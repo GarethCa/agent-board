@@ -30,9 +30,9 @@ On the first line, not as a line of its own or a closing line:
 
 - **A short message is still typed as one line.** A mark on a line of its own would make every message multi-line, so every one would be pasted; on the same line, only a long or multi-line message is pasted, as before, and a hand-off stays one line.
 - **A closing mark could be lost to the text it follows**: a send's closing line, or a message that ends quoting a mark of its own.
-- **A pasted message keeps its start.** Messages are pasted whole with bracketed paste, so the harness keeps the start of a long one. A message whose start was lost would show as the user's, the same as before this mark.
+- **A pasted message keeps its start.** Messages are pasted with bracketed paste, so the harness keeps the start of a long one, in order, whether it goes as one paste or several. Claude wraps one it folds in `<pasted_content>`; a message that starts with such a block is read as if unwrapped, so its mark still counts and the agent's text has no wrapper left. Two limits follow: a message the user pasted by hand from an agent, with words of their own typed after it, shows as all that agent's, and a marked message quoting a whole wrapper shows it unwrapped. Neither can be told apart from a message Claude folded. A message whose start was lost would show as the user's, the same as before this mark.
 
-The brackets are U+27E8 and U+27E9: no harness reads them as markup (Claude's own `<command-name>` and the like start with `<`), nothing typed strips them, and a mark can't start a `/` or `!` command. A name in a mark has them, line breaks and control characters replaced by spaces, so no name ends the mark early; only a mark at the very start of a message counts, so one quoted inside a message is text.
+The brackets are U+27E8 and U+27E9: no harness reads them as markup (Claude's own `<command-name>` and the like start with `<`), nothing typed strips them, and a mark can't start a `/` or `!` command. A name in a mark has them, line breaks and control characters replaced by spaces, so no name ends the mark early; only a mark at the very start of a message (or of the block that starts it) counts, so one quoted inside a message is text.
 
 ## Not marked
 

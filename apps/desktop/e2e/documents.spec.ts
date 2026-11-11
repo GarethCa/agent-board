@@ -274,3 +274,34 @@ test("an agent's sidebar lists the documents it showed and what it pinned, each 
     await expect(pins.nth(3)).not.toHaveAttribute('data-gone');
   });
 });
+
+test('⌘F in a Markdown document opens a find bar with a count; ↵ and ⇧↵ step through the matches and esc closes it', async () => {
+  await withApp(async (window) => {
+    const agent = await spawn(window, 'Doc: plan.md');
+    await agentTile(window, agent).getByTestId('tile-docs').click();
+    const body = docView(window).getByTestId('doc-body');
+    await expect(body).toContainText('Release 1.4 plan');
+    await expect(window.getByTestId('find-bar')).toHaveCount(0);
+
+    await body.click();
+    await window.keyboard.press('ControlOrMeta+f');
+    const field = window.getByTestId('find-field');
+    await expect(field).toBeFocused();
+    await field.fill('the');
+    const count = window.getByTestId('find-count');
+    await expect(count).toHaveText(/^1 of [2-9]\d*$/);
+    const total = ((await count.textContent()) ?? '').split(' of ')[1]!;
+    await field.press('Enter');
+    await expect(count).toHaveText(`2 of ${total}`);
+    await field.press('Shift+Enter');
+    await expect(count).toHaveText(`1 of ${total}`);
+    await field.press('Shift+Enter');
+    await expect(count).toHaveText(`${total} of ${total}`);
+    await field.fill('zzzz');
+    await expect(count).toHaveText('No matches');
+
+    await field.press('Escape');
+    await expect(window.getByTestId('find-bar')).toHaveCount(0);
+    await expect(docView(window)).toBeVisible();
+  });
+});

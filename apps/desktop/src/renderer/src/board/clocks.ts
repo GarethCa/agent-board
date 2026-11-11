@@ -1,7 +1,7 @@
 // A clock as the board draws it: its schedule in words, what it does, when it next runs and how its last runs went;
 // and the tethers that join it to the agent it messages, or to the fresh agent its run started.
 import type { Edge, Node } from '@xyflow/react';
-import { cronWords, parseCron } from '@agent-board/daemon/cron';
+import { cronWords, looksStuck, parseCron, skipsWords } from '@agent-board/daemon/cron';
 import { CLOCK_ACTIONS, CLOCK_RESULTS, HARNESSES, type ClockData, type ClockRun, type ClockStatus } from '@agent-board/daemon/protocol';
 import { isItemNode, type ItemNodeType } from './items/items';
 import { TETHER_EDGE_TYPE } from './items/agent-note-tethers';
@@ -53,6 +53,8 @@ export interface ClockCard {
   runs: RunMark[];
   /** Whether a fresh agent of its is at work. */
   running: boolean;
+  /** Whether its agent's turn looks stuck: its check-ins skipped, again and again, as it was still working. */
+  stuck: boolean;
 }
 
 /** The fresh agent a clock's run is waiting on, if one is. */
@@ -77,13 +79,17 @@ export function clockCard(data: ClockData, status: ClockStatus | undefined, agen
   const doer = data.does === 'message' ? `→ ${data.agent === null ? '' : (agentName(data.agent) ?? 'an agent no longer here')}` : `✦ fresh ${data.fresh.role ?? 'agent'}`;
   const words = cronWords(data.cron);
   const lacking = data.prompt.trim() === '' ? 'nothing to send' : data.does === 'message' && data.agent === null ? 'join it to an agent' : undefined;
-  if (running) return { words, detail: `${doer} · running`, soon: 'running', runs, running };
-  if (!data.enabled) return { words, detail: `${doer} · off`, soon: 'off', runs, running };
-  if (lacking !== undefined) return { words, detail: `not set: ${lacking}`, soon: 'not set', runs, running };
+  if (running) return { words, detail: `${doer} · running`, soon: 'running', runs, running, stuck: false };
+  if (!data.enabled) return { words, detail: `${doer} · off`, soon: 'off', runs, running, stuck: false };
+  if (lacking !== undefined) return { words, detail: `not set: ${lacking}`, soon: 'not set', runs, running, stuck: false };
   const next = status?.nextRunAt == null ? undefined : new Date(status.nextRunAt);
   // In a zone, for a fresh agent: the scheduler plans none in no zone.
-  if (next === undefined) return { words, detail: `${doer} · not set: put it in a zone`, soon: 'not set', runs, running };
-  return { words, detail: `${doer} · next ${whenLabel(next, now)}`, soon: until(next, now), runs, running };
+  if (next === undefined) return { words, detail: `${doer} · not set: put it in a zone`, soon: 'not set', runs, running, stuck: false };
+  const skips = status?.skips;
+  if (skips != null && looksStuck(skips)) {
+    return { words, detail: `${doer} · ${skipsWords(skips, now)}`, soon: until(next, now), runs, running, stuck: true };
+  }
+  return { words, detail: `${doer} · next ${whenLabel(next, now)}`, soon: until(next, now), runs, running, stuck: false };
 }
 
 /** The editor's quick choices of when a clock fires. */

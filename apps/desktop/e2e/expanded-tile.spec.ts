@@ -1226,7 +1226,7 @@ test('tiles pushed clear of an expanded tile stay fixed to the board while it pa
     await spawnAgent(window, 'monorepo', 'Lead two: Fix the flaky test');
     if (await sessionWindow(window).isVisible()) await sessionWindow(window).getByRole('button', { name: 'Close session window' }).click();
     await expect(tile(window)).toHaveCount(3, { timeout: 2 * TURN_MS });
-    await tileAction(tile(window).filter({ has: window.getByTitle('worker one', { exact: true }) }), 'Review its work');
+    await tileAction(tile(window).filter({ has: window.getByTitle('worker one', { exact: true }) }), 'Review its work', 'Review & gate');
     await expect(window.locator('[data-testid="agent-tile"][data-reviewer]')).toHaveCount(1);
     await tileAction(window.locator('[data-testid="agent-tile"][data-orchestrator]'), 'Expand in place');
     await expect(expandedTile(window)).toHaveCount(1);

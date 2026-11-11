@@ -13,7 +13,7 @@ import {
   type Effort,
   type Harness,
 } from '@agent-board/daemon/protocol';
-import { shortCommit } from '@agent-board/daemon/gate-rules';
+import { inRepoCheckout, shortCommit } from '@agent-board/daemon/gate-rules';
 import { HARNESSES } from '../harness';
 import { Button, Input, Menu, type MenuEntry } from '../ui';
 import { HarnessMark } from './HarnessMark';
@@ -276,6 +276,16 @@ export function agentSetupLine(agent: Pick<Agent, 'harness' | 'model' | 'effort'
 export function shelvesSetupLine(agent: Pick<Agent, 'harness' | 'model' | 'effort' | 'effortPending' | 'role' | 'roleName'>): string {
   const effort = effortText(agent);
   return [HARNESSES[agent.harness].label, ...(agent.model === null ? [] : [modelLabel(agent.model)]), ...(effort === null ? [] : [effort]), ...(agent.role === null ? [] : [roleText(agent.role, agent.roleName)])].join(' · ');
+}
+
+/**
+ * Where an agent works, in plain words: the sidebar footer's first line with Show technical details off. It says whose
+ * files the agent is in (the user's folder, the user's checkout, or a copy of its own), and never a branch name.
+ */
+export function plainWhereLine(agent: Pick<Agent, 'plainFolder' | 'reviews' | 'ownsWorktree' | 'worktree' | 'repoRoot'>): string {
+  if (agent.plainFolder) return 'Working in your folder';
+  if (agent.reviews !== null) return `Reviewing ${agent.reviews.branch}’s changes`;
+  return inRepoCheckout(agent) ? 'Working in your checkout' : 'Working in its own copy';
 }
 
 /** An agent's branch as its tile and details say it: a reviewer's reads "detached @ <commit> · <branch it reviews>". */

@@ -214,7 +214,7 @@ test("the dark theme: a review doc in its implementer's session window", async (
     await spawnAgent(window, 'monorepo', 'Write the code');
     const coder = tile(window).filter({ hasText: 'Write the code' });
     await expect(coder).toHaveAttribute('data-state', 'waiting', { timeout: TURN_MS });
-    await tileAction(coder, 'Review its work');
+    await tileAction(coder, 'Review its work', 'Review & gate');
     // The fake reviewer types its doc a word at a time.
     await expect(window.locator('[data-testid="agent-tile"][data-reviewer]')).toHaveAttribute('data-state', 'done', { timeout: 30_000 });
     await coder.getByTestId('tile-review').click();
@@ -269,57 +269,69 @@ test("an agent's sidebar: the document it showed, and a file, a link and a note 
   }
 });
 
-test("the Captain's panel with names, paths and code too long to fit: cut or wrapped, and above the dock with a window minimised", async () => {
-  needsBaselines('master-panel', 'master-panel-dock');
-  const { dir, repo, env } = scratch('waiting');
-  const dataDir = tempDataDir();
-  const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
-  try {
-    await listFinishedTurns(window);
-    await window.setViewportSize(VIEWPORT);
-    await pinFonts(window);
-    await pickFolderNext(app, repo);
-    await browseForZone(window);
-    await spawnAgent(window, 'monorepo', 'Pick a database', { name: LONG });
-    await expect(tile(window).first()).toHaveAttribute('data-state', 'waiting', { timeout: TURN_MS });
-    await crowdedPanel(window, '2026-01-01T14:31:00.000Z');
-    const panel = window.getByTestId('master-panel');
-    await expect(panel.getByTestId('master-digest')).toBeVisible();
-    // Watching folded and For you dragged taller, so the whole digest (its path, link, code span and block) is in frame.
-    await panel.getByTestId('master-fold-watching').click();
-    const grab = (await panel.getByTestId('master-for-you-handle').boundingBox())!;
-    await window.mouse.move(grab.x + grab.width / 2, grab.y + grab.height / 2);
-    await window.mouse.down();
-    await window.mouse.move(grab.x + grab.width / 2, grab.y + grab.height / 2 + 250, { steps: 5 });
-    await window.mouse.up();
-    // The chat's brief is the same every run; its scrollbar shows a while after a scroll. Its turn is shot once done,
-    // with its time pinned.
-    await window.addStyleTag({ content: '.master-panel * { scrollbar-width: none; }' });
-    await expect(panel.getByTestId('chat-assistant')).toHaveText(['Which database should I use, Postgres or SQLite?'], { timeout: TURN_MS });
-    await expect.poll(() => tile(window).evaluateAll((tiles) => tiles.map((each) => each.getAttribute('data-state'))), { timeout: TURN_MS }).toEqual(['waiting', 'waiting']);
-    await expect(panel.getByTestId('chat-live')).toHaveAttribute('data-live', 'done', { timeout: TURN_MS });
-    await pinChatTimes(window);
-    await pinRandomText(window);
-    let restorePointer = await ignorePointer(window);
-    await settle(window);
-    await expect.soft(window.locator('.board')).toHaveScreenshot('master-panel.png', SHOT);
-    await restorePointer();
+// The digest's `code` and code block take the board's code colours: the panel is shot in both themes.
+for (const theme of ['light', 'dark'] as const) {
+  test(`the Captain's panel with names, paths and code too long to fit: cut or wrapped${theme === 'light' ? ', and above the dock with a window minimised' : ', in the dark theme'}`, async () => {
+    const prefix = theme === 'light' ? '' : 'dark-';
+    needsBaselines(`${prefix}master-panel`, ...(theme === 'light' ? ['master-panel-dock'] : []));
+    const { dir, repo, env } = scratch('waiting');
+    const dataDir = tempDataDir();
+    const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, AGENT_BOARD_APPEARANCE: theme, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
+    try {
+      await listFinishedTurns(window);
+      await window.setViewportSize(VIEWPORT);
+      await window.emulateMedia({ colorScheme: theme });
+      await pinFonts(window);
+      await pickFolderNext(app, repo);
+      await browseForZone(window);
+      await spawnAgent(window, 'monorepo', 'Pick a database', { name: LONG });
+      await expect(tile(window).first()).toHaveAttribute('data-state', 'waiting', { timeout: TURN_MS });
+      await crowdedPanel(window, '2026-01-01T14:31:00.000Z');
+      const panel = window.getByTestId('master-panel');
+      await expect(panel.getByTestId('master-digest')).toBeVisible();
+      // Watching folded, For you dragged taller and scrolled to its end, so the whole digest (its path, link, code span
+      // and block) is in frame.
+      await panel.getByTestId('master-fold-watching').click();
+      const grab = (await panel.getByTestId('master-for-you-handle').boundingBox())!;
+      await window.mouse.move(grab.x + grab.width / 2, grab.y + grab.height / 2);
+      await window.mouse.down();
+      await window.mouse.move(grab.x + grab.width / 2, grab.y + grab.height / 2 + 250, { steps: 5 });
+      await window.mouse.up();
+      // The chat's brief is the same every run; its scrollbar shows a while after a scroll. Its turn is shot once done,
+      // with its time pinned.
+      await window.addStyleTag({ content: '.master-panel * { scrollbar-width: none; }' });
+      await expect(panel.getByTestId('chat-assistant')).toHaveText(['Which database should I use, Postgres or SQLite?'], { timeout: TURN_MS });
+      await expect.poll(() => tile(window).evaluateAll((tiles) => tiles.map((each) => each.getAttribute('data-state'))), { timeout: TURN_MS }).toEqual(['waiting', 'waiting']);
+      await expect(panel.getByTestId('chat-live')).toHaveAttribute('data-live', 'done', { timeout: TURN_MS });
+      await pinChatTimes(window);
+      await pinRandomText(window);
+      const forYou = panel.locator('.master-panel-for-you');
+      await forYou.evaluate((list) => (list.scrollTop = list.scrollHeight));
+      await expect(panel.locator('.master-digest .chat-md-code')).toBeInViewport({ ratio: 1 });
+      let restorePointer = await ignorePointer(window);
+      await settle(window);
+      await expect.soft(window.locator('.board')).toHaveScreenshot(`${prefix}master-panel.png`, SHOT);
+      await restorePointer();
+      await forYou.evaluate((list) => (list.scrollTop = 0));
+      // The dock is shot once, in the light theme.
+      if (theme === 'dark') return;
 
-    // A window minimised to the dock: the panel ends above it, the zoom bar beside it.
-    await tile(window).first().dblclick();
-    await window.getByRole('button', { name: 'Minimise session window' }).click();
-    await expect(window.getByTestId('dock-item')).toHaveCount(1);
-    await pinRandomText(window);
-    restorePointer = await ignorePointer(window);
-    await settle(window);
-    await expect.soft(window.locator('.board')).toHaveScreenshot('master-panel-dock.png', SHOT);
-    await restorePointer();
-  } finally {
-    await app.close();
-    await removeDataDir(dataDir);
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
+      // A window minimised to the dock: the panel ends above it, the zoom bar beside it.
+      await tile(window).first().dblclick();
+      await window.getByRole('button', { name: 'Minimise session window' }).click();
+      await expect(window.getByTestId('dock-item')).toHaveCount(1);
+      await pinRandomText(window);
+      restorePointer = await ignorePointer(window);
+      await settle(window);
+      await expect.soft(window.locator('.board')).toHaveScreenshot('master-panel-dock.png', SHOT);
+      await restorePointer();
+    } finally {
+      await app.close();
+      await removeDataDir(dataDir);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
 
 test('first-run onboarding: each step, with nothing installed', async () => {
   const shots = ['onboarding-welcome', 'onboarding-connect', 'onboarding-tour', 'onboarding-finish'];

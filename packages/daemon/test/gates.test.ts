@@ -10,7 +10,7 @@ import { isProcessAlive } from '../src/pid.ts';
 import { DatabaseSync } from 'node:sqlite';
 import { createGateHost } from '../src/gates.ts';
 import { migrate } from '../src/migrate.ts';
-import { BOARD_CALLER_METHODS, BOARD_ERROR, RPC_ERROR, type Agent, type DaemonMethod, type GateRun, type GateUpdatedEvent } from '../src/protocol.ts';
+import { BOARD_CALLER_METHODS, BOARD_ERROR, RPC_ERROR, type Agent, type AgentUpdatedEvent, type DaemonMethod, type GateRun, type GateUpdatedEvent } from '../src/protocol.ts';
 import { paneIds } from '../src/pane-layout.ts';
 import { connectTestClient, git, recordEvents, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
 
@@ -365,11 +365,12 @@ describe('Open PR and Merge', { timeout: 20_000 }, () => {
   it("opens an agent's pull request from its board token as a draft, and only its own; merging stays the user's", async () => {
     const { github, client, recorder, daemon, agent, passed } = await pullRequestDaemon({ printsToken: true });
     await passed();
+    // The agent prints its token in its turn, which may still be starting under load: wait for the turn to end, then
+    // for the line on its screen (the daemon may read the output just after the hook that ends the turn).
+    await recorder.waitFor((e): e is AgentUpdatedEvent => e.type === 'agent.updated' && e.agent.sessionId === agent.sessionId && e.agent.state === 'waiting');
     await client.call('session.attach', { sessionId: agent.sessionId });
     // Not just `:end`: the echoed command line holds that too, before the token line is printed.
-    const tokenLine = /^identity:([A-Za-z0-9_-]+):end/m;
-    await vi.waitFor(() => expect(recorder.screenText(agent.sessionId)).toMatch(tokenLine), { timeout: 10_000 });
-    const token = tokenLine.exec(recorder.screenText(agent.sessionId))![1]!;
+    const token = (await recorder.waitForMatch(agent.sessionId, /^identity:([A-Za-z0-9_-]+):end/m))[1]!;
     const agentSide = await connectTestClient(daemon);
 
     // A tab in its window is the user's, who has Open PR.

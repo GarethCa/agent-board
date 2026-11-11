@@ -17,6 +17,7 @@ const VERBS: Record<OrchestratorAction, { done: string; tried: string; of?: stri
   wake: { done: 'woke', tried: 'wake' },
   close: { done: 'closed', tried: 'close' },
   remove: { done: 'removed', tried: 'remove' },
+  handover: { done: 'handed over the crew of', tried: 'hand over the crew of' },
   'add-edge': { done: 'added an edge into', tried: 'add an edge into' },
   'remove-edge': { done: 'removed an edge into', tried: 'remove an edge into' },
   handoff: { done: 'handed off to', tried: 'hand off to' },

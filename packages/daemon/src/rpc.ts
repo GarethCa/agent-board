@@ -16,10 +16,16 @@ export type RpcResponse =
 /** Thrown by a handler to answer with a specific JSON-RPC error code; any other error becomes `internal`. */
 export class RpcMethodError extends Error {
   readonly code: number;
+  /**
+   * For a refusal that names what it refuses ("Alpha can't be paused: it is mid-turn"), the reason alone ("it is
+   * mid-turn"), for a caller in the daemon that shows the name itself. Not sent to the client.
+   */
+  readonly reason: string | undefined;
 
-  constructor(code: number, message: string) {
+  constructor(code: number, message: string, reason?: string) {
     super(message);
     this.code = code;
+    this.reason = reason;
   }
 }
 

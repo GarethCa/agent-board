@@ -1,8 +1,12 @@
-import { useState, type ReactNode } from 'react';
-import { ContextMenu, MENU_FOCUS_RETURN_MS } from '../ui';
+import { useMemo, useRef, useState, type ReactNode } from 'react';
+import { errorMessage } from '../../../shared/errors';
+import { ContextMenu, MENU_FOCUS_RETURN_MS, useToast } from '../ui';
+import { AgentContextMenu, type TileMenuBoard } from './agent-tile-menu';
+import { endOfNode } from './connectors/endpoints';
 import { boardEntries, selectionEntries, type ContextActions } from './editing/context-menu';
 import type { useEditing } from './editing/use-editing';
-import type { BoardNode } from './tiles';
+import type { TileNodeType } from './tile';
+import { isSessionTile, tileNodeId, type BoardNode } from './tiles';
 
 interface BoardMenuOptions {
   /** Opens Ask Claude about the selection. */
@@ -24,6 +28,8 @@ interface BoardMenuOptions {
   arrangeBoard(): void;
   /** Selects these nodes alone. */
   selectOnly(nodeIds: ReadonlySet<string>): void;
+  /** The node `nodeId` on the board as it is now. */
+  nodeOf(nodeId: string): BoardNode | undefined;
   /** Puts a new clock at `at`, on the screen, and opens its editor. */
   addClock(at: { x: number; y: number }): void;
   /** Puts a new steps card of the user's at `at`, on the screen, ready to type its steps into. */
@@ -45,9 +51,22 @@ interface BoardMenuOptions {
 /** Where a right-click was, on the screen. */
 type MenuEvent = Pick<MouseEvent, 'clientX' | 'clientY' | 'preventDefault'>;
 
+/** The agent of an agent's tile, or undefined for any other node. */
+const agentOf = (node: BoardNode | undefined) => (node !== undefined && isSessionTile(node) ? node.data.agent : undefined);
+
 /**
- * The board's context menu (WbTools): on the selection, or on empty board. Gives React Flow its three right-click
- * handlers, and `menu` to draw while one is open.
+ * Which menu a right-click on the selection `nodes`, with `connectors` connectors selected too, opens: the agent's own
+ * when it is one agent's tile alone, else the selection's.
+ */
+export function menuFor(nodes: readonly BoardNode[], connectors: number): 'agent' | 'selection' {
+  const [first, second] = nodes;
+  return first !== undefined && second === undefined && connectors === 0 && agentOf(first) !== undefined ? 'agent' : 'selection';
+}
+
+/**
+ * The board's context menu (WbTools): on the selection, on one agent's tile (its own menu, as its ⋯ has it), or on
+ * empty board. Gives React Flow its three right-click handlers, `menu` to draw while one is open, and `tileBoard`,
+ * what a tile's own menu does to it on the board.
  */
 export function useBoardMenu({
   askClaude,
@@ -62,6 +81,7 @@ export function useBoardMenu({
   tidyLoose,
   arrangeBoard,
   selectOnly,
+  nodeOf,
   addClock,
   addSteps,
   addMemory,
@@ -71,8 +91,9 @@ export function useBoardMenu({
   leadPinned,
   setLeadPinned,
 }: BoardMenuOptions) {
-  /** The context menu open, where it was asked for and on what: the selection, or empty board. */
-  const [contextMenu, setContextMenu] = useState<{ at: { x: number; y: number }; on: 'selection' | 'board' }>();
+  const toasts = useToast();
+  /** The context menu open, where it was asked for and on what: the selection, one agent's tile, or empty board. */
+  const [contextMenu, setContextMenu] = useState<{ at: { x: number; y: number }; on: 'selection' | 'board' } | { at: { x: number; y: number }; on: 'agent'; nodeId: string }>();
 
   const [only, second] = editing.selection().nodes;
   const pinned = only === undefined || second !== undefined ? undefined : leadPinned(only.id);
@@ -125,28 +146,91 @@ export function useBoardMenu({
     },
   };
 
-  const menu: ReactNode = contextMenu !== undefined && (
-    <ContextMenu
-      at={contextMenu.at}
-      label={contextMenu.on === 'board' ? 'Board' : 'Selection'}
-      entries={
-        contextMenu.on === 'board' ? boardEntries(contextActions) : selectionEntries(editing.selection(), selectedConnectors.size, contextActions)
-      }
-      onClose={() => setContextMenu(undefined)}
-    />
+  // A tile's own menu acts on that tile alone, whether or not it is selected.
+  const tileBoardNow: TileMenuBoard = {
+    askClaude: (nodeId) => {
+      selectOnly(new Set([nodeId]));
+      setTimeout(askClaude, MENU_FOCUS_RETURN_MS);
+    },
+    restack: (nodeId, how) => editing.restack(how, new Set([nodeId])),
+    joinable: (nodeId) => {
+      const node = nodeOf(nodeId);
+      return node !== undefined && endOfNode(node, 'right') !== undefined;
+    },
+    onBoard: (sessionId) => nodeOf(tileNodeId('agent', sessionId)) !== undefined,
+    connectFrom,
+    leadPinned,
+    setLeadPinned,
+    copy: (text, what) =>
+      void navigator.clipboard.writeText(text).then(
+        () => toasts.show({ tone: 'info', message: `${what} copied` }),
+        (error: unknown) => toasts.show({ tone: 'error', message: `Could not copy it: ${errorMessage(error)}` }),
+      ),
+  };
+  // One object for the board's life, calling the latest of each, so the context round every tile never changes.
+  const tileBoardRef = useRef(tileBoardNow);
+  tileBoardRef.current = tileBoardNow;
+  const tileBoard = useMemo<TileMenuBoard>(
+    () => ({
+      askClaude: (nodeId) => tileBoardRef.current.askClaude(nodeId),
+      restack: (nodeId, how) => tileBoardRef.current.restack(nodeId, how),
+      joinable: (nodeId) => tileBoardRef.current.joinable(nodeId),
+      onBoard: (sessionId) => tileBoardRef.current.onBoard(sessionId),
+      connectFrom: (nodeId) => tileBoardRef.current.connectFrom(nodeId),
+      leadPinned: (nodeId) => tileBoardRef.current.leadPinned(nodeId),
+      setLeadPinned: (nodeId, pinned) => tileBoardRef.current.setLeadPinned(nodeId, pinned),
+      copy: (text, what) => tileBoardRef.current.copy(text, what),
+    }),
+    [],
   );
+
+  const close = () => setContextMenu(undefined);
+  // The agent as it is now, so its rows follow it while the menu is open; gone with its tile, the menu closes.
+  const menuAgent = contextMenu?.on === 'agent' ? agentOf(nodeOf(contextMenu.nodeId)) : undefined;
+  const menu: ReactNode =
+    contextMenu === undefined ? null : contextMenu.on === 'agent' ? (
+      menuAgent !== undefined && (
+        <AgentContextMenu
+          nodeId={contextMenu.nodeId}
+          agent={menuAgent}
+          links={(nodeOf(contextMenu.nodeId) as TileNodeType).data}
+          at={contextMenu.at}
+          rename={() => setTimeout(() => requestRename(contextMenu.nodeId), MENU_FOCUS_RETURN_MS)}
+          onClose={close}
+        />
+      )
+    ) : (
+      <ContextMenu
+        at={contextMenu.at}
+        label={contextMenu.on === 'board' ? 'Board' : 'Selection'}
+        entries={
+          contextMenu.on === 'board' ? boardEntries(contextActions) : selectionEntries(editing.selection(), selectedConnectors.size, contextActions)
+        }
+        onClose={close}
+      />
+    );
+
+  /** The menu for the selection where it was right-clicked: an agent's own, when it is one agent's tile alone. */
+  const openOnSelection = (at: { x: number; y: number }, nodes: readonly BoardNode[], connectors: number) => {
+    const [first] = nodes;
+    if (first !== undefined && menuFor(nodes, connectors) === 'agent') setContextMenu({ at, on: 'agent', nodeId: first.id });
+    else setContextMenu({ at, on: 'selection' });
+  };
 
   return {
     menu,
+    tileBoard,
     onNodeContextMenu: (event: MenuEvent, node: BoardNode) => {
       event.preventDefault();
-      // On something not selected, the menu is for it alone.
-      if (node.selected !== true) selectOnly(new Set([node.id]));
-      setContextMenu({ at: { x: event.clientX, y: event.clientY }, on: 'selection' });
+      const at = { x: event.clientX, y: event.clientY };
+      if (node.selected === true) return openOnSelection(at, editing.selection().nodes, selectedConnectors.size);
+      // On something not selected, the menu is for it alone: selecting it drops any connector selected before.
+      selectOnly(new Set([node.id]));
+      openOnSelection(at, [node], 0);
     },
     onSelectionContextMenu: (event: MenuEvent) => {
       event.preventDefault();
-      setContextMenu({ at: { x: event.clientX, y: event.clientY }, on: 'selection' });
+      openOnSelection({ x: event.clientX, y: event.clientY }, editing.selection().nodes, selectedConnectors.size);
     },
     onPaneContextMenu: (event: MenuEvent) => {
       event.preventDefault();

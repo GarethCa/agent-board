@@ -9,7 +9,7 @@ import { AGENT_TILE_SIZE, clearOf, overlaps as rectsOverlap, CREW_GAP, GRID_COLU
 import type { DaemonClient } from '../src/client.ts';
 import { daemonPaths } from '../src/paths.ts';
 import { lintLine } from '../src/zone-map.ts';
-import { AGENT_NOTE_SIZE, BOARD_ERROR, measuredText, RPC_ERROR, STICKY_SIZE, type Agent, type AgentUpdatedEvent, type ArrangeLayout, type BoardItem, type DaemonEvent, type ExpandedBox, type MeasuredBox, type Zone } from '../src/protocol.ts';
+import { AGENT_NOTE_SIZE, BOARD_ERROR, FOLDED_ZONE_SIZE, measuredText, RPC_ERROR, STICKY_SIZE, type Agent, type AgentUpdatedEvent, type ArrangeLayout, type BoardItem, type DaemonEvent, type ExpandedBox, type MeasuredBox, type Zone } from '../src/protocol.ts';
 import { connectTestClient, git, recordEvents, startTestDaemon, TEST_CLI_LAUNCHER, tempDataDir, tempRepo } from './helpers.ts';
 
 // Orchestrators laying out their zone: move, arrange, groups and notes, each checked against the orchestrator's scope,
@@ -49,9 +49,9 @@ function markMadeBy(setup: Setup, id: string, sessionId: string) {
 type Setup = Awaited<ReturnType<typeof layoutDaemon>>;
 
 /** An agent in `zoneId` the user let orchestrate at `scope`, connected as itself: its board token presented. */
-async function lead(setup: Setup, zoneId: string, scope: 'zone' | 'repo' | 'board' = 'zone') {
+async function lead(setup: Setup, zoneId: string, scope: 'zone' | 'repo' | 'board' = 'zone', name = 'lead') {
   const { daemon, client, recorder } = setup;
-  const agent = await client.call('agent.spawn', { zoneId, name: 'lead', prompt: 'Print your board identity', orchestrate: scope, ...SIZE });
+  const agent = await client.call('agent.spawn', { zoneId, name, prompt: 'Print your board identity', orchestrate: scope, ...SIZE });
   await client.call('session.attach', { sessionId: agent.sessionId });
   await recorder.waitForText(agent.sessionId, ':end\r\n');
   const token = /identity:(.*):end\r\n/.exec(recorder.screenText(agent.sessionId))![1]!;
@@ -1939,6 +1939,22 @@ describe('orchestrator.arrangeBoard', () => {
     expect(await lastLine(setup.client)).toMatchObject({ action: 'arrange-board', outcome: 'done', detail: '1 zone and 1 loose tile' });
   });
 
+  it('arranges round a folded zone as the chip it is, and the zone keeps its saved size', async () => {
+    const setup = await layoutDaemon();
+    // In the zone that stays unfolded: a fold would pause it.
+    const me = await lead(setup, setup.other.id, 'board');
+    await setup.client.call('zone.fold', { id: setup.zone.id });
+
+    await me.connection.call('orchestrator.arrangeBoard', { token: me.token });
+
+    const zones = await setup.client.call('zone.list');
+    const web = zones.find((zone) => zone.id === setup.zone.id)!;
+    const other = zones.find((zone) => zone.id === setup.other.id)!;
+    expect(web).toMatchObject({ folded: true, x: 0, y: 0, width: setup.zone.width, height: setup.zone.height });
+    // Closed up round the chip: the board moves it clear again when the zone is unfolded.
+    expect({ x: other.x, y: other.y }).toEqual({ x: FOLDED_ZONE_SIZE.width + BOARD_ARRANGE_GAP, y: 0 });
+  });
+
   it('keeps a zone a gap clear of a note loose on the board, which stays, and arranges over the MCP arrange tool', async () => {
     const setup = await layoutDaemon();
     const me = await lead(setup, setup.zone.id, 'board');
@@ -2406,5 +2422,96 @@ describe('sizes the app measured', () => {
     ]) {
       await expect(client.call('layout.measured', params as never)).rejects.toMatchObject({ code: RPC_ERROR.invalidParams });
     }
+  });
+});
+
+describe('a second orchestrator in a zone the first one arranged', () => {
+  /** A lead that arranged its crew's lane in the zone, then ended; and the lead after it there. */
+  async function takenOver() {
+    const setup = await layoutDaemon();
+    const first = await lead(setup, setup.zone.id, 'zone', 'first');
+    const impl = await first.connection.call('orchestrator.spawn', { token: first.token, name: 'menu', role: 'custom', branch: 'acme-199-menu-scroll' });
+    await first.connection.call('orchestrator.arrange', { token: first.token });
+    const parts = async () => (await setup.client.call('item.list')).filter((item) => typeof item.data.arrange === 'string');
+    const before = await parts();
+    expect(before.map((item) => item.data.arrange).sort()).toEqual(['issue:ACME-199#label', 'issue:ACME-199#note']);
+    const second = await lead(setup, setup.zone.id, 'zone', 'second');
+    return { setup, first, second, impl, parts, before };
+  }
+
+  const idsOf = (items: readonly BoardItem[]) => items.map((item) => item.id).sort();
+  /** The ticket's lane's parts are the ones the first arrange made, and no lane has two of a part. */
+  const expectReused = (now: readonly BoardItem[], before: readonly BoardItem[]) => {
+    expect(idsOf(now.filter((item) => String(item.data.arrange).startsWith('issue:ACME-199#')))).toEqual(idsOf(before));
+    const keys = now.map((item) => item.data.arrange);
+    expect(keys).toEqual([...new Set(keys)]);
+  };
+
+  it('reuses the lane label and note the first one made once it has ended, rather than making a second of each', async () => {
+    const { setup, first, second, parts, before } = await takenOver();
+    await setup.client.call('agent.stop', { sessionId: first.agent.sessionId });
+    // A worker of its own, on the same ticket: the same lane as the first one's.
+    await second.connection.call('orchestrator.spawn', { token: second.token, name: 'menu-fix', role: 'custom', branch: 'acme-199-menu-fix' });
+    await second.connection.call('orchestrator.arrange', { token: second.token });
+    expectReused(await parts(), before);
+    // Its own now, with no handover.
+    const note = before.find((item) => item.kind === 'agent-note')!;
+    await second.connection.call('orchestrator.editNote', { token: second.token, id: note.id, text: 'Taken over' });
+  });
+
+  it('leaves a live orchestrator its lane label and note', async () => {
+    const { setup, first, second, parts, before } = await takenOver();
+    await second.connection.call('orchestrator.spawn', { token: second.token, name: 'menu-fix', role: 'custom', branch: 'acme-199-menu-fix' });
+    await second.connection.call('orchestrator.arrange', { token: second.token });
+    const now = await parts();
+    const note = before.find((item) => item.kind === 'agent-note')!;
+    // Its own, untouched: neither moved into the second's lane nor rewritten.
+    expect(now.find((item) => item.id === note.id)?.data.text).toBe(note.data.text);
+    await expect(second.connection.call('orchestrator.removeNote', { token: second.token, id: note.id })).rejects.toMatchObject({ code: BOARD_ERROR.outOfScope });
+    await first.connection.call('orchestrator.editNote', { token: first.token, id: note.id, text: 'Still mine' });
+    // The first one's next arrange still finds its own parts there.
+    await first.connection.call('orchestrator.arrange', { token: first.token });
+    expect(idsOf((await parts()).filter((item) => before.some((part) => part.id === item.id)))).toEqual(idsOf(before));
+    expect((await setup.client.call('item.list')).find((item) => item.id === note.id)?.data.text).toBe('Still mine');
+  });
+
+  it("takes over the first one's crew and notes once it has ended, then arranges, edits and removes them", async () => {
+    const { setup, first, second, impl, parts, before } = await takenOver();
+    const note = before.find((item) => item.kind === 'agent-note')!;
+    // Before: not its crew, not its note.
+    await expect(second.connection.call('orchestrator.removeNote', { token: second.token, id: note.id })).rejects.toMatchObject({ code: BOARD_ERROR.outOfScope });
+    // Not while the first one runs: it hands its crew over itself, or the user does.
+    await expect(second.connection.call('orchestrator.handover', { token: second.token, from: first.agent.sessionId, to: second.agent.sessionId })).rejects.toMatchObject({
+      code: BOARD_ERROR.outOfScope,
+      message: expect.stringContaining('still running'),
+    });
+    await setup.client.call('agent.stop', { sessionId: first.agent.sessionId });
+
+    const handed = await second.connection.call('orchestrator.handover', { token: second.token, from: first.agent.sessionId, to: second.agent.sessionId });
+    expect(handed.crew.map((agent) => [agent.name, agent.spawnedBy])).toEqual([['menu', second.agent.sessionId]]);
+    expect(handed.made).toBe(2);
+    expect(await lastLine(setup.client)).toMatchObject({ orchestratorId: second.agent.sessionId, action: 'handover', targetName: 'first', outcome: 'done' });
+
+    await second.connection.call('orchestrator.arrange', { token: second.token });
+    expectReused(await parts(), before);
+    await second.connection.call('orchestrator.editNote', { token: second.token, id: note.id, text: 'Taken over' });
+    await second.connection.call('orchestrator.removeNote', { token: second.token, id: note.id });
+    expect((await second.connection.call('orchestrator.close', { token: second.token, sessionId: impl.sessionId, remove: true }))).toBeNull();
+  });
+
+  it('hands over only its own crew, or one whose session ended; the user hands over any', async () => {
+    const { setup, first, second } = await takenOver();
+    const third = await lead(setup, setup.zone.id, 'zone', 'third');
+    await expect(third.connection.call('orchestrator.handover', { token: third.token, from: first.agent.sessionId, to: second.agent.sessionId })).rejects.toMatchObject({
+      code: BOARD_ERROR.outOfScope,
+    });
+    await expect(setup.client.call('orchestrator.handover', { from: first.agent.sessionId, to: first.agent.sessionId })).rejects.toMatchObject({ code: RPC_ERROR.invalidParams });
+    // The first one gives its own away, while it runs.
+    const handed = await first.connection.call('orchestrator.handover', { token: first.token, from: first.agent.sessionId, to: second.agent.sessionId });
+    expect(handed.crew.map((agent) => agent.name)).toEqual(['menu']);
+    // And the user hands it on again.
+    const again = await setup.client.call('orchestrator.handover', { from: second.agent.sessionId, to: third.agent.sessionId });
+    expect(again.crew.map((agent) => agent.name)).toEqual(['menu']);
+    expect(again.made).toBe(2);
   });
 });

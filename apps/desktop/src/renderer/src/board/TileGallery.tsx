@@ -157,6 +157,7 @@ export const galleryAgent = (state: AgentState): Agent => ({
   messagesWaiting: 0,
   undelivered: [],
   status: null,
+  character: null,
   workFinishedAt: null,
   startup: null,
   flag: null,

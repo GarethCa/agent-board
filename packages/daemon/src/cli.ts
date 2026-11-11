@@ -1,5 +1,6 @@
 import { homedir } from 'node:os';
 import { parseArgs } from 'node:util';
+import { logLine } from './log-line.ts';
 import { BOARD_COMMANDS, runBoardCommand } from './board-cli.ts';
 import { daemonLaunchEnv, runsUnderDaemon } from './daemon-launch.ts';
 import { runHookCommand } from './hook-forwarder.ts';
@@ -98,10 +99,10 @@ export async function runAgentBoardCli(argv: string[], options: AgentBoardCliOpt
     });
   } catch (error) {
     if (error instanceof DaemonAlreadyRunningError) {
-      console.log(`[agent-board daemon] ${error.message}; leaving it running`);
+      console.log(logLine(`${error.message}; leaving it running`));
       return 0;
     }
-    console.error(`[agent-board daemon] could not start: ${(error as Error).message}`);
+    console.error(logLine(`could not start: ${(error as Error).message}`));
     return 1;
   }
   console.log(cliBanner({ version: describeBuild(options.build ?? null), ...daemon.startedWith }));

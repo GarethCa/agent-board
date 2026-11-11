@@ -103,6 +103,8 @@ export function registerZoneIpc(daemon: DaemonLink): void {
     const { codexBypassHookTrust, trustsFolder, boardMcp, agentsOrchestrate, gateCommand, spacing, layoutMode } = settings;
     return daemon.call('zone.configure', { id, codexBypassHookTrust, trustsFolder, boardMcp, agentsOrchestrate, gateCommand, spacing, layoutMode });
   });
+  ipcMain.handle(ZONE_IPC.fold, (_event, id: string) => daemon.call('zone.fold', { id }));
+  ipcMain.handle(ZONE_IPC.unfold, (_event, id: string, wake?: boolean) => daemon.call('zone.unfold', { id, wake: wake === true }));
   ipcMain.handle(ZONE_IPC.setTracker, (_event, id: string, tracker: ZoneTracker | null) =>
     daemon.call('zone.setTracker', { id, tracker }),
   );

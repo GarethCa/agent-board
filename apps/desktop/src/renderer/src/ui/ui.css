@@ -856,11 +856,20 @@
   margin-left: auto;
 }
 
-/* A few muted words at a row's end. */
+/* A few muted words at a row's end, cut with an ellipsis when long, such as a path to copy. */
 .ui-menu-detail {
+  overflow: hidden;
+  max-width: var(--size-menu-detail);
   margin-left: auto;
   color: var(--muted);
   font-size: var(--font-size-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A submenu's words sit just before its chevron. */
+.ui-menu-detail + .ui-menu-chevron {
+  margin-left: 0;
 }
 
 .ui-menu-separator {

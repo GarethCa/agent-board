@@ -1,6 +1,6 @@
 import { expect, type Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
-import { agents, closeAgent, launch, spawnAgent, tile, tileAction, TURN_MS, zoneNamed, zones } from './agent-helpers.ts';
+import { agents, closeAgent, launch, openSubmenu, spawnAgent, tile, tileAction, TURN_MS, zoneNamed, zones } from './agent-helpers.ts';
 import { test, pickFolderNext, removeDataDir, runDesign, tempDataDir, browseForZone } from './launch.ts';
 import { scratch } from './scratch.ts';
 
@@ -71,7 +71,7 @@ test('a closed agent folds to a chip that keeps its edge, unfolds on click, fold
     await expect.poll(() => node.evaluate((element) => (element as HTMLElement).offsetHeight)).toBeGreaterThan(100);
 
     // From its tile menu it folds back, and undo unfolds it again.
-    await tileAction(window.locator(`[data-testid="agent-tile"][data-session-id="${fixer!.sessionId}"]`), 'Fold to a chip');
+    await tileAction(window.locator(`[data-testid="agent-tile"][data-session-id="${fixer!.sessionId}"]`), 'Fold to a chip', 'Arrange');
     await expect(chip(window)).toHaveCount(1);
     await expect.poll(() => saved(window)).toBe('[]');
     await window.keyboard.press('ControlOrMeta+z');
@@ -98,6 +98,7 @@ test('an agent that has only ended, its pane a live shell, keeps its tile and it
     // On the Classic tile Restart is in its head; on the Simplified card, in its ⋯ menu.
     if (runDesign() === 'simplified') {
       await tile(window).getByRole('button', { name: 'More' }).click();
+      await openSubmenu(window, 'Run');
       await expect(window.getByRole('menuitem', { name: 'Restart agent' })).toBeVisible();
       await window.keyboard.press('Escape');
     } else await expect(tile(window).getByRole('button', { name: 'Restart' })).toBeAttached();

@@ -15,7 +15,7 @@ test("an agent's Schedule… puts a clock beside its tile, joined to it: the age
     // Its turn is over and Claude has said it's idle at its prompt.
     await expect(tile(page)).toHaveAttribute('data-state', 'waiting');
 
-    await tileAction(tile(page), 'Schedule');
+    await tileAction(tile(page), 'Schedule', 'Settings');
     const dialog = page.getByRole('dialog', { name: 'Clock' });
     await dialog.getByLabel(/^Cron/).fill('0 25 * * *');
     await expect(dialog.getByTestId('schedule-preview')).toContainText('hour');
@@ -45,7 +45,7 @@ test("an agent's Schedule… puts a clock beside its tile, joined to it: the age
     await page.getByRole('button', { name: 'Fold clock' }).click();
     await expect(clock).toHaveAttribute('data-folded', 'true');
     await expect(clock.getByTestId('clock-soon')).toHaveText(/^(in .+|tomorrow 06:30)$/);
-    await tileAction(tile(page), 'Edit schedule');
+    await tileAction(tile(page), 'Edit schedule', 'Settings');
     await dialog.getByRole('button', { name: 'Delete' }).click();
     await expect(clock).toHaveCount(0);
     await expect(tile(page).getByTestId('tile-clock')).toHaveCount(0);

@@ -15,6 +15,9 @@
   --raised: #ffffff; /* tiles, dialogs, inputs: anything that sits on the desk */
   --raised-edge: #d8d2c4; /* outline of a raised thing on the minimap */
   --sunken: var(--surface); /* a well inside a raised thing: a quoted tool input */
+  --code-chip: var(--sunken); /* `code` and a code block on the board's own surfaces (the Captain's panel), not a session window's */
+  --code-chip-edge: var(--border);
+  --code-ink: var(--text);
   --border: #e2ddd1; /* a card's edge: a dialog, menu or tile */
   --control-edge: #ddd7ca; /* a button's, input's or key's edge: a shade firmer than a card's */
   --separator: #ebe7de; /* a rule between a menu's groups */
@@ -49,6 +52,8 @@
   --on-accent: #ffffff; /* text on a saturated fill: the accent or an agent state's mark */
   --selection: color-mix(in srgb, var(--accent) 8%, transparent); /* the board's drag-to-select box */
   --selection-edge: var(--accent); /* the box round a selection of several, and the marquee's edge */
+  --find-match: color-mix(in srgb, var(--accent) 24%, transparent); /* a find's matches in a document */
+  --find-match-active: color-mix(in srgb, var(--accent) 50%, transparent); /* the match it shows */
   --snap-guide: #e64980; /* the alignment guides while dragging (WbTools) */
 
   /* The primary action: Start, Send, Save */
@@ -92,6 +97,9 @@
   --prefab-ink: var(--shape-ink-pink);
   --prefab-edge: color-mix(in srgb, var(--prefab) 40%, var(--border)); /* round a prefab of your own, in the library */
   --prefab-wire: var(--control-edge); /* who gets whose work, in the editor's diagram */
+  --crew-card-edge: 3px; /* a crew card's left rule: its prefab's pink, green once ready to merge, orange while it needs you */
+  --crew-card-over: var(--state-idle-ink); /* that rule once its crew is over: merged, stopped, or its builder gone */
+  --size-crew-round: 22px; /* a round's chip on a crew card, at its narrowest */
 
   /* Inverse: a dark chip on the light desk, for tooltips and toasts */
   --inverse: var(--text);
@@ -847,6 +855,7 @@
   --size-hover-card: 270px; /* a hover card's widest */
   --size-toast: 380px; /* a toast's widest */
   --size-menu: 214px; /* a menu's narrowest */
+  --size-menu-detail: 180px; /* the widest a menu row's muted words grow, such as a path to copy, before they are cut */
   --size-popover-wide: 420px; /* the widest a list popover grows, long lines cut with an ellipsis */
   --size-empty-body: 200px; /* an empty state's text, widest */
   --size-dialog: 440px; /* a dialog's width */

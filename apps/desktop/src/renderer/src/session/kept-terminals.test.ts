@@ -155,6 +155,54 @@ describe('kept terminals', () => {
     expect(keep.has('b')).toBe(false);
   });
 
+  it('lets go of the terminals of sessions in folded zones: one parked now, one that shows as it leaves', () => {
+    const keep = keptTerminals({ budget: 100 });
+    const [parked, shown, other] = [entry(10), entry(10), entry(10)];
+    keep.add('a', parked);
+    keep.add('b', shown);
+    keep.add('c', other);
+    keep.park('a');
+    keep.park('c');
+    keep.fold(['a', 'b']);
+    expect(parked.gone).toEqual(['folded']);
+    expect(shown.gone).toEqual([]);
+    expect(other.gone).toEqual([]);
+    keep.park('b');
+    expect(shown.gone).toEqual(['folded']);
+    expect(keep.parked().count).toBe(1);
+  });
+
+  it('never parks one opened while its zone stays folded, and keeps one again once its zone is unfolded', () => {
+    const keep = keptTerminals({ budget: 100 });
+    keep.fold(['a', 'b']);
+    // Its window was opened from a list, and closed.
+    const opened = entry(10);
+    keep.add('a', opened);
+    keep.park('a');
+    expect(opened.gone).toEqual(['folded']);
+    expect(keep.has('a')).toBe(false);
+
+    // Unfolded while its terminal showed: it is kept as it leaves.
+    const showing = entry(10);
+    keep.add('b', showing);
+    keep.fold(['b']);
+    keep.fold([]);
+    keep.park('b');
+    expect(showing.gone).toEqual([]);
+    expect(keep.take('b')).toBe(showing);
+  });
+
+  it('lets one forgotten for another reason go for that reason, folded or unfolded since', () => {
+    const keep = keptTerminals({ budget: 100 });
+    const ended = entry(10);
+    keep.add('a', ended);
+    keep.forget('a', 'ended');
+    keep.fold(['a']);
+    keep.fold([]);
+    keep.park('a');
+    expect(ended.gone).toEqual(['ended']);
+  });
+
   describe('a parked terminal that keeps growing', () => {
     beforeEach(() => vi.useFakeTimers());
     afterEach(() => vi.useRealTimers());

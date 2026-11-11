@@ -8,7 +8,7 @@
 // restart, nor hibernation), its jobs go back to the front of their queue, each drop counted.
 import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
-import { boardCaller, isOwnLiveSession, sessionCaller, type BoardCallerSources, type BoardConnection } from './board.ts';
+import { boardCaller, connectionAgent, isOwnLiveSession, type BoardCallerSources, type BoardConnection } from './board.ts';
 import { readsItem, type ReachesZone } from './item-scope.ts';
 import { isObject } from './json.ts';
 import { AGENT_TILE_SIZE, freeSpotFor } from './board-layout.ts';
@@ -834,11 +834,9 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
 
   return {
     visible(items, connection) {
-      const session = connection.boardSession;
-      if (session === undefined) return items;
-      const who = sessionCaller(options, session);
-      const me = who?.side === 'agent' ? options.agents.get(who.tileId) : undefined;
+      const me = connectionAgent(options, connection);
       if (me === undefined) return items;
+      if (me === null) return items.filter((item) => item.kind !== 'memory' && item.kind !== 'queue');
       return items.filter((item) => (item.kind !== 'memory' && item.kind !== 'queue') || reads(me, item));
     },
 

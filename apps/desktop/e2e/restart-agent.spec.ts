@@ -48,7 +48,7 @@ test('an agent that exits drops its pane into a shell in its worktree, and Resta
     await expect(tile(window).getByTestId('restart-agent')).toHaveCount(0);
     const [footer, card] = [await tile(window).locator('.hybrid-tile-footer').boundingBox(), await tile(window).boundingBox()];
     expect(footer!.y + footer!.height, 'footer bottom').toBeLessThanOrEqual(card!.y + card!.height + 0.5);
-    await tileAction(tile(window), 'Restart agent');
+    await tileAction(tile(window), 'Restart agent', 'Run');
     const confirm = window.getByRole('alertdialog', { name: 'Restart agent?' });
     await expect(confirm).toContainText('running something');
     await confirm.getByRole('button', { name: 'Restart anyway' }).click();

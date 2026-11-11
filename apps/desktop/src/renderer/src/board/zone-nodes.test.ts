@@ -22,6 +22,7 @@ const zone = (id: string, overrides: Partial<Zone> = {}): Zone => ({
   gateCommand: null,
   spacing: 'normal',
   layoutMode: 'free',
+  folded: false,
   tracker: null,
   clone: null,
   managedClone: false,

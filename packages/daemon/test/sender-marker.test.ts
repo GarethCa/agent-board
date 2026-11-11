@@ -15,6 +15,27 @@ describe('markSender', () => {
 });
 
 describe('readSender', () => {
+  describe('of a message Claude folded some of', () => {
+    const block = (id: string, text: string) => `<pasted_content id="${id}">\n${text}\n</pasted_content id="${id}">`;
+    const from = { ref: 'agent:1', name: 'lead', kind: 'send' };
+    const head = '⟨send from lead · agent:1⟩ ';
+
+    it('finds the mark in a block that is all of it, or only its start, and leaves no wrapper in the text', () => {
+      expect(readSender(block('1', `${head}Fix it\nnow`))).toEqual({ text: 'Fix it\nnow', from });
+      expect(readSender(`\n${block('1', `${head}Fix it`)}\nand then push`)).toEqual({ text: 'Fix it\nand then push', from });
+    });
+
+    it('leaves no wrapper in the text of a block further on, with the mark typed before it', () => {
+      expect(readSender(`${head}Fix it ${block('1', 'all\nof\nthis')} now`)).toEqual({ text: 'Fix it all\nof\nthis now', from });
+      expect(readSender(`${head}a$1${block('1', '$2')}`)).toEqual({ text: 'a$1$2', from });
+    });
+
+    it('keeps as the user\'s a mark that comes after their own words, even inside a block, and leaves their blocks to fold', () => {
+      const quoted = `See ${block('1', `${head}Fix it`)}`;
+      expect(readSender(quoted)).toEqual({ text: quoted });
+    });
+  });
+
   it('reads the sender of a send, and leaves its text as it was sent', () => {
     expect(readSender(markSender('send', 'Captain', 'agent:944e1234', 'Fix the login test\n\nThen push.'))).toEqual({
       text: 'Fix the login test\n\nThen push.',

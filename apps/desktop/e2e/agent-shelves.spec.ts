@@ -81,20 +81,39 @@ test("an agent's shelves open at the window's leading edge, resize on their hand
     await dragHandle(window, -2000);
     await expect(shelves(window)).toHaveCount(0);
     await expect(rail(window)).toBeVisible();
-    await expect(handle(window)).toHaveCount(0);
     await expect(toggle(window)).toHaveAttribute('aria-pressed', 'false');
     await window.keyboard.press('ControlOrMeta+i');
     await expect(shelves(window)).toBeVisible();
     await expect.poll(() => width(window)).toBe(316);
 
-    // Stepped below its minimum from the keyboard it collapses too, and the focus goes to the header's toggle.
-    await dragHandle(window, -116);
+    // The rail keeps the handle at its trailing edge. A click or a short drag leaves it on the rail; dragged out past
+    // its least it opens, and goes on resizing as the drag goes on.
+    await dragHandle(window, -2000);
+    await expect(rail(window)).toBeVisible();
+    await expect(handle(window)).toHaveAttribute('aria-valuenow', '54');
+    await handle(window).click();
+    await dragHandle(window, 40);
+    await expect(rail(window)).toBeVisible();
+    await expect(shelves(window)).toHaveCount(0);
+    await dragHandle(window, 300);
+    await expect(shelves(window)).toBeVisible();
+    await expect.poll(() => width(window)).toBe(354);
+    await expect(toggle(window)).toHaveAttribute('aria-pressed', 'true');
+
+    // Stepped below its minimum from the keyboard it collapses too, keeping the focus, and the right arrow opens it again.
+    await dragHandle(window, -154);
     await expect.poll(() => width(window)).toBe(200);
     await handle(window).focus();
     await window.keyboard.press('ArrowLeft');
     await expect(shelves(window)).toHaveCount(0);
-    await expect(toggle(window)).toBeFocused();
-    await window.keyboard.press('Enter');
+    await expect(handle(window)).toBeFocused();
+    await window.keyboard.press('ArrowRight');
+    await expect(shelves(window)).toBeVisible();
+    await expect.poll(() => width(window)).toBe(200);
+    // The header's toggle still collapses and opens it.
+    await toggle(window).click();
+    await expect(shelves(window)).toHaveCount(0);
+    await toggle(window).click();
     await expect(shelves(window)).toBeVisible();
     await handle(window).dblclick();
     await expect.poll(() => width(window)).toBe(316);
@@ -106,8 +125,8 @@ test("an agent's shelves open at the window's leading edge, resize on their hand
     await expect(shelves(window)).toBeVisible();
 
     // Show technical details gives Setup its tab, and with it a tab row: where it works, its branch, folder and AI, open;
-    // and the workspace footer on every shelf.
-    await expect(shelves(window).getByTestId('shelves-footer')).toHaveCount(0);
+    // and the workspace footer on every shelf, in plain words until then.
+    await expect(shelves(window).getByTestId('shelves-footer')).toContainText('Working in its own copy');
     await setTechnical(window, true);
     await expect(shelves(window).getByTestId('shelves-footer')).toContainText('Claude');
     await tabs(window).getByRole('tab', { name: 'Setup' }).click();
@@ -409,8 +428,8 @@ test("an expanded tile shows the shelves under Simplified: icons only when narro
     await window.keyboard.press('ArrowLeft');
     await expect(tileShelves(window)).toHaveCount(0);
     await expect(tileRail(window)).toBeVisible();
-    // The focus the handle had goes to the header's toggle, as in the window, not to the page.
-    await expect(tileToggle).toBeFocused();
+    // The handle stays on the rail, with the focus, as in the window: the right arrow would open it again.
+    await expect(tileHandle(window)).toBeFocused();
 
     // A rail icon opens its shelf as a peek in the tile; Esc closes the peek, not the tile.
     await tileRail(window).getByRole('button', { name: /^Now/ }).click();

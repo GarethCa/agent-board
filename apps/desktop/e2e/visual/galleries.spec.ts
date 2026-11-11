@@ -141,6 +141,30 @@ for (const { theme, suffix } of THEMES) {
   }
 }
 
+// A crew card in each of its looks, on its own page, in both designs.
+for (const { theme, suffix } of THEMES) {
+  for (const design of ['classic', 'simplified'] as const) {
+    const shot = `crew-card${design === 'simplified' ? '-simplified' : ''}${suffix}`;
+    test(`a crew card at work, needing you and at each of its stops: its gallery page, ${design}, ${theme}`, async () => {
+      needsBaselines(shot);
+      const dataDir = tempDataDir();
+      const { app, window } = await launchGallery(dataDir, theme, undefined, design === 'simplified' ? { design } : {}, '#gallery-crew-card');
+      try {
+        const gallery = window.getByTestId('crew-card-gallery');
+        await expect(gallery).toBeVisible();
+        await expect(gallery.getByTestId('crew-card')).toHaveCount(13);
+        await pinFonts(window);
+        await ignorePointer(window);
+        await settle(window);
+        await expect.soft(gallery).toHaveScreenshot(`${shot}.png`, SHOT);
+      } finally {
+        await app.close();
+        await removeDataDir(dataDir);
+      }
+    });
+  }
+}
+
 // A crowded orchestrator's chips stay inside its tile, at the board's size and at its narrowest, in both designs: what doesn't
 // fit folds into "+N" in Classic, and gives way in Simplified's foot.
 for (const { theme, suffix } of THEMES) {

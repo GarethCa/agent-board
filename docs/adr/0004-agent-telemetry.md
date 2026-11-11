@@ -227,6 +227,27 @@ PTY.
   bracketed paste instead: Claude 2.1.312 kept only the end of a longer line typed as keys (2,691 characters sent, the
   last 695 in its transcript, starting mid-word, a cut that falls on the 1 KiB reads a macOS terminal gives), while
   first prompts of 4 to 6 KB, always pasted, arrived whole.
+  A paste of over 800 characters or three line breaks is then folded by Claude to `[Pasted text #1 +3 lines]` and
+  wrapped in `<pasted_content>`, so the model reads the user's words as pasted material. So a long message at a Claude
+  agent goes as smaller pastes, none over 600 characters or two line breaks, all in one write. A message starting
+  with `!` or `/`, one with an image, one over 30,000 characters and one of over 199 pieces go as one paste, which
+  reaches the model as pasted, though the chat shows it in full. Measured by hand at Claude 2.1.318's prompt, in a 200-column
+  terminal unless said: 800 characters and 3 lines stayed text, 801 characters and 4 lines folded; two pastes of 500 characters
+  stayed apart at every gap from 0 to 500 ms; 28,885 characters in 58 pieces in one write arrived exactly, whitespace-only
+  pieces and pieces ending in a space included (that one ran in bash mode, left on by the `!` probe below), and 29,163 in
+  55 written apart arrived exactly as a prompt, with no wrapper; a tab became four spaces; at 8 rows a paste of 2 lines
+  folded, where at 12 rows 3 did not; a small first piece starting with `!` put the prompt in bash mode, which stayed on, so
+  Enter ran it. One Ctrl-U cleared only one wrapped row of a line, and one per row, with more than needed, cleared it.
+  Then at Claude 2.1.322, every prompt stopped by a `UserPromptSubmit` hook before the model and its text compared:
+  every piece in one write, submitted as a prompt, arrived exactly, unwrapped, at 199 pieces (398 short lines, and 398
+  lines of 40 characters, also with every core busy), at 28,831 characters in 58 pieces, at 3,000 CJK characters, and for
+  a 12-question answer and a 20-line message with tabs; a paste's start marker split across two writes 1, 20 and 100 ms
+  apart did no harm; a message ending in `@pack` or `/tmp/fo` arrived as sent, though in an empty folder, with nothing for
+  Enter to pick as a suggestion, so what a suggestion does was not measured. One whole paste starting with `/` arrived
+  wrapped, in full, not run as a command; after one whole paste starting with `!`, or pieces starting with it, the board's
+  Clear left the prompt out of bash mode.
+  Not measured: a long message at a Claude agent mid-turn, and any of this under Codex, which
+  takes one paste on recollection that it expands one as it submits it, with no wrapper.
 - **Last message.** The agent keeps what it last said to the user, in memory, as the inbox's context: its own `Stop`'s
   `last_assistant_message`, or the `message` of an `agent_needs_input` notification. A `UserPromptSubmit` clears it.
 

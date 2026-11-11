@@ -4,7 +4,7 @@
 // wait`) is told once someone else ticks it, or the card closes. Nothing else is typed: naming an agent on a step sends
 // it nothing. What a change tells is typed only once the change is saved.
 import { createHash, randomUUID } from 'node:crypto';
-import { boardCaller, isOwnLiveSession, sessionCaller, type BoardCallerSources, type BoardConnection } from './board.ts';
+import { boardCaller, connectionAgent, isOwnLiveSession, type BoardCallerSources, type BoardConnection } from './board.ts';
 import { readsItem, type ReachesZone } from './item-scope.ts';
 import { isObject } from './json.ts';
 import { keyedQueue } from './keyed-queue.ts';
@@ -553,11 +553,9 @@ export function createStepsHost(options: StepsHostOptions): StepsHost {
 
   const host: StepsHost = {
     visible(items, connection) {
-      const session = connection.boardSession;
-      if (session === undefined) return items;
-      const who = sessionCaller(options, session);
-      const me = who?.side === 'agent' ? options.agents.get(who.tileId) : undefined;
+      const me = connectionAgent(options, connection);
       if (me === undefined) return items;
+      if (me === null) return items.filter((item) => item.kind !== 'steps');
       return items.filter((item) => item.kind !== 'steps' || reads(me, item));
     },
 

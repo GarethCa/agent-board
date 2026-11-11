@@ -242,7 +242,7 @@ export function ShelvesGallery() {
         <Frame testId="shelves-made-gate-failed" caption="Made, its gate failed" agent={BUSY} shelf="made" gate={FAILED_GATE} height={620} />
         <Frame testId="shelves-setup-gate-failed" caption="Setup, its gate failed" agent={BUSY} shelf="setup" gate={FAILED_GATE} height={620} />
         <Frame testId="shelves-setup-quiet" caption="Quiet agent, Setup, its folder outside its worktree" agent={QUIET} shelf="setup" folder="/tmp/elsewhere" height={620} />
-        <Frame testId="shelves-made-plain" caption="Made, technical details off: no gate, no footer" agent={BUSY} shelf="made" alone height={620} />
+        <Frame testId="shelves-made-plain" caption="Made, technical details off: no gate, a plain-words footer" agent={BUSY} shelf="made" alone height={620} />
         <Frame testId="shelves-linked" caption="Links and a note; a pull request failing" agent={LINKED} height={620} />
         <Frame testId="shelves-alone" caption="Its page the one shelf: its name and icon as a header" agent={{ ...QUIET, page: { ...LINKED.page!, blocks: LINKED.page!.blocks.slice(1) } }} alone height={360} />
       </div>

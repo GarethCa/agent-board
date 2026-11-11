@@ -188,6 +188,17 @@ const EXIT_PRESS_WINDOW_MS = 2000;
 const PASTE_START = '\x1b[200~';
 const PASTE_END = '\x1b[201~';
 
+/**
+ * The longest paste Claude leaves as text at its prompt. Longer ones, and those of `PASTE_FOLD_BREAKS` line breaks or
+ * more, show as a placeholder: measured at Claude 2.1.318's prompt, where 800 characters and 3 lines stayed text, and
+ * 801 characters and 4 lines folded.
+ */
+const PASTE_FOLD_CHARS = 800;
+const PASTE_FOLD_BREAKS = 3;
+
+/** What Claude writes for a folded paste, with its two line breaks before and one after, as 2.1.318 does (`foldPastes`). */
+const FOLDED_PASTE = /\n\n<pasted_content id="([0-9a-f]+)">\n([\s\S]*?)\n<\/pasted_content id="\1">\n/g;
+
 /** Unwinds a turn the user interrupted (Ctrl-C). */
 class TurnInterrupted extends Error {
   constructor() {
@@ -236,6 +247,8 @@ export class FakeSession {
   private stopHooksToLose = Number(process.env.FAKE_HARNESS_LOSE_STOP_HOOKS ?? 0);
   /** Whether the prompt about to be submitted was typed at it. */
   private promptTyped = false;
+  /** How many folded pastes it has shown, each numbered as Claude numbers its placeholders. */
+  private foldedShown = 0;
   /** Whether a message typed mid-turn is taken at the turn's next step: `FAKE_HARNESS_QUEUE_MID_TURN`. */
   private readonly queueMidTurn = process.env.FAKE_HARNESS_QUEUE_MID_TURN === '1';
   /** Keys a menu read raw, which the line reader holds as the start of its next line (`readKeys`). */
@@ -348,8 +361,15 @@ export class FakeSession {
     this.inTurn = true;
     this.interrupted = false;
     this.turnId = randomUUID();
-    if (this.dialect.demo) this.printLines(demo.userPrompt(this.dialect.harness, prompt));
-    else this.print(`> ${prompt}\n`);
+    let folded = this.foldedShown;
+    const shown = prompt.replace(FOLDED_PASTE, (_, _id: string, text: string) => {
+      folded += 1;
+      const breaks = text.split('\n').length - 1;
+      return `[Pasted text #${folded}${breaks > 0 ? ` +${breaks} lines` : ''}]`;
+    });
+    this.foldedShown = folded;
+    if (this.dialect.demo) this.printLines(demo.userPrompt(this.dialect.harness, shown));
+    else this.print(`> ${shown}\n`);
     // The Codex TUI keeps its composer and status line drawn through a turn, under what the turn prints.
     if (this.dialect.harness === 'codex' && this.dialect.interactive && !this.dialect.demo) this.printLines(codexComposer(this.dialect.model, this.dialect.cwd, this.dialect.effort));
     this.dialect.transcript.userPrompt(prompt, this.turnId);
@@ -815,34 +835,43 @@ export class FakeSession {
 
   /**
    * The API call behind the turn failed (Claude's StopFailure). Then Claude shows a rate limit's screen
-   * (`rateLimitScreen`).
+   * (`drawRateLimitScreen`), drawn before the hook fires: the real TUI draws it as it shows the error, so by the time a
+   * hook's reader looks at the screen it is up.
    */
   async failTurn(error: string, details: string): Promise<void> {
     const message = `API Error: ${details}`;
     this.print(`${message}\n`);
+    const menu = error === 'rate_limit' && this.dialect.stopFailureEvent ? this.drawRateLimitScreen() : undefined;
     if (this.dialect.stopFailureEvent) {
       await this.fire('StopFailure', { error, error_details: details, last_assistant_message: message });
     }
     this.inTurn = false;
-    if (error === 'rate_limit' && this.dialect.stopFailureEvent) await this.rateLimitScreen();
+    if (menu !== undefined) await this.answerRateLimitMenu(menu);
   }
 
   /**
-   * What Claude shows once a turn hit its usage limit, by `FAKE_HARNESS_RATE_LIMIT_SCREEN` (`rate-limit-menu.ts`):
+   * Draws what Claude shows once a turn hit its usage limit, by `FAKE_HARNESS_RATE_LIMIT_SCREEN` (`rate-limit-menu.ts`):
    * `prompt` puts `continue` at its prompt, for Enter to submit; `menu` (or `menu-credits-first`, its rows in the other
-   * order) opens its menu, reads the arrows and Enter of one pick, and closes it, saying what the pick did: the stop
-   * row leaves an empty prompt, any other row opens a page and leaves it too. None by default: just the error.
+   * order) opens its menu, whose rows it returns for `answerRateLimitMenu`. None by default: just the error.
    */
-  private async rateLimitScreen(): Promise<void> {
+  private drawRateLimitScreen(): string[] | undefined {
     const screen = process.env.FAKE_HARNESS_RATE_LIMIT_SCREEN ?? '';
     if (screen === 'prompt') {
       this.prefilled = RATE_LIMIT_CONTINUE;
       this.print(`> ${RATE_LIMIT_CONTINUE}\n`);
-      return;
+      return undefined;
     }
-    if (screen !== 'menu' && screen !== 'menu-credits-first') return;
+    if (screen !== 'menu' && screen !== 'menu-credits-first') return undefined;
     const rows = rateLimitMenuRows(screen === 'menu' ? 'stop-first' : 'credits-first');
     this.print(`${drawRateLimitMenu(rows).join('\n')}\n`);
+    return rows;
+  }
+
+  /**
+   * Reads the arrows and Enter of one pick on the rate-limit menu with `rows`, and closes it, saying what the pick did:
+   * the stop row leaves an empty prompt, any other row opens a page and leaves it too.
+   */
+  private async answerRateLimitMenu(rows: string[]): Promise<void> {
     const keys = await this.readKeys();
     // Ink draws over the menu as it closes: here the screen is cleared.
     this.print('\x1b[2J\x1b[H');
@@ -973,18 +1002,39 @@ export class FakeSession {
     return line === undefined ? line : afterClearKey(line);
   }
 
-  /** The next prompt or paste as it ended at an Enter. */
+  /** The next prompt or pastes as they ended at an Enter: a paste's own line breaks are not one. */
   private async readMessage(): Promise<string | undefined> {
     let line = await this.readTypedLine();
     if (line === undefined) return line;
     if (!line.startsWith(PASTE_START)) return this.rawInput && this.dialect.harness === 'claude' ? keptOfTypedLine(line) : line;
-    const lines = [line];
-    while (!line.includes(PASTE_END)) {
+    let message = line;
+    while (message.lastIndexOf(PASTE_START) > message.lastIndexOf(PASTE_END)) {
       line = await this.readTypedLine();
       if (line === undefined) break;
-      lines.push(line);
+      message = `${message}\n${line}`;
     }
-    return lines.join('\n').replace(PASTE_START, '').replace(PASTE_END, '');
+    if (this.dialect.harness === 'claude') return this.foldPastes(message);
+    return message.replaceAll(PASTE_START, '').replaceAll(PASTE_END, '');
+  }
+
+  /**
+   * `message` as Claude takes its pastes, each on its own however soon after the last, with what was typed around them
+   * kept in its place: a tab made four spaces, and one too long (`PASTE_FOLD_CHARS`, `PASTE_FOLD_BREAKS`) wrapped, for its
+   * transcript, and shown as a placeholder (`submit`).
+   */
+  private foldPastes(message: string): string {
+    return message
+      .split(PASTE_START)
+      .map((part, index) => {
+        if (index === 0) return part;
+        const [pasted, ...typed] = part.split(PASTE_END);
+        const paste = pasted!.replaceAll('\t', '    ');
+        const after = typed.join('');
+        if (paste.length <= PASTE_FOLD_CHARS && paste.split('\n').length - 1 < PASTE_FOLD_BREAKS) return `${paste}${after}`;
+        const id = randomUUID().slice(0, 4);
+        return `\n\n<pasted_content id="${id}">\n${paste}\n</pasted_content id="${id}">\n${after}`;
+      })
+      .join('');
   }
 
   /** A line as typed: one ended by ESC CR goes on with the next. */

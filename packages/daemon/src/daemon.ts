@@ -3,6 +3,7 @@ import { createServer, type Server, type Socket } from 'node:net';
 import { homedir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { logLine } from './log-line.ts';
 import {
   cloneRepo,
   createGitHubTracker,
@@ -58,6 +59,7 @@ import {
   PROTOCOL_VERSION,
   lineSplitter,
   waitsForYou,
+  type BoardItem,
   type BuildInfo,
   type DaemonEvent,
   type DaemonHealth,
@@ -80,6 +82,7 @@ import { createSafeFetch } from './safe-fetch.ts';
 import { createImageStore } from './image-store.ts';
 import { createImageSweeper } from './image-sweeper.ts';
 import { createLinkCards } from './link-cards.ts';
+import { createCrewCards, type CrewCards } from './crew-cards.ts';
 import { createCrewLoop } from './crew-loop.ts';
 import { unsavedWork } from './worktrees.ts';
 import { createPrefabLibrary } from './prefab-library.ts';
@@ -103,6 +106,7 @@ import { setupHandlers } from './setup-checks.ts';
 import { viewStateHandlers } from './view-state.ts';
 import { createZoneSources, type ZoneSources } from './zone-sources.ts';
 import { linkedWorktrees, removeManagedClone, zoneDissolveHandlers } from './zone-dissolve.ts';
+import { zoneFoldHandlers } from './zone-fold.ts';
 import { createZoneTable, inGroupFolder, zoneHandlers } from './zones.ts';
 
 export interface DaemonOptions {
@@ -286,7 +290,7 @@ const DAEMON_ITSELF: SessionSubscriber & BoardConnection = { send: () => {}, bac
  * has been true for `idleTimeoutMs`.
  */
 export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
-  const log = options.log ?? ((message: string) => console.log(`[agent-board daemon] ${message}`));
+  const log = options.log ?? ((message: string) => console.log(logLine(message)));
   const idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
   const idleCheckIntervalMs = options.idleCheckIntervalMs ?? Math.min(1_000, idleTimeoutMs);
   const dataDirGraceMs = options.dataDirGraceMs ?? DEFAULT_DATA_DIR_GRACE_MS;
@@ -307,14 +311,31 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     // An ended agent's pane's shell is no session to the user: it neither keeps the daemon up nor stops it stopping.
     const countLiveSessions = () => (liveSessions.get() as { n: number }).n - agents.fallbackShellCount();
 
-    const clients = new Set<Socket>();
+    /** Each client's socket, and the connection its calls are made on: who it speaks as, once it identifies. */
+    const clients = new Map<Socket, BoardConnection>();
     /** Connections that asked for their sessions' streams alone: every other event is noise to them, and each costs them a parse. */
     const streamOnly = new WeakSet<Socket>();
     /** What hears every event the daemon sends, beside its clients: the orchestrators' waits, once they are made. */
     const listeners: ((event: DaemonEvent) => void)[] = [];
-    const broadcast = (event: DaemonEvent) => {
+    /** The kinds an agent reads only in its scope (ADR-0010): every other item is every connection's to hear. */
+    const SCOPED_KINDS: ReadonlySet<BoardItem['kind']> = new Set(['steps', 'memory', 'queue', 'crew']);
+    /**
+     * Whether `client` hears `event`. An item's change or removal of a scoped kind reaches it only if its `item.list`
+     * would list the item; a removal whose item isn't known, or one sent before the rule is set, reaches only a
+     * connection that speaks for no agent.
+     */
+    const hears = (client: Socket, connection: BoardConnection, event: DaemonEvent, about: BoardItem | undefined): boolean => {
+      if (client.destroyed) return false;
+      if (event.type !== 'session.exited' && streamOnly.has(client)) return false;
+      if (event.type !== 'item.updated' && event.type !== 'item.removed') return true;
+      if (connection.boardSession === undefined) return true;
+      const item = event.type === 'item.updated' ? event.item : about;
+      if (item !== undefined && !SCOPED_KINDS.has(item.kind)) return true;
+      return item !== undefined && late.visibleItems !== undefined && late.visibleItems([item], connection).length > 0;
+    };
+    const broadcast = (event: DaemonEvent, about?: BoardItem) => {
       const line = eventLine(event);
-      for (const client of clients) if (!client.destroyed && (event.type === 'session.exited' || !streamOnly.has(client))) client.write(line);
+      for (const [client, connection] of clients) if (hears(client, connection, event, about)) client.write(line);
       for (const listener of listeners) listener(event);
     };
 
@@ -378,7 +399,12 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     });
 
     // Late-bound: made once the daemon's methods are, and told of sessions ending from then on.
-    const late: { memoryQueue?: MemoryQueueHost } = {};
+    const late: {
+      memoryQueue?: MemoryQueueHost;
+      crewCards?: CrewCards;
+      /** The items `connection` may read, as `item.list` lists them (ADR-0010). */
+      visibleItems?: (list: BoardItem[], connection: BoardConnection) => BoardItem[];
+    } = {};
     // Late-bound: the agent host is made after, with the shells' `deleteOwned`.
     const shells = createShellHost({ db, sessions, homeDir, shell, agentDeleting: (agentId) => agents.isDeleting(agentId), broadcast, log });
     const isAgentSession = db.prepare('SELECT 1 FROM agents WHERE session_id = ?1 OR harness_session_id = ?1 UNION SELECT 1 FROM agent_conversations WHERE harness_session_id = ?1');
@@ -490,6 +516,8 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         stop: (...args) => agents.stop(...args),
         deliver: (...args) => agents.deliver(...args),
         announce: (sessionId) => agents.announce(sessionId),
+        flag: (...args) => agents.flag(...args),
+        clearFlag: (sessionId) => agents.clearFlag(sessionId),
       },
       call: async (method, params) => handlers[method](params as never, DAEMON_ITSELF) as never,
       broadcast,
@@ -771,6 +799,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       },
       news: (sessionId, kind, detail) => orchestrators.crewNews(sessionId, kind, detail),
       dir: join(paths.dataDir, 'crews'),
+      changed: (crewId) => late.crewCards?.changed(crewId),
       log,
     });
     listeners.push((event) => event.type === 'agent.updated' && crews.observe(event.agent));
@@ -822,13 +851,28 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     // Memories and queues: their contents in their own tables, their scope as a steps card's.
     const memoryQueue = createMemoryQueueHost({ sessions, agents, shells, db, log, call: (method, params) => call(method, params), place: (sessionId, size) => spotBesideAgent(call, sessionId, size), reachesZone });
     late.memoryQueue = memoryQueue;
+    // A running crew's card: the crew loop's own record of it, as a board item.
+    const crewCards = createCrewCards({
+      sessions,
+      agents,
+      shells,
+      db,
+      log,
+      call: (method, params) => call(method, params),
+      place: (sessionId, size) => spotBesideAgent(call, sessionId, size),
+      card: (crewId) => crews.card(crewId),
+      crews: () => crews.list(),
+      reachesZone,
+    });
+    late.crewCards = crewCards;
+    late.visibleItems = (list, connection) => crewCards.visible(memoryQueue.visible(steps.visible(list, connection), connection), connection);
     const captures = createCaptureHost({ ...(options.captureTimeoutMs === undefined ? {} : { timeoutMs: options.captureTimeoutMs }) });
     const measures = createLayoutMeasures({ mayReport: captures.serves, ...(options.measureWaitMs === undefined ? {} : { waitMs: options.measureWaitMs }) });
     // A steps card an ask was put on, taken off the board, gives the ask back to its agent's tile.
     const items = itemHandlers(
       db,
-      (event) => {
-        broadcast(event);
+      (event, about) => {
+        broadcast(event, about);
         if (event.type === 'item.removed') asks.cardGone(event.id);
         // What agents wait on the user for on a steps card follows its cards.
         if (event.type === 'item.removed') steps.itemChanged({ id: event.id, removed: true });
@@ -871,6 +915,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       }),
       ...shells.handlers<SessionSubscriber>(),
       ...zones,
+      ...zoneFoldHandlers<unknown>(db, zoneTable, agents),
       'zone.remove': async (params, context) => {
         const id = (params as { id?: unknown } | undefined)?.id;
         const result = await leavingZone(typeof id === 'string' ? id : undefined, () => zones['zone.remove'](params, context));
@@ -899,16 +944,21 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       ...flowEdges.handlers<SessionSubscriber>(),
       ...items,
       // An agent lists only the steps cards in its scope, as the steps methods read them.
-      'item.list': async (params, context) => memoryQueue.visible(steps.visible(await items['item.list'](params, context), context), context),
-      // A memory's or queue's count is its rows': an undo that sends a card's whole data back may carry an older one.
-      'item.create': async (params, context) => memoryQueue.recounted(await items['item.create'](params, context), true),
+      'item.list': async (params, context) => late.visibleItems!(await items['item.list'](params, context), context),
+      // A memory's or queue's count is its rows': an undo that sends a card's whole data back may carry an older one. A
+      // crew card's data is its crew's, whoever makes or changes the card.
+      'item.create': async (params, context) => memoryQueue.recounted(await items['item.create'](crewCards.creating(params), context), true),
       // A queue an agent holds a job from stays the agents': the user's takes none.
       'item.update': async (params, context) => {
         memoryQueue.checkUpdate(params);
         // The agents a queue's drain started are the daemon's to keep: the user's drain sheet, or an undo, sends an old list.
         memoryQueue.keepStarted(params);
         const data = (params as { data?: Record<string, unknown> } | null)?.data;
-        return memoryQueue.recounted(await items['item.update'](params, context), data !== undefined && ('count' in data || 'drain' in data));
+        return memoryQueue.recounted(await items['item.update'](crewCards.updating(params), context), data !== undefined && ('count' in data || 'drain' in data));
+      },
+      'item.delete': (params, context) => {
+        crewCards.checkDelete(params);
+        return items['item.delete'](params, context);
       },
       ...viewStateHandlers<SessionSubscriber>(db),
       ...settings.handlers<SessionSubscriber>(),
@@ -1038,6 +1088,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       if (event.type === 'agent.removed') void memoryQueue.releaseGone(event.sessionId).catch((error: unknown) => log(`could not put back the jobs ${event.sessionId} held: ${(error as Error).message}`));
     });
     void memoryQueue.releaseGone().catch((error: unknown) => log(`could not put back the jobs of agents gone: ${(error as Error).message}`));
+    void crewCards.load().catch((error: unknown) => log(`could not read the crews' cards: ${(error as Error).message}`));
     // No ask's call outlives the daemon: a card still marked as waited on says its ask stopped.
     void steps.endStaleAsks().catch((error: unknown) => log(`could not mark steps cards as no longer waited on: ${(error as Error).message}`));
     void steps.load().catch((error: unknown) => log(`could not read the steps cards agents wait on: ${(error as Error).message}`));
@@ -1101,7 +1152,6 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
 
     const guardedHandlers = guardBoardCallers(handlers, orchestrators);
     const server = createServer((socket) => {
-      clients.add(socket);
       const closed = new AbortController();
       const subscriber: SessionSubscriber & BoardConnection = {
         closed: closed.signal,
@@ -1115,6 +1165,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
           else socket.once('drain', callback);
         },
       };
+      clients.set(socket, subscriber);
       socket.on('close', () => {
         clients.delete(socket);
         sessions.detachAll(subscriber);
@@ -1145,6 +1196,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         orchestrators.close();
         // Its agents stop as the daemon does, which no crew should take for news.
         crews.close();
+        crewCards.close();
         pullRequests.stop();
         flowEdges.stop();
         conditionShell.stop();
@@ -1158,7 +1210,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         // Unlink the socket first, while it is certainly still ours: once it stops answering, a new daemon may take
         // the lock and bind a fresh socket at the same path, which a later unlink would delete.
         if (process.platform !== 'win32') rmSync(paths.socket, { force: true });
-        for (const client of clients) client.destroy();
+        for (const client of clients.keys()) client.destroy();
         // Kill the sessions once no client can start more: nothing would own their PTYs once we are gone. The user
         // didn't stop them, so they are stopped by restart, and the app offers to resume them.
         await Promise.all([new Promise((resolve) => server.close(resolve)), ingress!.close(), sessions.killAll({ stoppedByRestart: true })]);

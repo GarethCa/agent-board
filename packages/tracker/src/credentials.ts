@@ -15,9 +15,27 @@ export const KEYCHAIN_SERVICE = 'agent-board';
 
 /**
  * Characters a secret may have. API keys and OAuth tokens fit, and nothing here needs quoting in `security -i`'s
- * command language or can end a line.
+ * command language or is a line end. (Length is checked on the whole command: see `MAX_COMMAND_LENGTH`.)
  */
 const SECRET_PATTERN = /^[A-Za-z0-9._~+/=:-]{1,4096}$/;
+
+/**
+ * Characters an account name may have: a provider (`linear`), maybe with a host or user. Like the secret, it goes
+ * into `security -i`'s command language, and nothing here needs quoting there or is a line end. It starts with a
+ * letter or digit, so no tool reads it as an option.
+ */
+const ACCOUNT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._@+-]{0,127}$/;
+
+/** A keychain path goes inside double quotes in `security -i`, so it may not hold one, a backslash or a line end. */
+// eslint-disable-next-line no-control-regex -- control characters are what it refuses.
+const UNSAFE_PATH = /["\\\x00-\x1f\x7f]/;
+
+/**
+ * The longest command we hand `security -i`, in bytes with its newline. It cuts every 4095 characters into a command
+ * of its own, so a longer line would run its first piece without the keychain file, writing to the login keychain,
+ * and run the rest as a second command. This leaves headroom below that.
+ */
+const MAX_COMMAND_LENGTH = 4000;
 
 export interface KeychainOptions {
   /**
@@ -69,10 +87,13 @@ function macKeychain(keychain?: string): CredentialStore {
       return found.stdout.replace(/\n$/, '');
     },
     async set(account, secret) {
+      checkAccount(account);
       checkSecret(secret);
+      if (keychain !== undefined && UNSAFE_PATH.test(keychain)) throw new Error('that is not a safe keychain path');
       // `security -i` reads commands on stdin, so the secret never reaches a command line.
       const quoted = [KEYCHAIN_SERVICE, account, secret, ...file].map((word) => `"${word}"`);
       const command = `add-generic-password -U -s ${quoted[0]} -a ${quoted[1]} -l ${quoted[0]} -w ${quoted.slice(2).join(' ')}\n`;
+      if (Buffer.byteLength(command) > MAX_COMMAND_LENGTH) throw new Error('that is too long to store');
       const added = await security(['-i'], command);
       // `security -i` exits 0 even when a command fails, so check the write took. Its stderr is left out of the error:
       // it could echo the command, secret and all.
@@ -89,11 +110,14 @@ function macKeychain(keychain?: string): CredentialStore {
 function secretService(): CredentialStore {
   const attributes = (account: string) => ['service', KEYCHAIN_SERVICE, 'account', account];
   return {
+    // An account that isn't valid was never stored, and `secret-tool` might read one as an option.
     async get(account) {
+      if (!ACCOUNT_PATTERN.test(account)) return undefined;
       const found = await run('secret-tool', ['lookup', ...attributes(account)]);
       return found.code === 0 && found.stdout !== '' ? found.stdout : undefined;
     },
     async set(account, secret) {
+      checkAccount(account);
       checkSecret(secret);
       const stored = await run(
         'secret-tool',
@@ -103,9 +127,14 @@ function secretService(): CredentialStore {
       if (stored.code !== 0) throw new Error(`could not write to the Secret Service: ${stored.stderr}`);
     },
     async delete(account) {
+      if (!ACCOUNT_PATTERN.test(account)) return;
       await run('secret-tool', ['clear', ...attributes(account)]);
     },
   };
+}
+
+function checkAccount(account: string): void {
+  if (!ACCOUNT_PATTERN.test(account)) throw new Error('that is not a valid account name');
 }
 
 function checkSecret(secret: string): void {

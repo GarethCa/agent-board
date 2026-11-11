@@ -2,6 +2,11 @@
 // handler it calls, with a stable id. Any menu of one of them (its tile's or tab's ⋯, a right-click, the menu bar) takes
 // its rows from here, so a row reads and does the same wherever it shows. Pure, so it is unit-tested.
 import {
+  AlignStartVertical,
+  ArrowDown,
+  ArrowDownToLine,
+  ArrowUp,
+  ArrowUpToLine,
   Brain,
   Check,
   CircleDot,
@@ -9,6 +14,7 @@ import {
   BellOff,
   Clock,
   Coins,
+  Copy,
   Ellipsis,
   Expand,
   FileCheck,
@@ -19,29 +25,41 @@ import {
   FolderPlus,
   FoldVertical,
   GitBranch,
+  GitPullRequest,
   Hash,
+  Layers,
   LayoutDashboard,
   LayoutGrid,
   Link2,
+  LocateFixed,
   ListPlus,
   ListTodo,
   Maximize2,
+  MessageCircleQuestion,
   Network,
+  OctagonX,
   Palette,
   Pause,
   Pencil,
+  Pin,
+  PinOff,
   Play,
   Plug,
   Plus,
   RotateCcw,
   Rows3,
+  Settings2,
   ShieldCheck,
+  Sparkles,
+  Spline,
   SquareArrowOutUpRight,
   StickyNote,
   Trash2,
+  UnfoldVertical,
   Unlink,
   X,
   Users,
+  Zap,
   LibraryBig,
 } from 'lucide-react';
 import { CrewFaces } from '../crews/icons';
@@ -64,6 +82,7 @@ import {
   type Zone,
   type ZoneBinding,
   type ZoneLayoutMode,
+  waitsOnUser,
 } from '@agent-board/daemon/protocol';
 import { isClosed, SPACING_GAPS } from '@agent-board/daemon/board-layout';
 import { startBlocked } from '@agent-board/daemon/review-doc';
@@ -76,6 +95,8 @@ import { canRestart } from '../session/RestartAgent';
 import type { ClickOpens } from './click-opens';
 import { folderLabel } from './folders';
 import { pauseControl } from './paused';
+import type { Reorder } from './editing/arrange';
+import { sessionControls, type ControlId } from '../session/controls';
 import type { TileActions } from './tile';
 
 /** A row of a model menu, with the id the menu bar and tests know it by. Headings and separators carry none. */
@@ -185,21 +206,195 @@ export function agentMenu(input: AgentMenuInput): ModelEntry[] {
     reasoningEntry(agent, actions),
     'separator',
     ...reviewEntries(input),
-    ...(gated(agent)
-      ? [
-          {
-            id: 'run-gate',
-            label: 'Run gate',
-            icon: <ShieldCheck />,
-            shortcut: runGateShortcut(),
-            disabled: gate?.status === 'running',
-            hint: gate?.status === 'running' ? 'It is running: its Gate tab shows it' : "Run its zone's gate command in its worktree",
-            onSelect: () => actions.openGate(agent, true),
-          },
-        ]
-      : []),
+    ...gateEntries(agent, gate, actions),
     'separator',
     { id: 'delete', label: 'Delete agent', icon: <Trash2 />, danger: true, onSelect: () => actions.deleteAgent(agent.sessionId) },
+  ];
+}
+
+/** Its Run gate row, for an agent with a worktree of its own: disabled while a run is under way. */
+function gateEntries(agent: Agent, gate: GateRun | undefined, actions: Pick<AgentMenuActions, 'openGate'>): ModelEntry[] {
+  if (!gated(agent)) return [];
+  const running = gate?.status === 'running';
+  return [
+    {
+      id: 'run-gate',
+      label: 'Run gate',
+      icon: <ShieldCheck />,
+      shortcut: runGateShortcut(),
+      disabled: running,
+      hint: running ? 'It is running: its Gate tab shows it' : "Run its zone's gate command in its worktree",
+      onSelect: () => actions.openGate(agent, true),
+    },
+  ];
+}
+
+/** A tile the agent's is linked to, to show: its implementer or reviewer, or the orchestrator that started it. */
+export interface RelatedTile {
+  sessionId: string;
+  /** Its row's words, as "Show its reviewer" or "Show checkout-fix". */
+  label: string;
+}
+
+/** What an agent tile's menu does to the tile on the board, rather than to the agent. */
+export interface TileBoardActions {
+  /** Opens Ask Claude about the tile. */
+  askClaude(): void;
+  /** Brings the tile forward or to the front, or sends it back. */
+  restack(how: Reorder): void;
+  /** Waits for a click on what to join the tile to; absent where it can't be joined. */
+  connect?: () => void;
+  /** For a lead tile in a shelved zone: whether it is pinned top-left, and how to free or pin it. */
+  leadPin?: { pinned: boolean; toggle(): void };
+  /** Puts the text on the clipboard, saying what it was. */
+  copy(text: string, what: string): void;
+  /** Selects the tile of the session and flies to it. */
+  show(sessionId: string): void;
+}
+
+type AgentTileMenuActions = AgentMenuActions & Pick<TileActions, 'interruptAgent' | 'stopAgent' | 'openPullRequest'>;
+
+/** What an agent tile's menu is drawn from: its agent menu's input, and what it does to the tile on the board. */
+export interface AgentTileMenuInput extends AgentMenuInput {
+  actions: AgentTileMenuActions;
+  board: TileBoardActions;
+  /** The tiles it is linked to, still on the board. */
+  related: readonly RelatedTile[];
+  /** For a reviewer, the round it writes. */
+  review: ReviewRound | undefined;
+}
+
+/**
+ * The one step that leads an agent tile's menu, when it has one: the place to answer its question, Wake while it is
+ * paused, or a reviewer's review once its doc is in. Each opens where to act, and does nothing for the user there.
+ */
+function nextStep({ nodeId, agent, clickOpens, review, actions }: AgentTileMenuInput): ModelEntry[] {
+  if (agent.endedAt === null && (agent.state === 'needs-permission' || agent.permissions.length > 0 || waitsOnUser(agent)))
+    return [
+      {
+        id: 'go-to-question',
+        label: 'Go to its question',
+        icon: <MessageCircleQuestion />,
+        hint: 'Opens it, to answer there',
+        onSelect: () => (clickOpens === 'expand' ? actions.expand(nodeId) : actions.openAgent(agent)),
+      },
+    ];
+  const pause = pauseControl(agent);
+  if (pause?.action === 'wake') return [{ id: 'wake', label: 'Wake', icon: <Play />, hint: pause.hint, onSelect: () => void actions.resumeAgent(agent.sessionId) }];
+  if (agent.reviewOf !== null && review?.status === 'ready')
+    return [{ id: 'open-review', label: 'Open review', icon: <FileCheck />, hint: 'Its doc is in', onSelect: () => actions.openReview(agent.reviewOf!) }];
+  return [];
+}
+
+/** Run ▸: interrupt or pause it, carry an ended one on, and, kept apart, stop its session. */
+function runEntries(agent: Agent, actions: AgentTileMenuActions): ModelEntry[] {
+  const controls = sessionControls({ agent, live: true });
+  const control = (id: ControlId) => controls.find((each) => each.id === id);
+  const interrupt = control('interrupt');
+  const pause = control('pause');
+  const stop = control('stop');
+  const going: ModelEntry[] = [
+    ...(agent.endedAt === null && interrupt !== undefined
+      ? [{ id: 'interrupt', label: 'Interrupt', icon: <Zap />, disabled: !interrupt.enabled, hint: interrupt.hint, onSelect: () => actions.interruptAgent(agent.sessionId) }]
+      : []),
+    ...(pause === undefined ? [] : [{ id: 'pause', label: 'Pause', icon: <Pause />, disabled: !pause.enabled, hint: pause.hint, onSelect: () => void actions.pauseAgent(agent.sessionId) }]),
+    ...(canRestart(agent) ? [{ id: 'restart', label: 'Restart agent', icon: <RotateCcw />, onSelect: () => actions.restartAgent(agent.sessionId) }] : []),
+    ...(agent.state === 'stopped-by-restart' ? [{ id: 'resume', label: 'Resume agent', icon: <RotateCcw />, onSelect: () => void actions.resumeAgent(agent.sessionId) }] : []),
+    ...(continuesOnCredits(agent) ? [{ id: 'continue-on-credits', label: 'Continue on credits', icon: <Coins />, onSelect: () => void actions.continueOnCredits(agent.sessionId) }] : []),
+  ];
+  const stopping: ModelEntry[] =
+    stop?.enabled === true ? [{ id: 'stop', label: 'Stop session', icon: <OctagonX />, hint: stop.hint, onSelect: () => actions.stopAgent(agent.sessionId) }] : [];
+  return [...going, ...(going.length > 0 && stopping.length > 0 ? ['separator' as const] : []), ...stopping];
+}
+
+/** Review & gate ▸: its own pull request, its reviews, the tiles it is linked to, and its gate. */
+function reviewGateEntries(input: AgentTileMenuInput): ModelEntry[] {
+  const { agent, gate, related, actions } = input;
+  const [pr] = agent.pullRequests;
+  const checks: ModelEntry[] = [
+    ...(pr === undefined ? [] : [{ id: 'open-pr', label: `Open pull request #${pr.number}`, icon: <GitPullRequest />, hint: pr.title, onSelect: () => actions.openPullRequest(agent, pr) }]),
+    ...reviewEntries(input),
+    ...related.map((tile): ModelEntry => ({ id: `show-${tile.sessionId}`, label: tile.label, icon: <LocateFixed />, onSelect: () => input.board.show(tile.sessionId) })),
+  ];
+  const gates = gateEntries(agent, gate, actions);
+  return [...checks, ...(checks.length > 0 && gates.length > 0 ? ['separator' as const] : []), ...gates];
+}
+
+/** Arrange ▸: the tile's z-order (its keys still work), Align, which takes two or more, and its place on the board. */
+function arrangeEntries({ nodeId, agent, board, actions }: AgentTileMenuInput): ModelEntry[] {
+  const place: ModelEntry[] = [
+    ...(isClosed(agent) ? [{ id: 'fold', label: 'Fold to a chip', icon: <FoldVertical />, onSelect: () => actions.setFolded(nodeId, true) }] : []),
+    ...(board.leadPin === undefined
+      ? []
+      : [
+          board.leadPin.pinned
+            ? { id: 'lead-pin', label: 'Free from top-left', icon: <PinOff />, hint: 'It goes on the shelves as a stack of its own', onSelect: board.leadPin.toggle }
+            : { id: 'lead-pin', label: 'Pin top-left', icon: <Pin />, hint: "Back in the zone's head row, above the shelves", onSelect: board.leadPin.toggle },
+        ]),
+    ...(board.connect === undefined ? [] : [{ id: 'connect', label: 'Connect to…', icon: <Spline />, hint: 'Then click what to join it to', onSelect: board.connect }]),
+  ];
+  return [
+    { id: 'front', label: 'Bring to front', icon: <ArrowUpToLine />, shortcut: keyText('edit.front'), onSelect: () => board.restack('front') },
+    { id: 'forward', label: 'Bring forward', icon: <ArrowUp />, shortcut: keyText('edit.forward'), onSelect: () => board.restack('forward') },
+    { id: 'backward', label: 'Send backward', icon: <ArrowDown />, shortcut: keyText('edit.backward'), onSelect: () => board.restack('backward') },
+    { id: 'back', label: 'Send to back', icon: <ArrowDownToLine />, shortcut: keyText('edit.back'), onSelect: () => board.restack('back') },
+    // As the selection's Align ▸, which a lone tile has nothing to line up with.
+    { id: 'align', label: 'Align', icon: <AlignStartVertical />, disabled: true, hint: 'Select two or more to line them up', entries: [] },
+    ...(place.length > 0 ? ['separator' as const, ...place] : []),
+  ];
+}
+
+/** Copy ▸: its branch name, worktree path and session id. */
+function copyEntries({ agent, board }: AgentTileMenuInput): ModelEntry[] {
+  const copy = (id: string, label: string, text: string, what: string): ModelEntry => ({
+    id,
+    label,
+    icon: <Copy />,
+    ...(text === '' ? { disabled: true, hint: 'It has none' } : { detail: text }),
+    onSelect: () => board.copy(text, what),
+  });
+  return [copy('branch', 'Branch name', agent.branch, 'Branch name'), copy('worktree', 'Worktree path', agent.worktree, 'Worktree path'), copy('session-id', 'Session id', agent.sessionId, 'Session id')];
+}
+
+/**
+ * An agent tile's menu, from its ⋯ and a right-click alike: its next step first when it has one, how to open it, then
+ * its rows in groups (Run, Settings, Review & gate, Arrange), Ask Claude, Copy and Delete. Ten rows at most, so it fits
+ * beside a tile. No row answers, approves or nudges the agent: each does only what is pressed.
+ */
+export function agentTileMenu(input: AgentTileMenuInput): ModelEntry[] {
+  const { nodeId, agent, clickOpens, rename, actions, board } = input;
+  const run = runEntries(agent, actions);
+  const review = reviewGateEntries(input);
+  return [
+    ...nextStep(input),
+    otherOpen(clickOpens, () => actions.expand(nodeId), () => actions.openAgent(agent)),
+    { id: 'pop-out', label: 'Pop out', icon: <SquareArrowOutUpRight />, onSelect: () => actions.popOutAgent(agent) },
+    'separator',
+    ...(run.length === 0 ? [] : [{ id: 'run', label: 'Run', icon: <Play />, entries: run }]),
+    {
+      id: 'settings',
+      label: 'Settings',
+      icon: <Settings2 />,
+      entries: [
+        { id: 'rename', label: 'Rename', icon: <Pencil />, shortcut: keyText('tile.rename'), onSelect: rename },
+        { id: 'schedule', label: agent.schedule === null ? 'Schedule…' : 'Edit schedule…', icon: <Clock />, onSelect: () => actions.scheduleAgent(agent) },
+        { id: 'link-issue', label: agent.issue === null ? 'Link issue…' : 'Change issue…', icon: <Hash />, onSelect: () => actions.linkIssue(agent) },
+        {
+          id: 'mute',
+          label: agent.muted ? 'Unmute notifications' : 'Mute notifications',
+          icon: agent.muted ? <Bell /> : <BellOff />,
+          onSelect: () => actions.setMuted(agent.sessionId, !agent.muted),
+        },
+        reasoningEntry(agent, actions),
+      ],
+    },
+    ...(review.length === 0 ? [] : [{ id: 'review', label: 'Review & gate', icon: <ShieldCheck />, entries: review }]),
+    { id: 'arrange', label: 'Arrange', icon: <Layers />, entries: arrangeEntries(input) },
+    'separator',
+    { id: 'ask', label: 'Ask Claude about it…', icon: <Sparkles />, shortcut: keyText('make.askClaude'), hint: 'Sends nothing until you press Ask', onSelect: board.askClaude },
+    { id: 'copy', label: 'Copy', icon: <Copy />, entries: copyEntries(input) },
+    'separator',
+    { id: 'delete', label: 'Delete agent', icon: <Trash2 />, danger: true, shortcut: keyText('tile.delete'), onSelect: () => actions.deleteAgent(agent.sessionId) },
   ];
 }
 
@@ -283,6 +478,10 @@ export interface ZoneBindingActions {
   openSettings(): void;
   /** Draws the zone's work as `mode` lays it out: free, on shelves, or in clusters. Moves no tile's saved place. */
   setLayoutMode(zone: Zone, mode: ZoneLayoutMode): void;
+  /** Folds it to a chip: its agents that can pause are paused and its terminals let go. */
+  fold(zone: Zone): void;
+  /** Unfolds it. Its paused agents stay paused unless `wake` is asked for. */
+  unfold(zone: Zone, wake: boolean): void;
   /** Renames it; rejects if the daemon refuses. */
   rename(zone: Zone, name: string): Promise<unknown>;
   recolor(zone: Zone, color: string): void;
@@ -312,6 +511,51 @@ export interface ZoneBindingActions {
 
 /** What a zone's menus do to it: the handlers its tab is given, but for renaming, which its menu starts in place. */
 type ZoneMenuActions = Omit<ZoneBindingActions, 'rename'>;
+
+/**
+ * The rows that fold a zone to a chip while it isn't needed, or unfold it: Fold, or Unfold (its agents stay paused, as
+ * nothing wakes an agent by itself) and Unfold and wake, which wakes the agents the fold paused and none paused before
+ * it. The same in both designs' menus.
+ */
+function foldRows(zone: Zone, actions: Pick<ZoneMenuActions, 'fold' | 'unfold'>): ModelEntry[] {
+  // While it clones it has nothing to fold, and its header has no Fold button either.
+  if (zone.clone !== null) return [];
+  if (!zone.folded) {
+    return [
+      {
+        id: 'fold',
+        label: 'Fold to a chip',
+        icon: <FoldVertical />,
+        hint: 'Pauses the agents that can pause and lets their terminals go, to free memory. The chip keeps a count and anything that needs you',
+        onSelect: () => actions.fold(zone),
+      },
+    ];
+  }
+  return [
+    { id: 'unfold', label: 'Unfold', icon: <UnfoldVertical />, hint: 'Its agents stay paused until you wake them', onSelect: () => actions.unfold(zone, false) },
+    { id: 'unfold-wake', label: 'Unfold and wake its agents', icon: <UnfoldVertical />, hint: 'Wakes the agents that folding paused. One paused before the fold stays paused', onSelect: () => actions.unfold(zone, true) },
+  ];
+}
+
+/**
+ * The ⋯ and right-click menu of a folded zone's chip: unfold it (or unfold and wake), rename it, delete it. `simplified`
+ * words the delete as the Simplified design's project does.
+ */
+export function chipMenu({ zone, rename, actions, simplified = false }: Pick<ZoneMenuInput, 'zone' | 'rename' | 'actions'> & { simplified?: boolean }): ModelEntry[] {
+  return [
+    ...foldRows(zone, actions),
+    'separator',
+    { id: 'rename', label: 'Rename', icon: <Pencil />, onSelect: rename },
+    {
+      id: 'delete',
+      label: simplified ? 'Delete project…' : 'Delete zone…',
+      icon: <X />,
+      danger: true,
+      hint: simplified ? 'Its agents stay on the board where they are' : 'Its tiles stay on the board where they are',
+      onSelect: () => actions.deleteZone(zone),
+    },
+  ];
+}
 
 /** A zone's spacings to pick from, its own picked, each with its tile and lane gaps. */
 function spacingEntries(zone: Zone, actions: Pick<ZoneMenuActions, 'setSpacing'>): ModelEntry[] {
@@ -379,7 +623,7 @@ export function bindEntries(zone: Zone, actions: { bind(zone: Zone, as: ZoneBind
 }
 
 /** A chip on a zone's tab that can fold into its ⋯ menu. */
-export type ZoneTabChip = 'default-repo' | 'cancel-clone' | 'tracker' | 'issue' | 'bind' | 'agent' | 'shell' | 'tidy';
+export type ZoneTabChip = 'default-repo' | 'cancel-clone' | 'tracker' | 'issue' | 'bind' | 'agent' | 'shell' | 'tidy' | 'fold';
 
 /** The handlers a zone's tab chips call. */
 export interface ZoneTabActions {
@@ -424,6 +668,8 @@ export function zoneTabEntries(zone: Zone, noAgents: string | undefined, actions
     shell: { id: 'tab-new-shell', label: 'New shell', icon: <Plus />, onSelect: () => actions.newShell(zone) },
     // The zone's own ⋯ has Tidy already; while it clones, ⋯ holds only what folded.
     tidy: clone === null ? undefined : { id: 'tab-tidy', label: 'Tidy', icon: <LayoutGrid />, ...tidyBlocked(zone), onSelect: () => actions.tidy(zone) },
+    // ⋯ has Fold to a chip already, and a zone still cloning has no Fold button.
+    fold: undefined,
   };
 }
 
@@ -461,6 +707,7 @@ export function zoneMenu({ zone, folded, themeFill, rename, actions }: ZoneMenuI
       icon: <Rows3 />,
       entries: [{ heading: 'Layout' }, ...layoutModeEntries(zone, actions), 'separator', { heading: 'Spacing' }, ...spacingEntries(zone, actions)],
     },
+    ...foldRows(zone, actions),
     { id: 'rename', label: 'Rename', icon: <Pencil />, onSelect: rename },
     {
       id: 'colour',
@@ -733,6 +980,7 @@ export function projectMenu(input: ProjectMenuInput): ModelEntry[] {
       ],
     },
     { id: 'layout', label: 'Layout', icon: <LayoutDashboard />, entries: layoutModeEntries(zone, actions) },
+    ...foldRows(zone, actions),
     issues,
     folder,
     { id: 'agents', label: 'Agents in this project', icon: <Network />, entries: agentSettingEntries(input) },

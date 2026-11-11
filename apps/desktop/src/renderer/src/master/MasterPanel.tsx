@@ -92,6 +92,7 @@ export function MasterPanel({ agents, zones, items, side, focusRequest, onSettin
   const maxBottom = height === 0 ? 0 : maxPanelBottom(height, inset * 2 + tokenNumber('--island-height'), inset);
   const bottom = panelBottom(storedBottom, lift, maxBottom);
   const width = board === 0 ? chosen : clampPanelWidth(chosen, board, taken);
+  const widest = board === 0 ? DEFAULT_PANEL_WIDTH : maxPanelWidth(board, taken);
   // Esc in the panel closes it, as it does a popover; the chat's own keys come first.
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.key !== 'Escape' || event.defaultPrevented) return;
@@ -109,8 +110,8 @@ export function MasterPanel({ agents, zones, items, side, focusRequest, onSettin
         label={listSide ? 'Resize the pane' : 'Resize the Captain’s panel'}
         testId="master-panel-handle"
         value={width}
-        min={MIN_PANEL_WIDTH}
-        max={board === 0 ? DEFAULT_PANEL_WIDTH : maxPanelWidth(board, taken)}
+        min={Math.min(MIN_PANEL_WIDTH, widest)}
+        max={widest}
         grow={-1}
         onChange={(next) => setPanelWidth(clampPanelWidth(next, board, taken))}
         onReset={() => setPanelWidth(undefined)}

@@ -2,7 +2,8 @@
 // At each hand-off it starts that round's reviewers on the builder's branch; once each has left its review, it stops at
 // ready to merge, or hands the reviews back to the builder for the next round, up to the prefab's round limit. It
 // passes on only what its agents wrote, under their own sender marks, and approves, merges and draws nothing. Backed by
-// `crews` and `crew_reviewers`, so a crew carries on across a restart.
+// `crews` and `crew_reviewers`, so a crew carries on across a restart. What a crew's card shows (`card`) is read from
+// the same rows, and `changed` says when to read it again.
 import { randomBytes } from 'node:crypto';
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -15,10 +16,12 @@ import type { ActivityEntry, OrchestratorAccess } from './orchestrators.ts';
 import { invalidParams, optionalStringParam, paramsObject, stringParam } from './params.ts';
 import {
   BOARD_ERROR,
+  MAX_CREW_CARD_TITLE,
   planPending,
   waitsOnUser,
   type Agent,
   type Crew,
+  type CrewCardData,
   type CrewPrefab,
   type CrewReviewer,
   type CrewStop,
@@ -51,6 +54,8 @@ interface CrewRow {
   phase: 'building' | 'reviewing';
   phase_at: string;
   start_failed: 0 | 1;
+  /** Why, while `start_failed`. */
+  start_error: string | null;
   stopped: CrewStop | null;
   stopped_at: string | null;
   started_at: string;
@@ -85,6 +90,8 @@ export interface CrewLoopOptions {
   news(sessionId: string, kind: 'round' | 'crew-stopped', detail: string): void;
   /** Where the crews keep a copy of each review they read, for the next round's reviewer once its own is closed. */
   dir: string;
+  /** The crew may show differently now (`card`): it started, took a step, was stopped, or one of its agents changed. */
+  changed?(crewId: string): void;
   log(message: string): void;
   now?: () => Date;
 }
@@ -101,6 +108,11 @@ export interface CrewLoop {
   resume(): void;
   /** The crews, newest first. */
   list(): Crew[];
+  /**
+   * What the crew's card shows, as the crew is now, its `tiles` as its prefab draws a crew at first; undefined for no
+   * such crew.
+   */
+  card(crewId: string): CrewCardData | undefined;
   /** Settles once no crew is moving on: for tests. */
   idle(): Promise<void>;
   /** Stops moving crews on, as the daemon shuts down: its agents stop as it goes, which is no news to a crew. */
@@ -147,6 +159,16 @@ function readText(path: string): string | undefined {
 
 const rounds = (n: number) => `${n} ${n === 1 ? 'round' : 'rounds'}`;
 
+/** What a crew was asked, in a line for its card: its prompt's first line with anything on it, else its prefab's name. */
+function cardTitle(prompt: string, prefab: string): string {
+  const line = prompt
+    .split('\n')
+    .map((each) => each.trim())
+    .find((each) => each !== '');
+  const title = [...(line ?? prefab)];
+  return title.length > MAX_CREW_CARD_TITLE ? `${title.slice(0, MAX_CREW_CARD_TITLE - 1).join('')}…` : title.join('');
+}
+
 export function createCrewLoop(db: DatabaseSync, options: CrewLoopOptions): CrewLoop {
   const now = options.now ?? (() => new Date());
   const insertCrew = db.prepare(
@@ -161,7 +183,7 @@ export function createCrewLoop(db: DatabaseSync, options: CrewLoopOptions): Crew
   const setPhase = db.prepare('UPDATE crews SET phase = ?, phase_at = ?, round = ? WHERE id = ?');
   const setStopped = db.prepare('UPDATE crews SET stopped = ?, stopped_at = ? WHERE id = ?');
   const restart = db.prepare('UPDATE crews SET stopped = NULL, stopped_at = NULL, round_limit = ? WHERE id = ?');
-  const setStartFailed = db.prepare('UPDATE crews SET start_failed = ? WHERE id = ?');
+  const setStartFailed = db.prepare('UPDATE crews SET start_failed = ?, start_error = ? WHERE id = ?');
   const crewsOf = db.prepare(
     'SELECT DISTINCT c.id FROM crews c LEFT JOIN crew_reviewers r ON r.crew_id = c.id WHERE c.builder = ? OR r.session_id = ?',
   );
@@ -170,6 +192,9 @@ export function createCrewLoop(db: DatabaseSync, options: CrewLoopOptions): Crew
   const names = new Map<string, string>();
   const nameOf = (sessionId: string) => options.agent(sessionId)?.name ?? names.get(sessionId) ?? sessionId;
   let closing = false;
+  const changed = (id: string) => {
+    if (!closing) options.changed?.(id);
+  };
 
   const reviewersOf = (id: string, round?: number) =>
     (selectReviewers.all(id) as unknown as ReviewerRow[]).filter((reviewer) => round === undefined || reviewer.round === round);
@@ -247,7 +272,7 @@ export function createCrewLoop(db: DatabaseSync, options: CrewLoopOptions): Crew
       insertReviewer.run(crew.id, reviewer.sessionId, member.id, crew.round);
     }
     if (!stillRunning(crew.id)) return;
-    setStartFailed.run(0, crew.id);
+    setStartFailed.run(0, null, crew.id);
     setPhase.run('reviewing', now().toISOString(), crew.round, crew.id);
     const reviewing = reviewersOf(crew.id, crew.round).map((each) => nameOf(each.session_id));
     options.news(crew.builder, 'round', `round ${crew.round} of ${crew.round_limit}: ${reviewing.join(', ')} reviewing`);
@@ -358,7 +383,7 @@ export function createCrewLoop(db: DatabaseSync, options: CrewLoopOptions): Crew
         await startReviewers(crew, builder);
       } catch (error) {
         setPhase.run('building', now().toISOString(), crew.round, crew.id);
-        setStartFailed.run(1, crew.id);
+        setStartFailed.run(1, (error as Error).message, crew.id);
         options.flag(
           crew.builder,
           `${crewFlag(crew.prefab)}couldn't start round ${crew.round}'s reviewers (${(error as Error).message}): agent-board crew round crew:${crew.id} tries again, and so does ${builder.name}'s next hand-off`,
@@ -422,12 +447,18 @@ export function createCrewLoop(db: DatabaseSync, options: CrewLoopOptions): Crew
           if (closing || now === last) return;
           last = now;
           await advance(id).catch((error: Error) => options.log(`crew ${id}: ${error.message}`));
+          // Each step shows as it is taken: the next may take a while (a reviewer starting).
+          changed(id);
           if (!again.has(id)) return;
           // Let the daemon's other work run between steps.
           await new Promise((resolve) => setImmediate(resolve));
         }
       })
-      .finally(() => moving.delete(id));
+      .finally(() => {
+        moving.delete(id);
+        // An update heard during a step may change only what the card shows (a name, who needs you), with no step to take.
+        changed(id);
+      });
     moving.set(id, run);
     return run;
   };
@@ -447,6 +478,7 @@ export function createCrewLoop(db: DatabaseSync, options: CrewLoopOptions): Crew
       const at = now().toISOString();
       names.set(builder.sessionId, builder.name);
       insertCrew.run(id, prefab.name, prefabFile(prefab), builder.zoneId, startedBy, builder.sessionId, prompt, prefab.roundLimit, at, at);
+      changed(id);
       return view(row(id)!);
     },
 
@@ -461,6 +493,30 @@ export function createCrewLoop(db: DatabaseSync, options: CrewLoopOptions): Crew
     },
 
     list: () => (selectCrews.all() as unknown as CrewRow[]).map(view),
+
+    card(crewId) {
+      const crew = row(crewId);
+      if (crew === undefined) return undefined;
+      const prefab = parsePrefab(crew.body);
+      return {
+        crewId: crew.id,
+        title: cardTitle(crew.prompt, crew.prefab),
+        icon: prefab.icon,
+        tiles: prefab.onBoard === 'tiles',
+        members: prefab.members.map((member) => ({
+          id: member.id,
+          name: member.name ?? member.id,
+          role: member.role,
+          harness: member.harness,
+          model: member.model,
+          starts: member.starts,
+        })),
+        crew: view(crew),
+        phaseAt: crew.phase_at,
+        startFailed: crew.start_failed === 1,
+        startError: crew.start_failed === 1 ? crew.start_error : null,
+      };
+    },
 
     async idle() {
       while (moving.size > 0) await Promise.all(moving.values());
@@ -505,6 +561,7 @@ export function createCrewLoop(db: DatabaseSync, options: CrewLoopOptions): Crew
             entry.detail = crew.prefab;
             if (crew.stopped !== null) throw invalidParams(`crew:${crew.id} has stopped already (${crew.stopped})`);
             stop(crew, 'stopped', `stopped by ${me.agent === null ? 'the user' : me.name}`);
+            changed(crew.id);
             return view(row(crew.id)!);
           });
         },

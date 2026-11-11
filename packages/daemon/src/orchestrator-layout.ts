@@ -104,6 +104,7 @@ import {
   type TileSide,
   type Zone,
   type CaptureStyle,
+  drawnZoneSize,
   type ZoneMap,
   type ZoneMapThing,
 } from './protocol.ts';
@@ -946,6 +947,23 @@ export function layoutHandlers<Context extends BoardConnection>({
   };
 
   /**
+   * A lane's label and note that an orchestrator before `me` in the zone made, for each of `clusters`' parts `parts` has
+   * none of: an arrange takes them over rather than making a second of each. Only from one whose session has ended and
+   * that `me` could take over (`mayTakeOver`): a live orchestrator's parts, and the user's, stay theirs.
+   */
+  const othersParts = (me: Orchestrator, zoneId: string, items: readonly BoardItem[], parts: ReadonlyMap<string, BoardItem>, clusters: readonly ArrangedCluster[]): BoardItem[] => {
+    const keys = new Set(clusters.map((cluster) => cluster.key));
+    const taken = new Set(parts.keys());
+    return items.filter((item) => {
+      const key = item.data.arrange;
+      if (item.zoneId !== zoneId || item.kind === 'link' || typeof key !== 'string' || taken.has(key) || !keys.has(clusterKeyOf(key))) return false;
+      if (!access.mayTakeOver(me, madeBy(itemMadeBy, item.id))) return false;
+      taken.add(key);
+      return true;
+    });
+  };
+
+  /**
    * Puts each cluster's label and note where `clusters` says, editing the ones an arrange made before
    * (`parts`, by their cluster's `arrange` key) in place rather than stacking new ones, and leaving alone what is
    * already where it goes. The note is an agent note signed by `me` (a sticky when the user's side arranges) and says where
@@ -957,6 +975,8 @@ export function layoutHandlers<Context extends BoardConnection>({
     /** Writes `data` as the part `key` (`known`, or made new as `kind`), moved to `at`; only what differs is written. */
     const put = async (key: string, kind: 'text' | 'sticky' | 'agent-note', known: BoardItem | undefined, at: Point, size: Size, data: Record<string, unknown>) => {
       if (known !== undefined) {
+        // Taken over from an orchestrator that has ended (`othersParts`): `me`'s crew's from now on.
+        if (me.agent !== null && !access.madeByCrew(me, madeBy(itemMadeBy, known.id))) markItem.run(me.agent.sessionId, known.id);
         const wanted = { ...data, arrange: key };
         const changed = Object.entries(wanted).filter(([field, value]) => JSON.stringify(known.data[field]) !== JSON.stringify(value));
         const moved = known.x !== at.x || known.y !== at.y || known.width !== size.width || known.height !== size.height;
@@ -1351,6 +1371,10 @@ export function layoutHandlers<Context extends BoardConnection>({
         const { spacing } = zone;
         const grid = zoneGrid(spacing);
         const first = clusters ? arrangeTiles(tiles, links, { by, layout, spacing, width: zone.width, window: measures.window(), obstacles: keep(ownParts), clusters }).clusters : [];
+        for (const item of clusters ? othersParts(me, zone.id, board.items, parts, first) : []) {
+          parts.set(String(item.data.arrange), item);
+          ownParts.add(`item:${item.id}`);
+        }
         const byHand = clusters ? handPlaced(me, inZone, board.items, parts, first) : new Map<string, BoardItem>();
         const obstacles = keep(new Set([...ownParts, ...[...byHand.values()].map((item) => `item:${item.id}`)]));
         // Each lane makes room for its note at the height its text needs.
@@ -1618,7 +1642,9 @@ export function layoutHandlers<Context extends BoardConnection>({
           // Its agents and shells; an external session's tile stays put, as the notes, shapes and text do.
           const tiles = loose.filter((each) => each.kind === 'agent' || each.kind === 'shell');
           const arranged = arrangeBoard(
-            board.zones.map(({ id, x, y, width, height }) => ({ id, x, y, width, height })),
+            // A folded zone takes its chip's room, so its neighbours close up round it. It keeps its saved size, and the
+            // board moves them out of its way again when it is unfolded.
+            board.zones.map((zone) => ({ id: zone.id, x: zone.x, y: zone.y, ...drawnZoneSize(zone) })),
             tiles.map((each) => ({ id: each.key, ...each.rect })),
             loose.filter((each) => !tiles.includes(each)).map(takenBy),
           );

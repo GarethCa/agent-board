@@ -43,6 +43,7 @@ import {
   MAX_FLAG_LENGTH,
   MAX_STATUS_LENGTH,
   type Agent,
+  type AgentCharacter,
   type AgentStepsWait,
   type AgentRepo,
   type AgentStart,
@@ -77,6 +78,7 @@ import { createQuietTurns, QUIET_TURN_MS, readTranscriptTail, showsIdlePrompt, t
 import { createSubagentStore, subagentsAfterExit } from './subagents.ts';
 import { oneLine, submitsDraft } from './terminal-input.ts';
 import { isWorking, statusAfterTurn } from './turn-status.ts';
+import { AGENT_POSES, CHARACTER_EXPIRY_MS, characterLive, isRestingPose, type AgentFace, type AgentPose, type AgentProp, type CharacterSet } from './character.ts';
 import { createTranscriptReader } from './transcripts.ts';
 import type { TrackerHost } from './trackers.ts';
 import { moveParams, optionalPlaceParam, saveMove, tilePosition, zoneIdParam, type PositionColumns } from './tile-position.ts';
@@ -122,8 +124,32 @@ const TURN_HOOKS: ReadonlySet<unknown> = new Set(['UserPromptSubmit', 'PreToolUs
 /** The hooks that end the agent's own turn: by its `Stop`, failed (a rate limit too), or interrupted (Codex's). */
 const TURN_ENDS: ReadonlySet<unknown> = new Set(['Stop', 'StopFailure', 'Interrupt']);
 
+/** The resting poses, as an SQL list: they outlive their turn's end. */
+const RESTING_SQL = AGENT_POSES.filter(isRestingPose)
+  .map((pose) => `'${pose}'`)
+  .join(', ');
+
+/** The agent's pose from its row, while it lasts at `now`: a working pose lapses with no new set (`characterLive`). */
+function characterOf(
+  row: Pick<AgentRow, 'character_pose' | 'character_face' | 'character_prop' | 'character_set_at' | 'character_set_by'>,
+  now: number,
+): AgentCharacter | null {
+  if (row.character_pose === null || row.character_set_at === null) return null;
+  const character: AgentCharacter = {
+    pose: row.character_pose as AgentPose,
+    face: row.character_face as AgentFace | null,
+    prop: row.character_prop as AgentProp | null,
+    setAt: row.character_set_at,
+    setBy: row.character_set_by,
+  };
+  return characterLive(character, now) ? character : null;
+}
+
 /** The states of an agent at work in a turn, which only a hook (or an interrupt) ends. */
 const AT_WORK: ReadonlySet<SessionState> = new Set(['running', 'thinking']);
+
+/** The states an agent's turn leaves it in once over, however it ended: no `waiting`, which a question in its turn is too. */
+const TURN_OVER: ReadonlySet<SessionState> = new Set(['idle', 'failed', 'rate-limited', 'done']);
 
 export interface AgentHostOptions {
   db: DatabaseSync;
@@ -313,9 +339,10 @@ export interface AgentHost {
   setName(sessionId: string, name: string): Agent;
   /**
    * Sets what the agent says it is doing now (ADR-0010), replacing what was there: a summary, trimmed and at most
-   * `MAX_STATUS_LENGTH`, and a progress 0-100 or null.
+   * `MAX_STATUS_LENGTH`, and a progress 0-100 or null; and its character's pose. Either may be left out
+   * (`summary` null, `character` undefined), keeping what it had, but not both.
    */
-  setStatus(sessionId: string, summary: string, progress: number | null, done?: boolean, setBy?: string | null): Agent;
+  setStatus(sessionId: string, summary: string | null, progress: number | null, done?: boolean, setBy?: string | null, character?: CharacterSet): Agent;
   /** Whether the live agent went waiting after its turn ended, so sits at its prompt asking nothing (`createHookStates`'s). */
   waitsAtPrompt(sessionId: string): boolean;
   /** Notes that the agent says its work is finished (`Agent.workFinishedAt`), until its next prompt. */
@@ -327,6 +354,11 @@ export interface AgentHost {
    * how deep in a crew it is (0 for one the user started).
    */
   orchestrateFacts(sessionId: string): { off: boolean; depth: number };
+  /**
+   * Makes the agents `from` started `to`'s, as if `to` had started them. Returns their ids; the caller tells the clients,
+   * once whatever it runs this in has committed.
+   */
+  handCrew(from: string, to: string): string[];
   /**
    * Hears a zone's `agentsOrchestrate` change. Off, it stops every agent in it orchestrating (a grant by hand goes for
    * good), and on, they do again; tells the clients of each.
@@ -367,9 +399,10 @@ export interface AgentHost {
    * Pauses the live agent between turns (`hibernated`): ends its session as `stop` does, its conversation kept to
    * carry on when it wakes. `by` is the session id of the orchestrator that paused it, or null for the user; `why`
    * says who asked, for the log. Refuses one mid-turn, waiting on you, with the user typing or a message never sent
-   * at its prompt, or with a message being typed or sent to it.
+   * at its prompt, or with a message being typed or sent to it: its error's `reason` says which. `fold` is the id of
+   * the zone whose fold pauses it (`zone.fold`), remembered while it stays paused.
    */
-  pause(sessionId: string, by: string | null, why: string): Promise<Agent>;
+  pause(sessionId: string, by: string | null, why: string, fold?: string): Promise<Agent>;
   /**
    * Starts an ended agent (stopped by restart, or exited) again in its worktree, carrying on its conversation with no
    * new prompt: Claude with `--resume`, Codex with `codex resume` (or afresh if it can't). Ends the shell its pane
@@ -538,9 +571,17 @@ export interface AgentRow extends PositionColumns {
   status_progress: number | null;
   status_updated_at: string | null;
   status_set_by: string | null;
+  /** The pose it set for its character (`setStatus` with a character): all null while it has none. */
+  character_pose: string | null;
+  character_face: string | null;
+  character_prop: string | null;
+  character_set_at: string | null;
+  character_set_by: string | null;
   /** When it was paused, and the session id of the orchestrator that paused it (null for the user): `Agent.hibernated`. */
   hibernated_at: string | null;
   hibernated_by: string | null;
+  /** The zone whose fold paused it (`zone.fold`), while it stays paused: what unfolding and waking that zone wakes. */
+  hibernated_fold: string | null;
   /** When it said its work is finished (`Agent.workFinishedAt`), or null. */
   work_finished_at: string | null;
   /** The scope the user let it orchestrate in by hand, or null to follow its zone's switch. */
@@ -657,6 +698,20 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     'UPDATE agents SET status_summary = ?, status_progress = ?, status_updated_at = ?, status_set_by = ? WHERE session_id = ?',
   );
   const updateFinished = db.prepare('UPDATE agents SET work_finished_at = ? WHERE session_id = ?');
+  const updateCharacter = db.prepare(
+    'UPDATE agents SET character_pose = ?, character_face = ?, character_prop = ?, character_set_at = ?, character_set_by = ? WHERE session_id = ?',
+  );
+  const NO_CHARACTER = 'character_pose = NULL, character_face = NULL, character_prop = NULL, character_set_at = NULL, character_set_by = NULL';
+  /** Takes the agent's pose off: every pose, or with `resting` only a resting one, or only a working one. */
+  const clearCharacter = db.prepare(`UPDATE agents SET ${NO_CHARACTER} WHERE session_id = ?`);
+  const clearRestingCharacter = db.prepare(`UPDATE agents SET ${NO_CHARACTER} WHERE session_id = ? AND character_pose IN (${RESTING_SQL})`);
+  const clearWorkingCharacter = db.prepare(`UPDATE agents SET ${NO_CHARACTER} WHERE session_id = ? AND character_pose NOT IN (${RESTING_SQL})`);
+  /** A working pose that lapsed, unless a new set came since. */
+  const clearLapsedCharacter = db.prepare(`UPDATE agents SET ${NO_CHARACTER} WHERE session_id = ? AND character_set_at = ?`);
+  // The daemon went away, and every turn with it: a working pose went at its turn's end.
+  db.prepare(`UPDATE agents SET ${NO_CHARACTER} WHERE character_pose NOT IN (${RESTING_SQL})`).run();
+  /** Cancels the timer that redraws a working pose's tile as it lapses (`CHARACTER_EXPIRY_MS`), one per agent. */
+  const characterLapses = new Map<string, () => void>();
   const updateOrchestrate = db.prepare('UPDATE agents SET orchestrate = ?, orchestrate_off = ? WHERE session_id = ?');
   /** The agents a zone's setting reaches: those in it. */
   const selectReachedBy = db.prepare('SELECT session_id FROM agents WHERE zone_id = ?');
@@ -1281,6 +1336,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
 
   const selectLiveSession = db.prepare('SELECT 1 FROM sessions WHERE id = ? AND ended_at IS NULL');
   const selectCrew = db.prepare('SELECT session_id FROM agents WHERE spawned_by = ?');
+  const updateLead = db.prepare('UPDATE agents SET spawned_by = ? WHERE session_id = ?');
 
   /** The name of the agent's orchestrator while that one is live; null for a loose agent, the Captain's, or one whose orchestrator ended. */
   const led = (row: AgentRow): string | null => {
@@ -1367,6 +1423,8 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
         transcriptPath: each.transcript_path,
         endedAt: each.ended_at,
       })),
+      // An ended session strikes no pose of its own: the board draws how it ended.
+      character: row.ended_at === null ? characterOf(row, clock.now()) : null,
       status: statusAfterTurn(
         row.status_summary === null || row.status_updated_at === null
           ? null
@@ -1478,8 +1536,51 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
 
   const requireAgent = (sessionId: string): Agent => toAgent(requireRow(sessionId));
 
+  /**
+   * Sets the agent's pose (`none` takes it off), its face and prop with it. A working pose lapses with no new set, and
+   * its tile is redrawn then; the board draws whichever pose was set last, however soon after the one before.
+   */
+  const setCharacter = (sessionId: string, character: CharacterSet, at: string, setBy: string | null): void => {
+    characterLapses.get(sessionId)?.();
+    characterLapses.delete(sessionId);
+    if (character.pose === 'none') {
+      clearCharacter.run(sessionId);
+      return;
+    }
+    updateCharacter.run(character.pose, character.face ?? null, character.prop ?? null, at, setBy, sessionId);
+    if (isRestingPose(character.pose)) return;
+    const cancel = clock.setTimer(() => {
+      characterLapses.delete(sessionId);
+      if (Number(clearLapsedCharacter.run(sessionId, at).changes) === 0) return;
+      const agent = get(sessionId);
+      if (agent !== undefined) options.broadcast({ type: 'agent.updated', agent });
+    }, CHARACTER_EXPIRY_MS);
+    characterLapses.set(sessionId, cancel);
+  };
+
+  /** Takes the agent's pose off, as much of it as `clear` does, and the timer of its lapse with it. Its state saved after says so to every client. */
+  const takeOffPose = (sessionId: string, clear: typeof clearCharacter): void => {
+    if (Number(clear.run(sessionId).changes) === 0) return;
+    characterLapses.get(sessionId)?.();
+    characterLapses.delete(sessionId);
+  };
+
   /** Whether the live agent waits on a question or dialog of its own, in its turn: not at its prompt. */
   const questionUp = (row: AgentRow) => row.state === 'waiting' && hookStates.promptNow(row) === 'moved-on';
+
+  /**
+   * Takes off the pose a move from `row`'s state to `state` ends. A turn over takes a working pose with it, however it
+   * ended: its `Stop`, an interrupt (Claude sends no hook for one), or the idle a `Stop` that never came is moved to
+   * (its idle prompt, which moves it to `waiting`, is `onHook`'s to read).
+   * A turn begun from its prompt takes a resting one, which rested until then, whether a prompt began it or a wake with
+   * none. A permission or a question in a turn under way is neither.
+   */
+  const poseAfterMove = (row: AgentRow, state: SessionState): void => {
+    if (state === row.state) return;
+    const wasAtPrompt = TURN_OVER.has(row.state) || (row.state === 'waiting' && !questionUp(row));
+    if (TURN_OVER.has(state)) takeOffPose(row.session_id, clearWorkingCharacter);
+    else if (wasAtPrompt && (AT_WORK.has(state) || state === 'needs-permission')) takeOffPose(row.session_id, clearRestingCharacter);
+  };
 
   /**
    * Records the agent's new state and subagents and tells every client; unless `always`, only if either changed.
@@ -1498,6 +1599,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     // A turn has begun: its new conversation has started, so "no earlier conversation" is over.
     if (AT_WORK.has(state) && row.notice === NO_CONVERSATION_NOTICE) updateNotice.run(null, row.session_id);
     if (AT_WORK.has(state) && row.turn_cut_off === 1) updateCutOff.run(row.session_id);
+    poseAfterMove(row, state);
     update.run(state, row.session_id);
     options.broadcast({ type: 'agent.updated', agent: get(row.session_id)! });
   };
@@ -1779,7 +1881,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
 
     stop: lifecycle.stop,
 
-    pause(sessionId, by, why) {
+    pause(sessionId, by, why, fold) {
       const agent = requireAgent(sessionId);
       const row = getRow(sessionId)!;
       // One not up yet with no first prompt and nothing queued loses nothing: its wait for its session is all it holds.
@@ -1791,8 +1893,8 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
         (deliveries.unsent(sessionId) === undefined ? undefined : 'a message typed at its prompt was never sent') ??
         (holdsNothing ? undefined : (notUp ?? (deliveries.busy(sessionId) ? 'a message is being sent to it: wait for its turn' : undefined))) ??
         hookStates.whyNotReady(row, true);
-      if (refusal !== undefined) throw invalidParams(`${agent.name} can't be paused: ${refusal}`);
-      return lifecycle.hibernate(sessionId, by, why);
+      if (refusal !== undefined) throw invalidParams(`${agent.name} can't be paused: ${refusal}`, refusal);
+      return lifecycle.hibernate(sessionId, by, why, fold ?? null);
     },
 
     resume: lifecycle.resume,
@@ -1942,18 +2044,22 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       return agent;
     },
 
-    setStatus(sessionId, summary, progress, done = false, setBy = null) {
+    setStatus(sessionId, summary, progress, done = false, setBy = null, character) {
       requireAgent(sessionId);
-      const text = oneLine(summary);
+      if (summary === null && character === undefined) throw invalidParams('give a status summary, a character pose, or both');
+      const text = summary === null ? null : oneLine(summary);
       if (text === '') throw invalidParams('the status summary must not be blank');
-      if (text.length > MAX_STATUS_LENGTH) {
+      if (text !== null && text.length > MAX_STATUS_LENGTH) {
         throw invalidParams(`the status summary is ${text.length} characters; at most ${MAX_STATUS_LENGTH}`);
       }
       if (progress !== null && !isStatusProgress(progress)) {
         throw invalidParams('progress must be a whole number from 0 to 100');
       }
+      if (progress !== null && text === null) throw invalidParams('progress goes with a status summary');
       const at = new Date().toISOString();
-      updateStatus.run(text, progress, at, setBy, sessionId);
+      if (text !== null) updateStatus.run(text, progress, at, setBy, sessionId);
+      // By the clock its lapse is timed and read by.
+      if (character !== undefined) setCharacter(sessionId, character, new Date(clock.now()).toISOString(), setBy);
       if (done && requireRow(sessionId).work_finished_at === null) updateFinished.run(at, sessionId);
       const agent = get(sessionId)!;
       options.broadcast({ type: 'agent.updated', agent });
@@ -1981,6 +2087,12 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     orchestrateFacts(sessionId) {
       const row = requireRow(sessionId);
       return { off: row.orchestrate_off === 1, depth: row.crew_depth };
+    },
+
+    handCrew(from, to) {
+      const crew = (selectCrew.all(from) as { session_id: string }[]).map((row) => row.session_id).filter((id) => id !== to);
+      for (const id of crew) updateLead.run(to, id);
+      return crew;
     },
 
     zoneOrchestrateChanged(zoneId, on) {
@@ -2034,6 +2146,15 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       }
       // Its own turn ended, so no call of it still waits on the user: one its harness gave up on (timed out) goes too.
       if (payload.agent_id === undefined && payload.hook_event_name === 'Stop') options.asks?.drop(sessionId);
+      // What its hooks alone say of its pose (`poseAfterMove` has the rest): its session's end takes any off, and a prompt
+      // taken a resting one, in a turn under way too. Its idle prompt says its turn is over where no `Stop` did (lost, or
+      // a turn interrupted in its terminal): it moves to `waiting`, as a question in a turn does, so only the hook tells
+      // them apart. Before its state is saved, so the tile drawn for it is without the pose.
+      if (payload.agent_id === undefined && !hookStates.isStale(sessionId, payload)) {
+        if (payload.hook_event_name === 'SessionEnd') takeOffPose(sessionId, clearCharacter);
+        if (payload.hook_event_name === 'UserPromptSubmit') takeOffPose(sessionId, clearRestingCharacter);
+        if (payload.hook_event_name === 'Notification' && payload.notification_type === 'idle_prompt') takeOffPose(sessionId, clearWorkingCharacter);
+      }
       // Before its state is saved, so the turn's end already shows what it left running.
       backgroundCommands.onHook(sessionId, payload);
       const reply = hookStates.onHook(row, payload, signal);
@@ -2125,6 +2246,8 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       backgroundCommands.close();
       lifecycle.close();
       permissions.close();
+      for (const cancel of characterLapses.values()) cancel();
+      characterLapses.clear();
     },
   };
   return host;

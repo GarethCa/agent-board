@@ -16,9 +16,10 @@ export function railChoice(collapsed: boolean): string | undefined {
  * that holds the sidebar and its header). Classic's details strip opens collapsed to its rail in each; an agent's shelves
  * open, or collapsed to their rail, as they last were in any window or tile (⌘I): one choice for all of them, kept in
  * `shelvesCollapsed`, so one open beside the one that changed it follows. Switched between the sidebars while open (a pick
- * in Settings, the design, or its agent listed or gone), it opens as that sidebar opens. Collapsed from its handle
- * (dragged or stepped below its least), the focus the handle had goes to the header's toggle, or else to the rail's button
- * that opens the shelves again: else the focus falls to the page, and an arrow key would move the tile. Where
+ * in Settings, the design, or its agent listed or gone), it opens as that sidebar opens. Collapsed while the focus was in
+ * what went (the shelves' footer button), the focus goes to the header's toggle, or else to the rail's button that opens
+ * the shelves again: else the focus falls to the page, and an arrow key would move the tile. (The handle stays on the
+ * rail, so pulled or stepped shut on it, it keeps its focus.) Where
  * `tooNarrow` says there is no room for the shelves beside the terminal (an expanded tile under a width), they open on the
  * rail, as they open and when the sidebar switches to them: for this one alone, so it is not remembered nor told to the rest.
  */

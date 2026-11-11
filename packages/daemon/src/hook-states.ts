@@ -2,7 +2,7 @@ import { systemClock, type Clock } from './clock.ts';
 import { compactingAfterHook, isOwnDialog, lastMessageAfterHook } from './claude-state.ts';
 import { stateAfterHook } from './harness-state.ts';
 import { promptCounts, stateWithPrompts, type HookReply, type PermissionHolds } from './permissions.ts';
-import type { AgentState, Harness, SessionState, Subagent } from './protocol.ts';
+import { STILL_WORKING, WAITING_FOR_YOU, type AgentState, type Harness, type SessionState, type Subagent } from './protocol.ts';
 import { subagentsAfterHook, type SubagentStore } from './subagents.ts';
 import type { PromptNow } from './deliveries.ts';
 import { draftAfterInput, oneLine } from './terminal-input.ts';
@@ -240,9 +240,9 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
       if (!atPrompt(row, evenAsking) && !(row.state === 'failed' && permissions.prompts(sessionId).length === 0)) {
         const waiting =
           row.state === 'waiting' || row.state === 'needs-permission' || permissions.prompts(sessionId).length > 0 || askingYou;
-        return waiting ? 'it was waiting for you' : 'it was still working';
+        return waiting ? WAITING_FOR_YOU : STILL_WORKING;
       }
-      if (askingYou) return 'it was waiting for you';
+      if (askingYou) return WAITING_FOR_YOU;
       if (drafting.has(sessionId)) return 'you were typing in its terminal';
       return undefined;
     },

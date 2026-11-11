@@ -207,7 +207,7 @@ test('the README screenshots: flows, the review doc and the chat view', async ()
 
     // A reviewer: its tile is dashed, and it ends once its review doc is in.
     const coderTile = page.locator(`[data-testid="agent-tile"][data-session-id="${coder.sessionId}"]`);
-    await tileAction(coderTile, 'Review its work');
+    await tileAction(coderTile, 'Review its work', 'Review & gate');
     const reviewer = page.locator('[data-testid="agent-tile"][data-reviewer]');
     await expect(reviewer).toHaveAttribute('data-state', 'done', { timeout: 60_000 });
     await expect.poll(async () => (await page.evaluate(() => window.agentBoard.reviews.list()))[0]?.status).toBe('ready');

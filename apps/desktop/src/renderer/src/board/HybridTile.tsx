@@ -33,6 +33,7 @@ import { ArrowUpRight, BellOff, Brain, Check, ClipboardList, Clock, Coins, Dot, 
 import { Button, Chip, EditableName, FlowPill, HoverCard, RenameButton, Spinner, StatusPill, Tag, useRenaming, useSlowClickRename } from '../ui';
 import { useCharacterStyle } from './characters';
 import { TileCharacter } from './TileCharacter';
+import { poseShown } from '@agent-board/daemon/character';
 import { poseOfPill } from './tile-pose';
 import { TileRobot } from './CommandFigure';
 import { JobTicket, useHeldJobs } from './items/taken-jobs';
@@ -57,7 +58,8 @@ import { useReviews } from '../review/ReviewsProvider';
 import { roundsOf } from '../review/reviews';
 import { dropKey, dropOver as dropOverValue } from '../session/shell-moves';
 import { pausedLine } from './paused';
-import { agentMenu, externalMenu, shellMenu } from './menu-model';
+import { externalMenu, shellMenu } from './menu-model';
+import { useAgentTileMenu } from './agent-tile-menu';
 import { CalmShellTile } from './CalmShellTile';
 import { CalmTile } from './CalmTile';
 import { ResumeButton } from './RestartBanner';
@@ -83,7 +85,7 @@ export const HybridTile = memo(function HybridTile({ id, tile, selected = false 
   if (tile.agent !== undefined && simplified) {
     return <CalmTile id={id} selected={selected} agent={tile.agent} repo={tile.repo} from={tile.from} crew={tile.crew} crewFlags={tile.crewFlags} implementer={tile.implementer} />;
   }
-  if (tile.agent !== undefined) return <AgentTile id={id} selected={selected} agent={tile.agent} repo={tile.repo} from={tile.from} crew={tile.crew} crewFlags={tile.crewFlags} tabs={tile.tabs} />;
+  if (tile.agent !== undefined) return <AgentTile id={id} selected={selected} agent={tile.agent} repo={tile.repo} from={tile.from} crew={tile.crew} crewFlags={tile.crewFlags} tabs={tile.tabs} implementer={tile.implementer} />;
   if (tile.shell !== undefined && simplified) return <CalmShellTile id={id} shell={tile.shell} selected={selected} />;
   if (tile.shell !== undefined) return <ShellTile id={id} shell={tile.shell} selected={selected} />;
   if (tile.external !== undefined) return <ExternalTile id={id} session={tile.external} />;
@@ -99,7 +101,7 @@ export const HybridTile = memo(function HybridTile({ id, tile, selected = false 
   );
 });
 
-function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs }: { id: string; selected: boolean; agent: Agent; repo?: string } & Pick<TileData, 'from' | 'crew' | 'crewFlags' | 'tabs'>) {
+function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, implementer }: { id: string; selected: boolean; agent: Agent; repo?: string } & Pick<TileData, 'from' | 'crew' | 'crewFlags' | 'tabs' | 'implementer'>) {
   const shows = useNeedsYouShows();
   const crewView = useContext(CrewViewContext);
   // The crew it is of, as an orchestrator or one it started: lit while the orchestrator or a chip is hovered.
@@ -121,6 +123,7 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs }: {
   const split = agent.reviewOf === null ? { name: agent.name } : splitReviewerName(agent.name);
   const shownName = starting && split.subtitle !== undefined ? { name: `${split.subtitle} · ${split.name}` } : split;
   const renaming = useRenaming(agent.name, (name) => rename({ kind: 'agent', sessionId: agent.sessionId }, name));
+  const menu = useAgentTileMenu(id, agent, { from, implementer }, renaming.startSoon);
   useRenameRequest(id, renaming);
   const nameClicks = useSlowClickRename(renaming, selected);
   const handoffs = useContext(HandoffsContext);
@@ -316,7 +319,7 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs }: {
           {agent.state === 'stopped-by-restart' && (
             <TileButton className="hybrid-tile-minor" icon={<RotateCcw />} aria-label="Resume" data-testid="resume" title="Resume it, carrying on its conversation" onClick={() => void resumeAgent(agent.sessionId)} />
           )}
-          <TileMenu entries={agentMenu({ nodeId: id, agent, clickOpens, gate, rounds, rename: renaming.startSoon, actions: tileActions })} />
+          <TileMenu entries={menu.entries} onOpen={menu.reread} />
         </TileCorner>
       </div>
       {crew !== undefined && (
@@ -372,7 +375,7 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs }: {
         </span>
       )}
       <div className="hybrid-tile-said" data-character={characterStyle === 'off' ? undefined : characterStyle}>
-        {characterStyle !== 'off' && <TileCharacter harness={agent.harness} pose={poseOfPill(pillFace.state)} style={characterStyle} height={TILE_CHARACTER_HEIGHT} />}
+        {characterStyle !== 'off' && <TileCharacter harness={agent.harness} pose={poseShown(poseOfPill(pillFace.state), agent)} style={characterStyle} height={TILE_CHARACTER_HEIGHT} />}
         <div className="hybrid-tile-said-text">
           {agent.undelivered.length > 0 ? (
             // Before all else: its sender heard it was queued, and nothing else says it never went.

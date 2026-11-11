@@ -20,11 +20,12 @@ import {
   type ScheduleSpec,
   type Zone,
   BOARD_ERROR,
+  type ClockStatus,
 } from './protocol.ts';
 import type { BoardConnection } from './board.ts';
 import type { OrchestratorAccess } from './orchestrators.ts';
 import { RpcMethodError, type RpcHandlers } from './rpc.ts';
-import { cronWords } from './cron.ts';
+import { cronWords, looksStuck, stuckFlagReason } from './cron.ts';
 import { createScheduleHost, type FiringClock, type Fired, type ScheduleHost } from './schedules.ts';
 import { cutText } from './text-cut.ts';
 import { isObject } from './json.ts';
@@ -70,7 +71,7 @@ function freshAgentName(prompt: string, count: number): string {
 export interface ClockHostOptions {
   db: DatabaseSync;
   clock: Clock;
-  agents: Pick<AgentHost, 'get' | 'runScheduled' | 'spawn' | 'finalMessage' | 'delete' | 'stop' | 'deliver' | 'announce'>;
+  agents: Pick<AgentHost, 'get' | 'runScheduled' | 'spawn' | 'finalMessage' | 'delete' | 'stop' | 'deliver' | 'announce' | 'flag' | 'clearFlag'>;
   /** The daemon's own methods: clocks, notes and their changes are made as the board makes them. */
   call: DaemonCall;
   broadcast(event: DaemonEvent): void;
@@ -132,10 +133,60 @@ export function createClockHost(options: ClockHostOptions): ClockHost {
   }
   const selectMadeBy = options.db.prepare("SELECT made_by FROM board_items WHERE kind = 'clock' AND id = ?");
   const markMadeBy = options.db.prepare('UPDATE board_items SET made_by = ? WHERE id = ?');
+  /**
+   * The flag each clock raised on its agent, whose turn looked stuck, and the run of skips it raised it for: by the
+   * flag's id (null when the agent had a flag already), so one the agent has since replaced stays, and by the run's
+   * start, so that run never raises it again.
+   */
+  const stuckFlags = new Map<string, { sessionId: string; flagId: number | null; since: string }>();
+  /** Takes down the flag a clock raised, unless the agent or the user has replaced or cleared it since. */
+  const lowerStuck = (clockId: string) => {
+    const raised = stuckFlags.get(clockId);
+    if (raised === undefined) return;
+    const agent = agents.get(raised.sessionId);
+    if (raised.flagId !== null && agent?.endedAt === null && agent.flag?.id === raised.flagId) agents.clearFlag(raised.sessionId);
+  };
+  /** A clock that no longer messages the agent it flagged (deleted, turned off, joined to another) takes its flag down. */
+  const dropStuck = (clockId: string) => {
+    const raised = stuckFlags.get(clockId);
+    if (raised === undefined) return;
+    const data = clockOf(clockId)?.data;
+    if (data !== undefined && data.enabled && data.does === 'message' && data.agent === raised.sessionId) return;
+    lowerStuck(clockId);
+    stuckFlags.delete(clockId);
+  };
+  /**
+   * A clock that messages its agent flags it once its skips in a row look stuck (`looksStuck`): no check-in can reach
+   * it. A flag the agent already has is left as it is. The flag goes once a check-in reaches the agent again, or its
+   * turn ends, unless the agent or the user has replaced or cleared it; that run of skips doesn't raise it again.
+   */
+  const afterFire = (firing: FiringClock, status: ClockStatus) => {
+    const sessionId = firing.data.does === 'message' ? firing.data.agent : null;
+    if (sessionId === null) return;
+    const skips = status.skips;
+    const raised = stuckFlags.get(firing.id);
+    if (raised !== undefined && raised.since !== skips?.since) {
+      lowerStuck(firing.id);
+      stuckFlags.delete(firing.id);
+    }
+    if (!looksStuck(skips) || stuckFlags.has(firing.id)) return;
+    const agent = agents.get(sessionId);
+    if (agent === undefined || agent.endedAt !== null) return;
+    // A flag it already has asks for a look as it is: that run of skips is not news again once the user has looked.
+    if (agent.flag !== null) {
+      stuckFlags.set(firing.id, { sessionId, flagId: null, since: skips!.since });
+      return;
+    }
+    const flagged = agents.flag(sessionId, stuckFlagReason(agent.name, skips!, new Date(options.clock.now())), null);
+    if (flagged.flag !== null) stuckFlags.set(firing.id, { sessionId, flagId: flagged.flag.id, since: skips!.since });
+    log(`clock ${firing.id} flagged ${sessionId}: skipped ${skips!.count} times in a row while it was mid-turn`);
+  };
+
   const schedules = createScheduleHost({
     db: options.db,
     clock: options.clock,
     fire,
+    afterFire,
     onChange(clockId) {
       const status = schedules.status(clockId);
       if (status !== null) options.broadcast({ type: 'clock.updated', status });
@@ -247,6 +298,8 @@ export function createClockHost(options: ClockHostOptions): ClockHost {
   };
 
   function turnEnded(sessionId: string) {
+    // A stuck turn that ends is no longer stuck.
+    for (const [clockId, raised] of stuckFlags) if (raised.sessionId === sessionId) lowerStuck(clockId);
     const run = schedules.runOf(sessionId);
     if (run === undefined || finishing.has(sessionId)) return;
     // A turn that ended asking the user something isn't the end of its work: it waits for them, its run going on.
@@ -387,8 +440,13 @@ export function createClockHost(options: ClockHostOptions): ClockHost {
     },
 
     onEvent(event) {
-      if (event.type === 'item.updated' && event.item.kind === 'clock') schedules.replan(event.item.id);
-      else if (event.type === 'item.removed') schedules.replan(event.id);
+      if (event.type === 'item.updated' && event.item.kind === 'clock') {
+        schedules.replan(event.item.id);
+        dropStuck(event.item.id);
+      } else if (event.type === 'item.removed') {
+        schedules.replan(event.id);
+        dropStuck(event.id);
+      }
       else if (event.type === 'agent.updated') failIfOver(event.agent.sessionId, event.agent);
       else if (event.type === 'agent.removed') failIfOver(event.sessionId, undefined);
     },

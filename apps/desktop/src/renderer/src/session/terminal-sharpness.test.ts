@@ -14,6 +14,30 @@ const coverage = ({ dpr, zoom }: RasterInput, out: ReturnType<typeof raster>) =>
 });
 
 describe('raster', () => {
+  // On the screen, in device pixels, the strip a zoomed grid leaves right of it. Worked by hand from a layout of 863 and 15-pixel cells.
+  it.each([[0.58, 81.08], [0.69, 40.94], [0.83, 52.58], [1.44, 70.44], [1.73, 110.98]])('at a zoom of %d has a strip right of the grid to fill, the rest of its layout width', (zoom, device) => {
+    const input = { ...INPUT, zoom };
+    const out = raster(input);
+    expect(out.strip.left).toBe(863);
+    expect(out.strip.width * out.screenScale.x * input.dpr * zoom).toBeCloseTo(device, 1);
+    expect(out.strip.height).toBe(out.css.canvas.height);
+  });
+
+  it('has a strip at a zoom just above a whole cell, where the grid falls short by under a CSS pixel', () => {
+    const input = { ...INPUT, cols: 80, zoom: 1.9365 };
+    const out = raster(input);
+    expect(out.strip.width).toBeGreaterThan(0);
+    expect(out.strip.width * out.screenScale.x * input.dpr * input.zoom).toBeCloseTo(3.8, 1);
+  });
+
+  it.each([1, 1.2, 2])('at a zoom of %d, where cells are whole, has no strip', (zoom) => {
+    expect(raster({ ...INPUT, zoom }).strip.width).toBe(0);
+  });
+
+  it('has no strip where a cell took the next whole pixel: the canvas is already squeezed to the exact size', () => {
+    expect(raster({ ...INPUT, dpr: 1, zoom: 0.83 }).strip.width).toBe(0);
+  });
+
   it('at 100% has the cells xterm itself computes, whole device pixels of the measured character', () => {
     const out = raster(INPUT);
     expect(out.device.cell).toEqual({ width: 15, height: 30 });
@@ -137,7 +161,15 @@ describe('sharpen', () => {
   function fake({ scale = 1.44, left = 97.6, top = 251.2 } = {}) {
     const style = { transform: '', transformOrigin: '', removeProperty(name: string) { (this as unknown as Record<string, string>)[name === 'transform' ? 'transform' : 'transformOrigin'] = ''; } };
     const box = { left, top };
-    const screen = { style, isConnected: true, getBoundingClientRect: () => box };
+    const strips: { style: Record<string, string>; removed: boolean }[] = [];
+    const ownerDocument = {
+      createElement: () => {
+        const strip = { width: 0, height: 0, removed: false, style: { setProperty(name: string, value: string) { (this as unknown as Record<string, string>)[name] = value; } } as unknown as Record<string, string>, getContext: () => ({ fillRect() {} }), remove: () => (strip.removed = true) };
+        strips.push(strip);
+        return strip;
+      },
+    };
+    const screen = { style, isConnected: true, getBoundingClientRect: () => box, ownerDocument, appendChild() {} };
     const size = { width: 863 * scale };
     const animations: unknown[] = [];
     const layout = { width: '863px' };
@@ -172,10 +204,12 @@ describe('sharpen', () => {
       cols: 115,
       rows: 32,
       options: {},
+      buffer: { active: { viewportY: 0, getNullCell: () => ({}), getLine: () => undefined } },
+      onRender: () => ({ dispose() {} }),
       element: { offsetWidth: 863, closest: () => null, getBoundingClientRect: () => size },
-      _core: { _coreBrowserService: browser, _charSizeService: { width: 7.8, height: 15 }, _renderService: render, screenElement: screen },
+      _core: { _coreBrowserService: browser, _charSizeService: { width: 7.8, height: 15 }, _renderService: render, screenElement: screen, _themeService: { colors: { background: { css: '#000000' }, foreground: { css: '#ffffff' }, ansi: [] } } },
     };
-    return { terminal: terminal as unknown as Terminal, animations, screen, layout, webgl, render, browser, style, size, box, canvasWrites };
+    return { terminal: terminal as unknown as Terminal, strips, animations, screen, layout, webgl, render, browser, style, size, box, canvasWrites };
   }
 
   it('draws for the zoom through the WebGL renderer, with the layout unchanged, once it takes WebGL', () => {
@@ -253,6 +287,25 @@ describe('sharpen', () => {
     expect(webgl.dimensions.device.cell).toEqual({ width: 15, height: 30 });
   });
 
+  it('fills the strip a zoomed grid leaves, hides it at 100%, and removes it on the DOM renderer and when done', () => {
+    const { terminal, strips, size } = fake();
+    const sharp = sharpen(terminal);
+    sharp.setRenderer('webgl');
+    expect(strips).toHaveLength(1);
+    expect(strips[0]!.style.display).toBe('block');
+    expect(parseFloat(strips[0]!.style.left!)).toBe(863);
+    size.width = 863;
+    sharp.settle();
+    expect(strips[0]!.style.display).toBe('none');
+    sharp.setRenderer('dom');
+    expect(strips[0]!.removed).toBe(true);
+    size.width = 863 * 1.44;
+    sharp.setRenderer('webgl');
+    expect(strips).toHaveLength(2);
+    sharp.dispose();
+    expect(strips[1]!.removed).toBe(true);
+  });
+
   it('measures where the screen would be without its own offset', () => {
     const { terminal, box, style } = fake({ scale: 1, left: 100.2, top: 50 });
     const sharp = sharpen(terminal);
@@ -320,7 +373,7 @@ describe('sharpen', () => {
   it('still matches the shipped xterm and WebGL addon internals it patches', () => {
     const require = createRequire(import.meta.url);
     const xterm = readFileSync(require.resolve('@xterm/xterm/lib/xterm.js'), 'utf8');
-    for (const name of ['_core', '_coreBrowserService', '_charSizeService', '_renderService', '_renderer', 'screenElement', 'onDprChange', 'handleDevicePixelRatioChange', 'handleResize', 'dpr', 'devicePixelRatio']) expect(xterm, name).toContain(name);
+    for (const name of ['_core', '_coreBrowserService', '_charSizeService', '_renderService', '_renderer', 'screenElement', '_themeService', 'onDprChange', 'handleDevicePixelRatioChange', 'handleResize', 'dpr', 'devicePixelRatio']) expect(xterm, name).toContain(name);
     const addon = readFileSync(require.resolve('@xterm/addon-webgl'), 'utf8');
     for (const name of ['_updateDimensions', '_setCanvasDevicePixelDimensions', '_devicePixelRatio', 'renderRows', 'dimensions']) expect(addon, name).toContain(name);
   });

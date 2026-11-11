@@ -3,7 +3,10 @@
  * why, and runs just those, in parallel where they don't depend on each other. A change to the gate, the shared config,
  * the e2e helpers, the fake CLIs or the protocol runs the full `check:local` instead. Rules: select.ts.
  *
- *   node scripts/check-pr/main.ts [--dry-run] [--base <ref> | --recheck]
+ *   node scripts/check-pr/main.ts [--dry-run] [--quick] [--base <ref> | --recheck]
+ *
+ * --quick is the pre-merge command for an agent's branch: the static steps and the selected unit tests, never the build, e2e or visual
+ * runs, and a short table. A change that needs the full gate runs every unit test instead.
  *
  * --recheck checks a fix to a failed full run: against that run's result record, not origin/main (recheck.ts).
  *
@@ -22,6 +25,7 @@ import { releaseRulePaths, selectChecks } from './select.ts';
 import { leakCheckStep, runStages, stepsFor, type Step } from './steps.ts';
 import { filesNamingTickets } from './ticket-ids.ts';
 import { resultsDir, writeRecord, type GateRecord } from '../gate-results/results.ts';
+import { quickReport } from './quick.ts';
 import { findRecord, recheckPlan } from './recheck.ts';
 
 const args = process.argv.slice(2);
@@ -32,7 +36,12 @@ if (baseIndex >= 0 && !baseArg) {
   console.error('check:pr: --base needs a ref');
   process.exit(2);
 }
+const quick = args.includes('--quick');
 const recheck = args.includes('--recheck');
+if (quick && recheck) {
+  console.error('check:pr: --quick and --recheck do not combine');
+  process.exit(2);
+}
 if (recheck && baseArg !== undefined) {
   console.error('check:pr: --recheck compares against the last full run, so it takes no --base');
   process.exit(2);
@@ -130,7 +139,7 @@ function run(step: Step, logDir: string): Promise<{ name: string; outcome: strin
       running.delete(child);
       log.end();
       const outcome = code === 0 ? 'pass' : code === TIMED_OUT && overLimit ? `FAIL: over its ${limitOf(step)} min limit` : 'FAIL';
-      console.log(`${step.name}: ${outcome} (log: ${join(logDir, `${step.name}.log`)})`);
+      if (!quick) console.log(`${step.name}: ${outcome} (log: ${join(logDir, `${step.name}.log`)})`);
       resolve({ name: step.name, outcome, seconds: Math.round((Date.now() - started) / 1000) });
     });
   });
@@ -167,13 +176,16 @@ const exists = (file: string): boolean => existsSync(join(root, file));
 const rules = await ruleFiles();
 const changedPlan = selectChecks(files, exists, rules);
 const rechecked = record !== undefined && !changedPlan.full ? recheckPlan(record, changedPlan, files, (some) => some.length > 0 && selectChecks(some, exists, rules).visual) : undefined;
-const plan = rechecked?.plan ?? changedPlan;
+const selected = rechecked?.plan ?? changedPlan;
+// --quick never starts the full gate: a change that needs it runs every unit test, and the master's gate does the rest.
+const plan = quick && selected.full ? { ...selected, full: false, testAll: true, reasons: [...selected.reasons, 'quick: the full gate is not run; every unit test runs instead'] } : selected;
 const naming = filesNamingTickets(files, root);
 const leakCheck = naming.length > 0;
 plan.reasons.push(leakCheck ? `release-leaks: ${naming.length} changed file(s) name a ticket ID, so the release leak check runs` : 'release-leaks: skipped, no changed file names a ticket ID');
-console.log(`check:pr: ${files.length} file(s) changed against ${base}`);
-for (const reason of plan.reasons) console.log(`  ${reason}`);
-if (rechecked !== undefined && rechecked.reused.length > 0) console.log(`  recheck: reused from ${record!.sha.slice(0, 7)}, where they passed: ${rechecked.reused.join(', ')}`);
+const chatty = !quick || dryRun;
+if (chatty) console.log(`check:pr: ${files.length} file(s) changed against ${base}`);
+if (chatty) for (const reason of plan.reasons) console.log(`  ${reason}`);
+if (chatty && rechecked !== undefined && rechecked.reused.length > 0) console.log(`  recheck: reused from ${record!.sha.slice(0, 7)}, where they passed: ${rechecked.reused.join(', ')}`);
 
 if (plan.full) {
   console.log('check:pr: running the full gate, pnpm check:local');
@@ -190,14 +202,14 @@ if (plan.full) {
   fullGate = full;
   full.on('close', (code) => process.exit(code ? 1 : 0));
 } else {
-  const steps = stepsFor(plan, { leakCheck, exists: (file) => existsSync(join(root, file)), headless: process.platform === 'linux' && !process.env.DISPLAY });
-  console.log(`check:pr: steps: ${steps.map((s) => s.name).join(', ')}`);
+  const steps = stepsFor(plan, { leakCheck, exists: (file) => existsSync(join(root, file)), headless: process.platform === 'linux' && !process.env.DISPLAY, quick });
+  if (chatty) console.log(`check:pr: steps: ${steps.map((s) => s.name).join(', ')}`);
   if (dryRun) process.exit(0);
   const logDir = process.env.CHECK_LOG_DIR ?? mkdtempSync(join(tmpdir(), 'agent-board-check-pr.'));
   mkdirSync(logDir, { recursive: true });
   const started = Date.now();
   const batteryAtStart = await readBatteryNote();
-  if (batteryAtStart !== undefined) console.log(batteryAtStart);
+  if (!quick && batteryAtStart !== undefined) console.log(batteryAtStart);
   const results = new Map<string, { outcome: string; seconds: number }>();
   const settle = async (step: Step): Promise<void> => {
     const r = await run(step, logDir);
@@ -229,7 +241,7 @@ if (plan.full) {
       }
     },
   });
-  if (notRun !== 'the build failed') console.log(`check:pr: ${notRun}; the rest is not run`);
+  if (!quick && notRun !== 'the build failed') console.log(`check:pr: ${notRun}; the rest is not run`);
   let failed = false;
   const rows: string[] = [];
   const flaky: string[] = [];
@@ -242,6 +254,15 @@ if (plan.full) {
     rows.push(`| \`${step.name}\` | ${r.outcome}${names.length > 0 ? `, ${names.length} flaky` : ''} | ${r.seconds}s |`);
   }
   for (const name of rechecked?.reused ?? []) rows.push(`| \`${name}\` | reused: passed on ${record!.sha.slice(0, 7)} | |`);
+  if (quick) {
+    const read = (name: string): string => { try { return readFileSync(join(logDir, `${name}.log`), 'utf8'); } catch { return ''; } };
+    const table = steps.map((step) => {
+      const r = results.get(step.name) ?? { outcome: `not run: ${notRun}`, seconds: 0 };
+      return { name: step.name, outcome: r.outcome, seconds: r.seconds, logPath: join(logDir, `${step.name}.log`), log: r.outcome === 'pass' ? undefined : read(step.name) };
+    });
+    console.log(quickReport(table, Math.round((Date.now() - started) / 1000)).join('\n'));
+    process.exit(table.some((row) => row.outcome !== 'pass') ? 1 : 0);
+  }
   const dirty = git('status', '--porcelain').length > 0;
   console.log(`\nPer-PR checks on \`${git('rev-parse', '--short', 'HEAD')}\`${dirty ? ' (with uncommitted changes)' : ''}, ${Math.round((Date.now() - started) / 1000)}s wall:\n`);
   console.log(['| Step | Result | Time |', '| --- | --- | --- |', ...rows].join('\n'));

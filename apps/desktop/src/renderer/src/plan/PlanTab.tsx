@@ -1,9 +1,12 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { ClipboardList } from 'lucide-react';
 import type { Agent, Plan, PlanOutcome, PlanSummary } from '@agent-board/daemon/protocol';
 import type { WebTabKey, WebTabState } from '../../../preload/api';
 import { errorMessage } from '../../../shared/errors';
 import { changedLineCount, editHint } from '../doc/doc-view';
+import { FindBar } from '../find/FindBar';
+import { pageFinder } from '../find/page-find';
+import { useFindKey } from '../find/use-find';
 import { binding, isActive, keyText, pressed } from '../keys/registry';
 import { Markdown } from '../session/Markdown';
 import { useWebViewBounds } from '../session/use-web-view';
@@ -325,6 +328,8 @@ export function PlanPage({ html, visible, onFocus, onPaneKey }: PlanPageProps) {
   const latest = useRef({ onFocus, onPaneKey });
   latest.current = { onFocus, onPaneKey };
   const drawn = useWebViewBounds(id, host, visible);
+  const finder = useMemo(() => pageFinder(id), [id]);
+  const find = useFindKey(() => host.current?.parentElement ?? null, visible);
   useEffect(() => {
     const close = window.agentBoard.webTabs.openPlan(id, html, {
       onState: (next) => {
@@ -343,6 +348,7 @@ export function PlanPage({ html, visible, onFocus, onPaneKey }: PlanPageProps) {
   }, [id]);
   return (
     <>
+      {find.finding > 0 && <FindBar finder={finder} focusSignal={find.finding} onClose={find.close} />}
       {state?.problem !== undefined && (
         <div className="web-problem plan-problem" data-testid="plan-problem">
           <ErrorText>{state.problem}</ErrorText>

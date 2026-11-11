@@ -5,8 +5,8 @@ import { runDesign, test, addEmptyZone, browseForZone, pickFolderNext, removeDat
 import { scratch } from './scratch.ts';
 import { serveWebPages } from './web-server.ts';
 
-const spotlight = (page: Page) => page.getByRole('dialog', { name: 'Jump to a session or zone' });
-const field = (page: Page) => spotlight(page).getByRole('combobox', { name: 'Jump to a session or zone' });
+const spotlight = (page: Page) => page.getByRole('dialog', { name: 'Jump to a session, zone or setting' });
+const field = (page: Page) => spotlight(page).getByRole('combobox', { name: 'Jump to a session, zone or setting' });
 /** The button that closes a session window: Classic's Close, the Simplified header's Done. */
 const closeWindow = (page: Page) => page.getByRole('button', { name: /^(Close session window|Done, close )/ });
 const agentTile = (page: Page, name: string) => tile(page).filter({ hasText: name });

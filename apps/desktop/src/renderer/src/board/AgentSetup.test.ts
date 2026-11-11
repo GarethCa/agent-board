@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent } from '@agent-board/daemon/protocol';
-import { agentSetupLine, effortText, shelvesSetupLine } from './AgentSetup';
+import { agentSetupLine, effortText, plainWhereLine, shelvesSetupLine } from './AgentSetup';
 
 const setup = (fields: Partial<Agent> = {}) =>
   ({ harness: 'claude', model: null, effort: null, effortPending: null, role: null, roleName: null, reviews: null, ...fields }) as Agent;
@@ -24,5 +24,25 @@ describe("an agent's setup line on its shelves", () => {
     expect(shelvesSetupLine(setup())).toBe('Claude');
     expect(shelvesSetupLine(setup({ model: 'opus' }))).toBe('Claude · Opus');
     expect(shelvesSetupLine(setup({ model: 'opus', effort: 'high', role: 'reviewer' }))).toBe('Claude · Opus · High reasoning · Reviewer');
+  });
+});
+
+describe('the footer’s plain line', () => {
+  const where = (fields: Partial<Agent> = {}) => plainWhereLine(setup({ plainFolder: false, ownsWorktree: true, worktree: '/w/a', repoRoot: '/r', ...fields }));
+
+  it('says a copy of its own for an agent with a worktree', () => {
+    expect(where()).toBe('Working in its own copy');
+  });
+
+  it('says the user’s checkout for an agent in the repo’s own folder', () => {
+    expect(where({ ownsWorktree: false, worktree: '/r' })).toBe('Working in your checkout');
+  });
+
+  it('says the user’s folder for an agent in a plain folder', () => {
+    expect(where({ plainFolder: true, ownsWorktree: false, worktree: '/r' })).toBe('Working in your folder');
+  });
+
+  it('names the branch a reviewer reviews', () => {
+    expect(where({ reviews: { branch: 'docs/intro', head: 'abc1234' } as Agent['reviews'] })).toBe('Reviewing docs/intro’s changes');
   });
 });

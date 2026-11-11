@@ -66,6 +66,7 @@ interface ZoneRow {
   gate_command: string | null;
   spacing: ArrangeSpacing;
   layout_mode: ZoneLayoutMode;
+  folded: number;
   tracker_provider: TrackerProvider | null;
   tracker_scope: string | null;
   tracker_project: string | null;
@@ -212,6 +213,7 @@ export function createZoneTable(
     gateCommand: row.gate_command,
     spacing: row.spacing,
     layoutMode: row.layout_mode,
+    folded: row.folded === 1,
     tracker:
       row.tracker_provider === null || row.tracker_scope === null
         ? null

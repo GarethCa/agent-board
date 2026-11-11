@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { ZONE_COLORS, type Agent, type ExternalSession, type GateRun, type LibraryPrefab, type ReviewRound, type Shell, type Zone } from '@agent-board/daemon/protocol';
 import { keyText } from '../keys/registry';
 import { runGateShortcut } from '../session/window-keys';
-import { agentMenu, bindEntries, externalMenu, menuIds, projectContextMenu, projectMenu, shellMenu, tidyMenu, zoneMenu, zoneTabEntries, type AgentMenuInput, type ModelEntry, type ProjectContextMenuInput, type ZoneMenuInput, type ShellMenuInput } from './menu-model';
+import { agentMenu, agentTileMenu, bindEntries, chipMenu, externalMenu, menuIds, projectContextMenu, projectMenu, shellMenu, tidyMenu, zoneMenu, zoneTabEntries, type AgentMenuInput, type AgentTileMenuInput, type ModelEntry, type ProjectContextMenuInput, type ZoneMenuInput, type ShellMenuInput, type TileBoardActions } from './menu-model';
 import { galleryAgent } from './TileGallery';
 
 const AT = '2026-10-22T12:00:00.000Z';
@@ -134,6 +134,135 @@ describe("an agent's menu", () => {
   });
 });
 
+/** A tile's board handlers, remembering what was called into `calls`: none to connect or pin it unless given. */
+function boardSpies(calls: [string, unknown[]][] = [], more: Partial<TileBoardActions> = {}): TileBoardActions {
+  const remember = (name: string) => (...args: unknown[]) => void calls.push([name, args]);
+  return { askClaude: remember('askClaude'), restack: remember('restack'), copy: remember('copy'), show: remember('show'), ...more };
+}
+
+function tileInput(agent: Agent, more: Partial<AgentTileMenuInput> = {}): AgentTileMenuInput {
+  return { ...agentInput(agent), actions: spies(), board: boardSpies(), related: [], review: undefined, ...more };
+}
+
+/** The ids of a menu's top level alone. */
+const topIds = (entries: readonly ModelEntry[]) => entries.flatMap((entry) => (entry === 'separator' || 'heading' in entry ? [] : [entry.id]));
+
+describe("an agent tile's menu, grouped", () => {
+  it("leads with how to open it, then groups its rows: run, settings, review and gate, arrange, ask, copy, delete", () => {
+    const entries = agentTileMenu(tileInput(running));
+    expect(topIds(entries)).toEqual(['expand', 'pop-out', 'run', 'settings', 'review', 'arrange', 'ask', 'copy', 'delete']);
+    expect(menuIds(entries)).toEqual([
+      'expand', 'pop-out',
+      'run', 'run/interrupt', 'run/pause', 'run/stop',
+      'settings', 'settings/rename', 'settings/schedule', 'settings/link-issue', 'settings/mute',
+      'settings/reasoning', 'settings/reasoning/default', 'settings/reasoning/low', 'settings/reasoning/medium', 'settings/reasoning/high', 'settings/reasoning/xhigh', 'settings/reasoning/max',
+      'review', 'review/open-pr', 'review/start-review', 'review/run-gate',
+      'arrange', 'arrange/front', 'arrange/forward', 'arrange/backward', 'arrange/back', 'arrange/align',
+      'ask',
+      'copy', 'copy/branch', 'copy/worktree', 'copy/session-id',
+      'delete',
+    ]);
+  });
+
+  /** The rows of the submenu with this id. */
+  const sub = (entries: readonly ModelEntry[], id: string) => (row(entries, id) as Extract<ModelEntry, { entries: unknown }>).entries;
+  const paused: Agent = { ...galleryAgent('hibernated'), endedAt: AT };
+  const asking: Agent = { ...galleryAgent('waiting'), ask: {} as Agent['ask'] };
+  const reviewer: Agent = { ...galleryAgent('idle'), reviewOf: 'impl', pullRequests: [] };
+
+  it('leads with its next step: where to answer its question, Wake while paused, a review once its doc is in', () => {
+    expect(topIds(agentTileMenu(tileInput(asking)))[0]).toBe('go-to-question');
+    expect(topIds(agentTileMenu(tileInput({ ...galleryAgent('needs-permission'), permissions: [{}] as Agent['permissions'] })))[0]).toBe('go-to-question');
+    expect(topIds(agentTileMenu(tileInput(paused)))[0]).toBe('wake');
+    expect(topIds(agentTileMenu(tileInput(reviewer, { review: { ...round('ready'), reviewer: reviewer.sessionId } })))[0]).toBe('open-review');
+    // A paused reviewer with its doc in is woken first.
+    expect(topIds(agentTileMenu(tileInput({ ...paused, reviewOf: 'impl' }, { review: round('ready') })))[0]).toBe('wake');
+  });
+
+  it('has no next step when nothing waits on the user: a turn that has ended, a review still being written', () => {
+    expect(topIds(agentTileMenu(tileInput(galleryAgent('waiting'))))[0]).toBe('expand');
+    expect(topIds(agentTileMenu(tileInput(running)))[0]).toBe('expand');
+    expect(topIds(agentTileMenu(tileInput(reviewer, { review: round('reviewing') })))[0]).toBe('expand');
+  });
+
+  it('only opens the place to answer its question, the way a click on the tile does', () => {
+    const actions = spies<AgentTileMenuInput['actions']>();
+    (row(agentTileMenu(tileInput(asking, { actions })), 'go-to-question') as { onSelect(): void }).onSelect();
+    (row(agentTileMenu(tileInput(asking, { actions, clickOpens: 'expand' })), 'go-to-question') as { onSelect(): void }).onSelect();
+    expect(actions.calls.map(([name]) => name)).toEqual(['openAgent', 'expand']);
+  });
+
+  it('interrupts only mid-turn, and stops its session apart from the rest, as its window does', () => {
+    expect(sub(agentTileMenu(tileInput(running)), 'run')).toMatchObject([
+      { id: 'interrupt', label: 'Interrupt', disabled: false, hint: 'Interrupt what it is doing (Ctrl-C)' },
+      { id: 'pause', label: 'Pause', disabled: true },
+      'separator',
+      { id: 'stop', label: 'Stop session', hint: 'End its session; its worktree and branch stay' },
+    ]);
+    expect(row(sub(agentTileMenu(tileInput(galleryAgent('idle'))), 'run'), 'interrupt')).toMatchObject({ disabled: true, hint: 'It has no turn under way to interrupt' });
+  });
+
+  it('stops a paused agent as it is, and carries an ended one on, with nothing to interrupt or stop', () => {
+    expect(sub(agentTileMenu(tileInput(paused)), 'run')).toMatchObject([{ id: 'stop', hint: 'Close it as it is, no longer paused: its worktree and branch stay' }]);
+    expect(menuIds(sub(agentTileMenu(tileInput(ended)), 'run'))).toEqual(['restart']);
+    expect(menuIds(sub(agentTileMenu(tileInput({ ...galleryAgent('stopped-by-restart'), endedAt: AT })), 'run'))).toEqual(['resume']);
+    expect(menuIds(sub(agentTileMenu(tileInput({ ...galleryAgent('rate-limited'), harness: 'claude' })), 'run'))).toContain('continue-on-credits');
+  });
+
+  it("has no Run for an ended reviewer, whose round ended with it", () => {
+    expect(topIds(agentTileMenu(tileInput({ ...ended, reviewOf: 'impl' })))).not.toContain('run');
+  });
+
+  it('opens its own pull request, never one its work only went into', () => {
+    const own = { number: 7, title: 'Fix the flake', url: '', state: 'open', checks: 'passing' } as Agent['pullRequests'][number];
+    expect(row(sub(agentTileMenu(tileInput({ ...running, pullRequests: [own] })), 'review'), 'open-pr')).toMatchObject({ label: 'Open pull request #7', hint: 'Fix the flake' });
+    expect(menuIds(sub(agentTileMenu(tileInput({ ...running, pullRequests: [], pushedPullRequests: [own] })), 'review'))).not.toContain('open-pr');
+  });
+
+  it('shows the tiles it is linked to', () => {
+    const calls: [string, unknown[]][] = [];
+    const entries = sub(
+      agentTileMenu(tileInput(reviewer, { board: boardSpies(calls), related: [{ sessionId: 'impl', label: 'Show checkout-fix' }] })),
+      'review',
+    );
+    expect(entries).toMatchObject([{ id: 'open-review' }, { id: 'show-impl', label: 'Show checkout-fix' }, 'separator', { id: 'run-gate' }]);
+    (row(entries, 'show-impl') as { onSelect(): void }).onSelect();
+    expect(calls).toEqual([['show', ['impl']]]);
+  });
+
+  it('arranges the tile: its z-order, Align for two or more, and where it sits', () => {
+    const arrange = sub(agentTileMenu(tileInput(running)), 'arrange');
+    expect(row(arrange, 'front')).toMatchObject({ label: 'Bring to front', shortcut: keyText('edit.front') });
+    expect(row(arrange, 'align')).toMatchObject({ disabled: true, hint: 'Select two or more to line them up' });
+    const placed = sub(agentTileMenu(tileInput(ended, { board: boardSpies([], { connect: () => {}, leadPin: { pinned: true, toggle: () => {} } }) })), 'arrange');
+    expect(menuIds(placed).slice(-3)).toEqual(['fold', 'lead-pin', 'connect']);
+    expect(row(placed, 'lead-pin').label).toBe('Free from top-left');
+  });
+
+  it('copies its branch name, worktree path and session id, and says when it has none', () => {
+    const copy = sub(agentTileMenu(tileInput({ ...running, branch: '', worktree: '/w/fix' })), 'copy');
+    expect(copy).toMatchObject([
+      { label: 'Branch name', disabled: true, hint: 'It has none' },
+      { label: 'Worktree path', detail: '/w/fix' },
+      { label: 'Session id', detail: running.sessionId },
+    ]);
+  });
+
+  it.each([
+    ['running', running],
+    ['asking', asking],
+    ['paused', paused],
+    ['ended', ended],
+    ['an ended reviewer with its doc in', { ...ended, reviewOf: 'impl' }],
+    ['a rate-limited Claude agent', { ...galleryAgent('rate-limited'), harness: 'claude' } as Agent],
+  ])('has ten rows at most when %s', (_name, agent) => {
+    const entries = agentTileMenu(tileInput(agent, { review: round('ready'), rounds: [round('ready')], related: [{ sessionId: 'x', label: 'Show x' }] }));
+    expect(topIds(entries).length).toBeLessThanOrEqual(10);
+    const ids = menuIds(entries);
+    expect(ids.length).toBe(new Set(ids).size);
+  });
+});
+
 describe("a shell's and an external session's menus", () => {
   it("lists a shell's rows", () => {
     const shell = { id: 's1' } as Shell;
@@ -165,6 +294,7 @@ const repoZone: Zone = {
   tracker: null,
   spacing: 'normal',
   layoutMode: 'free',
+  folded: false,
   clone: null,
   managedClone: false,
   defaultRepo: null,
@@ -191,6 +321,7 @@ describe("a zone's ⋯ menu", () => {
       'spacing/spacing-compact',
       'spacing/spacing-normal',
       'spacing/spacing-roomy',
+      'fold',
       'rename',
       'colour',
       'fill-opacity',
@@ -224,7 +355,7 @@ describe("a zone's ⋯ menu", () => {
       { name: 'Solo agent', icon: 'agent', builtIn: true, members: [] },
       { name: 'Docs pass', icon: 'review', builtIn: false, members: [] },
     ] as unknown as LibraryPrefab[];
-    const actions = spies<ZoneMenuInput['actions']>();
+    const actions = spies<ProjectContextMenuInput['actions']>();
     const crew = row(zoneMenu(zoneInput(repoZone, { actions })), 'crew') as { entries: ModelEntry[] };
     library.current = [];
     expect(menuIds(crew.entries)).toEqual(['crew-Docs pass', 'crew-Solo agent', 'crew-library']);
@@ -249,7 +380,7 @@ describe("a zone's ⋯ menu", () => {
   });
 
   it('calls the handler it was given', () => {
-    const actions = spies<ZoneMenuInput['actions']>();
+    const actions = spies<ProjectContextMenuInput['actions']>();
     const entries = zoneMenu(zoneInput(repoZone, { actions }));
     for (const id of ['tidy', 'board-mcp', 'delete']) (row(entries, id) as { onSelect(): void }).onSelect();
     expect(actions.calls).toEqual([
@@ -836,6 +967,11 @@ describe("every row's fields", () => {
           "label": "Layout and spacing",
         },
         {
+          "hint": "Pauses the agents that can pause and lets their terminals go, to free memory. The chip keeps a count and anything that needs you",
+          "id": "fold",
+          "label": "Fold to a chip",
+        },
+        {
           "id": "rename",
           "label": "Rename",
         },
@@ -1004,6 +1140,11 @@ describe("every row's fields", () => {
           ],
           "id": "spacing",
           "label": "Layout and spacing",
+        },
+        {
+          "hint": "Pauses the agents that can pause and lets their terminals go, to free memory. The chip keeps a count and anything that needs you",
+          "id": "fold",
+          "label": "Fold to a chip",
         },
         {
           "id": "rename",
@@ -1324,6 +1465,58 @@ describe("every row's handler", () => {
     `);
   });
 
+  it("is wired in an agent tile's menu", () => {
+    const actions = spies<AgentTileMenuInput['actions']>();
+    const board = boardSpies(actions.calls, { connect: () => void actions.calls.push(['connect', []]), leadPin: { pinned: false, toggle: () => void actions.calls.push(['toggleLeadPin', []]) } });
+    const rename = () => void actions.calls.push(['rename', []]);
+    const pr = { number: 9, title: 'Fix', url: '', state: 'open', checks: 'passing' } as Agent['pullRequests'][number];
+    const agent: Agent = { ...galleryAgent('waiting'), sessionId: 'a1', ask: {} as Agent['ask'], pullRequests: [pr] };
+    expect([
+      ...wiring(agentTileMenu(tileInput(agent, { actions, board, rename, rounds: [{ ...round('ready'), reviewer: 'r1' }], related: [{ sessionId: 'r1', label: 'Show its reviewer' }] })), actions.calls),
+      ...wiring(agentTileMenu(tileInput({ ...galleryAgent('hibernated'), sessionId: 'a2', endedAt: AT }, { actions, board: boardSpies(actions.calls), rename })), actions.calls).filter((line) => /^(wake|run\/)/.test(line)),
+      ...wiring(agentTileMenu(tileInput({ ...ended, sessionId: 'a3', reviewOf: 'a1' }, { actions, board: boardSpies(actions.calls), rename, review: round('ready') })), actions.calls).filter((line) => /^(open-review|arrange\/fold)/.test(line)),
+    ]).toMatchInlineSnapshot(`
+      [
+        "go-to-question → openAgent(#a1)",
+        "expand → expand("n1")",
+        "pop-out → popOutAgent(#a1)",
+        "run/interrupt → interruptAgent("a1")",
+        "run/pause → pauseAgent("a1")",
+        "run/stop → stopAgent("a1")",
+        "settings/rename → rename()",
+        "settings/schedule → scheduleAgent(#a1)",
+        "settings/link-issue → linkIssue(#a1)",
+        "settings/mute → setMuted("a1", true)",
+        "settings/reasoning/default → setEffort("a1", null)",
+        "settings/reasoning/low → setEffort("a1", "low")",
+        "settings/reasoning/medium → setEffort("a1", "medium")",
+        "settings/reasoning/high → setEffort("a1", "high")",
+        "settings/reasoning/xhigh → setEffort("a1", "xhigh")",
+        "settings/reasoning/max → setEffort("a1", "max")",
+        "review/open-pr → openPullRequest(#a1, #?)",
+        "review/open-review → openReview("a1")",
+        "review/start-review → startReview(#a1)",
+        "review/show-r1 → show("r1")",
+        "review/run-gate → openGate(#a1, true)",
+        "arrange/front → restack("front")",
+        "arrange/forward → restack("forward")",
+        "arrange/backward → restack("backward")",
+        "arrange/back → restack("back")",
+        "arrange/lead-pin → toggleLeadPin()",
+        "arrange/connect → connect()",
+        "ask → askClaude()",
+        "copy/branch → copy("acme-18-waiting", "Branch name")",
+        "copy/worktree → copy("/worktrees/gallery", "Worktree path")",
+        "copy/session-id → copy("a1", "Session id")",
+        "delete → deleteAgent("a1")",
+        "wake → resumeAgent("a2")",
+        "run/stop → stopAgent("a2")",
+        "open-review → openReview("a1")",
+        "arrange/fold → setFolded("n1", true)",
+      ]
+    `);
+  });
+
   it("is wired in a shell's and an external session's menus", () => {
     const actions = spies<ShellMenuInput['actions'] & Parameters<typeof externalMenu>[1]>();
     const rename = () => void actions.calls.push(['rename', []]);
@@ -1368,6 +1561,7 @@ describe("every row's handler", () => {
         "spacing/spacing-compact → setSpacing(#z1, "compact")",
         "spacing/spacing-normal → setSpacing(#z1, "normal")",
         "spacing/spacing-roomy → setSpacing(#z1, "roomy")",
+        "fold → fold(#z1)",
         "rename → rename()",
         "colour → recolor(#z1, "picked")",
         "fill-opacity → setFill(#z1, 12)",
@@ -1386,6 +1580,7 @@ describe("every row's handler", () => {
         "spacing/spacing-compact → setSpacing(#g1, "compact")",
         "spacing/spacing-normal → setSpacing(#g1, "normal")",
         "spacing/spacing-roomy → setSpacing(#g1, "roomy")",
+        "fold → fold(#g1)",
         "rename → rename()",
         "colour → recolor(#g1, "picked")",
         "fill-opacity → setFill(#g1, 12)",
@@ -1472,6 +1667,60 @@ const projects: [string, Zone][] = [
   ['a cloning project', { ...repoZone, clone: {} as Zone['clone'] }],
 ];
 
+describe("a folded zone's chip menu", () => {
+  it('unfolds without waking, unfolds and wakes, renames and deletes', () => {
+    const actions = spies<ZoneMenuInput['actions']>();
+    const rename = vi.fn();
+    const entries = chipMenu({ zone: { ...repoZone, folded: true }, rename, actions });
+    expect(menuIds(entries)).toEqual(['unfold', 'unfold-wake', 'rename', 'delete']);
+    for (const id of ['unfold', 'unfold-wake', 'rename', 'delete']) (row(entries, id) as { onSelect(): void }).onSelect();
+    expect(actions.calls).toEqual([
+      ['unfold', [{ ...repoZone, folded: true }, false]],
+      ['unfold', [{ ...repoZone, folded: true }, true]],
+      ['deleteZone', [{ ...repoZone, folded: true }]],
+    ]);
+    expect(rename).toHaveBeenCalledOnce();
+  });
+});
+
+describe('folding a zone from its menus', () => {
+  const folded: Zone = { ...repoZone, folded: true };
+  /** The two designs' ⋯ menus, and the right-click menu of the Simplified one, over the same zone. */
+  const menus: [string, (zone: Zone, actions: ProjectContextMenuInput['actions']) => ModelEntry[]][] = [
+    ['the Classic zone', (zone, actions) => zoneMenu(zoneInput(zone, { actions }))],
+    ['the Simplified project', (zone, actions) => projectMenu(projectInput(zone, { actions }))],
+    ['the Simplified right-click menu', (zone, actions) => (row(projectContextMenu({ ...projectInput(zone, { actions }), newNote: () => {} }), 'options') as { entries: ModelEntry[] }).entries],
+  ];
+
+  it.each(menus)('offers %s Fold to a chip, and nothing to unfold, while it is open', (_name, menu) => {
+    const actions = spies<ProjectContextMenuInput['actions']>();
+    const entries = menu(repoZone, actions);
+    expect(row(entries, 'fold')).toMatchObject({ label: 'Fold to a chip' });
+    expect(menuIds(entries)).not.toContain('unfold');
+    (row(entries, 'fold') as { onSelect(): void }).onSelect();
+    expect(actions.calls).toEqual([['fold', [repoZone]]]);
+  });
+
+  it.each(menus)('offers %s no Fold while it clones', (_name, menu) => {
+    const entries = menu({ ...repoZone, clone: {} as Zone['clone'] }, spies<ProjectContextMenuInput['actions']>());
+    expect(menuIds(entries)).not.toContain('fold');
+  });
+
+  it.each(menus)('offers %s Unfold, which wakes no one, and Unfold and wake, once it is folded', (_name, menu) => {
+    const actions = spies<ProjectContextMenuInput['actions']>();
+    const entries = menu(folded, actions);
+    expect(menuIds(entries)).not.toContain('fold');
+    expect(row(entries, 'unfold')).toMatchObject({ label: 'Unfold', hint: expect.stringMatching(/stay paused/) });
+    expect(row(entries, 'unfold-wake')).toMatchObject({ label: 'Unfold and wake its agents', hint: expect.stringMatching(/folding paused/) });
+    (row(entries, 'unfold') as { onSelect(): void }).onSelect();
+    (row(entries, 'unfold-wake') as { onSelect(): void }).onSelect();
+    expect(actions.calls).toEqual([
+      ['unfold', [folded, false]],
+      ['unfold', [folded, true]],
+    ]);
+  });
+});
+
 describe("a project's menus, under the Simplified design", () => {
   it.each(projects)("keep every control of today's zone tab and ⋯ for %s, doing the same, in ⋯ and in the right-click menu", (_name, zone) => {
     const classic = classicDoings(zone);
@@ -1510,6 +1759,7 @@ describe("a project's menus, under the Simplified design", () => {
         "options/layout/layout-free → setLayoutMode(#z1, "free")",
         "options/layout/layout-shelves → setLayoutMode(#z1, "shelves")",
         "options/layout/layout-clusters → setLayoutMode(#z1, "clusters")",
+        "options/fold → fold(#z1)",
         "options/issues/tracker → pickTracker(#z1)",
         "options/issues/add-issue → addIssue(#z1)",
         "options/folder/trust-folder → setTrustsFolder(#z1, false)",
@@ -1542,6 +1792,7 @@ describe("a project's menus, under the Simplified design", () => {
         "options/layout/layout-free → setLayoutMode(#z1, "free")",
         "options/layout/layout-shelves → setLayoutMode(#z1, "shelves")",
         "options/layout/layout-clusters → setLayoutMode(#z1, "clusters")",
+        "options/fold → fold(#z1)",
         "options/issues/tracker → pickTracker(#z1)",
         "options/folder/repo → bind(#z1, "repo")",
         "options/folder/project → bind(#z1, "project")",
@@ -1585,6 +1836,7 @@ describe("a project's menus, under the Simplified design", () => {
       'layout/layout-free',
       'layout/layout-shelves',
       'layout/layout-clusters',
+      'fold',
       'issues',
       'issues/tracker',
       'issues/add-issue',

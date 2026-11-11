@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { FileText, RotateCw } from 'lucide-react';
 import type { Agent } from '@agent-board/daemon/protocol';
 import type { DocSurface } from '@agent-board/daemon/window-layout';
@@ -6,6 +6,9 @@ import type { WebTabKey } from '../../../preload/api';
 import { errorMessage } from '../../../shared/errors';
 import { ErrorText, IconButton } from '../ui';
 import { PlanPage } from '../plan/PlanTab';
+import { FindBar } from '../find/FindBar';
+import { domFinder } from '../find/dom-find';
+import { useFindKey } from '../find/use-find';
 import { Markdown } from './Markdown';
 import { docName } from './tabs';
 
@@ -34,6 +37,10 @@ export function DocTab({ doc, agent, visible, onFocus, onPaneKey }: DocTabProps)
   const [problem, setProblem] = useState<string>();
   const [reads, setReads] = useState(0);
   const { sessionId, path } = doc;
+  const viewer = useRef<HTMLDivElement>(null);
+  const finder = useMemo(() => domFinder(() => viewer.current?.querySelector('.plan-markdown, .doc-text') ?? null), []);
+  // An HTML doc's page finds in itself (PlanPage).
+  const find = useFindKey(() => viewer.current, visible && text !== undefined && !isHtml(path));
   useEffect(() => {
     if (!visible) return;
     let current = true;
@@ -50,7 +57,7 @@ export function DocTab({ doc, agent, visible, onFocus, onPaneKey }: DocTabProps)
     };
   }, [sessionId, path, visible, reads]);
   return (
-    <div className="review-viewer plan-viewer" data-testid="doc-view">
+    <div className="review-viewer plan-viewer" ref={viewer} data-testid="doc-view">
       <div className="plan-doc">
         <article className="plan-body" aria-label={docName(path)} data-testid="doc-body">
           <header className="plan-head">
@@ -61,6 +68,7 @@ export function DocTab({ doc, agent, visible, onFocus, onPaneKey }: DocTabProps)
             </span>
             <IconButton icon={<RotateCw />} size="sm" aria-label="Reload" tooltip="Read the file again" onClick={() => setReads((count) => count + 1)} />
           </header>
+          {find.finding > 0 && <FindBar finder={finder} focusSignal={find.finding} onClose={find.close} />}
           {problem !== undefined ? (
             <ErrorText>{problem}</ErrorText>
           ) : text === undefined ? (

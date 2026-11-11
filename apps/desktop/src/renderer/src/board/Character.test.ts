@@ -1,13 +1,21 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
-import type { Agent, Subagent } from '@agent-board/daemon/protocol';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { Agent, NeedsYouShows, Subagent } from '@agent-board/daemon/protocol';
+import { CalmTile } from './CalmTile';
 import { Captain, CAPTAIN_SIZES, Character } from './Character';
 import { CHARACTER_POSES } from './character-figures';
 import { CharacterGallery, CharacterStylesGallery } from './CharacterGallery';
 import { HybridTile } from './HybridTile';
 import { MAX_PERCHED } from './perch';
 import type { TileData } from './tile';
+
+/** What the needs-you inbox lists, as the window's setting says: a tile reads it to know whether it needs the user. */
+const setting = vi.hoisted(() => ({ shows: 'explicit' as NeedsYouShows }));
+vi.mock('../needs-you-setting', () => ({ useNeedsYouShows: () => setting.shows }));
+afterEach(() => {
+  setting.shows = 'explicit';
+});
 
 interface Drawn {
   attributes: Record<string, string>;
@@ -174,81 +182,82 @@ describe('subagents on a Hybrid tile', () => {
     ...fields,
   });
 
-  function tile(subagents: Subagent[], harness: 'claude' | 'codex' = 'claude', fields: Partial<Agent> = {}): string {
-    const data: TileData = {
-      label: 'agent',
+  function agentOf(subagents: Subagent[], harness: 'claude' | 'codex' = 'claude', fields: Partial<Agent> = {}): Agent {
+    return {
+      sessionId: 's1',
+      zoneId: 'z1',
+      repoRoot: '/code/app',
+      position: null,
       harness,
-      agent: {
-        sessionId: 's1',
-        zoneId: 'z1',
-        repoRoot: '/code/app',
-        position: null,
-        harness,
-        model: null,
-        effort: null,
-        effortPending: null,
-        role: null,
-        roleName: null,
-        reviews: null,
-        name: 'agent',
-        description: 'Map the code',
-        branch: 'map-the-code',
-        ownedBranch: 'map-the-code',
-        detached: false,
-        worktree: '/tmp/w',
-        cwd: '/tmp/w',
-        state: 'running',
-        notice: null,
-        earlierConversations: [],
-        hibernated: null,
-        muted: false,
-        seen: false,
-        issue: null,
-        createdAt: new Date().toISOString(),
-        endedAt: null,
-        exitCode: null,
-        shellSessionId: null,
-        shellHarness: null,
-        clickableLinks: null,
-        subagents,
-        commands: [],
-        pullRequests: [],
-        pushedPullRequests: [],
-        records: [],
-        recordedPullRequests: [],
-        guessedDoc: null,
-        page: null,
-        lastMessage: null,
-        compactingSince: null,
-        finishedAt: null,
-        permissions: [],
-        ask: null,
-        stepsWait: null,
-        plan: null,
-        docs: [],
-        schedule: null,
-        reviewOf: null,
-        reviewCap: 3,
-        ownsWorktree: true,
-        master: false,
-        plainFolder: false,
-        orchestrate: null,
-        spawnedBy: null,
-        ledBy: null,
-        startup: null,
-        unsent: null,
-        untypedPrompt: null,
-        trustFolder: null,
-        trustedByZone: false,
-        queuedUntilUp: 0,
-        messagesWaiting: 0,
-        undelivered: [],
-        status: null,
-        workFinishedAt: null,
-        flag: null,
-        ...fields,
-      },
+      model: null,
+      effort: null,
+      effortPending: null,
+      role: null,
+      roleName: null,
+      reviews: null,
+      name: 'agent',
+      description: 'Map the code',
+      branch: 'map-the-code',
+      ownedBranch: 'map-the-code',
+      detached: false,
+      worktree: '/tmp/w',
+      cwd: '/tmp/w',
+      state: 'running',
+      notice: null,
+      earlierConversations: [],
+      hibernated: null,
+      muted: false,
+      seen: false,
+      issue: null,
+      createdAt: new Date().toISOString(),
+      endedAt: null,
+      exitCode: null,
+      shellSessionId: null,
+      shellHarness: null,
+      clickableLinks: null,
+      subagents,
+      commands: [],
+      pullRequests: [],
+      pushedPullRequests: [],
+      records: [],
+      recordedPullRequests: [],
+      guessedDoc: null,
+      page: null,
+      lastMessage: null,
+      compactingSince: null,
+      finishedAt: null,
+      permissions: [],
+      ask: null,
+      stepsWait: null,
+      plan: null,
+      docs: [],
+      schedule: null,
+      reviewOf: null,
+      reviewCap: 3,
+      ownsWorktree: true,
+      master: false,
+      plainFolder: false,
+      orchestrate: null,
+      spawnedBy: null,
+      ledBy: null,
+      startup: null,
+      unsent: null,
+      untypedPrompt: null,
+      trustFolder: null,
+      trustedByZone: false,
+      queuedUntilUp: 0,
+      messagesWaiting: 0,
+      undelivered: [],
+      status: null,
+      character: null,
+      workFinishedAt: null,
+      flag: null,
+      ...fields,
     };
+  }
+
+  function tile(subagents: Subagent[], harness: 'claude' | 'codex' = 'claude', fields: Partial<Agent> = {}): string {
+    const data: TileData = { label: 'agent', harness, agent: agentOf(subagents, harness, fields) };
     return renderToStaticMarkup(createElement(HybridTile, { id: 'agent:s1', tile: data }));
   }
 
@@ -262,6 +271,89 @@ describe('subagents on a Hybrid tile', () => {
     expect(done).toMatch(/data-testid="tile-character" data-pose="done"/);
     const failed = tile([], 'claude', { shellHarness: 'claude', state: 'failed', endedAt: new Date().toISOString(), exitCode: 1 });
     expect(failed).toMatch(/data-testid="tile-character" data-pose="failed"/);
+  });
+
+  it("draws the pose the agent set over its work and its finished turn, and the board's needing you over that", () => {
+    const character = (pose: NonNullable<Agent['character']>['pose']) => ({ pose, face: null, prop: null, setAt: new Date().toISOString(), setBy: null });
+    expect(tile([], 'claude', { character: character('testing') })).toMatch(/data-testid="tile-character" data-pose="testing"/);
+    expect(tile([], 'claude', { character: character('running-a-tool') })).toMatch(/data-testid="tile-character" data-pose="running"/);
+    expect(tile([], 'claude', { state: 'waiting', character: character('waiting-on-review') })).toMatch(/data-testid="tile-character" data-pose="waiting-on-review"/);
+    expect(tile([], 'claude', { state: 'needs-permission', character: character('testing') })).toMatch(/data-testid="tile-character" data-pose="needs-permission"/);
+    expect(tile([], 'claude', { state: 'failed', character: character('testing') })).toMatch(/data-testid="tile-character" data-pose="failed"/);
+  });
+
+  describe("the board's states over the pose an agent set, on both designs", () => {
+    const posed = (pose: NonNullable<Agent['character']>['pose']): Agent['character'] => ({ pose, face: null, prop: null, setAt: new Date().toISOString(), setBy: null });
+    const DESIGNS: Record<string, (fields: Partial<Agent>) => string> = {
+      Classic: (fields) => tile([], 'claude', fields),
+      Simplified: (fields) => renderToStaticMarkup(createElement(CalmTile, { id: 'agent:s1', selected: false, agent: agentOf([], 'claude', fields) })),
+    };
+    /** The pose a tile's own character strikes. */
+    const poseOn = (html: string): string | undefined => /class="tile-character" data-pose="([^"]+)"/.exec(html)?.[1];
+
+    const AT = new Date().toISOString();
+    const permission: Agent['permissions'][number] = {
+      id: 'p',
+      toolName: 'Bash',
+      toolInput: { command: 'rm -rf dist' },
+      subagent: null,
+      requestedAt: AT,
+      heldUntil: null,
+      asksInTerminal: false,
+      sessionGrant: null,
+      questions: null,
+    };
+    const question = { question: 'Postgres or SQLite?', options: ['Postgres', 'SQLite'], freeText: true };
+    const ask: Agent['ask'] = { id: 'q', ...question, askedAt: AT, expiresAt: AT, onBoard: false, questions: [question], answers: [null], card: null };
+    /** What an agent waits on the user for, by name. */
+    const WAITS: Record<string, Partial<Agent>> = {
+      'a permission': { state: 'needs-permission', permissions: [permission] },
+      'a question': { state: 'waiting', ask },
+      'a plan to review': { state: 'waiting', plan: { title: 'Selection strategy', decision: null } as Agent['plan'] },
+      'a steps card': { state: 'waiting', stepsWait: { kind: 'steps' } as Agent['stepsWait'] },
+      'a flag to the user': { state: 'waiting', flag: { id: 1, reason: 'Which database?', at: AT, to: 'user', via: null } },
+    };
+
+    for (const [design, draw] of Object.entries(DESIGNS)) {
+      it(`${design}: draws what the agent waits on the user for, seen or not, never the pose it set`, () => {
+        for (const [name, wait] of Object.entries(WAITS)) {
+          for (const seen of [false, true]) {
+            const board = poseOn(draw({ ...wait, seen }));
+            expect(board, `${name}, seen ${seen}`).toBeDefined();
+            for (const pose of ['testing', 'waiting-on-review'] as const) {
+              expect(poseOn(draw({ ...wait, seen, character: posed(pose) })), `${pose} over ${name}, seen ${seen}`).toBe(board);
+            }
+          }
+        }
+        expect(poseOn(draw({ ...WAITS['a permission'], character: posed('testing') }))).toBe('needs-permission');
+      });
+
+      it(`${design}: draws a finished turn the inbox lists as needing you, and the pose where the tile does not say so`, () => {
+        setting.shows = 'turns';
+        const turn: Partial<Agent> = { state: 'waiting', character: posed('waiting-on-review') };
+        expect(poseOn(draw({ ...turn, seen: false }))).toBe('waiting');
+        // A Classic pill drops the needs-you look once the turn is seen. The Simplified status reads no `seen`: it says
+        // Needs you until the turn is answered, and its character says so with it.
+        expect(poseOn(draw({ ...turn, seen: true }))).toBe(design === 'Classic' ? 'waiting-on-review' : 'waiting');
+        setting.shows = 'explicit';
+        expect(poseOn(draw({ ...turn, seen: false }))).toBe('waiting-on-review');
+      });
+
+      it(`${design}: draws an agent at its prompt with its pull request open as its own status says, the pose under it`, () => {
+        const pullRequests: Agent['pullRequests'] = [{ number: 41, title: 'Add the dock', url: '', state: 'open', checks: 'passing' }];
+        // The Simplified status reads an open pull request as Needs you ("Changes ready to review"), the board's to
+        // draw. Classic's pill rests there, so the agent's waiting on review shows.
+        expect(poseOn(draw({ state: 'idle', pullRequests, character: posed('waiting-on-review') }))).toBe(design === 'Classic' ? 'waiting-on-review' : 'waiting');
+      });
+
+      it(`${design}: draws a working pose only in a turn, and a resting one at the prompt`, () => {
+        expect(poseOn(draw({ state: 'running', character: posed('testing') }))).toBe('testing');
+        for (const state of ['idle', 'waiting'] as const) {
+          expect(poseOn(draw({ state, character: posed('testing') })), state).toBe(poseOn(draw({ state })));
+          expect(poseOn(draw({ state, character: posed('waiting-on-review') })), state).toBe('waiting-on-review');
+        }
+      });
+    }
   });
 
   it('draws what it hands on and what it times as its own pose, with no second robot over the tile', () => {

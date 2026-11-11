@@ -51,7 +51,7 @@ describe('clocks', () => {
     const { client, recorder, clock, zone } = await clockDaemon();
     const made = await freshClock(client, zone.id, { result: 'note' });
     expect(made).toMatchObject({ kind: 'clock', zoneId: zone.id, x: 40, y: 40, width: 256, height: 76 });
-    expect(await client.call('clock.list')).toEqual([{ id: made.id, nextRunAt: EIGHT.toISOString(), runs: [] }]);
+    expect(await client.call('clock.list')).toEqual([{ id: made.id, nextRunAt: EIGHT.toISOString(), runs: [], skips: null }]);
 
     clock.advanceTo(EIGHT);
     const running = await untilStatus(recorder, made.id, (status) => status.runs[0]?.sessionId != null);
@@ -167,6 +167,72 @@ describe('clocks', () => {
     }
     await expect.poll(async () => (await client.call('agent.list')).map((agent) => [agent.sessionId, agent.state])).toEqual([[started[1], 'stopped-by-restart']]);
   });
+
+  it('flags an agent whose turn looks stuck, three check-ins skipped in a row as it was mid-turn, until its turn ends', async () => {
+    // A `Keep busy` turn never ends on its own: the agent stays mid-turn until it is interrupted.
+    const { client, recorder, clock, zone } = await clockDaemon('busy');
+    const agent = await client.call('agent.spawn', { zoneId: zone.id, prompt: 'Keep busy with the tests', ...SIZE });
+    await untilAgent(recorder, agent.sessionId, (seen) => seen.state === 'thinking' || seen.state === 'running');
+    const made = await client.call('clock.add', { place: { beside: agent.sessionId }, data: { cron: '*/1 * * * *', prompt: 'Check in' } });
+
+    clock.advanceTo(new Date(2026, 9, 10, 7, 32));
+    await untilStatus(recorder, made.id, (status) => status.skips?.count === 2);
+    expect((await client.call('agent.list')).find((each) => each.sessionId === agent.sessionId)!.flag).toBeNull();
+
+    clock.advanceTo(new Date(2026, 9, 10, 7, 33));
+    const flagged = await untilAgent(recorder, agent.sessionId, (seen) => seen.flag !== null);
+    expect(flagged.flag).toMatchObject({
+      reason: `${agent.name} has been working for at least 2m without a turn ending; its check-ins are being skipped (×3 since 07:31)`,
+      to: 'user',
+    });
+    const status = await untilStatus(recorder, made.id, (each) => each.skips?.count === 3);
+    expect(status.skips).toEqual({ count: 3, since: new Date(2026, 9, 10, 7, 31).toISOString(), reasons: ['it was still working'] });
+
+    // Raised once: a fourth skip doesn't raise it again, as a new flag would be news again.
+    clock.advanceTo(new Date(2026, 9, 10, 7, 34));
+    await untilStatus(recorder, made.id, (each) => each.skips?.count === 4);
+    expect((await client.call('agent.list')).find((each) => each.sessionId === agent.sessionId)!.flag?.id).toBe(flagged.flag!.id);
+
+    // The turn ending takes it down at once, not at the clock's next fire.
+    await client.call('agent.interrupt', { sessionId: agent.sessionId });
+    await untilAgent(recorder, agent.sessionId, (seen) => seen.flag === null);
+    clock.advanceTo(new Date(2026, 9, 10, 7, 35));
+    await untilStatus(recorder, made.id, (each) => each.runs[0]?.outcome === 'started');
+  }, 20_000);
+
+  it("leaves a flag the agent already has, doesn't raise one the user has looked at again, and takes its own down with the clock", async () => {
+    const { client, recorder, clock, zone } = await clockDaemon('busy');
+    const agent = await client.call('agent.spawn', { zoneId: zone.id, prompt: 'Keep busy with the tests', ...SIZE });
+    await untilAgent(recorder, agent.sessionId, (seen) => seen.state === 'thinking' || seen.state === 'running');
+    const flagOf = async () => (await client.call('agent.list')).find((each) => each.sessionId === agent.sessionId)!.flag;
+    const first = await client.call('clock.add', { place: { beside: agent.sessionId }, data: { cron: '*/1 * * * *', prompt: 'Check in' } });
+    clock.advanceTo(new Date(2026, 9, 10, 7, 33));
+    const raised = (await untilAgent(recorder, agent.sessionId, (seen) => seen.flag !== null)).flag!;
+
+    // A second clock's run of skips finds the first one's flag, and leaves it as it is.
+    const second = await client.call('clock.add', { place: { beside: agent.sessionId }, data: { cron: '*/1 * * * *', prompt: 'Look up' } });
+    clock.advanceTo(new Date(2026, 9, 10, 7, 36));
+    await untilStatus(recorder, second.id, (status) => status.skips?.count === 3);
+    expect((await flagOf())?.id).toBe(raised.id);
+
+    // Once the user has looked, neither clock raises it again for the same run of skips.
+    await client.call('agent.markSeen', { sessionId: agent.sessionId });
+    expect(await flagOf()).toBeNull();
+    clock.advanceTo(new Date(2026, 9, 10, 7, 37));
+    await untilStatus(recorder, second.id, (status) => status.skips?.count === 4);
+    await untilStatus(recorder, first.id, (status) => status.skips?.count === 7);
+    expect(await flagOf()).toBeNull();
+
+    // A clock that is deleted takes down the flag it raised.
+    const third = await client.call('clock.add', { place: { beside: agent.sessionId }, data: { cron: '*/1 * * * *', prompt: 'Report' } });
+    const added = recorder.events.length;
+    clock.advanceTo(new Date(2026, 9, 10, 7, 40));
+    const again = (await untilAgent(recorder, agent.sessionId, (seen) => seen.flag !== null, added)).flag!;
+    expect(again.reason).toContain('(×3 since 07:38)');
+    const deleting = recorder.events.length;
+    await client.call('item.delete', { id: third.id });
+    await untilAgent(recorder, agent.sessionId, (seen) => seen.flag === null, deleting);
+  }, 20_000);
 
   it("puts a clock made for an agent on its tile's left, joined to it, as its schedule", async () => {
     const { client, zone } = await clockDaemon();

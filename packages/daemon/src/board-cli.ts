@@ -41,6 +41,8 @@ import {
   sendToAgent,
   setDefaultRole,
   setOrchestrate,
+  handOver,
+  characterAnswer,
   setCrewStatus,
   setOwnStatus,
   recordEntry,
@@ -62,6 +64,7 @@ import {
   type BoardSession,
   type BoardView,
 } from './board-ops.ts';
+import { AGENT_FACES, AGENT_POSES, AGENT_PROPS, characterChoices, NO_POSE, parseCharacter, type CharacterSet } from './character.ts';
 import { DaemonRpcError } from './client.ts';
 import { documentTitle } from './document-names.ts';
 import { addSchedule, checkSchedule, listSchedules, removeSchedule } from './clock-ops.ts';
@@ -175,9 +178,9 @@ COMMANDS
   edges                 Every edge: its two agents, what it carries, when, and how it stands.
   show <ref>            Everything about one zone, agent, shell, edge, item or connector.
   usage                 The 5-hour and weekly plan usage. See \`usage --help\`.
-  status set <summary> [--progress <0-100>] [--done]
+  status set <summary> [--progress <0-100>] [--done] [--pose <pose>]
                         Set your own tile's status (agents only); --done says your work is
-                        finished. See \`status --help\`.
+                        finished; --pose your character's pose. See \`status --help\`.
   needs-you [--] <reason> [--via <ref>] | --clear
                         Ask for a look: blocked, ready for review, or a decision needed. A
                         turn ending tells no one. See \`needs-you --help\`.
@@ -441,7 +444,7 @@ decision instead, use the MCP tool \`show_doc\` with plan.
   --json           Print the document as JSON.`,
   },
   status: {
-    usage: 'agent-board status set <summary> [--agent <ref>] [--progress <0-100>] [--done]',
+    usage: 'agent-board status set [<summary>] [--agent <ref>] [--progress <0-100>] [--done] [--pose <pose> [--face <face>] [--prop <prop>]] | status poses',
     text: `Sets your own tile's status: one line, at most ${MAX_STATUS_LENGTH} characters, saying what you are doing
 now, as the change you are making ("Moving session ids to the daemon"), not the task you were
 given. Your tile shows it in place of your task. Set it once you understand the work, and again
@@ -461,9 +464,21 @@ and theirs) instead of your own, and its tile says who set it. Keep your crew's 
 each is doing now, from what you see of it. The latest write wins, its own or yours. An agent
 outside your crew is refused.
 
-  --agent <ref>    Set this crew member's line, not your own.
+--pose sets the pose your tile's character strikes, with or without a summary: thinking,
+running-a-tool, reading, writing or testing for the work you are doing now, and
+waiting-on-review as your turn ends with your work up for review. --face and --prop give it a
+face and a prop of their own; \`status poses\` lists them all. A word outside the lists is
+refused. A working pose goes when your turn ends, or 20 minutes after you set it;
+waiting-on-review when your next turn starts; \`--pose none\` gives the board's back now. The
+board's own states (needs you, a problem, a usage limit, paused, done) are drawn over yours,
+which shows again after. Setting a pose often is fine: the tile draws the last one.
+
+  --agent <ref>    Set this crew member's line or pose, not your own.
   --progress <n>   0 to 100.
   --done           Your work is finished (not with --agent).
+  --pose <pose>    Your character's pose, or none (\`status poses\`).
+  --face <face>    Its face, with --pose.
+  --prop <prop>    Its prop, with --pose.
   --json           Print the agent as JSON (with --agent, as \`show --json\` prints it).`,
   },
   record: {
@@ -597,14 +612,14 @@ For a question with answers to pick from, use the MCP tool \`ask\`, which waits 
     usage: 'agent-board mcp',
     text: `Serves the board as MCP tools on stdio: whoami, board, connections, handoff, ask, present_plan,
 show_doc, set_status, needs_you, open_pr, record_pr, record_doc, pin, unpin and set_page, and for an agent that may orchestrate as it starts, new_agent, send, wait, read,
-interrupt, set_effort, continue_on_credits, restart, pause, wake, close, add_edge, remove_edge, move, arrange, map,
+interrupt, set_effort, continue_on_credits, restart, pause, wake, close, handover, add_edge, remove_edge, move, arrange, map,
 zone_layout, add_note, edit_note, remove_note, prefabs, roles, set_role and remove_role. The app adds it to the agents it starts; add it to another Claude
 with:
 
   claude mcp add agent-board -- agent-board mcp`,
   },
   orchestrate: {
-    usage: 'agent-board orchestrate on|off <ref> [--scope zone|repo|board]',
+    usage: 'agent-board orchestrate on|off <ref> [--scope zone|repo|board]\n       agent-board orchestrate handover <from> <to>',
     text: `Orchestrating: one agent leading others, as a lead hands work to workers and reviewers and
 reads what they hand back.
 
@@ -626,6 +641,12 @@ It may always act on the agents it started, wherever they are, and never on itse
 read and wait for another orchestrator, but not steer one (send, interrupt, effort, restart, pause, wake,
 close, or wire an edge into it) whose scope is wider than its own (board > repo > zone): a message
 runs under the permissions of the agent that gets it.
+
+\`agent-board orchestrate handover <from> <to>\` hands one orchestrator's crew and what it made
+(notes, lane labels, clocks, shapes, connectors, zones and edges) to another, which may then
+arrange, edit, remove and close them as its own. An orchestrator hands over its own crew, or
+takes over one in its scope, no wider than its own, whose session has ended; either way the one
+that gets the crew must have every agent in it in its scope. From a shell, the user hands over any.
 
 As an orchestrator, a loop of implementing and reviewing looks like this:
   agent-board new --name impl -- 'Fix the flaky login test. Commit on your branch, write
@@ -1489,15 +1510,16 @@ marked as made by you, that fires on a five-field cron expression (minute hour d
 weekday, or @daily, @hourly…) in the machine's local time. Quote the expression.
 
 With --to, it sends <prompt> to that agent at each fire time, as its next message (relaunching
-it if its session has ended; a time at which it is busy is skipped). The clock goes on the
-agent's tile's left. With --fresh, it starts a fresh agent each time, in --zone (your zone by
+it if its session has ended; a time at which it is busy is skipped, and three skipped in a
+row while it was still working flag it: its turn looks stuck). The clock goes on the agent's
+tile's left. With --fresh, it starts a fresh agent each time, in --zone (your zone by
 default) with <prompt> as its task, waits for its turn to end, keeps its final message in the
 clock's run history, and closes it (--keep leaves it open); a time at which the last run is
 still going is skipped. --result note also leaves the result as a note where its tile was;
 --result handoff hands it to --handoff-to's agent.
 
 \`schedule list\` prints each clock's ref, its schedule, what it does, when it next runs and how
-its last run went. \`schedule remove\` removes only a clock you, or an agent you started, made;
+its last run went: for a run of skips, how many, since when and why. \`schedule remove\` removes only a clock you, or an agent you started, made;
 in a shell, or outside agent-board, any.
 
   --to <ref>         The agent it messages, in your scope.
@@ -1635,6 +1657,9 @@ const WAIT_TIMED_OUT = 3;
 const OPTIONS = {
   json: { type: 'boolean' },
   progress: { type: 'string' },
+  pose: { type: 'string' },
+  face: { type: 'string' },
+  prop: { type: 'string' },
   title: { type: 'string' },
   for: { type: 'string' },
   agent: { type: 'string' },
@@ -1723,9 +1748,12 @@ const OPTIONS = {
 
 type Option = keyof typeof OPTIONS;
 
+/** The options only `status set` takes, which other commands refuse by naming it. */
+const STATUS_ONLY: ReadonlySet<Option> = new Set<Option>(['progress', 'done', 'agent', 'pose', 'face', 'prop']);
+
 /** The options each command takes beyond `--json` (which every one but `status`'s set, `rpc` and `mcp` takes too). */
 export const COMMAND_OPTIONS: Record<string, readonly Option[]> = {
-  status: ['progress', 'done', 'agent'],
+  status: ['progress', 'done', 'agent', 'pose', 'face', 'prop'],
   record: ['title', 'for'],
   pin: ['note', 'label', 'for'],
   unpin: ['label', 'for'],
@@ -1775,7 +1803,7 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
   for (const option of Object.keys(values) as Option[]) {
     if (!takes.has(option)) {
       throw new UsageError(
-        option === 'progress' || option === 'done' || option === 'agent' ? `--${option} is only for \`status set\`` : `--${option} is not an option of ${command}`,
+        STATUS_ONLY.has(option) ? `--${option} is only for \`status set\`` : `--${option} is not an option of ${command}`,
       );
     }
   }
@@ -1898,23 +1926,39 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
       return async (session) => print(await pinEntry(session, params, process.cwd()));
     }
     case 'status': {
-      if (positionals[0] !== 'set') throw new UsageError('the only status command is `status set`');
-      const summary = positionals.slice(1).join(' ');
-      if (summary.trim() === '') throw new UsageError('give a summary');
+      if (positionals[0] === 'poses') {
+        if (positionals.length > 1 || Object.keys(values).some((option) => option !== 'json')) throw new UsageError('`status poses` takes nothing');
+        return async () => (values.json ? JSON.stringify({ poses: [...AGENT_POSES, NO_POSE], faces: AGENT_FACES, props: AGENT_PROPS }, null, 2) : characterChoices());
+      }
+      if (positionals[0] !== 'set') throw new UsageError('the status commands are `status set` and `status poses`');
+      const words = positionals.slice(1).join(' ');
+      const summary = words.trim() === '' ? undefined : words;
+      const pose = string('pose');
+      if (pose === undefined && (string('face') !== undefined || string('prop') !== undefined)) throw new UsageError('--face and --prop go with a --pose');
+      if (summary === undefined && pose === undefined) throw new UsageError('give a summary, a --pose, or both');
       const progress = string('progress') === undefined ? undefined : Number(string('progress'));
       if (progress !== undefined && !isStatusProgress(progress)) {
         throw new UsageError('--progress must be a whole number from 0 to 100');
+      }
+      if (progress !== undefined && summary === undefined) throw new UsageError('--progress goes with a summary');
+      let character: CharacterSet | undefined;
+      try {
+        character = pose === undefined ? undefined : parseCharacter({ pose, face: string('face'), prop: string('prop') });
+      } catch (error) {
+        throw new UsageError((error as Error).message);
       }
       const crewMember = string('agent');
       if (crewMember !== undefined && values.done === true) throw new UsageError('--done is for your own status: a crew member says it is finished itself');
       return async (session) => {
         if (crewMember !== undefined) {
-          const view = await setCrewStatus(session, crewMember, summary, progress);
+          const view = await setCrewStatus(session, crewMember, summary, progress, character);
           return values.json ? JSON.stringify(view.json, null, 2) : view.text;
         }
-        const agent = await setOwnStatus(session, summary, progress, values.done === true);
+        const agent = await setOwnStatus(session, summary, progress, values.done === true, character);
         if (values.json) return JSON.stringify(agent, null, 2);
-        return `status set: ${statusLine(agent.status!)}${agent.workFinishedAt === null ? '' : ' (finished)'}`;
+        const lines = summary === undefined ? [] : [`status set: ${statusLine(agent.status!)}${agent.workFinishedAt === null ? '' : ' (finished)'}`];
+        if (character !== undefined) lines.push(characterAnswer(agent));
+        return lines.join('\n');
       };
     }
     case 'page': {
@@ -2083,6 +2127,11 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
       return async (session) => print(await closeAgent(session, ref, values.remove === true));
     }
     case 'orchestrate': {
+      if (positionals[0] === 'handover') {
+        const [, from, to, ...extra] = positionals;
+        if (from === undefined || to === undefined || extra.length > 0) throw new UsageError('give the orchestrator to hand over from, and the one to hand over to');
+        return async (session) => print(await handOver(session, from, to));
+      }
       const [onOff, ref, ...rest] = positionals;
       if ((onOff !== 'on' && onOff !== 'off') || ref === undefined || rest.length > 0) throw new UsageError('give on or off, and one agent ref');
       const scope = string('scope') ?? 'zone';

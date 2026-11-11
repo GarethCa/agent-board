@@ -1,6 +1,6 @@
 import { expect } from '@playwright/test';
 import { rmSync } from 'node:fs';
-import { launch, listFinishedTurns, pickInChip, spawnAgent, tile, TURN_MS, zoneControl, zoneNamed } from '../agent-helpers.ts';
+import { launch, listFinishedTurns, openSubmenu, pickInChip, spawnAgent, tile, TURN_MS, zoneControl, zoneNamed } from '../agent-helpers.ts';
 import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone } from '../launch.ts';
 import { RENDER_ARGS, RENDER_ENV, VIEWPORT, ignorePointer, pinFonts, pinRandomText, settle } from '../render.ts';
 import { scratch } from '../scratch.ts';
@@ -37,6 +37,7 @@ test('the Reasoning chip with a level picked, and a running agent’s Reasoning 
     await expect(form).toBeHidden();
 
     await tile(window).getByRole('button', { name: 'More' }).click();
+    await openSubmenu(window, 'Settings');
     await window.getByRole('menuitem', { name: /^Reasoning/ }).focus();
     await window.keyboard.press('ArrowRight');
     await expect(window.getByRole('menuitem', { name: /^Max/ })).toBeVisible();
@@ -68,7 +69,9 @@ for (const { theme, suffix } of THEMES) {
       await browseForZone(window);
       await zoneControl(window, 'monorepo', 'New agent', 'New agent');
       const form = window.getByRole('dialog', { name: 'New agent' });
+      await expect(form).toBeVisible();
       await pickInChip(form, 'Reasoning', 'Extra high');
+      await expect(form.getByRole('button', { name: 'Reasoning: Extra high' })).toBeVisible();
       await pinRandomText(window);
       const restorePointer = await ignorePointer(window);
       await settle(window);

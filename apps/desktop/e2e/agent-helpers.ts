@@ -158,7 +158,10 @@ export async function untilStarted(window: Page): Promise<void> {
 export async function pickInChip(form: Locator, chip: 'Harness' | 'Model' | 'Reasoning' | 'Role', choice: string): Promise<void> {
   const button = form.getByRole('button', { name: new RegExp(`^${chip}:`) });
   await button.click();
-  await form.page().getByRole('menuitem', { name: choice, exact: true }).click();
+  const item = form.page().getByRole('menuitem', { name: choice, exact: true });
+  await item.click();
+  // The chip shows the choice before its menu has closed: a screenshot taken in between catches the menu over the form.
+  await expect(item).toBeHidden();
 }
 
 /** Sets the zone named `zoneName`'s tracker from its tab: `connect` fills the dialog in, and the tab then shows `shown`. */
@@ -213,10 +216,22 @@ export async function sessionItems(window: Page): Promise<Locator> {
   return menu.getByTestId('session-item');
 }
 
-/** Picks `action` from a tile's More menu: Delete agent, Link issue…, Schedule…, Mute notifications, Delete shell. */
-export async function tileAction(tile: Locator, action: string): Promise<void> {
+/**
+ * Picks `action` from a tile's More menu, inside the group `within` names where an agent's menu puts it there: Delete
+ * agent at the top; Schedule…, Link issue… or Mute notifications in Settings; Restart agent in Run; Run gate or Review
+ * its work in Review & gate; Fold to a chip in Arrange. A shell's menu has no groups.
+ */
+export async function tileAction(tile: Locator, action: string, within?: string): Promise<void> {
   await tile.getByRole('button', { name: 'More' }).click();
+  if (within !== undefined) await openSubmenu(tile.page(), within);
   await tile.page().getByRole('menuitem', { name: action }).click();
+}
+
+/** Opens the group `name` of the menu open, as a click on its row does, and waits for its rows. */
+export async function openSubmenu(page: Page, name: string): Promise<void> {
+  const row = page.getByRole('menuitem', { name: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`) });
+  await row.click();
+  await expect(row).toHaveAttribute('aria-expanded', 'true');
 }
 
 /**
@@ -269,7 +284,7 @@ export const recordedCharacters = (page: Page): Promise<string[]> =>
   page.evaluate(() => (window as unknown as { characters: string[] }).characters);
 
 /** Starts the fake claude as if typed into another terminal: not through the app, with `home` as `~`. */
-export function claudeInTerminal(cwd: string, home: string, args: string[], scenario: 'waiting' | 'output') {
+export function claudeInTerminal(cwd: string, home: string, args: string[], scenario: 'waiting' | 'output' | 'permission') {
   return spawn('claude', args, {
     cwd,
     env: fakeHarnessEnv({ scenario, home, stepDelayMs: 100, idleNotifyMs: 300 }),

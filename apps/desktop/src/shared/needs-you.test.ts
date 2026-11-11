@@ -68,6 +68,7 @@ const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}
   messagesWaiting: 0,
   undelivered: [],
   status: null,
+  character: null,
   workFinishedAt: null,
   flag: null,
   ...fields,

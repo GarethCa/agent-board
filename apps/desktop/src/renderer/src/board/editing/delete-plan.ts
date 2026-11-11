@@ -1,23 +1,29 @@
 import type { Agent, ExternalSession } from '@agent-board/daemon/protocol';
 
-/** What a delete of the selection would take: board items and connectors, and the session tiles. */
+/** What a delete of the selection would take: board items and connectors, the session tiles, and the crews whose cards go. */
 export interface DeleteTargets {
   agents: Agent[];
   /** `live`: some pane's process is still running. */
   shells: { name: string; live: boolean }[];
   externals: ExternalSession[];
+  /** The board items but the cards of running crews, which `crews` has. */
   items: number;
   connectors: number;
+  /** What each running crew whose card is selected was asked: its crew is stopped before its card goes. */
+  crews?: string[];
   /** How many shells still run in each agent's tabs, by session id: ended with it. */
   agentShells?: ReadonlyMap<string, number>;
 }
 
 /**
  * A delete waiting for the user to confirm it: of a live agent, or one that would lose work; of a shell tile with live
- * panes; of an external session still running; or of a selection of several things at once. Asked one at a time, in
- * order: an agent that turns out to hold unsaved work while a selection is deleted asks again after the rest.
+ * panes; of an external session still running; of a running crew's card, whose crew stops first; or of a selection of
+ * several things at once. Asked one at a time, in order: an agent that turns out to hold unsaved work while a selection
+ * is deleted asks again after the rest.
  */
 export interface PendingDelete {
+  /** What it is about, where two questions can read the same (two crews asked the same thing): one question waits for each key. */
+  key?: string;
   title: string;
   lines: string[];
   confirm: string;
@@ -28,17 +34,28 @@ export interface PendingDelete {
   run(keep: boolean, deleteClone: boolean): void;
 }
 
+/** Whether `ask` is a question already waiting as `known`: the same key where either has one, else the same words. */
+export const sameDelete = (known: PendingDelete, ask: PendingDelete) =>
+  known.key !== undefined || ask.key !== undefined ? known.key === ask.key : known.title === ask.title && known.lines.join() === ask.lines.join();
+
 /** Whether an external session has ended (its hooks said `done`); it is forgotten rather than just taken off the board. */
 export const externalEnded = (session: Pick<ExternalSession, 'state'>) => session.state === 'done';
 
 /**
  * Whether deleting these asks first, as one combined question. Items alone are undoable; a lone session asks, if it
- * needs to, on its own (its tile's delete); anything more, with a session in it, is confirmed together.
+ * needs to, on its own (its tile's delete), and so does a lone running crew's card; anything more, with a session or
+ * such a card in it, is confirmed together.
  */
 export function needsConfirmation(targets: DeleteTargets): boolean {
-  const sessions = targets.agents.length + targets.shells.length + targets.externals.length;
-  return sessions > 0 && sessions + targets.items + targets.connectors > 1;
+  const asked = targets.agents.length + targets.shells.length + targets.externals.length + (targets.crews?.length ?? 0);
+  return asked > 0 && asked + targets.items + targets.connectors > 1;
 }
+
+/** What stopping a crew does, as every question that stops one says it. */
+export const CREW_STOP_LINE = 'No more reviewers start, and no reviews go back. Its agents stay as they are. A stopped crew can’t be started again.';
+
+/** What happens to a running crew whose card is deleted with other things: it is stopped first, and only then its card goes. */
+const crewLine = (asked: string) => `The crew asked “${asked}” is stopped, and its card taken off the board. It can’t be started again.`;
 
 const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
 
@@ -60,7 +77,7 @@ export function externalLine(session: ExternalSession): string {
     : `${session.name}: taken off the board. It keeps running elsewhere, and comes back if it starts again.`;
 }
 
-/** One line per kind for the combined confirmation, then that sessions can't be undone. */
+/** One line per kind, and per session and running crew, for the combined confirmation, then that sessions can't be undone. */
 export function deleteLines(targets: DeleteTargets): string[] {
   const lines: string[] = [];
   if (targets.items > 0) lines.push(`${plural(targets.items, 'board item', 'board items')} deleted (undo brings them back).`);
@@ -68,6 +85,7 @@ export function deleteLines(targets: DeleteTargets): string[] {
   for (const agent of targets.agents) lines.push(agentLine(agent, targets.agentShells?.get(agent.sessionId)));
   for (const shell of targets.shells) lines.push(shell.live ? `${shell.name} still has running shells. They are ended.` : `${shell.name}: removed.`);
   for (const session of targets.externals) lines.push(externalLine(session));
+  for (const asked of targets.crews ?? []) lines.push(crewLine(asked));
   if (targets.agents.length + targets.shells.length > 0) lines.push("Deleting sessions can't be undone.");
   return lines;
 }

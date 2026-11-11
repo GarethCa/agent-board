@@ -160,6 +160,8 @@ test('a tile with model and role badges gains two PR chips, which stay while the
     await pickFolderNext(app, repo);
     await browseForZone(window);
     await startBadgedAgent(window);
+    // Its state is in the shot: a turn still under way draws "thinking", one that has finished "waiting".
+    await expect(tile(window)).toHaveAttribute('data-state', 'waiting', { timeout: TURN_MS });
     const [agent] = await agents(window);
     const pullRequest = (number: number): FakeGitHubPullRequest => ({
       repo: 'acme/app',
@@ -423,7 +425,7 @@ for (const { theme, suffix } of [
       await expect(sessionWindow(window)).toHaveCount(0);
 
       await window.keyboard.press(windowKey('k'));
-      const switcher = window.getByRole('dialog', { name: 'Jump to a session or zone' });
+      const switcher = window.getByRole('dialog', { name: 'Jump to a session, zone or setting' });
       await expect(switcher.getByTestId('spotlight-row')).toHaveCount(3);
       await pinRandomText(window);
       let restorePointer = await ignorePointer(window);

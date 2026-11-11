@@ -1590,6 +1590,19 @@
   overflow-wrap: anywhere;
 }
 
+/* The panel sits on the board, so its `code` and code blocks take the board's code colours, not the session window's dark well. */
+.master-panel .chat-md code,
+.master-panel .chat-md-code {
+  border: 1px solid var(--code-chip-edge);
+  background: var(--code-chip);
+  color: var(--code-ink);
+}
+
+.master-panel .chat-md-code code {
+  border: 0;
+  background: none;
+}
+
 .master-panel .chat-md table {
   display: table;
   width: 100%;

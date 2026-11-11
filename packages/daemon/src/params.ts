@@ -1,6 +1,7 @@
 // Checks for RPC params, which arrive untyped off the wire. Each throws an `invalidParams` error naming the bad field.
 import { MAX_EDGE_POINTS, MAX_NAME_LENGTH, RPC_ERROR, type EdgePoint } from './protocol.ts';
 import { RpcMethodError } from './rpc.ts';
+import { parseCharacter, type CharacterSet } from './character.ts';
 
 /** Largest terminal dimension accepted, in cells. */
 const MAX_DIMENSION = 1_000;
@@ -34,6 +35,16 @@ export function optionalStringParam(params: Record<string, unknown>, name: strin
   return params[name] === undefined ? undefined : stringParam(params, name);
 }
 
+/** An agent's character set (`board.setStatus`), if given: a pose from its list, and a face and a prop from theirs. */
+export function optionalCharacterParam(params: Record<string, unknown>): CharacterSet | undefined {
+  if (params.character === undefined) return undefined;
+  try {
+    return parseCharacter(params.character);
+  } catch (error) {
+    throw invalidParams((error as Error).message);
+  }
+}
+
 export function optionalBooleanParam(params: Record<string, unknown>, name: string): boolean | undefined {
   const value = params[name];
   if (value !== undefined && typeof value !== 'boolean') throw invalidParams(`${name} must be a boolean`);
@@ -63,8 +74,8 @@ export function dimensionParam(params: Record<string, unknown>, name: string): n
   return value as number;
 }
 
-export function invalidParams(message: string): RpcMethodError {
-  return new RpcMethodError(RPC_ERROR.invalidParams, message);
+export function invalidParams(message: string, reason?: string): RpcMethodError {
+  return new RpcMethodError(RPC_ERROR.invalidParams, message, reason);
 }
 
 /** An id a client may pick for what it creates (a connector, a flow edge): letters, digits and -, at most 64. */

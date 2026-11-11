@@ -8,6 +8,7 @@ import { Chip, ContextMenu, EditableName, Menu, useRenaming } from '../ui';
 import { useTechnicalDetails } from '../technical';
 import { CrewFramesContext } from './crew-view';
 import { CrewFrameBoxes } from './CrewFrameBoxes';
+import { FoldButton } from './FoldedZone';
 import { projectContextMenu, projectMenu, type ProjectMenuInput } from './menu-model';
 import { ProjectSummaryContext } from './project-summary';
 import { StatusGlyph } from './StatusMark';
@@ -135,6 +136,9 @@ export function ProjectWell({ data: { zone, tileCount = 0, resizeMin, shelves, c
           <span className="project-folder" data-technical-detail>
             {folder}
           </span>
+        )}
+        {clone === null && (
+          <FoldButton className="project-options" noun="project" onFold={() => binding.fold(zone)} />
         )}
         <Menu
           entries={optionsOpen ? projectMenu(input) : []}

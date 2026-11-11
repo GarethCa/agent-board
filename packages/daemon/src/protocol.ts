@@ -17,6 +17,7 @@ import pkg from '../package.json' with { type: 'json' };
 import { paneIds, type PaneLayout, type SplitDirection } from './pane-layout.ts';
 import type { Placement, Surface, WindowLayout } from './window-layout.ts';
 import type { GateCleanup, GateRun } from './gate-rules.ts';
+import type { AgentFace, AgentPose, AgentProp, CharacterSet } from './character.ts';
 
 export type { PaneLayout, SplitDirection };
 export type { GateCleanup, GateRun, GateRunStatus } from './gate-rules.ts';
@@ -152,6 +153,11 @@ export interface Zone {
   spacing: ArrangeSpacing;
   /** How it lays out what it holds (`ZONE_LAYOUT_MODES`). Free until set, for a new zone too. */
   layoutMode: ZoneLayoutMode;
+  /**
+   * Whether it is folded to a chip while it is not needed (`zone.fold`). Its place and size stay as they were, so
+   * unfolding puts it back exactly; its agents were paused when it folded, and unfolding wakes none unless asked.
+   */
+  folded: boolean;
   /** The clone it waits for, while the daemon clones its repo; null once it is bound, and for every other zone. */
   clone: ZoneClone | null;
   /**
@@ -332,6 +338,31 @@ export function validZoneFillOpacity(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max && value % step === 0;
 }
 
+/** An agent a fold or an unfold left as it was. */
+export interface ZoneFoldLeft {
+  sessionId: string;
+  name: string;
+  /** The reason alone, to show beside its name: "it is mid-turn: finish its turn first", "its worktree is gone". */
+  why: string;
+}
+
+/** What folding a zone did: the agents it paused (by session id), and those it could not, which stay live. */
+export interface ZoneFoldResult {
+  zone: Zone;
+  paused: string[];
+  kept: ZoneFoldLeft[];
+}
+
+/**
+ * What unfolding a zone did: the agents it woke (by session id; none unless asked), and those its fold paused that
+ * would not wake when asked, still paused.
+ */
+export interface ZoneUnfoldResult {
+  zone: Zone;
+  woken: string[];
+  asleep: ZoneFoldLeft[];
+}
+
 /** A zone's settings. */
 export interface ZoneSettings {
   codexBypassHookTrust: boolean;
@@ -444,6 +475,17 @@ export function unsortedGroupHeight(tileCount: number): number {
 }
 export const MIN_ZONE_SIZE = { width: 240, height: 160 };
 
+/** The most room a folded zone takes on the board: a chip, where its top left corner is. Its saved size stays as it was. */
+export const FOLDED_ZONE_SIZE = { width: 260, height: 48 };
+
+/**
+ * The room a zone takes on the board: its saved size, or folded, its chip's, which is never wider than the zone, so
+ * folding one puts it on no neighbour.
+ */
+export function drawnZoneSize(zone: Pick<Zone, 'folded' | 'width' | 'height'>): { width: number; height: number } {
+  return zone.folded ? { width: Math.min(FOLDED_ZONE_SIZE.width, zone.width), height: FOLDED_ZONE_SIZE.height } : { width: zone.width, height: zone.height };
+}
+
 /** Where a zone sits on the board and how big it is. */
 export interface ZoneLayout {
   x: number;
@@ -454,9 +496,10 @@ export interface ZoneLayout {
 
 /**
  * The kinds of board item. Each is drawn by its own node type on the board. An `agent-note` is a note an agent wrote
- * never one of the user's stickies. A `clock` is a schedule (`ClockData`).
+ * never one of the user's stickies. A `clock` is a schedule (`ClockData`). A `crew` is a running crew's card (`CrewCardData`),
+ * which the board keeps.
  */
-export const BOARD_ITEM_KINDS = ['sticky', 'text', 'shape', 'image', 'link', 'issue', 'agent-note', 'clock', 'document', 'plan', 'steps', 'memory', 'queue'] as const;
+export const BOARD_ITEM_KINDS = ['sticky', 'text', 'shape', 'image', 'link', 'issue', 'agent-note', 'clock', 'document', 'plan', 'steps', 'memory', 'queue', 'crew'] as const;
 export type BoardItemKind = (typeof BOARD_ITEM_KINDS)[number];
 
 /**
@@ -1756,6 +1799,8 @@ export interface Agent {
    * one, when its tile shows its `description`.
    */
   status: AgentStatus | null;
+  /** The pose it set for its character, while it lasts; null for none, when the board draws its own. */
+  character: AgentCharacter | null;
   /**
    * When it said its work is finished: it handed off (`board.handoff`) or set its status as done
    * (`board.setStatus` with `done`). A turn ending is not finishing: an agent may end turns while its background work
@@ -2157,11 +2202,36 @@ export interface ClockRun extends ScheduleRun {
   result: string | null;
 }
 
-/** What a clock is doing: when it next fires (null while not planned) and its latest runs, newest first. */
+/** The skips a clock's latest runs are, one after another since its last run that was not a skip: how many, since when, and why. */
+export interface ClockSkips {
+  count: number;
+  /** When the first of them fired. */
+  since: string;
+  /** Each reason they skipped for, once, the latest first. */
+  reasons: string[];
+}
+
+/**
+ * How many skips in a row, because its agent was still working (or, between those, waiting for you), make a clock that
+ * messages it flag the agent: its turn looks stuck, and its check-ins can't reach it.
+ */
+export const STUCK_CLOCK_SKIPS = 3;
+
+/** Why a run skips when its agent is mid-turn (`whyNotReady`). */
+export const STILL_WORKING = 'it was still working';
+
+/** Why a run skips when its agent waits for the user: a question, a permission prompt (`whyNotReady`). */
+export const WAITING_FOR_YOU = 'it was waiting for you';
+
+/**
+ * What a clock is doing: when it next fires (null while not planned), its latest runs, newest first, and the skips its
+ * latest runs are, if they are (`skips`, null when its latest run is not a skip).
+ */
 export interface ClockStatus {
   id: string;
   nextRunAt: string | null;
   runs: ClockRun[];
+  skips: ClockSkips | null;
 }
 
 /** Where `clock.add` puts a new clock: beside an agent's tile (on its left, joined to it), or at a place. */
@@ -3086,6 +3156,20 @@ export interface AgentStatus {
 }
 
 /**
+ * The pose an agent set for its character (`board.setStatus` with `character`), with its face and prop if it
+ * gave them. A working pose goes at its turn's end or `CHARACTER_EXPIRY_MS` after its set; a resting one when its next
+ * turn starts (`character.ts`).
+ */
+export interface AgentCharacter {
+  pose: AgentPose;
+  face: AgentFace | null;
+  prop: AgentProp | null;
+  setAt: string;
+  /** The orchestrator's name when it, not the agent, set the pose; null when the agent did. */
+  setBy: string | null;
+}
+
+/**
  * Who a board token belongs to (`board.identify`): the live session it was handed to, and the tile that session is
  * drawn on, an agent's or a shell's, with that tile's zone now (null for loose on the board).
  */
@@ -3209,6 +3293,7 @@ export const ORCHESTRATOR_ACTIONS = [
   'wake',
   'close',
   'remove',
+  'handover',
   'add-edge',
   'remove-edge',
   'handoff',
@@ -3242,6 +3327,12 @@ export const ORCHESTRATOR_ACTIONS = [
   'release',
 ] as const;
 export type OrchestratorAction = (typeof ORCHESTRATOR_ACTIONS)[number];
+
+/** What `orchestrator.handover` moved: the agents now in the new orchestrator's crew, and how many things it now made. */
+export interface OrchestratorHandover {
+  crew: Agent[];
+  made: number;
+}
 
 /** One line of the orchestrators' activity log: who did, or tried, what to whom, and when. Append-only. */
 export interface OrchestratorActivity {
@@ -3970,6 +4061,54 @@ export interface Crew {
   reviewers: CrewReviewer[];
 }
 
+/** The most member rows a crew card grows for: a larger crew's rows scroll. */
+const MAX_CREW_CARD_ROWS = 8;
+/**
+ * A new crew card's size, for a crew of so many members: its title, its rounds, a row for each member, then its last
+ * hand-off and its foot, or where it stopped with what the user can do there.
+ */
+export const crewCardSize = (members: number) => ({ width: 300, height: 176 + 22 * Math.min(Math.max(members, 1), MAX_CREW_CARD_ROWS) });
+/** A crew card's size for a builder and two reviewers, where no crew says how many it has. */
+export const CREW_CARD_SIZE = crewCardSize(3);
+/** The most characters of its prompt a crew card's title keeps. */
+export const MAX_CREW_CARD_TITLE = 160;
+
+/** A member of its prefab as a crew card lists it: a row, whether or not its agent has started yet. */
+export interface CrewCardMember {
+  /** Its key in the prefab, which a `CrewReviewer.member` names. */
+  id: string;
+  /** Its name in the prefab, else its key. */
+  name: string;
+  role: string | null;
+  harness: Harness;
+  model: string | null;
+  /** `prompt` for the crew's builder, `handoff` for a reviewer of each round. */
+  starts: PrefabStart;
+}
+
+/**
+ * A crew card's `data` (a `crew` item): one running crew on the board, as its loop has it. The board writes it, from the
+ * crew's own record, and writes it again whatever a client sends: only `tiles` is the user's.
+ */
+export interface CrewCardData {
+  /** The crew it shows (`Crew.id`): one card a crew. */
+  crewId: string;
+  /** What the crew was asked, in a line: its prompt's first, else its prefab's name. */
+  title: string;
+  /** Its prefab's icon. */
+  icon: string;
+  /** Whether its members are drawn as tiles beside it, rather than within it: the prefab's `onBoard` until the user says. */
+  tiles: boolean;
+  members: CrewCardMember[];
+  crew: Crew;
+  /** When the crew's turn last passed: to its reviewers at a hand-off, or back to its builder with their reviews. */
+  phaseAt: string;
+  /** Its round's reviewers failed to start: `crew round` tries again. */
+  startFailed: boolean;
+  /** Why they failed to start, as the daemon said it; null while they haven't, and where no reason was kept. */
+  startError: string | null;
+}
+
 /** The roles that review a branch: they start on a detached checkout of it, with no branch of their own. */
 export const REVIEWER_ROLES: readonly AgentRole[] = ['reviewer', 'follow-up-reviewer'];
 
@@ -4376,6 +4515,23 @@ export interface DaemonMethods {
   /** Changes the zone's settings given. Fails with `invalidParams` for an unknown id, or none given. */
   'zone.configure': { params: { id: string } & Partial<ZoneSettings>; result: Zone };
   /**
+   * Folds the zone to a chip while it is not needed: pauses (`agent.pause`) each agent of it that can be, and keeps what
+   * cannot (mid-turn, asking you something, a message being sent) live, with why. Its shells keep running, as pausing
+   * one would end its work: a fold frees its agents' harnesses, not every terminal. Its place and size are kept.
+   * Folding a folded zone does nothing. A zone's folds and unfolds run one at a time, as asked: one asked for while
+   * another runs waits for it. Fails with `invalidParams` for an unknown id, or a zone still cloning.
+   */
+  'zone.fold': { params: { id: string }; result: ZoneFoldResult };
+  /**
+   * Unfolds the zone to where it was. Wakes none of its paused agents, unless `wake`: then each one its fold paused
+   * that is still paused is resumed (`agent.resume`) in its conversation, and one that won't wake stays paused, with
+   * why, the zone unfolded all the same. An agent paused any other way (`agent.pause`, `orchestrator.pause`), before the
+   * fold or since, is never woken by it. Unfolded without `wake`, its agents are from then on paused as if by hand: a
+   * later fold and unfold wakes none of them. Unfolding a zone that is not folded does nothing. Fails with
+   * `invalidParams` for an unknown id.
+   */
+  'zone.unfold': { params: { id: string; wake?: boolean }; result: ZoneUnfoldResult };
+  /**
    * Binds the zone to a tracker scope the credential can see, and optionally to one of its projects, spelled as the
    * tracker spells them, or unbinds it with null. Fails with `TRACKER_ERROR.notConnected` before `tracker.connect`, and
    * `invalidParams` for an unknown zone, scope or project.
@@ -4427,8 +4583,9 @@ export interface DaemonMethods {
   /**
    * Sends `text` to the agent as the user's next message and submits it. One line is typed at its prompt; text of
    * several lines, or one line with `paste` (the composer sets it for a pasted image's path, as a dropped file is
-   * pasted), goes as a bracketed paste, as a terminal pastes, so the harness keeps its line breaks. Control characters
-   * other than tab and the line break are dropped either way. Answers to one agent go one at a time. Fails with
+   * pasted), goes as a bracketed paste, as a terminal pastes, so the harness keeps its line breaks; at a Claude agent a
+   * long one goes as several smaller pastes, which it takes as the user's words, not pasted material (`pastePieces`).
+   * Control characters other than tab and the line break are dropped either way. Answers to one agent go one at a time. Fails with
    * `invalidParams` for an unknown or ended agent, empty text, or an agent that needs permission (the text would land
    * in its permission dialog).
    */
@@ -4608,7 +4765,7 @@ export interface DaemonMethods {
    * `board.setStatus` does, saying who set it. The latest of the two wins. An agent outside its crew, an orchestrator
    * of wider scope or the caller itself is refused with `outOfScope`.
    */
-  'orchestrator.setStatus': { params: { token?: string; sessionId: string; summary: string; progress?: number }; result: Agent };
+  'orchestrator.setStatus': { params: { token?: string; sessionId: string; summary?: string; progress?: number; character?: CharacterSet }; result: Agent };
   /**
    * Waits until every agent (or, with `any`, one) is in one of `states` (`SETTLED_STATES` by default), or `timeoutMs`
    * passes (`DEFAULT_ORCHESTRATOR_WAIT_MS`, at most `MAX_ORCHESTRATOR_WAIT_MS`). An agent sent a message or started
@@ -4664,6 +4821,14 @@ export interface DaemonMethods {
    * orchestrator started may be. Resolves with the agent, or null once removed.
    */
   'orchestrator.close': { params: { token?: string; sessionId: string; remove?: boolean }; result: Agent | null };
+  /**
+   * Hands the orchestrator `from`'s crew (the agents it started) and what it made (notes, lane labels, clocks, shapes,
+   * connectors, zones and edges) to the orchestrator `to`, as if `to` had started and made them: `to` may then arrange,
+   * edit, remove and close them. The user's side hands over any; an orchestrator hands over its own, or takes over one in
+   * its scope, no wider than its own, whose session has ended. Either way `to`'s own scope must reach every agent it
+   * gets. `to` must be an orchestrator no deeper in a crew than `from`.
+   */
+  'orchestrator.handover': { params: { token?: string; from: string; to: string }; result: OrchestratorHandover };
   /** Pauses the agent, as `agent.pause` does, marked as paused by the orchestrator. */
   'orchestrator.pause': { params: { token?: string; sessionId: string }; result: Agent };
   /** Wakes a paused agent, carrying on its conversation (`agent.resume`). Fails with `invalidParams` for one not paused. */
@@ -4845,9 +5010,11 @@ export interface DaemonMethods {
    * Sets the status of the agent holding `token`: only its own. `summary` is trimmed and at most `MAX_STATUS_LENGTH`;
    * `progress` a whole number 0-100, or absent. Fails with `BOARD_ERROR.unknownToken` for an unknown token, and
    * `invalidParams` for a shell's, a blank summary or a bad progress. Makes the connection the session's, as
-   * `board.identify` does. With `done`, it also says its work is finished (`Agent.workFinishedAt`).
+   * `board.identify` does. With `done`, it also says its work is finished (`Agent.workFinishedAt`). With `character`, it
+   * sets the pose its character strikes (`Agent.character`), refusing a word outside its list with the list.
+   * `summary` may be left out for a pose alone, but not both.
    */
-  'board.setStatus': { params: { token: string; summary: string; progress?: number; done?: boolean }; result: Agent };
+  'board.setStatus': { params: { token: string; summary?: string; progress?: number; done?: boolean; character?: CharacterSet }; result: Agent };
   /**
    * Records an entry on the sidebar of the agent holding `token` (`Agent.records`): a pull request by its GitHub URL,
    * with its title if known, or a hand-off doc by its path (relative to where the session started, or absolute), which
@@ -5418,6 +5585,7 @@ export const ORCHESTRATOR_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMet
   'orchestrator.pause',
   'orchestrator.wake',
   'orchestrator.close',
+  'orchestrator.handover',
   'orchestrator.addEdge',
   'orchestrator.removeEdge',
   'orchestrator.move',

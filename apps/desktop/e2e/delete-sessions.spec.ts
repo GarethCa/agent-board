@@ -2,7 +2,7 @@ import { expect, type Page } from '@playwright/test';
 import { connectDaemon } from '@agent-board/daemon/client';
 import { daemonPaths } from '@agent-board/daemon/paths';
 import { existsSync, rmSync } from 'node:fs';
-import { run } from './board-helpers.ts';
+import { run, withDaemon } from './board-helpers.ts';
 import { agents, launch, sessionWindow, setClickOpens, SHELL_ENV, spawnAgent, tile } from './agent-helpers.ts';
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
 import { scratch } from './scratch.ts';
@@ -32,8 +32,22 @@ test('an ended agent is deleted from the right-click menu, keeping its worktree 
     await expect(expanded).toHaveCount(0);
     await expect.poll(async () => (await agents(window))[0]?.endedAt).not.toBeNull();
 
+    // With a sticky selected too, a right-click on the agent opens the selection's menu; on the agent alone, its own.
+    await withDaemon(dataDir, (daemon) =>
+      daemon.call('item.create', { kind: 'sticky', zoneId: null, x: 700, y: 420, width: 160, height: 160, data: { text: 'note', color: '#fff3a3' } }),
+    );
+    await expect(stickies(window)).toHaveCount(1);
+    await stickies(window).click({ position: { x: 12, y: 12 } });
+    await tile(window).click({ modifiers: ['Shift'] });
+    await tile(window).click({ button: 'right' });
+    await expect(window.getByRole('menu', { name: 'Selection' })).toBeVisible();
+    await expect(window.getByRole('menuitem', { name: 'Settings' })).toHaveCount(0);
+    await window.keyboard.press('Escape');
+    await expect(window.getByRole('menu')).toHaveCount(0);
+
     await tile(window).click();
     await tile(window).click({ button: 'right' });
+    await expect(window.getByRole('menuitem', { name: 'Settings' })).toBeVisible();
     await window.getByRole('menuitem', { name: /^Delete/ }).click();
     // Even ended, an agent with a worktree of its own asks whether to remove it with its branch or keep them.
     const confirm = window.getByRole('alertdialog', { name: 'Delete agent?' });

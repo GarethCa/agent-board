@@ -1,5 +1,6 @@
 import type {
   Agent,
+  Crew,
   CrewPrefab,
   LibraryPrefab,
   PrefabStarted,
@@ -103,7 +104,9 @@ import type {
   ZoneLayout,
   ZoneRemovedEvent,
   ZoneUpdatedEvent,
+  ZoneFoldResult,
   ZoneSettings,
+  ZoneUnfoldResult,
   ZoneSnapshot,
   ZoneTracker,
   OrchestratorActivity,
@@ -245,6 +248,8 @@ export const ZONE_IPC = {
   bind: 'zone:bind',
   update: 'zone:update',
   configure: 'zone:configure',
+  fold: 'zone:fold',
+  unfold: 'zone:unfold',
   setTracker: 'zone:setTracker',
   unbind: 'zone:unbind',
   initRepo: 'zone:initRepo',
@@ -297,6 +302,10 @@ export interface ZonesApi {
   update(id: string, layout: ZoneLayout): Promise<Zone>;
   /** Changes a zone's settings. */
   configure(id: string, settings: Partial<ZoneSettings>): Promise<Zone>;
+  /** Folds a zone to a chip: its agents that can pause are paused, and the result says which were kept live and why. */
+  fold(id: string): Promise<ZoneFoldResult>;
+  /** Unfolds a zone. Its paused agents stay paused unless `wake` asks for them. */
+  unfold(id: string, wake?: boolean): Promise<ZoneUnfoldResult>;
   /** Binds the zone to a tracker team, or unbinds it with null. */
   setTracker(id: string, tracker: ZoneTracker | null): Promise<Zone>;
   /** Unbinds the zone back into a group: no repo, tracker or default repo. Its agents keep their own repos. */
@@ -588,9 +597,22 @@ export const WEB_TAB_IPC = {
   /** main → renderer: `(tabId, WebTabKey)`, one of its window's own shortcuts pressed while the page had the keyboard. */
   key: 'web-tab:key',
   focus: 'web-tab:focus',
+  focusWindow: 'web-tab:focusWindow',
+  /** renderer → invoke: `(tabId, text, FindStep)`, finds in the page; `stopFind` clears it. */
+  find: 'web-tab:find',
+  stopFind: 'web-tab:stopFind',
   /** Settings' Clear browsing data, from the Settings window: the shared session's cookies, storage and cache. */
   clearData: 'web-tab:clearData',
 } as const;
+
+/** Which match a find shows: the first from the start of a new search, or the next or previous from the one shown. */
+export type FindStep = 'first' | 'next' | 'previous';
+
+/** How a find went: the match shown (1-based, 0 with none) of all the matches. */
+export interface FindResult {
+  active: number;
+  total: number;
+}
 
 /** Where a web tab's page is drawn in its window, in CSS pixels from the top left of the page. */
 export interface WebTabBounds {
@@ -674,6 +696,12 @@ export interface WebTabsApi {
   cancelHandOff(tabId: string): Promise<void>;
   /** Gives the tab's page the keyboard again, as the ⌘K switcher closes over it. */
   focus(tabId: string): Promise<void>;
+  /** Gives the keyboard to the window the page is in, away from the page. */
+  focusWindow(tabId: string): Promise<void>;
+  /** Finds `text` in the tab's page, highlighting the matches (any case) and the one shown; the keyboard stays with the caller. */
+  find(tabId: string, text: string, step: FindStep): Promise<FindResult>;
+  /** Takes the find's highlights off the page. */
+  stopFind(tabId: string): Promise<void>;
 }
 
 /** The orchestrator IPC channels between the preload and main. */
@@ -690,6 +718,8 @@ export const ORCHESTRATOR_IPC = {
   checkPrefab: 'orchestrator:check-prefab',
   startPrefab: 'orchestrator:start-prefab',
   importPrefab: 'orchestrator:import-prefab',
+  stopCrew: 'orchestrator:stop-crew',
+  crewRound: 'orchestrator:crew-round',
 } as const;
 
 /** What orchestrators did and tried: the activity log the daemon keeps. */
@@ -717,6 +747,13 @@ export interface OrchestratorsApi {
   startPrefab(params: { name: string; prompt: string; zoneId: string; repo?: string; roundLimit?: number }): Promise<PrefabStarted>;
   /** Asks for a `.crew.json` file and reads it as the library does: the prefab, or null if none was picked. Adds nothing. */
   importPrefab(): Promise<CrewPrefab | null>;
+  /** Stops the running crew's loop, as the user: nothing more is handed on. Its agents stay as they are. */
+  stopCrew(crewId: string): Promise<Crew>;
+  /**
+   * One more round for a crew stopped at its round limit, or another try at starting its round's reviewers: the daemon
+   * refuses any other crew, saying why.
+   */
+  crewRound(crewId: string): Promise<Crew>;
 }
 
 /** The board item IPC channels between the preload and main. */

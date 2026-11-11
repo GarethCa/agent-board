@@ -115,7 +115,7 @@ test('a zone connects to Linear, an agent starts from an issue on its branch, an
     const second = (await agents(window)).find((agent) => agent.sessionId !== fromIssue!.sessionId)!;
     const secondTile = tile(window, second.sessionId);
     await expect(secondTile.getByTestId('tile-issue')).toHaveCount(0);
-    await tileAction(secondTile, 'Link issue');
+    await tileAction(secondTile, 'Link issue', 'Settings');
     const linkDialog = window.getByRole('dialog', { name: 'Link issue' });
     await linkDialog.getByRole('option').filter({ hasText: knownIssue.id }).click();
     await linkDialog.getByRole('button', { name: 'Link', exact: true }).click();

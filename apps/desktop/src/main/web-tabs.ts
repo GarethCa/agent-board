@@ -1,12 +1,18 @@
-import { app, BrowserWindow, ipcMain, session as sessions, WebContentsView, type IpcMainEvent, type IpcMainInvokeEvent, type WebContents } from 'electron';
+import { app, BrowserWindow, ipcMain, session as sessions, WebContentsView, type IpcMainEvent, type IpcMainInvokeEvent, type Result, type WebContents } from 'electron';
 import { isWebTabUrl, WEB_TAB_RULE } from '@agent-board/daemon/web-url';
-import { WEB_TAB_IPC, type WebTabBounds, type WebTabKey, type WebTabState } from '../preload/api';
+import { WEB_TAB_IPC, type FindResult, type WebTabBounds, type WebTabKey, type WebTabState } from '../preload/api';
 import { headless } from './background';
 import { openWebLink, openWebTabLink } from './links';
 import { webKey } from './web-keys';
 import { passkeyNotice, probePasskeys } from './web-passkeys';
 import { lockDownContents, lockDownSession } from './web-lockdown';
 import { lockDownPlanContents, lockDownPlanSession, PLAN_URL } from './plan-lockdown';
+
+/** How long a find waits for the page to count its matches before it says none. */
+const FIND_WAIT_MS = 5000;
+
+/** How long a final count of none waits for a later one for the same search: a page's first search answers none, then the count. */
+const FIND_SETTLE_MS = 150;
 
 /** A tab's id, as it names its partition: what the renderer makes with `crypto.randomUUID()`, and nothing that isn't a name. */
 const TAB_ID = /^[\w-]{1,64}$/;
@@ -429,7 +435,47 @@ export function registerWebTabIpc({
     tab.problem = undefined;
     void tab.view.webContents.loadURL(url).catch(() => {});
   });
+  /** Ends the find a page is still counting for, by answering it with none. */
+  const supersedeFind = new WeakMap<WebContents, () => void>();
+  // The find bar opened over the window from a key pressed in a page: its field takes the keyboard from the page.
+  ipcMain.handle(WEB_TAB_IPC.focusWindow, (event, tabId: unknown) => tabOf(event, tabId)?.owner.focus());
   ipcMain.handle(WEB_TAB_IPC.focus, (event, tabId: unknown) => tabOf(event, tabId)?.view.webContents.focus());
+  ipcMain.handle(WEB_TAB_IPC.find, (event, tabId: unknown, text: unknown, step: unknown): Promise<FindResult> => {
+    const contents = tabOf(event, tabId)?.view.webContents;
+    if (contents === undefined || contents.isDestroyed() || typeof text !== 'string' || text === '') return Promise.resolve({ active: 0, total: 0 });
+    // A search started while another waits ends the other: the page answers only the last.
+    supersedeFind.get(contents)?.();
+    return new Promise((resolve) => {
+      let settling: NodeJS.Timeout | undefined;
+      const done = (result: FindResult) => {
+        clearTimeout(timer);
+        clearTimeout(settling);
+        contents.off('found-in-page', onFound);
+        if (supersedeFind.get(contents) === superseded) supersedeFind.delete(contents);
+        resolve(result);
+      };
+      const timer = setTimeout(() => done({ active: 0, total: 0 }), FIND_WAIT_MS);
+      const superseded = () => done({ active: 0, total: 0 });
+      supersedeFind.set(contents, superseded);
+      // findInPage answers with `found-in-page` events for its request; a final one has the count. `findNext: false` is
+      // left out, not passed: with it a new search is never answered.
+      const onFound = (_event: unknown, found: Result) => {
+        if (found.requestId !== request || !found.finalUpdate) return;
+        clearTimeout(settling);
+        const result = { active: found.activeMatchOrdinal, total: found.matches };
+        if (result.total > 0) done(result);
+        else settling = setTimeout(() => done(result), FIND_SETTLE_MS);
+      };
+      contents.on('found-in-page', onFound);
+      const request = contents.findInPage(text, step === 'first' ? { forward: true } : { forward: step === 'next', findNext: true });
+    });
+  });
+  ipcMain.handle(WEB_TAB_IPC.stopFind, (event, tabId: unknown) => {
+    const contents = tabOf(event, tabId)?.view.webContents;
+    if (contents === undefined || contents.isDestroyed()) return;
+    supersedeFind.get(contents)?.();
+    contents.stopFindInPage('clearSelection');
+  });
   ipcMain.handle(WEB_TAB_IPC.back, (event, tabId: unknown) => tabOf(event, tabId)?.view.webContents.navigationHistory.goBack());
   ipcMain.handle(WEB_TAB_IPC.forward, (event, tabId: unknown) => tabOf(event, tabId)?.view.webContents.navigationHistory.goForward());
   ipcMain.handle(WEB_TAB_IPC.reload, (event, tabId: unknown) => {

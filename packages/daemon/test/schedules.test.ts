@@ -106,7 +106,7 @@ describe('schedules', () => {
     const { clock, schedules, set, answer } = scheduler();
     set('c', { cron: '0 9 * * 1-5', prompt: 'Triage' });
 
-    expect(schedules.status('c')).toEqual({ id: 'c', nextRunAt: at(2026, 10, 12, 9).toISOString(), runs: [] });
+    expect(schedules.status('c')).toEqual({ id: 'c', nextRunAt: at(2026, 10, 12, 9).toISOString(), runs: [], skips: null });
     answer.next = { started: true, sessionId: 'a', agentName: 'Triager' };
     clock.advanceTo(at(2026, 10, 12, 9));
     answer.next = { started: false, reason: 'it was still running' };
@@ -118,7 +118,78 @@ describe('schedules', () => {
         expect.objectContaining({ dueAt: at(2026, 10, 13, 9).toISOString(), outcome: 'skipped', reason: 'it was still running', sessionId: null }),
         expect.objectContaining({ dueAt: at(2026, 10, 12, 9).toISOString(), firedAt: at(2026, 10, 12, 9).toISOString(), outcome: 'started', reason: null, sessionId: 'a', agentName: 'Triager' }),
       ],
+      skips: { count: 1, since: at(2026, 10, 13, 9).toISOString(), reasons: ['it was still running'] },
     });
+  });
+
+  it('counts the skips in a row whatever their reasons, from the first of them, past the runs it keeps', () => {
+    const { clock, schedules, set, answer } = scheduler();
+    set('c', { cron: '*/1 * * * *' });
+    clock.advanceTo(at(2026, 10, 10, 7, 31));
+    answer.next = { started: false, reason: 'it was waiting for you' };
+    clock.advanceTo(at(2026, 10, 10, 7, 32));
+    answer.next = { started: false, reason: 'it was still working', busy: true };
+    clock.advanceTo(at(2026, 10, 10, 7, 57));
+    const since = at(2026, 10, 10, 7, 32).toISOString();
+    expect(schedules.status('c')!.skips).toEqual({ count: 26, since, reasons: ['it was still working', 'it was waiting for you'] });
+    expect(schedules.status('c')!.runs.length).toBeLessThan(26);
+
+    answer.next = { started: false, reason: 'it was waiting for you' };
+    clock.advanceTo(at(2026, 10, 10, 7, 58));
+    expect(schedules.status('c')!.skips).toEqual({ count: 27, since, reasons: ['it was waiting for you', 'it was still working'] });
+
+    answer.next = { started: true };
+    clock.advanceTo(at(2026, 10, 10, 7, 59));
+    expect(schedules.status('c')!.skips).toBeNull();
+  });
+
+  it('tells its caller of each run as it is recorded, with the skips in a row', () => {
+    const fired: { id: string; count: number | null }[] = [];
+    const db = database();
+    const clock = createFakeClock(START);
+    const schedules = createScheduleHost({
+      db,
+      clock,
+      fire: () => ({ started: false, reason: 'it was still working', busy: true }),
+      afterFire: (firing, status) => fired.push({ id: firing.id, count: status.skips?.count ?? null }),
+      onChange: () => {},
+      log: () => {},
+    });
+    db.prepare("INSERT INTO board_items (id, kind, zone_id, x, y, width, height, z, data) VALUES ('c', 'clock', 'z', 0, 0, 256, 76, 1, ?)").run(
+      JSON.stringify(clockData({ cron: '*/1 * * * *' })),
+    );
+    schedules.replan('c');
+    clock.advanceTo(at(2026, 10, 10, 7, 33));
+    expect(fired).toEqual([
+      { id: 'c', count: 1 },
+      { id: 'c', count: 2 },
+      { id: 'c', count: 3 },
+    ]);
+  });
+
+  it('goes on firing when its caller throws after a run, and logs it', () => {
+    const logged: string[] = [];
+    let fires = 0;
+    const db = database();
+    const clock = createFakeClock(START);
+    const schedules = createScheduleHost({
+      db,
+      clock,
+      fire: () => ({ started: false, reason: 'it was still working', busy: true }),
+      afterFire: () => {
+        fires += 1;
+        throw new Error('no flag');
+      },
+      onChange: () => {},
+      log: (line) => logged.push(line),
+    });
+    db.prepare("INSERT INTO board_items (id, kind, zone_id, x, y, width, height, z, data) VALUES ('c', 'clock', 'z', 0, 0, 256, 76, 1, ?)").run(
+      JSON.stringify(clockData({ cron: '*/1 * * * *' })),
+    );
+    schedules.replan('c');
+    clock.advanceTo(at(2026, 10, 10, 7, 33));
+    expect(fires).toBe(3);
+    expect(logged).toContain('clock c: after its run: no flag');
   });
 
   it("gives an agent the schedule of the clock that messages it, the soonest of several", () => {

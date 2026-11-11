@@ -31,7 +31,13 @@ describe('selectChecks', () => {
 
   it('maps renderer zone files to the zone specs', () => {
     const plan = selectChecks(['apps/desktop/src/renderer/src/board/zone-nodes.ts']);
-    expect(plan.e2e).toEqual(['add-zone.spec.ts', 'zoneless-agents.spec.ts', 'zones.spec.ts']);
+    expect(plan.e2e).toEqual(['add-zone.spec.ts', 'zone-fold.spec.ts', 'zoneless-agents.spec.ts', 'zones.spec.ts']);
+  });
+
+  it('runs the fold spec for the folded zone’s chip, its helpers and the daemon’s fold', () => {
+    for (const file of ['apps/desktop/src/renderer/src/board/FoldedZone.tsx', 'apps/desktop/src/renderer/src/board/fold-zone.ts', 'apps/desktop/src/main/zones.ts', 'packages/daemon/src/zone-fold.ts']) {
+      expect(selectChecks([file]).e2e).toContain('zone-fold.spec.ts');
+    }
   });
 
   it('runs the smoke set for an unmapped, non-core app file', () => {
