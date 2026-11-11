@@ -2,7 +2,7 @@ import { expect, type ElectronApplication, type Page } from '@playwright/test';
 import type { Agent } from '@agent-board/daemon/protocol';
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { launch, screen, sessionWindow, setClickOpens, spawnAgent, tile, TURN_MS, useFullSidebar } from './agent-helpers.ts';
+import { launch, screen, sessionWindow, setClickOpens, spawnAgent, tile, TURN_MS, useFullSidebar, windowKey } from './agent-helpers.ts';
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test, tabText } from './launch.ts';
 import { scratch } from './scratch.ts';
 import { centreOf, drag, settledBox } from './board-helpers.ts';
@@ -128,8 +128,19 @@ test('esc leaves Edit with nothing written, and an HTML document is view-only wi
     await expect(docView(window)).toBeVisible();
 
     await docView(window).getByRole('button', { name: 'Edit' }).click();
-    await docView(window).getByLabel('Markdown of Release 1.4 plan').fill('Not this.');
-    await docView(window).getByLabel('Markdown of Release 1.4 plan').press('Escape');
+    const source = docView(window).getByLabel('Markdown of Release 1.4 plan');
+    await source.fill('Not this.');
+    // An unsaved draft keeps the window: ⌘Esc, or ⌘J then Esc from the header, goes back to the draft, not away.
+    await expect(docView(window)).toHaveAttribute('data-unsaved', /"kind":"document"/);
+    await window.keyboard.press(windowKey('Escape'));
+    await expect(source).toBeFocused();
+    await window.keyboard.press(windowKey('j'));
+    await expect(sessionWindow(window).locator('.session-window-head')).toBeFocused();
+    await window.keyboard.press('Escape');
+    await expect(source).toBeFocused();
+    await expect(sessionWindow(window)).toBeVisible();
+    await expect(source).toHaveValue('Not this.');
+    await source.press('Escape');
     await expect(docView(window)).toHaveAttribute('data-mode', 'read');
     // The window stays open: the first esc was the editor's.
     await expect(sessionWindow(window)).toBeVisible();

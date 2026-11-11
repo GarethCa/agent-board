@@ -12,6 +12,7 @@ import { createComposerWatch } from './codex-screen.ts';
 import { createAgentSpawns, issueColumns, type FolderPlace, type SpawnUsed } from './agent-spawns.ts';
 import type { StartChange } from './agent-starts.ts';
 import { createDeliveries, type AfterTurn, type Answered, type UnsentSent } from './deliveries.ts';
+import { draftLine, sendTrail, type SendTrail } from './send-log.ts';
 import { createHookStates } from './hook-states.ts';
 import { answerTrustScreen, readStartupScreen, screenTail, type StartupScreen } from './startup-screen.ts';
 import { type HarnessPaths } from './harness-path.ts';
@@ -79,6 +80,7 @@ import { createSubagentStore, subagentsAfterExit } from './subagents.ts';
 import { oneLine, submitsDraft } from './terminal-input.ts';
 import { isWorking, statusAfterTurn } from './turn-status.ts';
 import { AGENT_POSES, CHARACTER_EXPIRY_MS, characterLive, isRestingPose, type AgentFace, type AgentPose, type AgentProp, type CharacterSet } from './character.ts';
+import { stateClock } from './state-since.ts';
 import { createTranscriptReader } from './transcripts.ts';
 import type { TrackerHost } from './trackers.ts';
 import { moveParams, optionalPlaceParam, saveMove, tilePosition, zoneIdParam, type PositionColumns } from './tile-position.ts';
@@ -372,7 +374,9 @@ export interface AgentHost {
    * Sends `text` to the agent as the user's next message, after any answer to it still being typed: its line breaks
    * kept, pasted as a terminal pastes them, and pasted even as one line with `paste`. Resolves with how it went.
    */
-  answer(sessionId: string, text: string, paste?: boolean): Promise<Answered>;
+  answer(sessionId: string, text: string, paste?: boolean, trail?: SendTrail): Promise<Answered>;
+  /** A trail for the daemon log of one message of `chars` characters sent to the agent (`sendTrail`). */
+  sendTrail(sessionId: string, chars: number): SendTrail;
   /**
    * Keeps a message for the live agent mid-turn until a turn of its ends, then types it, after any kept before it
    * (`Agent.messagesWaiting`); handed back as not delivered if it ends or the daemon closes first.
@@ -651,6 +655,8 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   const updateEffort = db.prepare('UPDATE agents SET effort = ? WHERE session_id = ?');
   /** Per live Claude agent, the reasoning effort to type at its prompt (`/effort`) once it is between turns. */
   const effortAfterTurn = new Map<string, Effort>();
+  /** When each agent's shown state began, for `Agent.stateSince`. */
+  const stateTimes = stateClock();
   /** Agents whose `effortAfterTurn` is being typed now. */
   const typingEffort = new Set<string>();
   /**
@@ -1315,6 +1321,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
         notSentFlags.delete(sessionId);
         undelivered.delete(sessionId);
         flags.delete(sessionId);
+        stateTimes.forget(sessionId);
         hookStates.deleted(sessionId);
       },
     },
@@ -1457,6 +1464,12 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       recordedPullRequests: [...(options.recordedPullRequests?.(row.session_id) ?? [])],
       lastMessage: hookStates.lastMessage(row.session_id) ?? null,
       compactingSince: hookStates.compactingSince(row.session_id) ?? null,
+      stateSince: stateTimes.since(
+        row.session_id,
+        shownState,
+        new Date(clock.now()).toISOString(),
+        shownState === 'hibernated' ? row.hibernated_at : live ? null : row.ended_at,
+      ),
       finishedAt: row.finished_at,
       permissions: permissions.prompts(row.session_id),
       ask,
@@ -1756,6 +1769,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     },
 
     answer: deliveries.answer,
+    sendTrail: (sessionId, chars) => sendTrail(options.log, sessionId, chars),
     queueAfterTurn: deliveries.queueAfterTurn,
     deliverAfterTurn: deliveries.deliverAfterTurn,
 
@@ -1777,7 +1791,14 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     },
 
     async sendUnsent(sessionId, byUser) {
-      const sent = await deliveries.send(sessionId, byUser);
+      let sent: UnsentSent;
+      try {
+        sent = await deliveries.send(sessionId, byUser);
+      } catch (error) {
+        options.log(draftLine(sessionId, `not sent: ${(error as Error).message}`));
+        throw error;
+      }
+      options.log(draftLine(sessionId, sent.started ? 'sent, turn started on it' : `not sent, still at its prompt: ${sent.why}`));
       return { agent: get(sessionId)!, sent };
     },
 
@@ -1815,6 +1836,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     clearUnsent(sessionId, byUser) {
       // Typed at its terminal as much as the user's keys are: a draft of theirs there goes with it.
       hookStates.typed(sessionId, deliveries.clear(sessionId, byUser));
+      options.log(draftLine(sessionId, 'cleared'));
       return get(sessionId)!;
     },
 
@@ -2326,7 +2348,9 @@ export function agentHandlers<Context>(
     },
     'agent.answer': async (params) => {
       const p = paramsObject(params);
-      const { queued } = await agents.answer(stringParam(p, 'sessionId'), stringParam(p, 'text'), optionalBooleanParam(p, 'paste'));
+      const sessionId = stringParam(p, 'sessionId');
+      const text = stringParam(p, 'text');
+      const { queued } = await agents.answer(sessionId, text, optionalBooleanParam(p, 'paste'), agents.sendTrail(sessionId, text.length));
       return { queued };
     },
     'agent.interrupt': (params) => agents.interrupt(stringParam(paramsObject(params), 'sessionId'), "the app's agent.interrupt"),

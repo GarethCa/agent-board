@@ -9,6 +9,7 @@ import { domFinder } from '../find/dom-find';
 import { useFindKey } from '../find/use-find';
 import { PlanPage } from '../plan/PlanTab';
 import { Markdown } from '../session/Markdown';
+import { documentSurfaceOf } from '../session/tabs';
 import { Button, ErrorText, Segmented, Tag, Textarea, type SegmentedOption } from '../ui';
 import { useAction } from '../use-action';
 import { changedLineCount, docMeta, docTypeTag, editHint } from './doc-view';
@@ -122,7 +123,7 @@ export function DocumentTab({ agent, document, visible, onFocus, onPaneKey }: Do
   // Markdown being read; an HTML document's page finds in itself (PlanPage).
   const find = useFindKey(() => viewer.current, visible && markdown && !editing && text !== null);
   return (
-    <div className="doc-viewer" ref={viewer} data-testid="document-view" data-mode={mode} data-format={document.format}>
+    <div className="doc-viewer" ref={viewer} data-testid="document-view" data-mode={mode} data-format={document.format} data-unsaved={changed > 0 ? JSON.stringify(documentSurfaceOf(document)) : undefined}>
       <header className="doc-head">
         <div className="doc-title">
           <FileText aria-hidden />

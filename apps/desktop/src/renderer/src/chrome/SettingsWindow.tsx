@@ -15,7 +15,7 @@ import { AppearanceSetting } from './AppearanceSetting';
 import { BoardBackgroundSetting } from './BoardBackgroundSetting';
 import { ArrangeSpacingSetting } from './ArrangeSpacingSetting';
 import { DockSetting } from './DockSetting';
-import { AgentNoteLookSetting, ClickOpensSetting, ConnectionsSetting, CrewLookSetting } from './BoardViewSettings';
+import { AgentNoteLookSetting, ClickOpensSetting, ConnectionsSetting, CrewLookSetting, TileShowsSetting } from './BoardViewSettings';
 import { ChatStyleSetting } from './ChatStyleSetting';
 import { ChatThemeSetting } from './ChatThemeSetting';
 import { ClickableLinksSetting } from './ClickableLinksSetting';
@@ -105,6 +105,8 @@ function sectionBody(home: SettingsHome, onError: OnError): ReactNode {
       return <ConnectionsSetting />;
     case 'board.crews':
       return <CrewLookSetting />;
+    case 'board.tiles':
+      return <TileShowsSetting />;
     case 'board.notes':
       return <AgentNoteLookSetting />;
     case 'board.tidying':

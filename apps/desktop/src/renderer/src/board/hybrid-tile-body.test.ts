@@ -1,10 +1,12 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import type { Agent } from '@agent-board/daemon/protocol';
 import { HybridTile } from './HybridTile';
 import { lastMessageCard } from './tile-parts';
 import { galleryAgent } from './TileGallery';
+import { QUIET_TILE } from './tile-shows';
+import { restoreViewSettings } from './view-settings';
 
 const AT = '2026-10-22T12:00:00.000Z';
 
@@ -36,10 +38,21 @@ describe("an agent tile's body", () => {
     expect(html).not.toContain('tile-set-by');
   });
 
-  it('says who set the line when its orchestrator did', () => {
+  it('marks a line its orchestrator set, and leaves who to its hover card', () => {
     const html = render({ ...idle, status: { summary: 'Retry fix in', progress: null, updatedAt: AT, setBy: 'web-app orchestrator' } });
-    expect(html).toContain('>Retry fix in<');
-    expect(html).toMatch(/data-testid="tile-set-by"[^>]*>set by ◎ web-app orchestrator</);
+    expect(html).toContain('Retry fix in');
+    expect(html).toContain('data-testid="tile-set-by-mark"');
+    expect(html).not.toContain('data-testid="tile-set-by"');
+  });
+
+  it('gives its task as a native tooltip only when it has no hover card, so one tooltip shows at a time', () => {
+    const description = (html: string) => /<span[^>]*data-testid="tile-description"[^>]*>/.exec(html)![0];
+    // Its branch repeats its issue, so it goes to the hover card, which then leads with the task.
+    const quiet = render({ ...idle, lastMessage: null });
+    expect(description(quiet)).not.toContain('title=');
+    // Nothing for a hover card: the task is the body's tooltip.
+    const plain = render({ ...idle, lastMessage: null, branch: '', issue: null });
+    expect(description(plain)).toContain('title="Fix the checkout flake"');
   });
 
   it('still shows a permission prompt, a question and a plan in place of the line', () => {
@@ -70,6 +83,28 @@ describe("an agent tile's body", () => {
     const html = render({ ...idle, plan: { title: 'Move the dock', decision: null } as unknown as Agent['plan'] });
     expect(html).toContain('tile-ask');
     expect(html).toContain('Waiting for you to decide on its plan: Move the dock');
+  });
+});
+
+describe('the parts Settings turns back on', () => {
+  afterEach(() => restoreViewSettings({ tileShows: QUIET_TILE }));
+  const orchestrated: Agent = { ...idle, trustedByZone: true, status: { summary: 'Retry fix in', progress: null, updatedAt: AT, setBy: 'web-app orchestrator' } };
+
+  it('keeps the quiet tile until one is turned on', () => {
+    const html = render(orchestrated);
+    expect(html).not.toContain('hybrid-tile-branch');
+    expect(html).toContain('data-corner="hover"');
+    expect(html).not.toContain('data-testid="tile-set-by"');
+    expect(html).not.toContain('data-testid="tile-trusted-by-zone"');
+  });
+
+  it('draws each part turned on, on the tile itself', () => {
+    restoreViewSettings({ tileShows: { branchAlways: true, cornerAlways: true, setBy: true, trusted: true } });
+    const html = render(orchestrated);
+    expect(html).toContain('hybrid-tile-branch');
+    expect(html).not.toContain('data-corner="hover"');
+    expect(html).toContain('data-testid="tile-set-by"');
+    expect(html).toContain('data-testid="tile-trusted-by-zone"');
   });
 });
 

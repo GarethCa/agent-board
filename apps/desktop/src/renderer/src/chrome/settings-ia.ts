@@ -31,6 +31,7 @@ export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
     name: 'Board',
     sections: [
       { id: 'opening', name: 'Opening tiles' },
+      { id: 'tiles', name: 'Agent tiles' },
       { id: 'connections', name: 'Connections' },
       { id: 'crews', name: 'Crews' },
       { id: 'notes', name: 'Agent notes' },
@@ -100,6 +101,7 @@ export const SETTINGS_CONTROLS: readonly SettingsControl[] = [
   { id: 'clickOpens', label: 'Double-clicking a tile opens', home: 'board.opening', also: 'double-click expand session window maximise maximised maximize full' },
   { id: 'connections', label: 'Show connections', home: 'board.connections', also: 'edges rails lines' },
   { id: 'crewLook', label: 'Agents an orchestrator starts', home: 'board.crews', also: 'orchestrator crew layout' },
+  { id: 'tileShows', label: 'Tile shows', home: 'board.tiles', classicOnly: true, also: 'quiet branch row corner buttons expand pop out hover model reasoning effort set by status line trusted muted bell' },
   { id: 'agentNoteLook', label: 'How a note an agent writes looks', home: 'board.notes', classicOnly: true, also: 'document terminal card' },
   { id: 'dock', label: 'Dock', home: 'board.opening', also: 'minimised windows pin pinned off hide taskbar' },
   { id: 'arrangeSpacing', label: 'Arrange spacing', home: 'board.tidying', also: 'tidy gap layout' },

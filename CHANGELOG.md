@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.6.20 (2026-11-11)
+
+- An older build backs up, opens a backward-safe newer database, or names the backup and restore command
+- Rpc test's credential fixture no longer trips the leak check
+- Flake sweep part 4: tests wait on what they read, not on a lucky order
+- A bug's error reaches the app as a plain message, its detail in the daemon log
+- ⌘J / F6 / ⌘Esc out of the terminal, and one ordered Esc ladder
+- The MCP wait tool waits for a crew, as the CLI does
+- Settings turns the quiet tile's hidden parts back on, one switch each
+- Log each step of a send in daemon.log, by a short id and its length
+- A zoomed terminal fills its pane on all four sides, keeps its shape and doesn't jump as the zoom settles
+- The quiet agent tile: time in its state, progress, next run in words, and the rest to hover
+
 ## v0.6.19 (2026-11-11)
 
 - ⌘K's accessible names say it finds settings too
@@ -241,7 +254,6 @@
 - Place beside an expanded tile where it is drawn, arrange the crew's clocks on the top row, and lint a zone with an empty band as mostly empty
 - The stacked-agents rail shot waits for the tiles, zone and rail line to hold still before it fits and shoots
 - Arrange measures off-screen notes in a hidden element, a refused arrange keeps a size the user set, and Esc closes the board menu
-- Promo shots for pitch A: a shared demo board, one recording spec per storyboard shot with a cue log, and a first rough cut
 - Demo mode in the app hides dev chrome, scripts the camera, draws a cursor and grows hand-offs
 - A new migration no longer hides behind Vitest's cache
 
@@ -250,7 +262,6 @@
 - Bump node-pty so each terminal stops leaking a PTY on macOS (fixes posix_spawnp failed)
 - Pin the lane note test's crew lines so their turns ending can't rewrite the note mid-test
 - Agents start in a new folder or a brand-new repo (no git, or no commits yet)
-- Record the board offscreen at 60 fps and 2x into ffmpeg (promo capture spike)
 - Arrange and the zone map use sizes the app measures: notes as tall as their text, things where they're drawn, unmeasured when no window is open
 - Bump dev tooling: vitest 5.0.5, eslint 10.13, typescript-eslint 8.72, @types/node 26.6.5
 - The gate drops agent-board's own FORCE_HYPERLINK with its marker

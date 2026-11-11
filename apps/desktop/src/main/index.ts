@@ -28,6 +28,7 @@ import { registerAskIpc } from './asks';
 import { registerCaptures } from './captures';
 import { DEMO_SCALE, registerDemoCapture } from './demo-capture';
 import { CAPTURE_QUERY, captureSize } from '../shared/capture';
+import { VIEW_KEYS } from '../shared/view-saver';
 import { registerUnsavedPlanEditIpc } from './unsaved-plan-edits';
 import { registerReviewIpc } from './reviews';
 import { registerOrchestratorIpc } from './orchestrators';
@@ -64,7 +65,7 @@ app.setAboutPanelOptions({ applicationName: APP_NAME, applicationVersion: descri
 const dataDir = app.getPath('userData');
 const idleTimeoutMs = process.env.AGENT_BOARD_DAEMON_IDLE_TIMEOUT_MS;
 const permissionHoldMs = process.env.AGENT_BOARD_PERMISSION_HOLD_MS;
-/** Demo mode records the board for the promo (demo-capture.ts). Never in a packaged build. */
+/** Demo mode records the board for a demo video (demo-capture.ts). Never in a packaged build. */
 const demo = !app.isPackaged && process.env.AGENT_BOARD_DEMO === '1';
 /** How many device pixels per CSS pixel a headless test's board paints, as a Retina display does. Never in a packaged build. */
 const testScale = app.isPackaged ? undefined : Number(process.env.AGENT_BOARD_TEST_DEVICE_SCALE) || undefined;
@@ -252,12 +253,15 @@ const settingsWindow = registerSettingsWindow({
   // this variable in the main process to have the board count as full screen. Never in a packaged build.
   isFullScreen: (window) => window.isFullScreen() || (!app.isPackaged && process.env.AGENT_BOARD_TEST_FULL_SCREEN === '1'),
 });
+/** "Extended keyboard shortcuts", as the windows last saved it: read once the view state is up, then followed. */
+let extendedShortcuts = true;
 const webTabs = registerWebTabIpc({
   isBoard: (contents) => board !== undefined && !board.isDestroyed() && board.webContents === contents,
   isSettings: settingsWindow.isSettings,
   keepLogins: async () => (await daemon.call('settings.get')).keepWebLogins,
   // Read as a key is pressed, after `design` is registered below.
   simplified: () => design.current() === 'simplified',
+  extended: () => extendedShortcuts,
 });
 const followKeepLogins = (keep: boolean) => {
   if (!keep && keptWebLogins !== false) {
@@ -290,7 +294,13 @@ const design = registerDesign(dataDir);
 const technical = registerTechnical(dataDir);
 const dock = registerDock(dataDir);
 const view = daemonViewState(daemon);
-registerViewIpc(view);
+registerViewIpc(view, (key, value) => {
+  if (key === VIEW_KEYS.extendedShortcuts) extendedShortcuts = value !== false;
+});
+view.get(VIEW_KEYS.extendedShortcuts).then(
+  (saved) => (extendedShortcuts = saved !== false),
+  () => {},
+);
 const poppedWindows = registerWindowIpc({
   open: openWindow,
   view,

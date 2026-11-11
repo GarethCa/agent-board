@@ -2,6 +2,7 @@ import { useEffect, type Dispatch, type RefObject, type SetStateAction } from 'r
 import type { BoardItemKind } from '@agent-board/daemon/protocol';
 import type { PointerMode } from '../chrome/CreateToolbar';
 import { inOverlay } from '../keys';
+import { useEscStep, type EscPress } from '../keys/esc-ladder';
 import { pressed } from '../keys/registry';
 import { boardKey, CONTROLS } from './board-shortcuts';
 import { tileOpenAction, type ClickOpens } from './click-opens';
@@ -10,7 +11,7 @@ import { isItemNode } from './items/items';
 import { isSessionTile } from './tiles';
 import type { TileActions } from './tile';
 import type { ArmedTool } from './ToolOverlay';
-import { isTyping } from './use-tile-moves';
+import { isTyping } from '../keys/typing';
 
 interface BoardShortcutsOptions {
   loaded: boolean;
@@ -76,13 +77,8 @@ export function useBoardShortcuts({
     const onKeyDown = (event: KeyboardEvent) => {
       const shortcut = boardKey(event);
       if (shortcut === undefined) return;
-      if (shortcut.kind === 'escape') {
-        if (tool !== undefined) return setTool(undefined);
-        // With the board (or nothing) focused, not a menu or dialog, which close on their own Escape.
-        const active = document.activeElement;
-        if (event.defaultPrevented || (active !== null && active !== document.body && active.closest('.react-flow') === null)) return;
-        return collapseFrontTile();
-      }
+      // Escape is the ladder's: the steps below.
+      if (shortcut.kind === 'escape') return;
       // A popover or menu has the keyboard (a Needs-you button, say): its keys are its own, not the board's.
       if (inOverlay()) return;
       // F2 has asked a tile to open its name field, which is yet to take the keys: they are the name's, not a shortcut.
@@ -105,7 +101,20 @@ export function useBoardShortcuts({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [loaded, tool, setTool, renameRequest, createItem, pointer, boardCentre, screenToFlowPosition, pickMode, collapseFrontTile, cycleConnections, cycleCrewLook, openQuickInsert, openCheatSheet, arrangeBoard]);
+  }, [loaded, setTool, renameRequest, createItem, pointer, boardCentre, screenToFlowPosition, pickMode, cycleConnections, cycleCrewLook, openQuickInsert, openCheatSheet, arrangeBoard]);
+
+  // Escape, not typing: puts the armed tool down, even with a menu taking the same press; or else, with the board (or
+  // nothing) focused, not a menu or dialog (which close on their own Escape), collapses the expanded tile in front.
+  const boardEscape = (event: EscPress) => loaded && boardKey(event as KeyboardEvent)?.kind === 'escape';
+  useEscStep('tool', (event) => boardEscape(event) && tool !== undefined, () => setTool(undefined));
+  useEscStep(
+    'frontTile',
+    (event) => {
+      const active = document.activeElement;
+      return boardEscape(event) && (active === null || active === document.body || active.closest('.react-flow') !== null);
+    },
+    () => collapseFrontTile(),
+  );
 
   // F2 renames the one agent or shell tile selected; its field opens where it is drawn (compact or expanded).
   useEffect(() => {

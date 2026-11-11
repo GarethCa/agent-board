@@ -701,3 +701,32 @@ test('⌘F in a web tab finds in its page: a count, ↵ and ⇧↵ to step, esc 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("⌘J in a web tab moves the keyboard from its page to its window's header, where Esc minimises the window", async () => {
+  const server = await serveWebPages();
+  const { dir, repo, env } = scratch('output');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, { ...env, ...SHELL_ENV });
+  try {
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await newShellInZone(window);
+    await openWebTab(app, window, 'Web…', server.url, 'Dev home');
+
+    // Sent as the OS sends it, with the page holding the keyboard: the page hands it to the window.
+    await app.evaluate(({ BrowserWindow }, mac) => {
+      const [view] = BrowserWindow.getAllWindows()[0]!.contentView.children as Electron.WebContentsView[];
+      view!.webContents.focus();
+      view!.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'J', modifiers: mac ? ['meta'] : ['control', 'shift'] });
+    }, process.platform === 'darwin');
+    await expect(sessionWindow(window).locator('.session-window-head')).toBeFocused();
+    await window.keyboard.press('Escape');
+    await expect(sessionWindow(window)).toBeHidden();
+    await expect(window.getByTestId('dock-item')).toHaveCount(1);
+  } finally {
+    await app.close();
+    await server.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

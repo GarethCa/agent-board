@@ -5,6 +5,7 @@ import { isItemNode, type ItemNodeType } from './items/items';
 import type { TileData, TileNodeType } from './tile';
 import { isSessionTile, savedMove, subjectOf, type BoardNode } from './tiles';
 import { laidOutTile } from './shelves';
+import { isTyping } from '../keys/typing';
 
 /** How far a pointer must move before a press on a node drags it, rather than clicks it, px. */
 export const DRAG_THRESHOLD = 4;
@@ -32,15 +33,6 @@ const ARROWS: Record<string, { x: number; y: number }> = {
   ArrowLeft: { x: -1, y: 0 },
   ArrowRight: { x: 1, y: 0 },
 };
-
-/**
- * Whether a key press or paste is typing into a field, rather than a board shortcut: a field, or inside something that
- * has taken the keyboard for its own keys (`data-keys-own`, a steps card stepped into).
- */
-export function isTyping(event: Pick<Event, 'target'>): boolean {
-  const target = event.target as HTMLElement | null;
-  return target !== null && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.closest?.('[data-keys-own]') != null);
-}
 
 interface TileMovesOptions {
   loaded: boolean;

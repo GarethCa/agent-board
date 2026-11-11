@@ -16,7 +16,7 @@ import { runBoardCommand } from '../src/board-cli.ts';
 import { paneIds } from '../src/pane-layout.ts';
 import { refOf } from '../src/crew-flags.ts';
 import { markSender } from '../src/sender-marker.ts';
-import { connectTestClient, git, recordEvents, startTestDaemon, TEST_CLI_LAUNCHER, tempDataDir, tempRepo } from './helpers.ts';
+import { connectTestClient, git, recordEvents, sendLogLines, startTestDaemon, TEST_CLI_LAUNCHER, tempDataDir, tempRepo } from './helpers.ts';
 
 const SIZE = { cols: 120, rows: 40 };
 
@@ -865,6 +865,40 @@ describe('a send to an orchestrator mid-turn', () => {
     expect(screen.indexOf('Slow work done.')).toBeLessThan(screen.indexOf(`Done: ${sentBy(me, 'First report')}.`));
     expect(screen.indexOf(`Done: ${sentBy(me, 'First report')}.`)).toBeLessThan(screen.indexOf(`Done: ${sentBy(me, 'Second report')}.`));
   });
+
+  it('is typed only as each of its back-to-back turns ends, in order, and the log says when each was queued, typed and taken up', async () => {
+    const logs: string[] = [];
+    const setup = await orchestrateDaemon({ log: (message) => void logs.push(message) });
+    const { agent: me, token, connection } = await agentSide(setup, setup.zone.id, 'board');
+    const busy = await setup.client.call('agent.spawn', { zoneId: setup.zone.id, name: 'busy lead', prompt: 'Work slowly', orchestrate: 'board', ...SIZE });
+    await setup.client.call('session.attach', { sessionId: busy.sessionId });
+    await untilAgent(setup.recorder, busy.sessionId, (seen) => seen.state === 'running');
+
+    // The first starts a turn as this one ends; the second waits for that turn to end too.
+    for (const text of ['Wind down at 08:15', 'Stop starting workers']) {
+      expect(await connection.call('orchestrator.send', { token, sessionId: busy.sessionId, text })).toMatchObject({ delivery: 'queued-after-turn' });
+    }
+
+    const prompts = () =>
+      setup.recorder.events.flatMap((event) =>
+        event.type === 'hook' && event.sessionId === busy.sessionId && event.event === 'UserPromptSubmit' ? [event.payload.prompt] : [],
+      );
+    // The daemon logs a turn's start as it hears the hook; this client hears the same hook a moment later.
+    await vi.waitFor(
+      () => {
+        expect(sendLogLines(logs, busy.sessionId).map((lines) => lines.at(-1))).toEqual(['18: turn started on it', '21: turn started on it']);
+        expect(prompts()).toHaveLength(3);
+      },
+      { timeout: 30_000 },
+    );
+    expect(sendLogLines(logs, busy.sessionId)).toEqual([
+      ['18: queued until its turn ends (1 waiting)', '18: typing at its prompt, its turn ended', '18: turn started on it'],
+      ['21: queued until its turn ends (2 waiting)', '21: typing at its prompt, its turn ended', '21: turn started on it'],
+    ]);
+    expect(prompts()).toEqual(['Work slowly', sentBy(me, 'Wind down at 08:15'), sentBy(me, 'Stop starting workers')]);
+    // What a message says may be secret: the log keeps only its length.
+    expect(logs.filter((message) => message.includes('Wind down') || message.includes('starting workers'))).toEqual([]);
+  }, 60_000);
 
   it('puts a send behind the messages still waiting, from whichever sender, so each starts a turn of its own in the order sent', async () => {
     const setup = await orchestrateDaemon();

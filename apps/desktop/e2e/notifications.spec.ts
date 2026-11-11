@@ -37,9 +37,14 @@ async function spawn(page: Page, prompt: string): Promise<Agent> {
 
 /** Answers the one waiting agent from the needs-you inbox. */
 async function answer(page: Page, text: string): Promise<void> {
-  // The inbox opens from the Needs-you pill.
-  if (!(await page.getByTestId('needs-you-inbox').isVisible())) await page.getByTestId('inbox-count').click();
+  // The inbox opens from the Needs-you pill. A click as the window before it closes can be lost, and a second click
+  // on an inbox already opening shuts it: so click only while it is shut, until its answer field shows.
+  const inbox = page.getByTestId('needs-you-inbox');
   const item = page.getByTestId('inbox-item');
+  await expect(async () => {
+    if (!(await inbox.isVisible())) await page.getByTestId('inbox-count').click();
+    await expect(item.getByLabel('Answer')).toBeVisible({ timeout: 2_000 });
+  }).toPass({ timeout: 10_000 });
   await item.getByLabel('Answer').fill(text);
   await item.getByRole('button', { name: 'Send' }).click();
 }

@@ -5,7 +5,8 @@ import { createConnection } from 'node:net';
 import { describe, expect, it } from 'vitest';
 import { DaemonRpcError } from '../src/client.ts';
 import { DaemonAlreadyRunningError } from '../src/lock.ts';
-import { MIGRATIONS } from '../src/migrate.ts';
+import { DatabaseSync } from 'node:sqlite';
+import { MIGRATIONS, migrate, type Migration } from '../src/migrate.ts';
 import { daemonPaths } from '../src/paths.ts';
 import { DAEMON_VERSION, PROTOCOL_VERSION } from '../src/protocol.ts';
 import { connectTestClient, startTestDaemon, tempDataDir } from './helpers.ts';
@@ -58,6 +59,41 @@ describe('daemon API over the socket', () => {
     const dataDir = tempDataDir();
     await startTestDaemon({ dataDir });
     expect(existsSync(daemonPaths(dataDir).database)).toBe(true);
+  });
+
+  describe('on a database a newer daemon migrated', () => {
+    /** The data dir's database as a daemon that knows one migration more than this one leaves it. */
+    function migratedByNewer(dataDir: string, newer: Pick<Migration, 'name' | 'sql'>): void {
+      const path = daemonPaths(dataDir).database;
+      const current = new DatabaseSync(path);
+      migrate(current);
+      current.close();
+      const db = new DatabaseSync(path);
+      migrate(db, [...MIGRATIONS, { version: MIGRATIONS.length + 1, ...newer }]);
+      db.close();
+    }
+
+    it('starts, and logs why, when the newer migration is marked backward-safe', async () => {
+      const dataDir = tempDataDir();
+      migratedByNewer(dataDir, { name: 'notes', sql: '-- backward-safe: a table this daemon never reads.\nCREATE TABLE later_notes (id TEXT);' });
+      const logs: string[] = [];
+      const daemon = await startTestDaemon({ dataDir, log: (message) => logs.push(message) });
+      const client = await connectTestClient(daemon);
+
+      await expect(client.call('zone.list')).resolves.toBeDefined();
+      expect(logs).toContainEqual(expect.stringMatching(/newer than this daemon knows .*every newer migration is marked backward-safe/));
+    });
+
+    it('refuses to start when it is not, naming the backup made before the upgrade and the command that restores it', async () => {
+      const dataDir = tempDataDir();
+      migratedByNewer(dataDir, { name: 'rules', sql: '-- not backward-safe: rules this daemon would ignore.\nCREATE TABLE later_rules (id TEXT);' });
+
+      const started = startTestDaemon({ dataDir });
+
+      await expect(started).rejects.toThrow(`newer than this daemon knows (${MIGRATIONS.length})`);
+      await expect(started).rejects.toThrow(join(dataDir, `agent-board.db.v${MIGRATIONS.length}.bak`));
+      await expect(started).rejects.toThrow(/quit agent-board and run `cd .* && mv agent-board\.db .* && cp /);
+    });
   });
 
   it('answers an unknown method with a JSON-RPC method-not-found error', async () => {

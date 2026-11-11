@@ -3,12 +3,18 @@
 import type { Agent, AgentRole, AgentSchedule, LinkedIssue, PullRequest, TakenJob } from '@agent-board/daemon/protocol';
 import type { Effort, EffortPending } from '@agent-board/daemon/protocol';
 import { EFFORT_LABELS, modelLabel, roleText } from './AgentSetup';
+import { FULL_TILE, type TileShows } from './tile-shows';
 
 export type TileBadge =
   /** The model it was started with, when not its harness's default. */
   | { kind: 'model'; model: string }
   /** Its reasoning effort (null for its harness's own), when set, or one it has yet to take (`pending`). */
   | { kind: 'effort'; effort: Effort | null; pending: EffortPending | null }
+  /**
+   * Its model and reasoning effort as one tag, when either is not its harness's own (the quiet tile). Max effort, the
+   * one that spends the most, keeps a tag of its own (`effort`), so it is still easy to spot.
+   */
+  | { kind: 'setup'; model: string | null; effort: Effort | null; pending: EffortPending | null }
   /** The role it was started in, when it has one, and a custom role's name. */
   | { kind: 'role'; role: AgentRole; name: string | null }
   | { kind: 'issue'; issue: LinkedIssue }
@@ -43,12 +49,21 @@ const MAX_PULL_REQUEST_CHIPS = 2;
  * linked issue, the jobs it holds from queues as tickets, its first pull requests (its own branch's, else those of the branches it pushed to), its schedule, a mute's bell and its shells chip (when it
  * has `shells`) as badges, and the pull requests past those folded into a "+N", so the tile's head keeps its name
  * readable however much there is. A notice is no badge (the TileCompact mock folds it): it says why the agent stopped,
- * so the tile's body shows it.
+ * so the tile's body shows it. The quiet tile (`shows`) merges the model and effort into one tag and draws the bell
+ * beside the name instead.
  */
-export function tileFooter(agent: Agent, shells = 0, jobs: readonly TakenJob[] = []): TileFooter {
+export function tileFooter(agent: Agent, shells = 0, jobs: readonly TakenJob[] = [], shows: Pick<TileShows, 'setupApart' | 'mutedInFooter'> = FULL_TILE): TileFooter {
   const shown: TileBadge[] = [];
-  if (agent.model !== null) shown.push({ kind: 'model', model: agent.model });
-  if (agent.effort !== null || agent.effortPending !== null) shown.push({ kind: 'effort', effort: agent.effort, pending: agent.effortPending });
+  const hasEffort = agent.effort !== null || agent.effortPending !== null;
+  if (shows.setupApart) {
+    if (agent.model !== null) shown.push({ kind: 'model', model: agent.model });
+    if (hasEffort) shown.push({ kind: 'effort', effort: agent.effort, pending: agent.effortPending });
+  } else if (agent.effort === 'max') {
+    if (agent.model !== null) shown.push({ kind: 'setup', model: agent.model, effort: null, pending: null });
+    shown.push({ kind: 'effort', effort: 'max', pending: agent.effortPending });
+  } else if (agent.model !== null || hasEffort) {
+    shown.push({ kind: 'setup', model: agent.model, effort: agent.effort, pending: agent.effortPending });
+  }
   if (agent.role !== null) shown.push({ kind: 'role', role: agent.role, name: agent.roleName });
   if (agent.issue !== null) shown.push({ kind: 'issue', issue: agent.issue });
   // The first job it holds rides on it as a ticket; any more fold into the "+N".
@@ -59,7 +74,7 @@ export function tileFooter(agent: Agent, shells = 0, jobs: readonly TakenJob[] =
   const pullRequests = pullRequestBadges(agent);
   shown.push(...pullRequests.slice(0, MAX_PULL_REQUEST_CHIPS));
   if (agent.schedule !== null) shown.push({ kind: 'schedule', schedule: agent.schedule });
-  if (agent.muted) shown.push({ kind: 'muted' });
+  if (agent.muted && shows.mutedInFooter) shown.push({ kind: 'muted' });
   if (shells > 0) shown.push({ kind: 'shells' });
 
   const overflow = { jobs: jobs.slice(1).map((taken) => badgeLine({ kind: 'job', taken }, shells)), pullRequests: pullRequests.slice(MAX_PULL_REQUEST_CHIPS) };
@@ -92,7 +107,7 @@ export const FOOTER_LINES = 1;
  * shells chip, the schedule, the role before the reasoning effort before the model, the mute's bell, then pull requests, the later first. The issue
  * never folds: it is what the tile is for, and it is short. Nor does finished: it is what a lead looks for.
  */
-const FOLD_ORDER: TileBadge['kind'][] = ['shells', 'schedule', 'role', 'effort', 'model', 'muted', 'pr'];
+const FOLD_ORDER: TileBadge['kind'][] = ['shells', 'schedule', 'role', 'effort', 'setup', 'model', 'muted', 'pr'];
 
 /** Where the chips beside the badges fold, after every badge (those rank from 0), the lower first: docs go before the review. */
 export const EXTRA_FOLD_RANK = { docs: 100, plan: 101, review: 102, gate: 103, queued: 104, messages: 105 } as const;
@@ -113,6 +128,8 @@ export function badgeLine(badge: TileBadge, shells: number): string {
       return `Model: ${modelLabel(badge.model)}`;
     case 'effort':
       return `Reasoning: ${badge.effort === null ? 'Default' : EFFORT_LABELS[badge.effort]}${badge.pending === null ? '' : badge.pending === 'after-turn' ? ', after this turn' : ', on restart'}`;
+    case 'setup':
+      return `Model and reasoning: ${setupText(badge)}`;
     case 'role':
       return `Role: ${roleText(badge.role, badge.name)}`;
     case 'issue':
@@ -162,4 +179,10 @@ export function foldCount({ items, available, gap, maxLines, plusShown }: { item
     if (linesTaken(kept, available, gap) <= maxLines) return folded;
   }
   return badges.length;
+}
+
+/** What a merged setup tag says: "Opus · High", "Opus", "High"; a reasoning effort still to come reads as coming, "High…". */
+export function setupText(badge: Extract<TileBadge, { kind: 'setup' }>): string {
+  const effort = badge.effort === null && badge.pending === null ? null : `${badge.effort === null ? 'Default' : EFFORT_LABELS[badge.effort]}${badge.pending === null ? '' : '…'}`;
+  return [...(badge.model === null ? [] : [modelLabel(badge.model)]), ...(effort === null ? [] : [effort])].join(' · ');
 }

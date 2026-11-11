@@ -225,6 +225,7 @@ describe('subagents on a Hybrid tile', () => {
       page: null,
       lastMessage: null,
       compactingSince: null,
+      stateSince: new Date().toISOString(),
       finishedAt: null,
       permissions: [],
       ask: null,
@@ -389,8 +390,10 @@ describe('subagents on a Hybrid tile', () => {
     const schedule = { clockId: 'clock-1', cron: '0 * * * *', prompt: 'Sweep', enabled: true, nextRunAt: nextRunAt.toISOString(), lastRun: null };
     const time = `${String(nextRunAt.getHours()).padStart(2, '0')}:${String(nextRunAt.getMinutes()).padStart(2, '0')}`;
 
+    // It says the time to go; its clock time is in its tooltip.
     const scheduled = tile([], 'claude', { state: 'scheduled', schedule });
-    expect(scheduled).toMatch(new RegExp(`data-testid="tile-clock"[^>]*>.*</svg>(tomorrow )?${time}<`));
+    expect(scheduled).toMatch(/data-testid="tile-clock"[^>]*>.*<\/svg>in (60 m|1 h)</);
+    expect(scheduled).toMatch(new RegExp(`data-testid="tile-clock"[^>]*title="Next run (tomorrow )?${time}`));
     expect(scheduled).toContain('data-state="scheduled"');
     expect(scheduled).toContain('>scheduled<');
     expect(tile([], 'claude', { schedule: { ...schedule, enabled: false, nextRunAt: null } })).toMatch(/data-testid="tile-clock"[^>]*>.*<\/svg>paused</);

@@ -9,6 +9,7 @@ import type { RunStart } from './schedules.ts';
 import { CONTINUE, readRateLimitScreen } from './rate-limit-screen.ts';
 import { answerInput, draftAfterInput, oneLine, pastePieces, promptRows, submittedText } from './terminal-input.ts';
 import { cutText } from './text-cut.ts';
+import type { SendTrail } from './send-log.ts';
 
 /**
  * How long the terminal must stay quiet after drawing the typed text for the harness to have taken it in, so Enter
@@ -62,12 +63,13 @@ const whyGaveUp = (now: PromptNow): string =>
 
 /**
  * A message sent to an agent mid-turn, waiting for that turn to end (`queueAfterTurn`): `typing` hears its typing
- * start, and `settled` how it went once typed (whether its turn started), or that it was handed back instead.
+ * start, and `settled` how it went once typed (whether its turn started), or that it was handed back instead: `why`
+ * says why, when no turn started on it.
  */
 export interface AfterTurn {
   text: string;
   typing(): void;
-  settled(started: boolean): void;
+  settled(started: boolean, why?: string): void;
 }
 
 /** Why a message queued in a turn its rate limit stopped was given up on: Enter there may pick from Claude's menu. */
@@ -78,6 +80,14 @@ const withoutTabs = (text: string) => text.replaceAll('\t', '    ');
 
 /** Why nothing more is typed at a prompt holding a message that was never sent: it would run on from it. */
 const UNSENT_REASON = 'a message typed at its prompt was never sent';
+
+/** Tells `trail` how typing a message went: a turn started on it, it was queued in a turn, or it was left a draft. */
+function trailTyped(trail: SendTrail | undefined, typed: Typed): void {
+  if (trail === undefined) return;
+  if (!typed.typed) trail(`not typed, handed back: ${typed.reason}`);
+  else if (!typed.sent) trail(`left as a draft at its prompt: ${typed.why ?? UNSENT_REASON}`);
+  else trail(typed.inTurn === true ? 'a turn started as it was typed: queued in that turn' : 'turn started on it');
+}
 
 /**
  * What clears a draft of `lines` rows at a harness's prompt (`promptRows`), its cursor at its end, as the board's Clear
@@ -217,7 +227,9 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
    * What was queued for agents not up yet and not yet typed or handed back (`queueOrHandBack`), oldest first: whichever
    * comes first, its typing starting, its queue settling or the daemon closing (`handBackQueued`), takes each one.
    */
-  const queuedItems = new Set<{ sessionId: string; what: string; text: string }>();
+  const queuedItems = new Set<{ sessionId: string; what: string; text: string; trail?: SendTrail }>();
+  /** The trail of the message a paused agent is being woken with, for its first prompt to carry on (`firstPrompt`). */
+  const wakeTrails = new Map<string, SendTrail>();
   /** Per agent mid-turn when they came, the messages waiting for its turn to end, oldest first (`queueAfterTurn`). */
   const afterTurn = new Map<string, AfterTurn[]>();
   /** Agents one of whose messages waiting for its turn to end is being typed now. */
@@ -474,14 +486,19 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
    * Queues `text`, typed as `line`, for the agent not up yet (`queueUntilUp`), handing it to `undelivered` if it is
    * never typed: the sender has heard it was queued, so it is never dropped unsaid.
    */
-  const queueOrHandBack = (sessionId: string, line: string, what: string, text: string) => {
-    const item = { sessionId, what, text };
+  const queueOrHandBack = (sessionId: string, line: string, what: string, text: string, trail?: SendTrail) => {
+    const item = { sessionId, what, text, ...(trail === undefined ? {} : { trail }) };
     queuedItems.add(item);
-    void queueUntilUp(sessionId, line, what, () => queuedItems.delete(item))
+    void queueUntilUp(sessionId, line, what, () => {
+      queuedItems.delete(item);
+      trail?.('typing at its prompt, its session up');
+    })
       .then((typed) => {
-        // Typed, or the daemon closing handed it back already.
+        if (typed.typed) return trailTyped(trail, typed);
+        // The daemon closing handed it back already.
         if (!queuedItems.delete(item)) return;
-        if (!typed.typed) options.undelivered(sessionId, what, text, typed.reason);
+        trailTyped(trail, typed);
+        options.undelivered(sessionId, what, text, typed.reason);
       })
       .catch((error: Error) => options.log(`could not keep ${what} for ${sessionId}, never delivered: ${error.message}`));
   };
@@ -500,13 +517,61 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
       } catch (error) {
         options.log(`could not keep a message for ${sessionId}, never delivered: ${(error as Error).message}`);
       }
-      item.settled(false);
+      item.settled(false, `handed back: ${reason}`);
     }
     try {
       announce(sessionId);
     } catch (error) {
       options.log(`could not tell clients of ${sessionId}'s waiting messages: ${(error as Error).message}`);
     }
+  };
+
+  /** `answer`, telling `trail` of each step but a refusal, which `answer` tells it of. */
+  const answerWith = async (sessionId: string, text: string, paste: boolean, trail: SendTrail | undefined): Promise<Answered> => {
+    // A pause under way ends first: the message then wakes the agent, never typed into a terminal that is going.
+    const pausing = options.pausing(sessionId);
+    if (pausing !== undefined) await pausing;
+    const agent = requireAgent(sessionId);
+    if (agent.state === 'hibernated') {
+      if (oneLine(text) === '') throw invalidParams('the answer must not be empty');
+      const row = getRow(sessionId)!;
+      // Its first prompt, typed once its session is up, carries on this message's trail.
+      if (trail !== undefined) wakeTrails.set(sessionId, trail);
+      const woken = relaunch(row, text, 'to wake it for a message', row.harness_session_id);
+      if (!woken.started) {
+        wakeTrails.delete(sessionId);
+        throw invalidParams(`${agent.name} can't be woken: ${woken.reason}`);
+      }
+      trail?.('waking it with it, to be typed once its session is up');
+      return { queued: false, woken: true };
+    }
+    if (agent.endedAt !== null) throw invalidParams(`${agent.name} has ended`);
+    // Its state says so while any permission prompt, its own or a subagent's, is pending.
+    if (agent.state === 'needs-permission') throw invalidParams(`${agent.name} needs permission first`);
+    // Claude's question dialog is up: typed keys would pick its answers, which only the user does.
+    if (questionPrompt(agent) !== undefined) throw invalidParams(`${agent.name} is asking you questions: answer them in its terminal`);
+    if (oneLine(text) === '') throw invalidParams('the answer must not be empty');
+    // One with an image goes whole: a cut through its path would keep the harness from taking it as a dropped file.
+    const line = paste ? answerInput(text, true) : inputFor(sessionId, answerInput(text));
+    if (notUp.has(sessionId)) {
+      trail?.('queued until its session is up');
+      queueOrHandBack(sessionId, line, 'A message', text, trail);
+      return { queued: true };
+    }
+    const whyNot = () => {
+      const reason = whyNotAnswer(sessionId);
+      // Typed next, as nothing stands in its way.
+      if (reason === undefined) trail?.('typing at its prompt');
+      return reason;
+    };
+    const typed = await typeInput(sessionId, line, 'A message', whyNot, true);
+    if (typed.typed) trailTyped(trail, typed);
+    if (typed.typed && !typed.sent) return { queued: false, unsent: typed.why ?? UNSENT_REASON };
+    if (typed.typed) return typed.inTurn === true ? { queued: false, inTurn: true } : { queued: false };
+    // Refused, never typed: the caller still has it.
+    throw invalidParams(
+      typed.reason === UNSENT_REASON ? `${agent.name} has a message typed at its prompt that was never sent: send or clear it first` : typed.reason,
+    );
   };
 
   /** Whether the live agent is being paused: its session is going, so nothing is typed at it. */
@@ -524,7 +589,7 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
 
     /** Forgets the deleted agent's hand-offs still landing, and its unsent or queued message. */
     forget(sessionId: string) {
-      for (const item of afterTurn.get(sessionId) ?? []) item.settled(false);
+      for (const item of afterTurn.get(sessionId) ?? []) item.settled(false, 'its agent was deleted');
       afterTurn.delete(sessionId);
       handingOff.delete(sessionId);
       unsent.delete(sessionId);
@@ -764,6 +829,8 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
      */
     firstPrompt(sessionId: string, prompt: string | undefined, ready: Promise<boolean>) {
       setUnsent(sessionId, undefined);
+      const trail = wakeTrails.get(sessionId);
+      wakeTrails.delete(sessionId);
       const settled = ready.then(
         (up) => up,
         () => false,
@@ -773,10 +840,19 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
       void settled.then(() => notUp.get(sessionId) === entry && notUp.delete(sessionId));
       const ended = () => (getRow(sessionId)?.ended_at === null ? undefined : 'its session has ended');
       inTurn(sessionId, async () => {
-        if (!(await settled) || prompt === undefined) return;
+        if (!(await settled) || prompt === undefined) {
+          trail?.('not typed: its session ended before it was up');
+          return;
+        }
         typingFirst.add(sessionId);
         try {
-          const typed = await typeNow(sessionId, inputFor(sessionId, answerInput(prompt, true)), 'Its first prompt', ended, false);
+          const stillUp = () => {
+            const reason = ended();
+            if (reason === undefined) trail?.('typing at its prompt, its session up');
+            return reason;
+          };
+          const typed = await typeNow(sessionId, inputFor(sessionId, answerInput(prompt, true)), 'Its first prompt', stillUp, false);
+          trailTyped(trail, typed);
           if (!typed.typed) options.undelivered(sessionId, 'Its first prompt', prompt, typed.reason);
         } finally {
           typingFirst.delete(sessionId);
@@ -802,7 +878,8 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
       for (const sessionId of [...afterTurn.keys()]) handBackAfterTurn(sessionId, CLOSED_IN_TURN_REASON);
       const items = [...queuedItems];
       queuedItems.clear();
-      for (const { sessionId, what, text } of items) {
+      for (const { sessionId, what, text, trail } of items) {
+        trail?.(`handed back: ${CLOSED_REASON}`);
         try {
           options.undelivered(sessionId, what, text, CLOSED_REASON);
         } catch (error) {
@@ -827,7 +904,6 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
      */
     queueAfterTurn(sessionId: string, item: AfterTurn) {
       afterTurn.set(sessionId, [...(afterTurn.get(sessionId) ?? []), item]);
-      options.log(`a message to ${sessionId} is queued until its turn ends`);
       announce(sessionId);
     },
 
@@ -864,17 +940,17 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
             if (!typed.typed) {
               // It went to work or asked before it was typed: still first in line, for its next turn's end. One whose
               // session ended meanwhile is handed back as it ends, or was already.
-              if (afterTurn.get(sessionId)?.[0] === item) item.settled(false);
+              if (afterTurn.get(sessionId)?.[0] === item) item.settled(false, `not typed, still waiting: ${typed.reason}`);
               return;
             }
-            if (take()) item.settled(typed.sent);
+            if (take()) item.settled(typed.sent, typed.why ?? 'no turn started on it');
           },
           (error: Error) => {
             options.log(`could not type a waiting message at ${sessionId}: ${error.message}`);
             if (!take()) return;
             // The error itself is for the log: the user is told plainly.
             options.undelivered(sessionId, 'A message', item.text, 'it could not be typed');
-            item.settled(false);
+            item.settled(false, 'it could not be typed');
           },
         )
         .catch((error: Error) => options.log(`could not keep a message for ${sessionId}, never delivered: ${error.message}`))
@@ -895,37 +971,13 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
      * up yet gets it once it is, after its first prompt (`queueUntilUp`): resolves at once, `queued`. Resolves with how
      * it went (`Answered`): one typed whose Enter started no turn is the agent's unsent message, and says why.
      */
-    async answer(sessionId: string, text: string, paste = false): Promise<Answered> {
-      // A pause under way ends first: the message then wakes the agent, never typed into a terminal that is going.
-      const pausing = options.pausing(sessionId);
-      if (pausing !== undefined) await pausing;
-      const agent = requireAgent(sessionId);
-      if (agent.state === 'hibernated') {
-        if (oneLine(text) === '') throw invalidParams('the answer must not be empty');
-        const row = getRow(sessionId)!;
-        const woken = relaunch(row, text, 'to wake it for a message', row.harness_session_id);
-        if (!woken.started) throw invalidParams(`${agent.name} can't be woken: ${woken.reason}`);
-        return { queued: false, woken: true };
+    async answer(sessionId: string, text: string, paste = false, trail?: SendTrail): Promise<Answered> {
+      try {
+        return await answerWith(sessionId, text, paste, trail);
+      } catch (error) {
+        trail?.(`not typed: ${(error as Error).message}`);
+        throw error;
       }
-      if (agent.endedAt !== null) throw invalidParams(`${agent.name} has ended`);
-      // Its state says so while any permission prompt, its own or a subagent's, is pending.
-      if (agent.state === 'needs-permission') throw invalidParams(`${agent.name} needs permission first`);
-      // Claude's question dialog is up: typed keys would pick its answers, which only the user does.
-      if (questionPrompt(agent) !== undefined) throw invalidParams(`${agent.name} is asking you questions: answer them in its terminal`);
-      if (oneLine(text) === '') throw invalidParams('the answer must not be empty');
-      // One with an image goes whole: a cut through its path would keep the harness from taking it as a dropped file.
-      const line = paste ? answerInput(text, true) : inputFor(sessionId, answerInput(text));
-      if (notUp.has(sessionId)) {
-        queueOrHandBack(sessionId, line, 'A message', text);
-        return { queued: true };
-      }
-      const typed = await typeInput(sessionId, line, 'A message', () => whyNotAnswer(sessionId), true);
-      if (typed.typed && !typed.sent) return { queued: false, unsent: typed.why ?? UNSENT_REASON };
-      if (typed.typed) return typed.inTurn === true ? { queued: false, inTurn: true } : { queued: false };
-      // Refused, never typed: the caller still has it.
-      throw invalidParams(
-        typed.reason === UNSENT_REASON ? `${agent.name} has a message typed at its prompt that was never sent: send or clear it first` : typed.reason,
-      );
     },
 
     runScheduled(sessionId: string, prompt: string): RunStart {

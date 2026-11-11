@@ -119,9 +119,6 @@ const NO_CHECK_GLOBS = [
   // The Linux visual tooling is on-request, outside the gate; it and its baselines run nothing beyond the native `visual` step.
   'scripts/visual-linux.sh',
   'docker/**',
-  // The board recordings run on request, in a Playwright project of their own that no gate step runs.
-  'apps/desktop/e2e/capture/**',
-  'scripts/promo-capture.sh',
 ];
 
 /** Run when an app file changes and no `E2E_MAP` entry claims it: the acceptance journey and a few core specs. */

@@ -197,6 +197,8 @@ const LOCAL = [
   '--agent-note-zone',
   '--agent-note-edge',
   '--rename-gap',
+  // How far through an agent says it is, set inline on its tile's progress hairline.
+  '--progress',
   '--sticky-color',
   '--sticky-ink',
   '--item-color',

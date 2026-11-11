@@ -17,6 +17,18 @@ describe("a key pressed in a web tab's page", () => {
     expect(webKey(press('ArrowLeft', { meta: true, alt: true }), true)).toBe('window');
   });
 
+  it('hands ⌘J, the way out to its header, to the window on macOS and Ctrl+Shift+J elsewhere, never plain Ctrl+J', () => {
+    expect(webKey(press('KeyJ', { meta: true }), true)).toBe('window');
+    expect(webKey(press('KeyJ', { control: true, shift: true }), false)).toBe('window');
+    expect(webKey(press('KeyJ', { control: true }), false)).toBeUndefined();
+  });
+
+  it('keeps ⌘J for the page with the extended keys off, as before there was a way out, and the rest as ever', () => {
+    expect(webKey(press('KeyJ', { meta: true }), true, false, false)).toBeUndefined();
+    expect(webKey(press('KeyJ', { control: true, shift: true }), false, false, false)).toBeUndefined();
+    expect(webKey(press('KeyK', { meta: true }), true, false, false)).toBe('window');
+  });
+
   it('hands ⌘I to the window on macOS and Ctrl+Shift+I elsewhere, never plain Ctrl+I or ⇧⌘I', () => {
     expect(webKey(press('KeyI', { control: true, shift: true }), false)).toBe('window');
     expect(webKey(press('KeyI', { control: true }), false)).toBeUndefined();

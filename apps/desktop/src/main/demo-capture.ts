@@ -1,6 +1,6 @@
 // Demo capture (`AGENT_BOARD_DEMO=1`, never in a packaged build): records the board's window to a video file for the
-// promo, from its offscreen paints through ffmpeg. A Playwright spec starts and stops it through `electronApp.evaluate`,
-// which reaches it as `globalThis.agentBoardDemo`. The window must paint offscreen (headless mode): a shown window
+// demo video, from its offscreen paints through ffmpeg. A recording script (a Playwright test, say) starts and stops it
+// through `electronApp.evaluate`, which reaches it as `globalThis.agentBoardDemo`. The window must paint offscreen (headless mode): a shown window
 // sends no paints.
 import { spawn } from 'node:child_process';
 import { writeFile } from 'node:fs/promises';

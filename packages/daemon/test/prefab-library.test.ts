@@ -375,6 +375,40 @@ describe('starting a crew from a prefab', () => {
     });
   });
 
+  it('is waited on by the wait tool given its crew ref alone, until it stops, as `agent-board wait crew:<id>`', async () => {
+    const setup = await prefabDaemon();
+    const zoneLead = await lead(setup, 'zone');
+    const mcp = new McpClient(
+      {
+        command: TEST_CLI_LAUNCHER.command,
+        args: [...TEST_CLI_LAUNCHER.args, 'mcp'],
+        env: { ...process.env, AGENT_BOARD_SOCKET: setup.daemon.socketPath, AGENT_BOARD_IDENTITY: zoneLead.token },
+      },
+      tempDataDir(),
+    );
+    const started = await mcp.callTool('new_agent', { prompt: 'Fix it', prefab: 'Implementer + reviewer' });
+    const crew = /agent-board wait (crew:[0-9a-f]{8})/.exec(started.text)![1]!;
+
+    expect(await mcp.callTool('wait', { agents: [crew], timeout_seconds: 0 })).toMatchObject({
+      isError: false,
+      text: expect.stringMatching(new RegExp(`^${crew} {2}Implementer \\+ reviewer {2}round 1 of 3`)),
+    });
+    const waited = mcp.callTool('wait', { agents: [crew], timeout_seconds: 10 });
+    // Past its first poll of the crew, which is still running, it is still waiting.
+    const pending = Symbol('pending');
+    expect(await Promise.race([waited, new Promise((resolve) => setTimeout(resolve, 1500, pending))])).toBe(pending);
+    await zoneLead.connection.call('orchestrator.stopCrew', { token: zoneLead.token, crewId: crew });
+    expect(await waited).toMatchObject({
+      isError: false,
+      text: expect.stringMatching(new RegExp(`^${crew} {2}Implementer \\+ reviewer {2}stopped after round 1 of 3`)),
+    });
+
+    const alone = { isError: true, text: expect.stringContaining('wait with a crew takes the one crew alone') };
+    expect(await mcp.callTool('wait', { agents: [crew, 'agent:nope'] })).toMatchObject(alone);
+    expect(await mcp.callTool('wait', { agents: [crew], until: ['finished'] })).toMatchObject(alone);
+    expect(await mcp.callTool('wait', { agents: [crew], crew: true })).toMatchObject(alone);
+  });
+
   it('draws no edges, even once its reviewer is started on the builder’s branch as the command says', async () => {
     const setup = await prefabDaemon();
     const zoneLead = await lead(setup, 'zone');

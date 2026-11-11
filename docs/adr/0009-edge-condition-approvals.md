@@ -23,6 +23,7 @@ What is not covered: the plan looks one step deep. What `scripts/check-local.sh`
 - With only the path, `held_text` and `queued_text` stay NULL, and the file is read again when the hand-off is delivered. A file that has gone or turned invalid by then is skipped, saying why. Changing the setting to path only drops the copies held now.
 - A final message isn't a file and is kept anyway (`agents.final_message`), so the setting applies to file payloads.
 - A copy is deleted once delivered, skipped or dropped. The panel shows what is held or queued ("Holding plan.md, a copy kept") with a **Drop** button (`flowEdge.drop`), recorded in the edge's history. The daemon opens its database with `PRAGMA secure_delete`, so a deleted copy is overwritten in the file. In WAL mode an old page can linger in the `-wal` file until its next checkpoint.
+- The backup the daemon makes before migrating (`docs/rolling-back.md`) holds no copies: they are cleared in it as "Path only" would, and a board restored from it reads each held or queued file again at delivery. A final message's copy stays, as it is kept anyway. The database a restore moves aside (`.newer`) is the board as it was, copies included, until it is deleted.
 
 ## Considered options
 

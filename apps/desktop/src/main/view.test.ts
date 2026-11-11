@@ -14,13 +14,13 @@ vi.mock('electron', () => ({
   },
 }));
 
-function register(set: ViewState['set']) {
+function register(set: ViewState['set'], saved?: (key: string, value: unknown) => void) {
   const window = () => {
     const sent: unknown[][] = [];
     return { sent, isDestroyed: () => false, send: (...args: unknown[]) => void sent.push(args) };
   };
   electron.windows.splice(0, electron.windows.length, window(), window());
-  registerViewIpc({ get: async () => null, set, measured: async () => {}, remeasure: () => {} });
+  registerViewIpc({ get: async () => null, set, measured: async () => {}, remeasure: () => {} }, saved);
   return electron.handlers.get(VIEW_IPC.set)!;
 }
 
@@ -30,6 +30,13 @@ describe('the view state IPC', () => {
     await set({ sender: electron.windows[0] }, 'crewLook', 'chips');
     expect(electron.windows[0]!.sent).toEqual([]);
     expect(electron.windows[1]!.sent).toEqual([[VIEW_IPC.changed, { key: 'crewLook', value: 'chips' }]]);
+  });
+
+  it('tells the main process of each save too, once it is: a key press there reads the setting at once', async () => {
+    const saved = vi.fn();
+    const set = register(async () => {}, saved);
+    await set({ sender: electron.windows[0] }, 'keyboard.extendedShortcuts', false);
+    expect(saved).toHaveBeenCalledWith('keyboard.extendedShortcuts', false);
   });
 
   it('tells no window of a save that failed', async () => {

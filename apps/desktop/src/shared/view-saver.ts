@@ -44,6 +44,8 @@ export const VIEW_KEYS = {
   gpuTerminals: 'gpuTerminals',
   /** Whether an open pane's terminal stays alive while it is off screen: off unless turned on. */
   keepTerminals: 'keepTerminals',
+  /** Which of its quiet parts an agent's Classic tile shows at rest (Settings › Board › Agent tiles): the quiet tile unless set. */
+  tileShows: 'tileShows',
   /** Whether the plan usage pill shows on the board, beside the zoom controls: off unless turned on. */
   usageOnBoard: 'usageOnBoard',
   /** Whether the keys added since the key registry work, the "Extended keyboard shortcuts" setting: on unless turned off. */

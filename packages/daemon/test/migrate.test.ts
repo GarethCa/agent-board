@@ -71,7 +71,7 @@ describe('migrate', () => {
     const db = new DatabaseSync(':memory:');
     expect(migrate(db, TWO_STEPS)).toEqual({ from: 0, to: 2 });
     expect(schemaVersion(db)).toBe(2);
-    expect(tables(db)).toEqual(['tiles', 'zones']);
+    expect(tables(db)).toEqual(['schema_migrations', 'tiles', 'zones']);
   });
 
   it('upgrades from a previous version by applying only the newer migrations', () => {
@@ -80,7 +80,7 @@ describe('migrate', () => {
     db.exec("INSERT INTO zones (id) VALUES ('kept')");
 
     expect(migrate(db, TWO_STEPS)).toEqual({ from: 1, to: 2 });
-    expect(tables(db)).toEqual(['tiles', 'zones']);
+    expect(tables(db)).toEqual(['schema_migrations', 'tiles', 'zones']);
     expect(db.prepare('SELECT id FROM zones').all()).toEqual([{ id: 'kept' }]);
   });
 
@@ -97,13 +97,23 @@ describe('migrate', () => {
 
     expect(() => migrate(db, broken)).toThrow(/migration 2 \(broken\)/);
     expect(schemaVersion(db)).toBe(1);
-    expect(tables(db)).toEqual(['zones']);
+    expect(tables(db)).toEqual(['schema_migrations', 'zones']);
   });
 
   it('refuses a database written by a newer daemon', () => {
     const db = new DatabaseSync(':memory:');
     db.exec('PRAGMA user_version = 3');
-    expect(() => migrate(db, TWO_STEPS)).toThrow(/newer/);
+    expect(() => migrate(db, TWO_STEPS)).toThrow(/newer than this daemon knows \(2\)/);
+  });
+
+  it('records each migration it applies, and whether an older daemon may ignore it', () => {
+    const db = new DatabaseSync(':memory:');
+    migrate(db, [...TWO_STEPS, { version: 3, name: 'note', sql: '-- backward-safe: a new table.\nCREATE TABLE notes (id TEXT);' }]);
+    expect(db.prepare('SELECT version, name, backward_safe FROM schema_migrations ORDER BY version').all()).toEqual([
+      { version: 1, name: 'zones', backward_safe: 0 },
+      { version: 2, name: 'tiles', backward_safe: 0 },
+      { version: 3, name: 'note', backward_safe: 1 },
+    ]);
   });
 
   it('rebuilds a table other tables reference, with foreign keys on, and leaves them on', () => {

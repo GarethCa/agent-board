@@ -44,7 +44,7 @@ test('a zone’s role template starts a reviewer on a detached checkout of the b
     await form.getByRole('button', { name: 'Start' }).click();
     await expect(form).toBeHidden();
     const implementerTile = tile(window).filter({ hasText: 'Build it' });
-    await expect(implementerTile.getByTestId('tile-model')).toHaveText('claude-opus-5-5');
+    await expect(implementerTile.getByTestId('tile-setup')).toHaveText('claude-opus-5-5');
     await expect(implementerTile.getByTestId('tile-role')).toHaveCount(0);
     const [implementer] = await agents(window);
     expect(implementer!.model).toBe('claude-opus-5-5');
@@ -65,7 +65,7 @@ test('a zone’s role template starts a reviewer on a detached checkout of the b
     const reviewerTile = tile(window).filter({ hasText: `Reviews ${implementer!.branch}` });
     await expect(reviewerTile).toContainText(`detached @ ${tip.slice(0, 7)} · ${implementer!.branch}`);
     await expect(reviewerTile.getByTestId('tile-role')).toHaveText('Reviewer');
-    await expect(reviewerTile.getByTestId('tile-model')).toHaveCount(0);
+    await expect(reviewerTile.getByTestId('tile-setup')).toHaveCount(0);
     // It began with the zone's template, filled in.
     await reviewerTile.dblclick();
     await expect(screen(window)).toContainText(`> Review ${implementer!.branch}`);

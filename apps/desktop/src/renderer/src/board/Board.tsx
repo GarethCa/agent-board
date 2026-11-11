@@ -261,6 +261,7 @@ import { CONTROLS, quickInsertAt, SESSION_SURFACES } from './board-shortcuts';
 import type { SheetContext } from '../keys/cheat-sheet';
 import { useCheatSheet } from '../keys/CheatSheet';
 import { keyText } from '../keys/registry';
+import { useEscStep } from '../keys/esc-ladder';
 import { centreOf } from '../geometry';
 import { useZoneResize } from './use-zone-resize';
 import { useMeasuredBoxes } from './measured-boxes';
@@ -1664,19 +1665,14 @@ function BoardView() {
       connectNodes(connectingFrom, target);
       finish();
     };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      event.stopPropagation();
-      finish();
-    };
     window.addEventListener('pointerdown', onPointerDown, true);
-    window.addEventListener('keydown', onKeyDown, true);
     return () => {
       window.removeEventListener('pointerdown', onPointerDown, true);
-      window.removeEventListener('keydown', onKeyDown, true);
       toasts.dismiss(CONNECT_HINT);
     };
   }, [connectingFrom, connectNodes, toasts, setNotice]);
+  // Escape calls it off, before anything else has the press.
+  useEscStep('connect', () => connectingFrom !== undefined, () => setConnectingFrom(undefined));
 
   /**
    * A connector dragged from a handle was let go. On an object (on one of its handles, or on or near it, as its handles
@@ -1804,21 +1800,14 @@ function BoardView() {
     };
   }, [connecting]);
 
-  // Escape calls off a hand-off being dragged: nothing is joined, wherever it is let go.
-  useEffect(() => {
-    if (!handingOff) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      event.preventDefault();
-      handOffCancelled.current = true;
-      flowStore.getState().cancelConnection();
-      setConnecting(undefined);
-      setHandingOff(false);
-    };
-    // Before the board's own Escape, which would also put a tile down.
-    window.addEventListener('keydown', onKeyDown, { capture: true });
-    return () => window.removeEventListener('keydown', onKeyDown, { capture: true });
-  }, [handingOff, flowStore]);
+  // Escape calls off a hand-off being dragged: nothing is joined, wherever it is let go. It is the ladder's first step,
+  // so the same press puts no tile down.
+  useEscStep('handOff', () => handingOff, () => {
+    handOffCancelled.current = true;
+    flowStore.getState().cancelConnection();
+    setConnecting(undefined);
+    setHandingOff(false);
+  });
 
   /** The armed tool's click or drag, from `from` to `to` on the screen, made into an item. */
   const placeWithTool = useCallback(

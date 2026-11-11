@@ -2,7 +2,7 @@ import { expect, type ElectronApplication, type Page } from '@playwright/test';
 import type { Agent } from '@agent-board/daemon/protocol';
 import { readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { launch, screen, sessionWindow, spawnAgent, tile } from './agent-helpers.ts';
+import { launch, screen, sessionWindow, spawnAgent, tile, windowKey } from './agent-helpers.ts';
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test, tabText } from './launch.ts';
 import { scratch } from './scratch.ts';
 import { serveWebPages } from './web-server.ts';
@@ -193,6 +193,10 @@ test('a plan shown on the board is a card beside its agent, decided from Review 
     await source.fill('# Zone id migration\n\n## Steps\n\n- Add zone_id, nullable\n- Backfill from the board file, with a down step\n- Make it NOT NULL\n');
     await expect(planView(window).getByTestId('plan-edit-hint')).toContainText('1 change');
     await expect(decision.getByRole('button', { name: `Approve plan v1 for ${agent.name}` })).toBeDisabled();
+    // An unsaved edit keeps its window: ⌘Esc goes back to the draft, not away.
+    await source.press(windowKey('Escape'));
+    await expect(source).toBeFocused();
+    await expect(source).toHaveValue(/Backfill from the board file/);
     await openInbox(window);
     await expect(item(window, agent).getByTestId('plan-held')).toBeVisible();
     await expect(item(window, agent).getByRole('button', { name: `Approve plan v1 for ${agent.name}` })).toBeDisabled();

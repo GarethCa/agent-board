@@ -1,5 +1,5 @@
 import { pastedImages } from './composer-input';
-import { isTyping } from '../board/use-tile-moves';
+import { isTyping } from '../keys/typing';
 
 /** The panes an agent's session shows in: the session window over the board, and a tile expanded in place on it. */
 const PANE = '.session-window, .expanded-tile-body';

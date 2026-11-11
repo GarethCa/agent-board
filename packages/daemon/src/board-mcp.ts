@@ -50,6 +50,7 @@ import {
   unpinEntry,
   treeView,
   waitForAgents,
+  waitForCrew,
   watchCrew,
   type BoardSession,
 } from './board-ops.ts';
@@ -118,6 +119,7 @@ import {
   FLOW_CONDITION_KINDS,
   FLOW_EDGE_TRIGGERS,
   DEFAULT_ORCHESTRATOR_WAIT_MS,
+  MAX_ORCHESTRATOR_WAIT_MS,
   CLOCK_RESULTS,
   EFFORTS,
   HARNESSES,
@@ -805,7 +807,8 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
       'Wait until each agent\'s turn has ended (at its prompt, needing the user, failed or stopped), and say where each ' +
       `is. A turn you started counts only once it began, so call it straight after new_agent or send. until finished ` +
       `waits until it says its work is finished (it handed off, or set its status done), which a turn ending while its ` +
-      `background work runs is not. With no agents, it waits on your crew (the agents you started, and theirs). With ` +
+      `background work runs is not. With no agents, it waits on your crew (the agents you started, and theirs). Given a ` +
+      `crew ref (crew:<id>) alone, it waits until that crew stops. With ` +
       `since, it waits instead for what happens to them next, each once: ${CREW_EVENT_KINDS.join(', ')}; it answers ` +
       `with each as a line (at most 100) and a cursor to pass as since next time: "now" the first time. Gives up ` +
       `after ${MCP_WAIT_SECONDS} s by default, saying so (the result's timedOut is true): then call it again. As \`agent-board wait\` and ` +
@@ -1596,6 +1599,14 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
     if (since !== undefined && (typeof since !== 'string' || !isCrewSince(since))) throw new BoardError('since must be a cursor it answered with, "now" or "all"');
     if (!Number.isInteger(seconds) || (seconds as number) < 0) throw new BoardError('timeout_seconds must be a whole number');
     const timeoutMs = (seconds as number) * 1000;
+    // As `agent-board wait crew:<id>`: a crew is waited on alone, until it stops.
+    if (agents.some((ref) => (ref as string).startsWith('crew:'))) {
+      if (agents.length !== 1 || crew === true || until !== undefined || any === true || since !== undefined || kinds !== undefined) {
+        throw new BoardError('wait with a crew takes the one crew alone, with timeout_seconds: it waits until the crew stops');
+      }
+      const view = await waitForCrew(session, agents[0] as string, Math.min(timeoutMs, MAX_ORCHESTRATOR_WAIT_MS));
+      return { content: [{ type: 'text', text: view.text }], structuredContent: { timedOut: view.timedOut } };
+    }
     if (since === undefined) {
       const view = await waitForAgents(session, agents as string[], { until: until as WaitState[] | undefined, any: any === true, crew: wholeCrew, timeoutMs });
       return { content: [{ type: 'text', text: view.text }], structuredContent: { timedOut: view.timedOut } };

@@ -5,7 +5,7 @@ import { runBoardCommand } from '../src/board-cli.ts';
 import { BOARD_SOCKET_ENV, BOARD_TOKEN_ENV } from '../src/board-env.ts';
 import { refOf } from '../src/crew-flags.ts';
 import { markSender } from '../src/sender-marker.ts';
-import { connectTestClient, recordEvents, startTestDaemon, TEST_CLI_LAUNCHER, tempDataDir, tempRepo } from './helpers.ts';
+import { connectTestClient, recordEvents, sendLogLines, startTestDaemon, TEST_CLI_LAUNCHER, tempDataDir, tempRepo } from './helpers.ts';
 
 const SIZE = { cols: 120, rows: 40 };
 
@@ -14,8 +14,9 @@ const SIZE = { cols: 120, rows: 40 };
  * fake takes its first typed line as typed, then loses the `loseEnters` Enters after the next one, as a TUI still
  * redrawing does: a message sent then is left typed at its prompt (three are a send's), and the next Enter submits it.
  */
-async function sendDaemon(loseEnters = 3) {
+async function sendDaemon(loseEnters = 3, log: (message: string) => void = () => {}) {
   const daemon = await startTestDaemon({
+    log,
     worktreesDir: tempDataDir(),
     agentEnv: fakeHarnessEnv({ scenario: 'orchestrate', home: tempDataDir(), idleNotifyMs: 200, loseEnters, loseEntersAfter: 1 }),
     submitConfirmMs: 100,
@@ -185,5 +186,68 @@ describe('a send whose Enter never starts a turn', () => {
     // An agent that may not orchestrate reaches no draft.
     await setup.client.call('zone.configure', { id: setup.zone.id, agentsOrchestrate: false });
     await expect(connection.call('orchestrator.send', { token, sessionId: worker.sessionId, clear: true })).rejects.toMatchObject({ code: BOARD_ERROR.notAllowed });
+  });
+});
+
+describe("a send, in the daemon's log", () => {
+  /** A daemon whose log is kept, with sends as above and none of their Enters lost unless `loseEnters` says. */
+  async function loggedSends(loseEnters = 0) {
+    const logs: string[] = [];
+    const setup = await sendDaemon(loseEnters, (message) => void logs.push(message));
+    const sendsTo = (sessionId: string) => sendLogLines(logs, sessionId);
+    /** What became of the draft at the agent's prompt, sent on or cleared. */
+    const draftAt = (sessionId: string) => logs.filter((message) => message.startsWith(`send draft at ${sessionId}: `));
+    return { setup, sendsTo, draftAt };
+  }
+
+  it('to an agent at its prompt says Sent only once the turn started on it is logged', async () => {
+    const { setup, sendsTo } = await loggedSends();
+    const { lead, token, connection, worker, ref } = await leadAndWorker(setup);
+    await connection.call('orchestrator.wait', { token, sessionIds: [worker.sessionId] });
+
+    expect(await board(setup, token, 'send', [ref, '--', 'Rename the file'])).toMatchObject({ code: 0, out: expect.stringMatching(/^Sent to /) });
+
+    expect(sendsTo(worker.sessionId)).toEqual([['15: typing at its prompt', '15: turn started on it']]);
+    expect(await connection.call('orchestrator.wait', { token, sessionIds: [worker.sessionId] })).toMatchObject({ timedOut: false });
+    expect((await connection.call('orchestrator.read', { token, sessionId: worker.sessionId })).text).toBe(`Done: ${sentBy(lead, 'Rename the file')}.`);
+  });
+
+  it('left typed at the prompt with no turn started on it is logged as a draft, and why', async () => {
+    const { setup, sendsTo } = await loggedSends(3);
+    const { token, connection, worker } = await leadAndWorker(setup);
+    await connection.call('orchestrator.wait', { token, sessionIds: [worker.sessionId] });
+
+    await expect(connection.call('orchestrator.send', { token, sessionId: worker.sessionId, text: 'Also add a test' })).rejects.toThrow(/not sent/);
+
+    expect(sendsTo(worker.sessionId)).toEqual([['15: typing at its prompt', '15: left as a draft at its prompt: no turn started on it after 3 presses of Enter']]);
+  });
+
+  it("logs a message from the app's composer by its own id, as it logs a send", async () => {
+    const { setup, sendsTo } = await loggedSends();
+    const { token, connection, worker } = await leadAndWorker(setup);
+    await connection.call('orchestrator.wait', { token, sessionIds: [worker.sessionId] });
+
+    expect(await setup.client.call('agent.answer', { sessionId: worker.sessionId, text: 'Rename the file' })).toEqual({ queued: false });
+    expect(sendsTo(worker.sessionId)).toEqual([['15: typing at its prompt', '15: turn started on it']]);
+  });
+
+  it("logs what became of a draft: sent on by --submit", async () => {
+    const { setup, draftAt } = await loggedSends(3);
+    const { token, connection, worker } = await leadAndWorker(setup);
+    await connection.call('orchestrator.wait', { token, sessionIds: [worker.sessionId] });
+    await expect(connection.call('orchestrator.send', { token, sessionId: worker.sessionId, text: 'Also add a test' })).rejects.toThrow(/not sent/);
+
+    await connection.call('orchestrator.send', { token, sessionId: worker.sessionId, submit: true });
+    expect(draftAt(worker.sessionId)).toEqual([`send draft at ${worker.sessionId}: sent, turn started on it`]);
+  });
+
+  it('logs a draft cleared', async () => {
+    const { setup, draftAt } = await loggedSends(3);
+    const { token, connection, worker } = await leadAndWorker(setup);
+    await connection.call('orchestrator.wait', { token, sessionIds: [worker.sessionId] });
+    await expect(connection.call('orchestrator.send', { token, sessionId: worker.sessionId, text: 'Also add a test' })).rejects.toThrow(/not sent/);
+
+    await connection.call('orchestrator.send', { token, sessionId: worker.sessionId, clear: true });
+    expect(draftAt(worker.sessionId)).toEqual([`send draft at ${worker.sessionId}: cleared`]);
   });
 });

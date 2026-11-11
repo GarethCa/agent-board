@@ -578,4 +578,23 @@ describe('a crew’s card', () => {
     await closing.handOff(run.builder.sessionId);
     expect(closing.changed).toEqual([]);
   });
+
+  it('takes no further step once the daemon closes while a step is under way, nor reads its closed database', async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let spawning!: () => void;
+    const started = new Promise<void>((resolve) => (spawning = resolve));
+    const board = crewBoard({ spawn: () => (spawning(), held) });
+    const { builder } = startCrew(board);
+    board.agents.set(builder.sessionId, { ...builder, state: 'idle', workFinishedAt: board.now().toISOString() });
+    board.loop.observe(board.agents.get(builder.sessionId)!);
+    await started;
+    // Heard while the step waits on its reviewer: another step is due once this one is done.
+    board.loop.observe({ ...board.agents.get(builder.sessionId)!, state: 'running' });
+
+    board.loop.close();
+    board.db.close();
+    release();
+    await expect(board.loop.idle()).resolves.toBeUndefined();
+  });
 });

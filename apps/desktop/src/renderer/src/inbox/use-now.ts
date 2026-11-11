@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { startSinceClock } from '../../../shared/needs-you';
+import { toGoChangesIn } from '../board/tile-shows';
 
 /** The time now, re-rendering every second while `ticking`, for countdowns. */
 export function useNow(ticking: boolean): number {
@@ -22,5 +23,25 @@ export function useNow(ticking: boolean): number {
 export function useNowForSince(at: string): number {
   const [now, setNow] = useState(Date.now);
   useEffect(() => startSinceClock(at, setNow), [at]);
+  return now;
+}
+
+/**
+ * The time now, for a line that says how long until `at` (`timeToGo`): it moves only when that line would read
+ * differently, at each whole minute before `at`, so a tile showing one re-renders once a minute. Never moves with no `at`.
+ */
+export function useNowToward(at: string | null): number {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    if (at === null) return;
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = () => {
+      const time = Date.now();
+      setNow(time);
+      timer = setTimeout(tick, toGoChangesIn(at, time));
+    };
+    tick();
+    return () => clearTimeout(timer);
+  }, [at]);
   return now;
 }

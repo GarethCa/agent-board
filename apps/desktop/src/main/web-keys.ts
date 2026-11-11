@@ -2,7 +2,7 @@
 // web contents, so they never reach the window's renderer by themselves. Pure, so both platforms are tested.
 import type { Input } from 'electron';
 
-/** The window's shortcuts by `code` (`renderer/src/keys.ts`, `session/window-keys.ts`): tabs, splits, ⌘1–9, ⌘[ ⌘], ⌘I, ⌘K. */
+/** The window's shortcuts by `code` (`renderer/src/keys.ts`, `session/window-keys.ts`): tabs, splits, ⌘1–9, ⌘[ ⌘], ⌘I, ⌘K; ⌘J with the extended keys on. */
 const WINDOW_CODES = new Set(['KeyT', 'KeyW', 'KeyD', 'KeyK', 'KeyF', 'BracketLeft', 'BracketRight', ...Array.from({ length: 9 }, (_, at) => `Digit${at + 1}`)]);
 const ARROWS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']);
 
@@ -11,12 +11,12 @@ export type WebKey = 'window' | 'reload' | 'hardReload' | undefined;
 
 /**
  * What a key press in a web tab's page is for. Its window's own shortcuts go to the window (⌘W closes the tab, not the
- * OS window; ⌘T, ⌘D, ⌘1–9, ⌘K (the switcher), ⌘F (find in the page) and ⌘⌥ and an arrow as anywhere in it; off macOS with Ctrl+Shift, Ctrl's own keys staying the
+ * OS window; ⌘T, ⌘D, ⌘1–9, ⌘K (the switcher), ⌘J (out to the window's header, with the extended keys on), ⌘F (find in the page) and ⌘⌥ and an arrow as anywhere in it; off macOS with Ctrl+Shift, Ctrl's own keys staying the
  * page's). Under the Simplified design its ⌘⌥T (the terminal) and ⌘. (stop the step) go too; under Classic, which has
  * neither, they stay the page's. ⌘R (Ctrl+R) reloads the page, never the app, and ⇧⌘R (Ctrl+Shift+R) skips its cache.
  * Everything else, ⌘C and ⌘V among them, is the page's.
  */
-export function webKey(input: Pick<Input, 'type' | 'code' | 'meta' | 'control' | 'shift' | 'alt'>, isMac = process.platform === 'darwin', simplified = false): WebKey {
+export function webKey(input: Pick<Input, 'type' | 'code' | 'meta' | 'control' | 'shift' | 'alt'>, isMac = process.platform === 'darwin', simplified = false, extended = true): WebKey {
   if (input.type !== 'keyDown') return undefined;
   const command = isMac ? input.meta && !input.control : input.control && !input.meta;
   if (command && !input.alt && input.code === 'KeyR') return input.shift ? 'hardReload' : 'reload';
@@ -30,7 +30,7 @@ export function webKey(input: Pick<Input, 'type' | 'code' | 'meta' | 'control' |
     return !isMac && input.code === 'KeyD' ? 'window' : undefined;
   }
   if (simplified && input.code === 'Period' && !(isMac && input.shift)) return 'window';
-  if (WINDOW_CODES.has(input.code)) return 'window';
+  if (WINDOW_CODES.has(input.code) || (extended && input.code === 'KeyJ')) return 'window';
   // ⌘I, not ⇧⌘I; off macOS Ctrl+Shift+I, as plain Ctrl+I is Tab.
   return input.code === 'KeyI' && !(isMac && input.shift) ? 'window' : undefined;
 }

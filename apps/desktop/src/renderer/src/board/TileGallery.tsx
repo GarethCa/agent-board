@@ -79,7 +79,8 @@ const EXTRAS: Record<GalleryState, { harness: Harness; name: string } & Partial<
   'on-command': {
     harness: 'claude',
     name: 'Fix checkout flake',
-    status: { summary: 'Retry fix in; running the gate', progress: null, updatedAt: AT, setBy: null },
+    // Part way through, so its progress hairline shows.
+    status: { summary: 'Retry fix in; running the gate', progress: 60, updatedAt: AT, setBy: null },
     commands: [
       { command: 'pnpm check:pr', startedAt: GATE_STARTED },
       { command: 'pnpm dev --port 5173', startedAt: new Date(Date.now() - 60_000).toISOString() },
@@ -134,6 +135,8 @@ export const galleryAgent = (state: AgentState): Agent => ({
   commands: [],
   lastMessage: null,
   compactingSince: null,
+  // Three minutes in its state, read when the gallery draws it, so its pill says "3m" whenever the shot is taken.
+  stateSince: new Date(Date.now() - 3 * 60_000).toISOString(),
   finishedAt: null,
   permissions: [],
   ask: null,

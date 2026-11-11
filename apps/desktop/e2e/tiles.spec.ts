@@ -450,7 +450,7 @@ test('an agent is found by name from ⌘K, and its tile’s More menu works from
   }
 });
 
-test('hovering a tile moves nothing on it: its state stays at the bottom and its always-visible actions brighten', async () => {
+test('hovering a tile moves nothing on it: its state stays at the bottom and its corner actions show', async () => {
   classicOnly();
   const { dir, repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
@@ -460,22 +460,21 @@ test('hovering a tile moves nothing on it: its state stays at the bottom and its
     await spawnAgent(window, 'monorepo', 'Hold still');
     const card = tile(window);
     const parts = [card.locator('.ui-pill'), card.locator('.hybrid-tile-name'), card.locator('.hybrid-tile-body')];
-    const actions = card.locator('.hybrid-tile-actions');
+    const corner = card.locator('.hybrid-tile-corner');
     const boxes = () => Promise.all(parts.map((part) => settledBox(part)));
 
     await window.mouse.move(0, 0);
     // Its state settles first: the fake agent works, then waits, and the pill's label (so its width) follows.
     await expect(card).toHaveAttribute('data-state', 'waiting');
     await expect(card.locator('.ui-pill')).toHaveCount(1);
-    // Visible at rest, not hidden until hovered.
-    await expect(card.getByRole('button', { name: 'Expand' })).toBeVisible();
-    await expect(card.getByRole('button', { name: 'More' })).toBeVisible();
-    await expect(card.getByRole('button', { name: 'Pop out' })).toBeVisible();
-    await expect(actions).not.toHaveCSS('opacity', '0');
+    // Hidden at rest and shown on hover, keeping their room, so nothing moves.
+    await expect(corner).toHaveCSS('opacity', '0');
     const before = await boxes();
 
     await card.hover();
-    await expect(actions).toHaveCSS('opacity', '1');
+    await expect(corner).toHaveCSS('opacity', '1');
+    await expect(card.getByRole('button', { name: 'Expand' })).toBeVisible();
+    await expect(card.getByRole('button', { name: 'More' })).toBeVisible();
     await expect(card.locator('.ui-pill')).toHaveCount(1);
     await expect(card.locator('.ui-pill')).toBeVisible();
     // The same either way: its parts are where they were.

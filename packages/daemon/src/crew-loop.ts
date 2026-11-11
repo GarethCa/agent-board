@@ -443,8 +443,10 @@ export function createCrewLoop(db: DatabaseSync, options: CrewLoopOptions): Crew
         let last: string | undefined;
         for (;;) {
           again.delete(id);
+          // Closing finalizes the statements inputs reads: check it first.
+          if (closing) return;
           const now = inputs(id);
-          if (closing || now === last) return;
+          if (now === last) return;
           last = now;
           await advance(id).catch((error: Error) => options.log(`crew ${id}: ${error.message}`));
           // Each step shows as it is taken: the next may take a while (a reviewer starting).

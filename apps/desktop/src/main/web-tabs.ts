@@ -140,6 +140,7 @@ export function registerWebTabIpc({
   isSettings,
   keepLogins,
   simplified = () => false,
+  extended = () => true,
 }: {
   isBoard(contents: WebContents): boolean;
   /** Whether `contents` is the Settings window's page, whose Clear browsing data empties the shared session. */
@@ -147,6 +148,8 @@ export function registerWebTabIpc({
   keepLogins(): Promise<boolean>;
   /** Whether the Simplified design is on, whose window keys a page hands on too. */
   simplified?(): boolean;
+  /** Whether "Extended keyboard shortcuts" is on, whose ⌘J a page hands on; off, the page keeps it. */
+  extended?(): boolean;
 }): {
   stopKeepingLogins(): void;
 } {
@@ -377,7 +380,7 @@ export function registerWebTabIpc({
       changed();
     });
     contents.on('before-input-event', (input, key) => {
-      const action = webKey(key, undefined, simplified());
+      const action = webKey(key, undefined, simplified(), extended());
       if (action === undefined) return;
       input.preventDefault();
       // A held key acts once, as in the window.
@@ -386,8 +389,9 @@ export function registerWebTabIpc({
       else if (action === 'hardReload') contents.reloadIgnoringCache();
       else if (!tab.owner.isDestroyed()) {
         const pressed: WebTabKey = { key: key.key, code: key.code, metaKey: key.meta, ctrlKey: key.control, shiftKey: key.shift, altKey: key.alt };
-        // ⌘K opens the switcher over the window, whose field takes the keyboard from the page.
-        if (key.code === 'KeyK') tab.owner.focus();
+        // ⌘K opens the switcher over the window, whose field takes the keyboard from the page; ⌘J moves the keyboard to
+        // the window's header.
+        if (key.code === 'KeyK' || key.code === 'KeyJ') tab.owner.focus();
         tab.owner.send(WEB_TAB_IPC.key, tabId, pressed);
       }
     });

@@ -30,12 +30,17 @@ const STATE_ICONS: Partial<Record<AgentState, ReactNode>> = {
   'on-command': <Timer aria-hidden />,
 };
 
-/** An agent's state as a pill: its colour, a dot or mark, and its name. */
-export function StatusPill({ state, label, className, ...rest }: SpanProps & { state: AgentState; label?: ReactNode }) {
+/** An agent's state as a pill: its colour, a dot or mark, its name, and how long it has been in it when given (`time`). */
+export function StatusPill({ state, label, time, className, ...rest }: SpanProps & { state: AgentState; label?: ReactNode; time?: string | undefined }) {
   return (
     <span className={cx('ui-pill', className)} data-state={state} {...rest}>
       {STATE_ICONS[state] ?? <span className="ui-pill-dot" aria-hidden />}
       <span className="ui-pill-label">{label ?? STATE_LABELS[state]}</span>
+      {time !== undefined && (
+        <span className="ui-pill-time" data-testid="pill-time">
+          {time}
+        </span>
+      )}
     </span>
   );
 }

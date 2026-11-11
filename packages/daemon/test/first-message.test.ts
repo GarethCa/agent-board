@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { fakeHarnessEnv } from '@agent-board/fake-harness';
 import type { Agent, DaemonEvent, HookEvent } from '../src/protocol.ts';
-import { connectTestClient, recordEvents, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
+import { connectTestClient, recordEvents, sendLogLines, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
 
 const SIZE = { cols: 120, rows: 40 };
 
@@ -9,8 +9,13 @@ const SIZE = { cols: 120, rows: 40 };
  * An orchestrator (the user's agent in a zone that lets agents orchestrate) that starts a worker on the fake harness
  * with `env` and messages it at once, as a board agent does: the first message to a worker still starting.
  */
-async function startedAndMessaged(env: { startDelayMs?: number; startScreen?: 'folder-trust' }, worker: { harness?: 'claude' | 'codex'; prompt?: string }) {
+async function startedAndMessaged(
+  env: { startDelayMs?: number; startScreen?: 'folder-trust' },
+  worker: { harness?: 'claude' | 'codex'; prompt?: string },
+  log: (message: string) => void = () => {},
+) {
   const daemon = await startTestDaemon({
+    log,
     worktreesDir: tempDataDir(),
     agentEnv: fakeHarnessEnv({ scenario: 'orchestrate', home: tempDataDir(), idleNotifyMs: 200, ...env }),
   });
@@ -77,5 +82,35 @@ describe("an orchestrator's first message to an agent it just started", () => {
     await new Promise((resolve) => setTimeout(resolve, 500));
     expect(prompts().map((p) => String(p).replace(/^⟨[^⟩]*⟩ /, ''))).toEqual(['Carry on', 'Carry on again']);
     expect(await agent()).toMatchObject({ unsent: null, queuedUntilUp: 0, flag: null });
+  });
+});
+
+describe("a send to an agent not up yet, in the daemon's log", () => {
+  it('to one still starting is logged as queued, then typed and taken up once its session is up', async () => {
+    const logs: string[] = [];
+    const { started, untilPrompts } = await startedAndMessaged({ startDelayMs: 600 }, {}, (message) => void logs.push(message));
+    await untilPrompts(1);
+
+    await expect.poll(() => sendLogLines(logs, started.sessionId)).toEqual([
+      ['8: queued until its session is up', '8: typing at its prompt, its session up', '8: turn started on it'],
+    ]);
+  });
+
+  it('to a paused one is logged as waking it, then typed and taken up once its session is up', async () => {
+    const logs: string[] = [];
+    const { client, recorder, started, prompts, untilPrompts, connection, token } = await startedAndMessaged({}, {}, (message) => void logs.push(message));
+    await untilPrompts(1);
+    await recorder.waitFor((e): e is HookEvent => e.type === 'hook' && e.sessionId === started.sessionId && e.event === 'Stop');
+    await client.call('agent.pause', { sessionId: started.sessionId });
+
+    const sent = await connection.call('orchestrator.send', { token, sessionId: started.sessionId, text: 'Carry on again' });
+    expect(sent.delivery).toBe('waking');
+    await untilPrompts(2);
+    expect(prompts().map((p) => String(p).replace(/^⟨[^⟩]*⟩ /, ''))).toEqual(['Carry on', 'Carry on again']);
+    await expect.poll(() => sendLogLines(logs, started.sessionId).at(-1)).toEqual([
+      '14: waking it with it, to be typed once its session is up',
+      '14: typing at its prompt, its session up',
+      '14: turn started on it',
+    ]);
   });
 });

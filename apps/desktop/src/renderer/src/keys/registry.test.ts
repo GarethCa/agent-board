@@ -29,7 +29,7 @@ describe('the key registry', () => {
     }
   });
 
-  it('marks only the cheat sheet, master, document editing, find, arrow-swapping and board-arranging keys new so far: the rest were in the app before it', () => {
+  it('marks only the cheat sheet, master, document editing, find, arrow-swapping, board-arranging and way-out keys new so far: the rest were in the app before it', () => {
     expect(KEYS.filter((entry) => entry.status === 'new').map((entry) => entry.id)).toEqual([
       'move.cheatSheet',
       'move.master',
@@ -39,7 +39,30 @@ describe('the key registry', () => {
       'window.saveDoc',
       'window.find',
       'window.leaveDocEdit',
+      'window.jumpOut',
+      'window.regions',
+      'window.backIn',
+      'window.escape',
+      'window.leave',
     ]);
+  });
+
+  it('takes ⌘J out of a terminal, Ctrl+Shift+J elsewhere, never plain Ctrl+J, which is a newline', () => {
+    const j = { key: 'j', code: 'KeyJ', metaKey: false, ctrlKey: false, shiftKey: false, altKey: false };
+    expect(pressed('window.jumpOut', { ...j, metaKey: true }, MAC)).toBe(true);
+    expect(pressed('window.jumpOut', { ...j, ctrlKey: true, shiftKey: true }, OTHER)).toBe(true);
+    expect(pressed('window.jumpOut', { ...j, ctrlKey: true }, OTHER)).toBe(false);
+    expect(keyText('window.jumpOut', false)).toBe('Ctrl+Shift+J');
+  });
+
+  it('takes F6 and ⇧F6 for the regions, and ⌘Esc (Ctrl+Shift+Esc) to leave a tile or window from its terminal', () => {
+    const plain = { metaKey: false, ctrlKey: false, shiftKey: false, altKey: false };
+    expect(pressed('window.regions', { ...plain, key: 'F6' }, MAC)).toBe(true);
+    expect(pressed('window.regions', { ...plain, key: 'F6', shiftKey: true }, OTHER)).toBe(true);
+    expect(pressed('window.leave', { ...plain, key: 'Escape', metaKey: true }, MAC)).toBe(true);
+    expect(pressed('window.leave', { ...plain, key: 'Escape' }, MAC)).toBe(false);
+    expect(pressed('window.escape', { ...plain, key: 'Escape', metaKey: true }, MAC)).toBe(false);
+    expect(keysText('window.leave', true)).toEqual(['⌘esc']);
   });
 
   it('writes each key as the platform presses it', () => {
@@ -186,7 +209,7 @@ describe('the cheat sheet', () => {
     expect(off).not.toContain('window.saveDoc');
     expect(off).not.toContain('edit.swapDirection');
     expect(off).not.toContain('edit.arrangeBoard');
-    expect(off).toHaveLength(on.length - 8);
+    expect(off).toHaveLength(on.length - 13);
   });
 
   it('puts the sections for where it opened first, marked here', () => {

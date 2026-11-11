@@ -22,6 +22,8 @@ import { SessionBody, type WindowContent } from './SessionBody';
 import { pendingTab, requestTab, useTabRequestCount } from './tab-request';
 import { gateSurfaceOf } from './tabs';
 import { isRunGateKey } from './window-keys';
+import { useLeaveKeys } from '../keys/escape-hatch';
+import { useExtendedShortcuts } from '../keys/extended-shortcuts';
 import { GateControls } from '../gate/GateControls';
 import { gated } from '../gate/gate-view';
 import { errorMessage } from '../../../shared/errors';
@@ -136,10 +138,14 @@ function SessionWindowShown({ content, title, placement, onClose, onDelete, onMi
   useNavKeys(nav);
   // Under the Simplified design an agent's window has one header, which holds its view switch.
   const simplified = useSimplified() && content.kind === 'session';
+  // The header takes the focus (⌘J's way out) only with the extended keys on; off, a click on it leaves the focus as before.
+  const extended = useExtendedShortcuts();
   const [viewSlot, setViewSlot] = useState<HTMLElement | null>(null);
   const [controlsSlot, setControlsSlot] = useState<HTMLElement | null>(null);
   const terminalToggle = useRef<(() => void) | null>(null);
   useMinimiseOnClickOutside(root, placement === 'board' ? onMinimise : undefined);
+  // Esc from its header (⌘J has the focus there), or ⌘Esc from anywhere in it: minimised, the focus on its tile.
+  useLeaveKeys(root, onMinimise);
 
   // ⌘I shows or hides the details.
   useEffect(() => {
@@ -184,7 +190,7 @@ function SessionWindowShown({ content, title, placement, onClose, onDelete, onMi
       style={placed.style}
     >
       {frame && EDGES.map((edge) => <span key={edge} className={`session-window-edge session-window-edge-${edge}`} data-edge={edge} onPointerDown={(event) => placed.startResize(event, edge)} />)}
-      <header className="session-window-head" data-drag-region={placement === 'own-window' || undefined} onDoubleClick={placed.onHeaderDoubleClick}>
+      <header className="session-window-head" tabIndex={extended ? -1 : undefined} data-drag-region={placement === 'own-window' || undefined} onDoubleClick={placed.onHeaderDoubleClick}>
         {simplified ? (
           <SimplifiedHeader
             sessionId={content.sessionId}

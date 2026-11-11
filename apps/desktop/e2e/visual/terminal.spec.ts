@@ -96,7 +96,7 @@ const pixelsOf = (app: ElectronApplication, png: Buffer, points: { x: number; y:
     return { width, colours };
   }, { data: png.toString('base64'), points });
 
-// Cells hold whole device pixels, so a zoomed grid is a little narrower than its layout: its rows still have to reach as far as they do at 100%.
+// Cells hold whole device pixels, which a zoomed cell seldom comes to: the grid still has to reach as far as it does at 100%.
 test('at a device pixel ratio of 2 rows coloured to the full width reach the right edge of the grid at every zoom, and the bottom edge stays the terminal background', async () => {
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, { ...RENDER_ENV, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0', PS1: '$ ', AGENT_BOARD_TERMINAL_RENDERER: 'auto', AGENT_BOARD_TEST_DEVICE_SCALE: '2' }, RETINA_ARGS);
@@ -181,8 +181,9 @@ test('at a device pixel ratio of 2 rows coloured to the full width reach the rig
   }
 });
 
-// A device pixel ratio of 2, and zooms either side of 100%: WebGL's text stays as sharp as at 100%, and so do the zooms where
-// a cell is not a whole number of device pixels. A canvas stretched by the board's zoom shows here, as it doesn't at a ratio of 1.
+// A device pixel ratio of 2, and zooms either side of 100%: WebGL's text stays as sharp as at 100%, and the zooms where a cell
+// is not a whole number of device pixels resample it by half a pixel a cell at most. A canvas stretched by the board's zoom
+// shows here, as it doesn't at a ratio of 1.
 test('a shell expanded in place, its terminal drawn by WebGL at a device pixel ratio of 2, at several zooms, and in the session window', async () => {
   const shots = ['terminal-webgl-dpr2-window', 'terminal-webgl-dpr2', 'terminal-webgl-dpr2-zoomed-in', 'terminal-webgl-dpr2-zoomed-out', 'terminal-webgl-dpr2-right-edge'];
   needsBaselines(...shots);
@@ -225,7 +226,7 @@ test('a shell expanded in place, its terminal drawn by WebGL at a device pixel r
     await shot(shots[2]!);
     await zoomUntil(window, tile, 'Zoom Out', (zoom) => zoom < 0.7);
     await shot(shots[3]!);
-    // The whole pane where rounding costs a ratio of 2 the most: what its right edge looks like beside a row coloured to its full width.
+    // The whole pane at a zoom whose cells round the furthest: what its right edge looks like beside a row coloured to its full width.
     await zoomUntil(window, tile, 'Zoom Out', (zoom) => zoom < 0.6);
     await expectSharp(terminal, { soft: true });
     const restore = await ignorePointer(window);

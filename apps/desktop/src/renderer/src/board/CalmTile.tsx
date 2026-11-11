@@ -1,4 +1,4 @@
-import { useContext, useState } from 'react';
+import { useContext, useState, type CSSProperties } from 'react';
 import { Expand, FoldVertical, SquareArrowOutUpRight, X } from 'lucide-react';
 import { isClosed } from '@agent-board/daemon/board-layout';
 import { needsYouNow, waitsForYou, type Agent } from '@agent-board/daemon/protocol';
@@ -14,6 +14,8 @@ import { useJobDropOver } from './items/queue-board';
 import { useBoardCommands } from './commands';
 import { HarnessMark } from './HarnessMark';
 import { useAgentTileMenu } from './agent-tile-menu';
+import { useNowForSince, useNowToward } from '../inbox/use-now';
+import { calmTimes, QUIET_TILE, tileProgress, type TileShows } from './tile-shows';
 import { useRenameRequest } from './rename';
 import { StatusMark } from './StatusMark';
 import { poseShown } from '@agent-board/daemon/character';
@@ -50,6 +52,12 @@ export function CalmTile({ id, selected, agent, repo, from, crew, crewFlags, imp
   const held = useHeldJobs(agent.sessionId);
   const commands = useBoardCommands();
   const face = calmFace(agent, shows, implementer);
+  const look: TileShows = QUIET_TILE;
+  // Its times are re-read as each would read differently: once a minute, never by the second.
+  const sinceNow = useNowForSince(agent.stateSince);
+  const towardNow = useNowToward(look.wakeInWords && agent.schedule?.enabled === true ? agent.schedule.nextRunAt : null);
+  const times = calmTimes(agent, Math.max(sinceNow, towardNow), look);
+  const progress = tileProgress(agent, look);
   const quick = quickAskOf(agent);
   const sending = handoffs.sending.has(agent.sessionId) && face.status !== 'needs-you';
   const card = lastMessageCard(agent);
@@ -126,8 +134,15 @@ export function CalmTile({ id, selected, agent, repo, from, crew, crewFlags, imp
         ) : agent.unsent !== null ? (
           <UnsentRow fitted={fitted} what={agent.unsent} asked={agent.ask?.question} onSend={() => sendUnsent(agent.sessionId)} onClear={() => clearUnsent(agent.sessionId)} />
         ) : (
-          face.line !== null && (
-            <span className="calm-tile-line" data-testid="tile-line" title={face.line}>
+          (face.line !== null || times !== undefined) && (
+            <span className="calm-tile-line" data-testid="tile-line" title={face.line ?? undefined}>
+              {/* Its times lead, so the line's two-line cut never takes them. */}
+              {times !== undefined && (
+                <span className="calm-tile-times" data-testid="tile-times">
+                  {times}
+                  {face.line !== null && ' · '}
+                </span>
+              )}
               {face.line}
             </span>
           )
@@ -168,6 +183,9 @@ export function CalmTile({ id, selected, agent, repo, from, crew, crewFlags, imp
           <HarnessMark harness={agent.harness} />
           <span className="calm-tile-technical-text">{technicalLine(agent)}</span>
         </span>
+        {progress !== undefined && (
+          <span className="hybrid-tile-progress" data-testid="tile-progress" role="progressbar" aria-label="Its progress" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100} style={{ '--progress': `${progress}%` } as CSSProperties} />
+        )}
         <SubagentPerch harness={agent.harness} subagents={agent.subagents} />
         <TileRobot agent={agent} sending={sending} />
       </div>

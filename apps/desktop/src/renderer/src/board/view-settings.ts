@@ -1,5 +1,5 @@
 // The board's view settings: what a double-click on a tile opens, how a crew and agent notes look, which connections
-// are drawn, which sidebar an agent's window shows, and whether terminals draw with the GPU. Kept in the daemon's view state, and held here once per window, so the board and the Settings window read
+// are drawn, which sidebar an agent's window shows, whether terminals draw with the GPU, and what an agent's tile shows. Kept in the daemon's view state, and held here once per window, so the board and the Settings window read
 // and set the same values. Main tells every window of a change, so each follows live.
 import { useSyncExternalStore } from 'react';
 import { VIEW_KEYS } from '../../../shared/view-saver';
@@ -10,6 +10,7 @@ import { agentNoteLookFrom, type AgentNoteLook } from './items/agent-note-look';
 import { agentSidebarFrom, type AgentSidebar } from '../session/agent-sidebar';
 import { gpuTerminalsFrom } from '../session/terminal-gpu';
 import { keepTerminalsFrom } from '../session/kept-terminals';
+import { sameLook, tileShowsFrom, type TileShows } from './tile-shows';
 
 export interface ViewSettings {
   clickOpens: ClickOpens;
@@ -19,6 +20,7 @@ export interface ViewSettings {
   agentSidebar: AgentSidebar;
   gpuTerminals: boolean;
   keepTerminals: boolean;
+  tileShows: TileShows;
 }
 
 export const DEFAULT_VIEW_SETTINGS: ViewSettings = {
@@ -29,6 +31,7 @@ export const DEFAULT_VIEW_SETTINGS: ViewSettings = {
   agentSidebar: agentSidebarFrom(undefined),
   gpuTerminals: gpuTerminalsFrom(undefined),
   keepTerminals: keepTerminalsFrom(undefined),
+  tileShows: tileShowsFrom(undefined),
 };
 
 /** Each setting's view state key and the reader of what was saved under it (read back untyped). */
@@ -40,6 +43,7 @@ const SETTINGS = {
   agentSidebar: { key: VIEW_KEYS.agentSidebar, from: agentSidebarFrom },
   gpuTerminals: { key: VIEW_KEYS.gpuTerminals, from: gpuTerminalsFrom },
   keepTerminals: { key: VIEW_KEYS.keepTerminals, from: keepTerminalsFrom },
+  tileShows: { key: VIEW_KEYS.tileShows, from: tileShowsFrom },
 } as const;
 
 let current: ViewSettings = DEFAULT_VIEW_SETTINGS;
@@ -47,10 +51,15 @@ let current: ViewSettings = DEFAULT_VIEW_SETTINGS;
 let loaded = false;
 const listeners = new Set<() => void>();
 
+/** Whether a setting holds the same value: the tile look, an object, by its parts. */
+function same<Name extends keyof ViewSettings>(name: Name, a: ViewSettings[Name], b: ViewSettings[Name]): boolean {
+  return name === 'tileShows' ? sameLook(a as TileShows, b as TileShows) : a === b;
+}
+
 /** Holds `next`, and tells the subscribers if any setting differs: `current` is a new object only then. */
 function update(next: Partial<ViewSettings>): void {
   const merged = { ...current, ...next };
-  if ((Object.keys(merged) as (keyof ViewSettings)[]).every((name) => merged[name] === current[name])) return;
+  if ((Object.keys(merged) as (keyof ViewSettings)[]).every((name) => same(name, merged[name], current[name]))) return;
   current = merged;
   for (const listener of listeners) listener();
 }
@@ -113,7 +122,14 @@ export function useViewSettingsLoaded(): boolean {
   return useSyncExternalStore(subscribe, viewSettingsLoaded);
 }
 
-/** The settings, for a component that shows them. */
+const tileShowsNow = () => current.tileShows;
+
+/** What an agent's tile shows, for a tile: it draws again only when the look changes, not on any other setting. */
+export function useTileShows(): TileShows {
+  return useSyncExternalStore(subscribe, tileShowsNow, tileShowsNow);
+}
+
+/** The settings, for a component that shows them; rendered to markup (as the tile tests do), the ones held now. */
 export function useViewSettings(): ViewSettings {
-  return useSyncExternalStore(subscribe, viewSettings);
+  return useSyncExternalStore(subscribe, viewSettings, viewSettings);
 }

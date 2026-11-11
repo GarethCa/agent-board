@@ -59,6 +59,30 @@ async function linearZone(client: DaemonClient) {
   return client.call('zone.setTracker', { id: zone.id, tracker: { provider: 'linear', scope: 'ACME' } });
 }
 
+describe("a daemon method's bug", () => {
+  it('reaches the app as a plain message with an id, and the daemon log keeps its message and stack under that id', async () => {
+    const logged: string[] = [];
+    const broken = createMemoryCredentialStore();
+    broken.get = () => {
+      const response = undefined as unknown as { nodes: string[] };
+      return response.nodes[0] as never;
+    };
+    const dataDir = tempDataDir();
+    const { client } = await trackerDaemon({ dataDir, credentials: broken, log: (line) => void logged.push(line) });
+
+    const error = await rpcError(client.call('tracker.status', { provider: 'linear' }));
+
+    expect(error.code).toBe(RPC_ERROR.internal);
+    expect(error.message).toMatch(/^Something went wrong in tracker\.status \(error [0-9a-f]{6}\)\. Details are in the daemon log \(.+daemon\.log\)\.$/);
+    expect(error.message).toContain(join(dataDir, 'daemon.log'));
+    const id = /error ([0-9a-f]{6})/.exec(error.message)![1]!;
+    const line = logged.find((logLine) => logLine.includes(`(error ${id})`));
+    expect(line).toContain('rpc tracker.status failed');
+    expect(line).toContain("TypeError: Cannot read properties of undefined (reading 'nodes')");
+    expect(line).toMatch(/\n\s+at /);
+  });
+});
+
 describe('connecting a tracker', () => {
   it('checks the credential with the tracker, then keeps it in the credential store', async () => {
     const { client, credentials } = await trackerDaemon();

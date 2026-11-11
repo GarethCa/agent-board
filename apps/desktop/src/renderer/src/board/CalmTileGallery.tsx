@@ -6,14 +6,14 @@ import { galleryAgent, SHELL, START, START_FAILED } from './TileGallery';
 
 const AT = '2026-01-01T00:00:00.000Z';
 
-const line = (summary: string): Agent['status'] => ({ summary, progress: null, updatedAt: AT, setBy: null });
+const line = (summary: string, progress: number | null = null): Agent['status'] => ({ summary, progress, updatedAt: AT, setBy: null });
 
 /**
  * An agent's calm tile in each of the six statuses, by the name its screenshot takes, one a restart stopped (Needs you,
  * with Resume), and one to show the technical layer.
  */
 const TILES: Record<string, Agent> = {
-  working: { ...galleryAgent('running'), name: 'Fix login redirect', subagents: [], pullRequests: [], status: line('Running checks: 2 of 3 suites passed') },
+  working: { ...galleryAgent('running'), name: 'Fix login redirect', subagents: [], pullRequests: [], status: line('Running checks: 2 of 3 suites passed', 66) },
   waiting: { ...galleryAgent('needs-permission'), name: 'Clean the build', muted: false },
   done: { ...galleryAgent('idle'), name: 'Write onboarding docs', pullRequests: [], status: line('Added a Getting started page') },
   paused: {
