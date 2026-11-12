@@ -237,6 +237,12 @@ describe("an agent tile's menu, grouped", () => {
     const placed = sub(agentTileMenu(tileInput(ended, { board: boardSpies([], { connect: () => {}, leadPin: { pinned: true, toggle: () => {} } }) })), 'arrange');
     expect(menuIds(placed).slice(-3)).toEqual(['fold', 'lead-pin', 'connect']);
     expect(row(placed, 'lead-pin').label).toBe('Free from top-left');
+    expect(menuIds(sub(agentTileMenu(tileInput(running)), 'arrange'))).not.toContain('follow-rule');
+    const calls: [string, unknown[]][] = [];
+    const byHand = sub(agentTileMenu(tileInput(running, { board: boardSpies([], { backUnderRule: () => calls.push(['backUnderRule', []]) }) })), 'arrange');
+    expect(row(byHand, 'follow-rule')).toMatchObject({ label: 'Put back under the rule', hint: "The zone's rule lays it out again" });
+    (row(byHand, 'follow-rule') as { onSelect(): void }).onSelect();
+    expect(calls).toEqual([['backUnderRule', []]]);
   });
 
   it('copies its branch name, worktree path and session id, and says when it has none', () => {
@@ -294,6 +300,8 @@ const repoZone: Zone = {
   tracker: null,
   spacing: 'normal',
   layoutMode: 'free',
+  layoutRule: 'off',
+  handPlaced: [],
   folded: false,
   clone: null,
   managedClone: false,
@@ -316,6 +324,7 @@ describe("a zone's ⋯ menu", () => {
       'tidy',
       'spacing',
       'spacing/layout-free',
+      'spacing/layout-lanes',
       'spacing/layout-shelves',
       'spacing/layout-clusters',
       'spacing/spacing-compact',
@@ -420,10 +429,24 @@ describe("a zone's tab menus", () => {
     expect(row(zoneMenu(zoneInput(shelved)), 'tidy')).toMatchObject(why);
     expect(row(tidyMenu({ ...repoZone, layoutMode: 'clusters' }, undefined, spies()), 'tidy')).toMatchObject({ disabled: true, hint: expect.stringMatching(/lays its tiles out itself/) });
     expect(row(tidyMenu(repoZone, undefined, spies()), 'tidy')).not.toHaveProperty('disabled');
+    const ruled = { ...repoZone, layoutRule: 'lanes' as const };
+    expect(row(tidyMenu(ruled, undefined, spies()), 'tidy')).toMatchObject({ disabled: true, hint: 'The zone lays its tiles out by its rule' });
+    expect(row(zoneMenu(zoneInput(ruled)), 'tidy')).toMatchObject({ disabled: true });
+  });
+
+  it('offers the rule and the views in one Layout list, the one in use ticked', () => {
+    const layouts = (zone: Zone) => tidyMenu(zone, undefined, spies()).filter((entry) => typeof entry === 'object' && 'id' in entry && entry.id.startsWith('layout-'));
+    expect(layouts(repoZone)).toMatchObject([
+      { id: 'layout-free', label: 'Free', checked: true },
+      { id: 'layout-lanes', label: 'Lanes by ticket', hint: 'A lane per ticket, kept as work comes and goes', checked: false },
+      { id: 'layout-shelves', label: 'Status shelves', checked: false },
+      { id: 'layout-clusters', label: 'Clusters', checked: false },
+    ]);
+    expect(layouts({ ...repoZone, layoutRule: 'lanes' }).map((entry) => (entry as { checked: boolean }).checked)).toEqual([false, true, false, false]);
   });
 
   it('lists Tidy ▾: Tidy now, its layouts, its spacings, and the spacing for new zones', () => {
-    expect(menuIds(tidyMenu(repoZone, undefined, spies()))).toEqual(['tidy', 'layout-free', 'layout-shelves', 'layout-clusters', 'spacing-compact', 'spacing-normal', 'spacing-roomy', 'new-zone-spacing']);
+    expect(menuIds(tidyMenu(repoZone, undefined, spies()))).toEqual(['tidy', 'layout-free', 'layout-lanes', 'layout-shelves', 'layout-clusters', 'spacing-compact', 'spacing-normal', 'spacing-roomy', 'new-zone-spacing']);
     expect(row(tidyMenu(repoZone, 'roomy', spies()), 'new-zone-spacing')).toMatchObject({ detail: 'Roomy · Settings' });
   });
 
@@ -930,6 +953,12 @@ describe("every row's fields", () => {
             },
             {
               "checked": false,
+              "hint": "A lane per ticket, kept as work comes and goes",
+              "id": "layout-lanes",
+              "label": "Lanes by ticket",
+            },
+            {
+              "checked": false,
               "hint": "Shelves by status, a stack per ticket",
               "id": "layout-shelves",
               "label": "Status shelves",
@@ -1105,6 +1134,12 @@ describe("every row's fields", () => {
             },
             {
               "checked": false,
+              "hint": "A lane per ticket, kept as work comes and goes",
+              "id": "layout-lanes",
+              "label": "Lanes by ticket",
+            },
+            {
+              "checked": false,
               "hint": "Shelves by status, a stack per ticket",
               "id": "layout-shelves",
               "label": "Status shelves",
@@ -1257,6 +1292,12 @@ describe("every row's fields", () => {
           "hint": "Each tile where you put it",
           "id": "layout-free",
           "label": "Free",
+        },
+        {
+          "checked": false,
+          "hint": "A lane per ticket, kept as work comes and goes",
+          "id": "layout-lanes",
+          "label": "Lanes by ticket",
         },
         {
           "checked": false,
@@ -1556,6 +1597,7 @@ describe("every row's handler", () => {
         "crew/crew-library → crewLibrary(#z1)",
         "tidy → tidy(#z1)",
         "spacing/layout-free → setLayoutMode(#z1, "free")",
+        "spacing/layout-lanes → setLayoutMode(#z1, "lanes")",
         "spacing/layout-shelves → setLayoutMode(#z1, "shelves")",
         "spacing/layout-clusters → setLayoutMode(#z1, "clusters")",
         "spacing/spacing-compact → setSpacing(#z1, "compact")",
@@ -1575,6 +1617,7 @@ describe("every row's handler", () => {
         "crew/crew-library → crewLibrary(#g1)",
         "tidy → tidy(#g1)",
         "spacing/layout-free → setLayoutMode(#g1, "free")",
+        "spacing/layout-lanes → setLayoutMode(#g1, "lanes")",
         "spacing/layout-shelves → setLayoutMode(#g1, "shelves")",
         "spacing/layout-clusters → setLayoutMode(#g1, "clusters")",
         "spacing/spacing-compact → setSpacing(#g1, "compact")",
@@ -1609,6 +1652,7 @@ describe("every row's handler", () => {
         "tab-tidy → tidy(#c1)",
         "tidy → tidy(#z1)",
         "layout-free → setLayoutMode(#z1, "free")",
+        "layout-lanes → setLayoutMode(#z1, "lanes")",
         "layout-shelves → setLayoutMode(#z1, "shelves")",
         "layout-clusters → setLayoutMode(#z1, "clusters")",
         "spacing-compact → setSpacing(#z1, "compact")",
@@ -1757,6 +1801,7 @@ describe("a project's menus, under the Simplified design", () => {
         "options/spacing/spacing-roomy → setSpacing(#z1, "roomy")",
         "options/spacing/new-zone-spacing → openSettings()",
         "options/layout/layout-free → setLayoutMode(#z1, "free")",
+        "options/layout/layout-lanes → setLayoutMode(#z1, "lanes")",
         "options/layout/layout-shelves → setLayoutMode(#z1, "shelves")",
         "options/layout/layout-clusters → setLayoutMode(#z1, "clusters")",
         "options/fold → fold(#z1)",
@@ -1790,6 +1835,7 @@ describe("a project's menus, under the Simplified design", () => {
         "options/spacing/spacing-roomy → setSpacing(#z1, "roomy")",
         "options/spacing/new-zone-spacing → openSettings()",
         "options/layout/layout-free → setLayoutMode(#z1, "free")",
+        "options/layout/layout-lanes → setLayoutMode(#z1, "lanes")",
         "options/layout/layout-shelves → setLayoutMode(#z1, "shelves")",
         "options/layout/layout-clusters → setLayoutMode(#z1, "clusters")",
         "options/fold → fold(#z1)",
@@ -1834,6 +1880,7 @@ describe("a project's menus, under the Simplified design", () => {
       'spacing/new-zone-spacing',
       'layout',
       'layout/layout-free',
+      'layout/layout-lanes',
       'layout/layout-shelves',
       'layout/layout-clusters',
       'fold',

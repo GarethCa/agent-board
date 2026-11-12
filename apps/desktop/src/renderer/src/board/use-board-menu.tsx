@@ -48,6 +48,10 @@ interface BoardMenuOptions {
   leadPinned(nodeId: string): boolean | undefined;
   /** Pins the lead tile `nodeId` top-left in its shelved zone again, or frees it to be a stack like any other. */
   setLeadPinned(nodeId: string, pinned: boolean): void;
+  /** Whether the tile `nodeId` was placed by hand in a zone with a layout rule, which skips it. */
+  handPlaced(nodeId: string): boolean;
+  /** Puts the tile `nodeId`, placed by hand, back under its zone's layout rule. */
+  followRule(nodeId: string): void;
 }
 
 /** Where a right-click was, on the screen. */
@@ -93,6 +97,8 @@ export function useBoardMenu({
   crewLibrary,
   leadPinned,
   setLeadPinned,
+  handPlaced,
+  followRule,
 }: BoardMenuOptions) {
   const toasts = useToast();
   /** The context menu open, where it was asked for and on what: the selection, one agent's tile, or empty board. */
@@ -103,6 +109,7 @@ export function useBoardMenu({
   const contextActions: ContextActions = {
     ...editing,
     ...(pinned === undefined || only === undefined ? {} : { leadPin: { pinned, toggle: () => setLeadPinned(only.id, !pinned) } }),
+    ...(only === undefined || second !== undefined || !handPlaced(only.id) ? {} : { backUnderRule: () => followRule(only.id) }),
     // After the menu has handed the focus back, or the popover's field would lose it at once.
     askClaude: () => setTimeout(askClaude, MENU_FOCUS_RETURN_MS),
     deleteSelection: deleteSelected,
@@ -168,6 +175,8 @@ export function useBoardMenu({
     connectFrom,
     leadPinned,
     setLeadPinned,
+    handPlaced,
+    followRule,
     copy: (text, what) =>
       void navigator.clipboard.writeText(text).then(
         () => toasts.show({ tone: 'info', message: `${what} copied` }),
@@ -186,6 +195,8 @@ export function useBoardMenu({
       connectFrom: (nodeId) => tileBoardRef.current.connectFrom(nodeId),
       leadPinned: (nodeId) => tileBoardRef.current.leadPinned(nodeId),
       setLeadPinned: (nodeId, pinned) => tileBoardRef.current.setLeadPinned(nodeId, pinned),
+      handPlaced: (nodeId) => tileBoardRef.current.handPlaced(nodeId),
+      followRule: (nodeId) => tileBoardRef.current.followRule(nodeId),
       copy: (text, what) => tileBoardRef.current.copy(text, what),
     }),
     [],

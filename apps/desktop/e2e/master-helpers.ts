@@ -29,3 +29,25 @@ export async function crowdedPanel(window: Page, writtenAt = new Date().toISOStr
   );
 }
 
+type Box = { x: number; y: number; width: number; height: number };
+
+/** Whether any two of the boxes share area. */
+export const intersecting = (boxes: Record<string, Box | null>) => {
+  const named = Object.entries(boxes).filter((entry): entry is [string, Box] => entry[1] !== null);
+  return named.flatMap(([a, p], i) =>
+    named.slice(i + 1).flatMap(([b, q]) => (p.x < q.x + q.width && q.x < p.x + p.width && p.y < q.y + q.height && q.y < p.y + p.height ? [`${a} / ${b}`] : [])),
+  );
+};
+
+/** The top row's islands: the board menu, the creation toolbar and the top-right island, and the pane if it is open. */
+async function topRowOf(window: Page): Promise<Record<string, Box | null>> {
+  const box = async (selector: string) => ((await window.locator(selector).count()) === 0 ? null : window.locator(selector).first().boundingBox());
+  return { menu: await box('.island-top-left'), toolbar: await box('.create-toolbar'), right: await box('.island-top-right'), pane: await box('[data-testid="master-panel"]') };
+}
+
+/** Which of the top row's islands meet, each with every box, so a failure shows where they were; none when it fits. */
+export async function topRowMeets(window: Page): Promise<string[]> {
+  const row = await topRowOf(window);
+  return intersecting(row).map((pair) => `${pair}: ${JSON.stringify(row)}`);
+}
+

@@ -143,6 +143,7 @@ function TidyChips({ zone, binding }: { zone: Zone; binding: ZoneBindingActions 
   const readNewZones = (open: boolean) => {
     if (open) window.agentBoard.flowEdges.settings().then((settings) => setNewZones(settings.arrangeSpacing), () => {});
   };
+  const blocked = tidyBlocked(zone);
   return (
     <span className="zone-tab-split">
       <Chip
@@ -150,9 +151,9 @@ function TidyChips({ zone, binding }: { zone: Zone; binding: ZoneBindingActions 
         icon={<LayoutGrid />}
         aria-label="Tidy zone"
         // Not `disabled`, which would hide the tooltip saying why.
-        aria-disabled={zone.layoutMode !== 'free' || undefined}
-        title={tidyBlocked(zone).hint ?? 'Tidy: its tiles in rows, in reading order'}
-        onClick={() => zone.layoutMode === 'free' && binding.tidy(zone)}
+        aria-disabled={blocked.disabled}
+        title={blocked.hint ?? 'Tidy: its tiles in rows, in reading order'}
+        onClick={() => blocked.disabled === undefined && binding.tidy(zone)}
       />
       <Menu
         onOpenChange={readNewZones}

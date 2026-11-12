@@ -7,6 +7,7 @@ import { SessionWindow } from '../session/SessionWindow';
 import { keptLayout } from '../session/use-window-panes';
 import { PopOutSpotlight } from './PopOutSpotlight';
 import { useCheatSheet } from '../keys/CheatSheet';
+import { ParkThought } from '../keys/ParkThought';
 import { handOffWebTabs } from './SessionWindows';
 import { usePopOutMoves } from './use-pop-out-moves';
 
@@ -48,6 +49,7 @@ export function PopOutWindow({ target: opened }: { target: WindowTarget }) {
       )}
       <PopOutSpotlight target={target} onSwitched={switched} />
       {cheatSheet.sheet}
+      <ParkThought />
     </>
   );
 }

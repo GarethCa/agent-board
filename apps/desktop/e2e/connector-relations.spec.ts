@@ -104,7 +104,7 @@ test('a connector draws a class diagram’s relations, types a label by each end
     await expect(window.getByRole('button', { name: 'Shape', exact: true })).toHaveAttribute('aria-pressed', 'false');
 
     // One undo puts it back the way it was drawn, labels and all.
-    await window.keyboard.press('Meta+z');
+    await window.keyboard.press('ControlOrMeta+z');
     await expect
       .poll(() => storedConnector(dataDir))
       .toMatchObject({ from: { id: child.id, side: 'right' }, to: { id: parent.id, side: 'left' }, endEnd: 'diamond', startLabel: '1', endLabel: '0..*' });

@@ -42,6 +42,7 @@ import {
   isStatusProgress,
   MAX_CREW_DEPTH,
   MAX_FLAG_LENGTH,
+  MAX_PURPOSE_LENGTH,
   MAX_STATUS_LENGTH,
   type Agent,
   type AgentCharacter,
@@ -298,6 +299,8 @@ export interface StatusUpdate {
   done?: boolean;
   character?: CharacterSet;
   category?: WorkCategorySet;
+  /** What it is for (`Agent.purpose`); '' clears it. */
+  purpose?: string;
 }
 
 export interface AgentHost {
@@ -614,6 +617,8 @@ export interface AgentRow extends PositionColumns {
   waiting_on_ref: string | null;
   work_category_set_at: string | null;
   work_category_set_by: string | null;
+  /** What it says it is for (`setStatus` with a purpose): null while it has none. */
+  purpose: string | null;
   /** The pose it set for its character (`setStatus` with a character): all null while it has none. */
   character_pose: string | null;
   character_face: string | null;
@@ -744,6 +749,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   const updateStatus = db.prepare(
     'UPDATE agents SET status_summary = ?, status_progress = ?, status_updated_at = ?, status_set_by = ? WHERE session_id = ?',
   );
+  const updatePurpose = db.prepare('UPDATE agents SET purpose = ? WHERE session_id = ?');
   const updateFinished = db.prepare('UPDATE agents SET work_finished_at = ? WHERE session_id = ?');
   const updateWorkCategory = db.prepare(
     'UPDATE agents SET work_category = ?, work_category_label = ?, waiting_on_who = ?, waiting_on_ref = ?, work_category_set_at = ?, work_category_set_by = ? WHERE session_id = ?',
@@ -1487,6 +1493,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       // An ended session strikes no pose of its own: the board draws how it ended.
       character: row.ended_at === null ? characterOf(row, clock.now()) : null,
       workCategory: workCategoryOf(row),
+      purpose: row.purpose,
       status: statusAfterTurn(
         row.status_summary === null || row.status_updated_at === null
           ? null
@@ -2138,10 +2145,14 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       return agent;
     },
 
-    setStatus(sessionId, { summary = null, progress = null, done = false, character, category }, setBy = null) {
+    setStatus(sessionId, { summary = null, progress = null, done = false, character, category, purpose }, setBy = null) {
       requireAgent(sessionId);
-      if (summary === null && character === undefined && category === undefined) {
-        throw invalidParams('give a status summary, a character pose, a category, or more');
+      if (summary === null && character === undefined && category === undefined && purpose === undefined) {
+        throw invalidParams('give a status summary, a character pose, a category, a description, or more');
+      }
+      const about = purpose === undefined ? undefined : oneLine(purpose);
+      if (about !== undefined && about.length > MAX_PURPOSE_LENGTH) {
+        throw invalidParams(`the description is ${about.length} characters; at most ${MAX_PURPOSE_LENGTH}`);
       }
       const text = summary === null ? null : oneLine(summary);
       if (text === '') throw invalidParams('the status summary must not be blank');
@@ -2158,6 +2169,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       if (character !== undefined) setCharacter(sessionId, character, new Date(clock.now()).toISOString(), setBy);
       if (done) finishWork(sessionId, at, setBy, category);
       else if (category !== undefined) setWorkCategory(sessionId, category, at, setBy);
+      if (about !== undefined) updatePurpose.run(about === '' ? null : about, sessionId);
       const agent = get(sessionId)!;
       options.broadcast({ type: 'agent.updated', agent });
       return agent;
@@ -2342,7 +2354,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     onShellChanged: lifecycle.onShellChanged,
 
     close: () => {
-      deliveries.handBackQueued();
+      deliveries.close();
       transcripts.close();
       backgroundCommands.close();
       lifecycle.close();

@@ -110,6 +110,7 @@ import { createZoneSources, type ZoneSources } from './zone-sources.ts';
 import { linkedWorktrees, removeManagedClone, zoneDissolveHandlers } from './zone-dissolve.ts';
 import { zoneFoldHandlers } from './zone-fold.ts';
 import { createZoneTable, inGroupFolder, zoneHandlers } from './zones.ts';
+import { createZoneRules, markingHandMoves } from './zone-rules.ts';
 
 export interface DaemonOptions {
   /** Holds the database, socket, lock and log. Created if missing. */
@@ -999,6 +1000,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         close: async (params, connection) => orchestratorHandlers['orchestrator.close'](params as never, connection as SessionSubscriber & BoardConnection),
         capture: captures.request,
         measures,
+        zones: zoneTable,
         warn: log,
       }),
       ...captures.handlers,
@@ -1100,7 +1102,13 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       }),
     };
 
+    // A tile the user puts down in a zone with a rule leaves the rule, placed by hand; the daemon's own moves never do.
+    Object.assign(handlers, markingHandMoves(handlers, zoneTable));
     const call: DaemonCall = async (method, params) => handlers[method](params as never, DAEMON_ITSELF) as never;
+    // A zone with a layout rule is laid out by it again whenever what it holds changes.
+    const zoneRules = createZoneRules({ call, zones: zoneTable, clock: options.clock ?? systemClock, log });
+    listeners.push((event) => zoneRules.onEvent(event));
+    void zoneRules.start().catch((error: unknown) => log(`could not lay out the zones by their rules: ${(error as Error).message}`));
     // A deleted agent's jobs go back: one paused or stopped by a restart kept them, and has no exit to come.
     listeners.push((event) => {
       if (event.type === 'agent.removed') void memoryQueue.releaseGone(event.sessionId).catch((error: unknown) => log(`could not put back the jobs ${event.sessionId} held: ${(error as Error).message}`));
@@ -1217,6 +1225,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         crewCards.close();
         pullRequests.stop();
         flowEdges.stop();
+        zoneRules.stop();
         conditionShell.stop();
         gates.stop();
         sweeper.stop();

@@ -31,12 +31,17 @@
 }
 
 .island-top-centre {
-  left: 50%;
+  left: calc((100% - var(--captain-push, 0px)) / 2);
   translate: -50% 0;
 }
 
+/* Where the middle of the board would put it against an island, the creation toolbar moves clear of it (chrome-folds.ts). */
+.create-toolbar.island-top-centre {
+  left: calc((100% - var(--captain-push, 0px)) / 2 + var(--toolbar-shift, 0px));
+}
+
 .island-top-right {
-  right: var(--island-inset);
+  right: calc(var(--island-inset) + var(--captain-push, 0px));
 }
 
 .island-bottom-left {
@@ -45,7 +50,7 @@
 }
 
 .island-bottom-right {
-  right: var(--island-inset);
+  right: calc(var(--island-inset) + var(--captain-push, 0px));
   bottom: var(--island-inset);
 }
 
@@ -714,7 +719,7 @@
 
 .react-flow__panel.board-minimap {
   /* Above the zoom island. */
-  right: var(--island-inset);
+  right: calc(var(--island-inset) + var(--captain-push, 0px));
   bottom: calc(var(--island-inset) + var(--control-md) + var(--space-4));
   z-index: var(--layer-chrome);
   margin: 0;
@@ -724,14 +729,30 @@
   box-shadow: var(--shadow-island);
 }
 
-/* The Edge rules panel covers the right of the board: the zoom island and the minimap move clear of it. The docked pane doesn't move them: it draws over them at full height, or ends a gap above them when dragged up (`--controls-lift` is its bottom offset; `usePanelRoom` measures the gap). */
+/*
+ * The Captain's pane pushes the board's right edge in by `--captain-push`, and the islands and the minimap on the right
+ * ride the new edge. In a narrow window the pane covers the board instead
+ * and pushes nothing. Edge rules sits left of the pane either way (`--captain-beside`). A session window shown on the board
+ * hides the pane, so it gets the whole board back. `MasterPanel` sets the two lengths these come from on the board.
+ */
+.board {
+  --captain-push: var(--captain-room, 0px);
+  --captain-beside: var(--captain-edge, 0px);
+}
+
+:root:has([data-testid='session-window']) .board {
+  --captain-push: 0px;
+  --captain-beside: 0px;
+}
+
+/* The Edge rules panel covers the right of the board: the zoom island and the minimap move clear of it. */
 :root:has(.edge-rules) {
   --edge-room: calc(var(--island-inset) + var(--size-edge-rules));
 }
 
 :root:has(.edge-rules) .island-bottom-right,
 :root:has(.edge-rules) .react-flow__panel.board-minimap {
-  right: calc(var(--island-inset) + var(--edge-room, 0px));
+  right: calc(var(--island-inset) + var(--edge-room, 0px) + var(--captain-beside, 0px));
 }
 
 .react-flow__panel.board-minimap svg {
@@ -743,7 +764,7 @@
 /* The empty board's welcome, in the middle of the view; the board around it still takes clicks. */
 .empty-board {
   position: absolute;
-  inset: 0;
+  inset: 0 var(--captain-push, 0px) 0 0;
   z-index: var(--layer-chrome);
   display: grid;
   place-items: center;
@@ -974,6 +995,34 @@
   text-transform: uppercase;
 }
 
+.spotlight-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(var(--size-spotlight-column), 1fr));
+  gap: 0 var(--space-1-5);
+}
+
+.spotlight-column {
+  display: grid;
+  align-content: start;
+  gap: var(--space-px);
+  min-width: 0;
+}
+
+/* Nothing that needs you is left out: past a column's height, it scrolls on its own. */
+.spotlight-column[data-column='needs-you'] {
+  max-height: var(--size-spotlight-column-list);
+  overflow-y: auto;
+}
+
+.spotlight-column + .spotlight-column {
+  padding-left: var(--space-1);
+  border-left: var(--space-px) solid var(--border);
+}
+
+.spotlight-group[data-group='Needs you'] {
+  color: var(--warning-ink);
+}
+
 .spotlight-row {
   display: grid;
   grid-template-columns: var(--size-spotlight-mark) minmax(0, 1fr) auto;
@@ -1039,6 +1088,44 @@
   line-height: var(--leading-snug);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* What the agent says it is for reads as prose, not a path. */
+.spotlight-sub[data-purpose] {
+  font-family: var(--font-sans);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-regular);
+}
+
+.spotlight-sub mark {
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--text);
+}
+
+/* The field a match came from, before its words. */
+.spotlight-field-label {
+  display: inline-block;
+  margin-right: var(--space-1);
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-xs);
+  background: var(--hover);
+  color: var(--muted);
+  font-size: var(--font-size-3xs);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+
+.spotlight-field-label[data-field='PR'] {
+  background: var(--pr-open-soft);
+  color: var(--pr-open);
+}
+
+.spotlight-field-label[data-field='desc'] {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent-ink);
 }
 
 .spotlight-act {
@@ -1149,12 +1236,12 @@
   font-size: var(--font-size-2xs);
 }
 
+/* Flush to the window's right edge and full height: beside the board, which it pushes, so nothing is under it. */
 .master-panel {
   position: absolute;
-  top: calc(var(--island-inset) * 2 + var(--island-height));
-  /* Left of the Edge rules panel when both are open, full height by default over the zoom bar and the minimap, ending a gap above the dock; `--controls-lift` is how far its bottom edge was dragged up. */
-  right: calc(var(--island-inset) + var(--edge-room, 0px));
-  bottom: calc(var(--island-inset) + max(var(--dock-lift, 0px), var(--controls-lift, 0px)));
+  top: 0;
+  right: 0;
+  bottom: 0;
   z-index: var(--layer-panel);
   display: flex;
   flex-direction: column;
@@ -1163,12 +1250,20 @@
   width: var(--size-master-panel);
   min-width: 0;
   overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-window);
+  border-left: 1px solid var(--border);
   background: var(--panel);
   color: var(--text);
-  box-shadow: var(--shadow-overlay);
   font-size: var(--font-size-sm);
+}
+
+/*
+ * In a narrow window it covers the board's right side instead, over the zoom bar and the minimap, with a shadow. It ends
+ * above the dock while the dock shows; `--controls-lift` is where its bottom edge was dragged up to, set inline.
+ */
+.master-panel[data-mode='cover'] {
+  bottom: max(var(--controls-lift, 0px), calc(var(--island-inset) + var(--dock-lift, calc(-1 * var(--island-inset)))));
+  border-bottom: 1px solid var(--border);
+  box-shadow: var(--shadow-overlay);
 }
 
 /* The grab area on the panel's left edge, or on the line under the For you list; a line shows on hover, focus and drag. */
@@ -1230,6 +1325,9 @@
 .master-panel-head {
   flex: none;
   min-width: 0;
+  /* As tall as the row of top islands beside it, so its line under it meets theirs. */
+  box-sizing: border-box;
+  min-height: calc(var(--island-inset) * 2 + var(--island-height));
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -1723,47 +1821,84 @@
 }
 
 /*
- * In a narrower window the island would reach the creation toolbar: the Captain button drops its word, then itself
- * (⌘⇧M and the master's tile still reach it). The widths are where the islands would otherwise meet, Classic's here and
- * the Simplified design's, whose toolbar is narrower, below.
+ * On a narrower board the island would reach the creation toolbar: the Captain button drops its word, then itself
+ * (⌘⇧M and the master's tile still reach it), except while the pane is open, as the button switches or shuts it. The
+ * board's `data-folds` holds the widths it is under (chrome-folds.ts): the window's, less the room the pane takes beside
+ * it, so a board narrowed by the pane folds as a window that narrow would. The widths are where the islands would
+ * otherwise meet, Classic's here and the Simplified design's, whose toolbar is narrower, below. The same widths as media
+ * queries, after these rules, fold a window that narrow as it resizes: `data-folds` follows a frame later, and in a
+ * window that isn't drawn, not until it is.
  */
-@media (max-width: 1239px) {
-  :root:not([data-design='simplified']) .master-button-label {
-    display: none;
-  }
+:root:not([data-design='simplified']) .board[data-folds~='1240'] .master-button-label {
+  display: none;
 }
 
 /*
  * Below 960 px Classic's New agent and Shell drop their words (their names and tooltips say what they are), so the
  * toolbar clears the Needs-you island's left edge, as it did before More to add.
  */
-@media (max-width: 959px) {
-  :root:not([data-design='simplified']) .create-toolbar-word {
-    display: none;
-  }
+:root:not([data-design='simplified']) .board[data-folds~='960'] .create-toolbar-word {
+  display: none;
 }
 
-@media (max-width: 1099px) {
-  :root:not([data-design='simplified']) .master-button.ui-button {
-    display: none;
-  }
+:root:not([data-design='simplified']) .board[data-folds~='1100']:not(:has(> .master-panel)) .master-button.ui-button {
+  display: none;
 }
 
-@media (max-width: 959px) {
-  :root[data-design='simplified'] .master-button.ui-button {
-    display: none;
-  }
+:root[data-design='simplified'] .board[data-folds~='960']:not(:has(> .master-panel)) .master-button.ui-button {
+  display: none;
 }
 
 /*
  * With the usage island in it, the Simplified top-right island is wider, so the figures give way below 1240 px
  * (Settings › Usage still has them), before the Captain's word goes by its own rule, below 960 px.
  */
+:root[data-design='simplified'] .board[data-folds~='1240'] .needs-you .usage-island,
+:root[data-design='simplified'] .board[data-folds~='1240'] .needs-you .usage-island + .ui-island-separator {
+  display: none;
+}
+
+/* The window's own widths, at once (above): a window narrower than a fold's width has a board at least that narrow. */
 @media (max-width: 1239px) {
+  :root:not([data-design='simplified']) .master-button-label,
   :root[data-design='simplified'] .needs-you .usage-island,
   :root[data-design='simplified'] .needs-you .usage-island + .ui-island-separator {
     display: none;
   }
+}
+
+@media (max-width: 1099px) {
+  :root:not([data-design='simplified']) .board:not(:has(> .master-panel)) .master-button.ui-button {
+    display: none;
+  }
+}
+
+@media (max-width: 959px) {
+  :root:not([data-design='simplified']) .create-toolbar-word,
+  :root[data-design='simplified'] .board:not(:has(> .master-panel)) .master-button.ui-button {
+    display: none;
+  }
+}
+
+/*
+ * Where the toolbar still can't sit clear of the islands either side, the row gives way in turn (chrome-folds.ts): the
+ * board's name (its mark stays, and the name is still read out), then Find (⌘K still opens it), then New agent's word.
+ */
+.board[data-folds~='title'] .board-menu-title {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.board[data-folds~='find'] .board-menu-find,
+.board[data-folds~='find'] .board-menu .ui-island-separator:has(+ .board-menu-find) {
+  display: none;
+}
+
+.board[data-folds~='words'] .create-toolbar-word {
+  display: none;
 }
 
 /* The usage pill, first in the zoom island: the 5-hour and weekly windows, detail on hover. */
@@ -2237,4 +2372,13 @@
   color: var(--muted);
   font-size: var(--font-size-sm-plus);
   line-height: var(--leading-snug);
+}
+
+/* Park a thought (⌘⇧P): ⌘K's field alone, one line, its edge the accent. */
+.park-thought {
+  border-color: var(--accent);
+}
+
+.park-thought .spotlight-field {
+  border-bottom: 0;
 }

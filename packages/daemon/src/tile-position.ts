@@ -23,6 +23,7 @@ export function moveParams(fields: Record<string, unknown>): TileMove {
     z: fields.z === undefined ? undefined : finiteNumberParam(fields, 'z'),
     toFront: optionalBooleanParam(fields, 'toFront'),
     ifUnplaced: optionalBooleanParam(fields, 'ifUnplaced'),
+    byHand: optionalBooleanParam(fields, 'byHand'),
   };
 }
 

@@ -100,9 +100,10 @@ export function registerZoneIpc(daemon: DaemonLink): void {
     daemon.call('zone.update', { id, ...layout }),
   );
   ipcMain.handle(ZONE_IPC.configure, (_event, id: string, settings: Partial<ZoneSettings>) => {
-    const { codexBypassHookTrust, trustsFolder, boardMcp, agentsOrchestrate, gateCommand, spacing, layoutMode } = settings;
-    return daemon.call('zone.configure', { id, codexBypassHookTrust, trustsFolder, boardMcp, agentsOrchestrate, gateCommand, spacing, layoutMode });
+    const { codexBypassHookTrust, trustsFolder, boardMcp, agentsOrchestrate, gateCommand, spacing, layoutMode, layoutRule } = settings;
+    return daemon.call('zone.configure', { id, codexBypassHookTrust, trustsFolder, boardMcp, agentsOrchestrate, gateCommand, spacing, layoutMode, layoutRule });
   });
+  ipcMain.handle(ZONE_IPC.followRule, (_event, id: string, tiles: string[]) => daemon.call('zone.followRule', { id, tiles }));
   ipcMain.handle(ZONE_IPC.fold, (_event, id: string) => daemon.call('zone.fold', { id }));
   ipcMain.handle(ZONE_IPC.unfold, (_event, id: string, wake?: boolean) => daemon.call('zone.unfold', { id, wake: wake === true }));
   ipcMain.handle(ZONE_IPC.setTracker, (_event, id: string, tracker: ZoneTracker | null) =>

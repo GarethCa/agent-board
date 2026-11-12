@@ -170,6 +170,28 @@
   --state-on-command: #0b7285; /* a command left running: its row on the tile, the running count and the stopwatch */
   --state-on-command-ink: var(--state-on-command);
   --state-on-command-soft: #e3f6f8;
+  /* A work category in the Overview (ADR-0024): its edge or dot, its text, and its soft fill, on the states' colours */
+  --cat-help: var(--state-waiting);
+  --cat-help-ink: var(--state-waiting-ink);
+  --cat-help-soft: var(--state-waiting-soft);
+  --cat-ready: var(--accent);
+  --cat-ready-ink: var(--accent-ink);
+  --cat-ready-soft: var(--accent-soft);
+  --cat-blocked: var(--state-failed);
+  --cat-blocked-ink: var(--state-failed-ink);
+  --cat-blocked-soft: var(--state-failed-soft);
+  --cat-others: var(--state-hibernated);
+  --cat-others-ink: var(--state-hibernated-ink);
+  --cat-others-soft: var(--state-hibernated-soft);
+  --cat-in-review: var(--state-on-command);
+  --cat-in-review-ink: var(--state-on-command-ink);
+  --cat-in-review-soft: var(--state-on-command-soft);
+  --cat-working: var(--state-running);
+  --cat-working-ink: var(--state-running-ink);
+  --cat-working-soft: var(--state-running-soft);
+  --cat-done: var(--state-stopped-by-restart);
+  --cat-done-ink: var(--state-idle-ink);
+  --cat-done-soft: var(--state-idle-soft);
   --state-handing-off-ink: var(--flow-label-ink); /* delivering along its flow edges, in the edges' colour */
   --state-handing-off-soft: var(--flow-label);
   --state-starting-ink: var(--accent-ink); /* started, before its session's first hook */
@@ -758,6 +780,10 @@
   --size-dot-md: 8px; /* the Needs-you pill's dot */
   --size-dot-lg: 10px; /* a zone's colour beside its name */
   --size-swatch-sm: 9px; /* a zone's colour in a list */
+  --size-overview-search: 230px; /* the Overview's search box */
+  --size-overview-column: 210px; /* the narrowest a project's column in the Overview gets */
+  --size-overview-glyph: 10px; /* a work category's glyph before its group's name */
+  --size-overview-avatar: 16px; /* who a thread waits on, as initials */
   --size-logo: 30px; /* the app's mark on the board menu (brand/BRAND.md: about 30px) */
   --size-panel: 352px; /* the board menu's and settings' panels */
   --size-inbox: 372px; /* the Needs-you inbox's popover */
@@ -828,7 +854,7 @@
   --size-composer: 42px; /* the composer's field, one line high */
   --size-composer-max: 200px; /* the most the composer's field grows to with the lines typed, before it scrolls */
   --window-header-height: 50px; /* a session window's header: the traffic lights' midline when popped out (main/chrome.ts) */
-  --settings-bar-height: 38px; /* the Settings window's title bar: the traffic lights' midline there (main/chrome.ts) */
+  --settings-bar-height: 38px; /* the Settings and Overview windows' title bar: the traffic lights' midline there (main/chrome.ts) */
   --settings-sidebar-width: 224px; /* the Settings window's sidebar of groups */
   --size-settings-control: 264px; /* the width of a Settings control that fills its column: a segmented control, the Theme pop-up */
   --settings-page-width: 620px; /* the widest a Settings page's rows get */
@@ -877,6 +903,8 @@
   --size-spotlight: 520px; /* the ⌘K switcher's width */
   --size-spotlight-list: 360px; /* how tall its list grows before it scrolls */
   --size-spotlight-mark: 22px; /* a row's mark */
+  --size-spotlight-column: 210px; /* the narrowest ⌘K's Needs you and Recent columns get before they stack */
+  --size-spotlight-column-list: calc(var(--size-spotlight-list) * 2 / 3); /* how tall the Needs you column grows before it scrolls */
   --spotlight-top: 14vh; /* how far down the window it opens */
   --size-cheat-sheet: 760px; /* the keyboard cheat sheet's width */
   --size-cheat-sheet-column: 200px; /* the narrowest of its columns of keys */
@@ -1402,7 +1430,7 @@
   --radius-2xl: 12px;
 
   /* Type: SF Pro at 13 and 11, SF Mono */
-  --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', system-ui, sans-serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', 'Inter Variable', system-ui, sans-serif;
   --font-mono: ui-monospace, 'SF Mono', Menlo, monospace;
   --font-wordmark: 'Bricolage Grotesque Variable', system-ui, sans-serif;
   --font-size-xs: 11px;

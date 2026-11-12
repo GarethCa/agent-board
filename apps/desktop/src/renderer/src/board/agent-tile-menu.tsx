@@ -26,6 +26,10 @@ export interface TileMenuBoard {
   /** Whether the tile is a lead pinned top-left in its shelved zone; undefined for any other tile. */
   leadPinned(nodeId: string): boolean | undefined;
   setLeadPinned(nodeId: string, pinned: boolean): void;
+  /** Whether the tile was placed by hand in a zone with a layout rule, which skips it. */
+  handPlaced(nodeId: string): boolean;
+  /** Puts the tile placed by hand back under its zone's layout rule. */
+  followRule(nodeId: string): void;
   /** Puts the text on the clipboard, saying what it was. */
   copy(text: string, what: string): void;
 }
@@ -41,6 +45,8 @@ const NOTHING: TileMenuBoard = {
   connectFrom: () => {},
   leadPinned: () => undefined,
   setLeadPinned: () => {},
+  handPlaced: () => false,
+  followRule: () => {},
   copy: () => {},
 };
 
@@ -89,6 +95,7 @@ export function useAgentTileMenu(nodeId: string, agent: Agent, links: TileLinks,
       restack: (how) => board.restack(nodeId, how),
       ...(board.joinable(nodeId) ? { connect: () => board.connectFrom(nodeId) } : {}),
       ...(pinned === undefined ? {} : { leadPin: { pinned, toggle: () => board.setLeadPinned(nodeId, !pinned) } }),
+      ...(board.handPlaced(nodeId) ? { backUnderRule: () => board.followRule(nodeId) } : {}),
       copy: board.copy,
       show: (sessionId) => void commands.showTile({ kind: 'agent', id: sessionId }),
     },

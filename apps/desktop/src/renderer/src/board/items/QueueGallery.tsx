@@ -23,7 +23,7 @@ function job(id: string, text: string, more: Partial<QueueJob> = {}): QueueJob {
   return {
     id,
     queueId: 'gallery',
-    kind: 'job',
+    kind: 'task',
     text,
     link: null,
     state: 'queued',
@@ -32,6 +32,8 @@ function job(id: string, text: string, more: Partial<QueueJob> = {}): QueueJob {
     drops: 0,
     doneBy: null,
     doneAt: null,
+    result: null,
+    hiddenUntil: null,
     madeBy: lead,
     changedBy: more.madeBy ?? lead,
     lastChange: 'add',
@@ -45,7 +47,7 @@ function job(id: string, text: string, more: Partial<QueueJob> = {}): QueueJob {
 const JOBS: QueueJob[] = [
   job('j1', 'Rate-limit the login route', { state: 'taken', takenBy: impl2, takenAt: at(10, 20), link: 'https://example.test/acme/api/issues/84' }),
   job('j2', 'Drop the v1 webhooks', { drops: 1, link: 'https://example.test/acme/api/issues/88' }),
-  job('j3', 'Ask before touching billing', { kind: 'note', madeBy: you }),
+  job('j3', 'Ask before touching billing', { kind: 'info', madeBy: you }),
   job('j4', 'Paginate /orders', { state: 'taken', takenBy: impl3, takenAt: at(11, 5) }),
   job('j5', 'Retry failed refunds', { link: 'https://example.test/acme/api/issues/91' }),
   job('j6', 'Fix the flaky cart test', { madeBy: you }),
@@ -54,9 +56,9 @@ const JOBS: QueueJob[] = [
 
 /** The user's own queue: what is ready for them to look at. */
 const TO_LOOK_AT: QueueJob[] = [
-  job('u1', 'Cache product images', { link: 'https://example.test/acme/api/pull/214' }),
-  job('u2', 'Split the checkout: the plan', { madeBy: { kind: 'agent', sessionId: 'lead-web', name: 'lead · web' }, link: 'docs/plans/checkout-split.md' }),
-  job('u3', 'Load-test findings', { madeBy: impl3 }),
+  job('u1', 'Cache product images', { kind: 'review', link: 'https://example.test/acme/api/pull/214' }),
+  job('u2', 'Split the checkout: the plan', { madeBy: { kind: 'agent', sessionId: 'lead-web', name: 'lead · web' }, kind: 'backlog', link: 'docs/plans/checkout-split.md' }),
+  job('u3', 'Load-test findings', { kind: 'read', madeBy: impl3 }),
 ];
 
 const noop = () => {};

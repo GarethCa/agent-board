@@ -1,5 +1,7 @@
 // How a memory's entries and a queue's jobs are typed, as one line or many: read the same by the CLI, the MCP and the board.
 
+import { MAX_JOB_HEADLINE } from './protocol.ts';
+
 /** A key as `add` reads one off the text's start: one word (no spaces), then ": ". */
 const KEY_LINE = /^([^\s:]{1,120}):[ \t]+(\S[\s\S]*)$/;
 
@@ -45,3 +47,18 @@ export function jobBrief(queue: { title: string; ref: string }, jobId: string, t
     `This is job #${short} from the queue “${queue.title}”, ${how}. When it is done: agent-board queue done ${queue.ref} ${short}. To put it back for someone else: agent-board queue drop ${queue.ref} ${short}.`,
   ].join('\n');
 }
+
+/**
+ * A job's headline and body: its first line, and the rest without the blank lines between. A first line longer than a
+ * headline is cut short with an ellipsis, and the body is then the whole text, so nothing is lost.
+ */
+export function jobParts(text: string): { headline: string; body: string } {
+  const at = text.indexOf('\n');
+  const first = (at < 0 ? text : text.slice(0, at)).trim();
+  const rest = at < 0 ? '' : text.slice(at + 1).replace(/^\s*\n/, '').trimEnd();
+  if (first.length <= MAX_JOB_HEADLINE) return { headline: first, body: rest };
+  return { headline: `${first.slice(0, MAX_JOB_HEADLINE - 1).trimEnd()}…`, body: text.trim() };
+}
+
+/** A job's text from a headline and a body: one line, then a blank line and the body, when it has one. */
+export const jobTextOf = (headline: string, body: string | undefined): string => (body === undefined || body.trim() === '' ? headline.trim() : `${headline.trim()}\n\n${body.trim()}`);

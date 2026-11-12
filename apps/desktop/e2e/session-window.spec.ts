@@ -282,7 +282,7 @@ test('splitting stops when a pane would be left too small to use, and says why',
     const status = sessionWindow(window).getByTestId('session-window-status');
     for (let i = 0; i < 10 && !/no room to split/.test((await status.textContent()) ?? ''); i++) {
       const before = await panes.count();
-      await window.keyboard.press('ControlOrMeta+d');
+      await window.keyboard.press(windowKey('d'));
       await expect.poll(async () => (await panes.count()) > before || /no room to split/.test((await status.textContent()) ?? '')).toBe(true);
     }
     await expect(status).toContainText('no room to split');

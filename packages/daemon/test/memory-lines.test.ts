@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { entryFrom, jobsFrom } from '../src/memory-lines.ts';
+import { entryFrom, jobParts, jobsFrom, jobTextOf } from '../src/memory-lines.ts';
 
 describe('an entry as typed', () => {
   it('reads "key: value" with a one-word key, and anything else as a note', () => {
@@ -31,5 +31,23 @@ describe('a queue’s lines as typed', () => {
       { text: 'Rename foo -> bar in the API', link: null },
       { text: 'Ship it', link: 'https://x.test/2' },
     ]);
+  });
+});
+
+describe('a job’s headline and body', () => {
+  it('are its first line and the rest, a blank line between them', () => {
+    expect(jobParts('Fix the login')).toEqual({ headline: 'Fix the login', body: '' });
+    expect(jobParts('Fix the login\n\nThe token expires.\nSee the logs.\n')).toEqual({ headline: 'Fix the login', body: 'The token expires.\nSee the logs.' });
+    expect(jobTextOf('Fix the login', 'The token expires.')).toBe('Fix the login\n\nThe token expires.');
+    expect(jobTextOf(' Fix the login ', '  ')).toBe('Fix the login');
+    expect(jobParts(jobTextOf('Fix the login', 'One\n\nTwo'))).toEqual({ headline: 'Fix the login', body: 'One\n\nTwo' });
+  });
+
+  it('cuts a first line too long for a headline, and keeps the whole text as the body', () => {
+    const long = `${'word '.repeat(20)}end`;
+    const { headline, body } = jobParts(long);
+    expect(headline).toHaveLength(80);
+    expect(headline.endsWith('…')).toBe(true);
+    expect(body).toBe(long);
   });
 });

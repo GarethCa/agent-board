@@ -2,7 +2,7 @@
 // web contents, so they never reach the window's renderer by themselves. Pure, so both platforms are tested.
 import type { Input } from 'electron';
 
-/** The window's shortcuts by `code` (`renderer/src/keys.ts`, `session/window-keys.ts`): tabs, splits, ⌘1–9, ⌘[ ⌘], ⌘I, ⌘K; ⌘J with the extended keys on. */
+/** The window's shortcuts by `code` (`renderer/src/keys.ts`, `session/window-keys.ts`): tabs, splits, ⌘1–9, ⌘[ ⌘], ⌘I, ⌘K; ⌘J and ⌘⇧P with the extended keys on. */
 const WINDOW_CODES = new Set(['KeyT', 'KeyW', 'KeyD', 'KeyK', 'KeyF', 'BracketLeft', 'BracketRight', ...Array.from({ length: 9 }, (_, at) => `Digit${at + 1}`)]);
 const ARROWS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']);
 
@@ -11,7 +11,7 @@ export type WebKey = 'window' | 'reload' | 'hardReload' | undefined;
 
 /**
  * What a key press in a web tab's page is for. Its window's own shortcuts go to the window (⌘W closes the tab, not the
- * OS window; ⌘T, ⌘D, ⌘1–9, ⌘K (the switcher), ⌘J (out to the window's header, with the extended keys on), ⌘F (find in the page) and ⌘⌥ and an arrow as anywhere in it; off macOS with Ctrl+Shift, Ctrl's own keys staying the
+ * OS window; ⌘T, ⌘D, ⌘1–9, ⌘K (the switcher), ⌘J (out to the window's header) and ⌘⇧P (park a thought), with the extended keys on, ⌘F (find in the page) and ⌘⌥ and an arrow as anywhere in it; off macOS with Ctrl+Shift, Ctrl's own keys staying the
  * page's). Under the Simplified design its ⌘⌥T (the terminal) and ⌘. (stop the step) go too; under Classic, which has
  * neither, they stay the page's. ⌘R (Ctrl+R) reloads the page, never the app, and ⇧⌘R (Ctrl+Shift+R) skips its cache.
  * Everything else, ⌘C and ⌘V among them, is the page's.
@@ -31,6 +31,17 @@ export function webKey(input: Pick<Input, 'type' | 'code' | 'meta' | 'control' |
   }
   if (simplified && input.code === 'Period' && !(isMac && input.shift)) return 'window';
   if (WINDOW_CODES.has(input.code) || (extended && input.code === 'KeyJ')) return 'window';
+  // ⌘⇧P parks a thought; plain ⌘P (Ctrl+P) is the page's, to print it.
+  if (extended && input.code === 'KeyP' && input.shift) return 'window';
   // ⌘I, not ⇧⌘I; off macOS Ctrl+Shift+I, as plain Ctrl+I is Tab.
   return input.code === 'KeyI' && !(isMac && input.shift) ? 'window' : undefined;
+}
+
+/**
+ * Whether a key handed to the window must take the keyboard from the page too: those that open a field to type in over
+ * the window (⌘K, the switcher; ⌘⇧P, park a thought) or move the keyboard to its header (⌘J). The page keeps the OS
+ * focus otherwise, and what is typed next would go to it.
+ */
+export function takesKeyboard(code: string): boolean {
+  return code === 'KeyK' || code === 'KeyJ' || code === 'KeyP';
 }

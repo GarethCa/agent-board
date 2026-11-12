@@ -92,4 +92,4 @@ An agent's shelves are the exception for pull requests: its Made shelf lists eac
 - Classic and the Simplified design share every component, so a fix to one reaches both, and nothing is built twice.
 - Each component that renders differently carries a branch until Classic is retired or the Simplified design is dropped; `useSimplified()` finds them all.
 - What the app measures in script follows the design as well as the theme: open terminals restyle and refit, a zone's tab measures its chips again and the colour rows are kept per theme and design. A text item's box is still measured when it is edited, so one made under the other design keeps its box until then.
-- Its system fonts (SF Pro, SF Mono) aren't bundled, so its screenshots depend on the machine's fonts more than Classic's, whose fonts ship with the app.
+- Its system fonts (SF Pro, SF Mono) aren't bundled, so its screenshots depend on the machine's fonts more than Classic's, whose fonts ship with the app. Without SF Pro, its text falls back to the bundled Inter, as Linux's default system font can be wide enough to make the toolbar's islands overlap.

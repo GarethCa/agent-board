@@ -42,7 +42,7 @@ test('âŒ« on a selected repo zone asks, leaves its tiles and the repo alone, and
     expect((await page.evaluate(() => window.agentBoard.shells.list()))[0]!.zoneId).toBeNull();
 
     // âŒ˜Z: the same zone, bound to the same repo, with the shell back where it was.
-    await page.keyboard.press('Meta+Z');
+    await page.keyboard.press('ControlOrMeta+Z');
     await expect(zoneNamed(page, before!.name)).toHaveCount(1);
     expect((await zones(page))[0]).toMatchObject({ id: before!.id, kind: 'repo', repoRoot: repo, folder: '' });
     await expect
@@ -105,7 +105,7 @@ test('a managed clone offers an unticked box that deletes its folder too, and âŒ
     await confirm.getByRole('button', { name: 'Delete' }).click();
     await expect(zoneNamed(page, before!.name)).toHaveCount(0);
     expect(existsSync(join(clone, '.git'))).toBe(true);
-    await page.keyboard.press('Meta+Z');
+    await page.keyboard.press('ControlOrMeta+Z');
     await expect(zoneNamed(page, before!.name)).toHaveCount(1);
     expect((await zones(page))[0]).toMatchObject({ id: before!.id, kind: 'repo', repoRoot: clone });
 
@@ -118,7 +118,7 @@ test('a managed clone offers an unticked box that deletes its folder too, and âŒ
     await expect(zoneNamed(page, before!.name)).toHaveCount(0);
     // The folder goes after the zone does, as the daemon removes it.
     await expect.poll(() => existsSync(clone)).toBe(false);
-    await page.keyboard.press('Meta+Z');
+    await page.keyboard.press('ControlOrMeta+Z');
     await expect(zoneNamed(page, before!.name)).toHaveCount(1);
     expect((await zones(page))[0]).toMatchObject({ id: before!.id, kind: 'unbound', repoRoot: null });
     await expect(page.getByText('is back as a group')).toBeVisible();
@@ -147,7 +147,7 @@ test('a zone selected with a note and a shell is one confirmation and one undo s
 
     // The board has the focus, on bare board.
     await page.locator('.react-flow__pane').click({ position: { x: 40, y: 500 } });
-    await page.keyboard.press('Meta+A');
+    await page.keyboard.press('ControlOrMeta+A');
     await page.keyboard.press('Backspace');
     const confirm = page.getByRole('alertdialog');
     await expect(confirm).toHaveCount(1);
@@ -160,7 +160,7 @@ test('a zone selected with a note and a shell is one confirmation and one undo s
     expect(await zones(page)).toEqual([]);
 
     // One âŒ˜Z: the zone and the note come back together.
-    await page.keyboard.press('Meta+Z');
+    await page.keyboard.press('ControlOrMeta+Z');
     await expect(zoneNamed(page, made!.name)).toHaveCount(1);
     await expect(page.getByTestId('sticky')).toHaveCount(1);
   } finally {
@@ -182,7 +182,7 @@ test('a zone still cloning is left out of a delete, and a note selected with it 
     );
     await expect(page.getByTestId('sticky')).toHaveCount(1);
     await page.locator('.react-flow__pane').click({ position: { x: 40, y: 500 } });
-    await page.keyboard.press('Meta+A');
+    await page.keyboard.press('ControlOrMeta+A');
     await page.keyboard.press('Backspace');
     const confirm = page.getByRole('alertdialog', { name: 'Delete selection?' });
     await expect(confirm).toContainText('still cloning');

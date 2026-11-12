@@ -30,12 +30,7 @@ import { usePanelRoom } from './use-panel-room';
 import { tokenNumber } from '../theme';
 import {
   clampForYouHeight,
-  clampPanelWidth,
-  DEFAULT_PANEL_WIDTH,
   maxForYouHeight,
-  maxPanelBottom,
-  maxPanelWidth,
-  panelBottom,
   MIN_FOR_YOU_HEIGHT,
   MIN_PANEL_WIDTH,
   setForYouHeight,
@@ -45,6 +40,7 @@ import {
   usePanelBottom,
   useForYouHeight,
   usePanelWidth,
+  paneLayout,
   type PanelSection,
 } from './panel-layout';
 
@@ -83,16 +79,24 @@ export function MasterPanel({ agents, zones, items, side, focusRequest, onSettin
   const simplified = useSimplified();
   const listSide = simplified && side === 'needs-you';
   const panel = useRef<HTMLElement>(null);
-  // The board it sits on bounds its width; the width is the user's, kept across reloads.
+  // The board it sits on bounds its width and says whether it pushes the board or covers it; the width is the user's, kept across reloads.
   const chosen = usePanelWidth();
-  const { board, taken, lift, height } = usePanelRoom(panel);
-  // Its bottom edge is full height by default, over the zoom bar and the minimap; dragged up, or double-clicked, it ends above them.
+  const room = usePanelRoom(panel);
+  // Covering, its bottom edge is full height by default, over the zoom bar and the minimap; dragged up, or double-clicked, it ends above them.
   const storedBottom = usePanelBottom();
   const inset = tokenNumber('--island-inset');
-  const maxBottom = height === 0 ? 0 : maxPanelBottom(height, inset * 2 + tokenNumber('--island-height'), inset);
-  const bottom = panelBottom(storedBottom, lift, maxBottom);
-  const width = board === 0 ? chosen : clampPanelWidth(chosen, board, taken);
-  const widest = board === 0 ? DEFAULT_PANEL_WIDTH : maxPanelWidth(board, taken);
+  const { mode, width, widest, bottom, maxBottom, room: pushed } = paneLayout(room, chosen, storedBottom, inset);
+  // The board's right edge comes in by `--captain-room`, and Edge rules moves left of the pane by `--captain-edge`.
+  useLayoutEffect(() => {
+    const board = panel.current?.parentElement;
+    if (!board) return;
+    board.style.setProperty('--captain-room', `${pushed}px`);
+    board.style.setProperty('--captain-edge', `${width}px`);
+    return () => {
+      board.style.removeProperty('--captain-room');
+      board.style.removeProperty('--captain-edge');
+    };
+  }, [pushed, width]);
   // Esc in the panel closes it, as it does a popover; the chat's own keys come first.
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.key !== 'Escape' || event.defaultPrevented) return;
@@ -104,7 +108,7 @@ export function MasterPanel({ agents, zones, items, side, focusRequest, onSettin
     if (focusRequest > 0 && master === undefined) panel.current?.querySelector<HTMLButtonElement>('[data-testid="master-start"]')?.focus();
   }, [focusRequest, master]);
   return (
-    <aside ref={panel} className="master-panel" data-testid="master-panel" aria-label={listSide ? 'Needs you' : 'Captain'} data-side={simplified ? side : undefined} style={{ width, '--controls-lift': `${bottom}px` } as CSSProperties} onKeyDown={onKeyDown}>
+    <aside ref={panel} className="master-panel" data-testid="master-panel" aria-label={listSide ? 'Needs you' : 'Captain'} data-side={simplified ? side : undefined} data-mode={mode} style={{ width, '--controls-lift': `${bottom === 0 ? 0 : inset + bottom}px` } as CSSProperties} onKeyDown={onKeyDown}>
       <PanelHandle
         orientation="vertical"
         label={listSide ? 'Resize the pane' : 'Resize the Captain’s panel'}
@@ -113,21 +117,23 @@ export function MasterPanel({ agents, zones, items, side, focusRequest, onSettin
         min={Math.min(MIN_PANEL_WIDTH, widest)}
         max={widest}
         grow={-1}
-        onChange={(next) => setPanelWidth(clampPanelWidth(next, board, taken))}
+        onChange={(next) => setPanelWidth(Math.min(widest, Math.max(MIN_PANEL_WIDTH, Math.round(next))))}
         onReset={() => setPanelWidth(undefined)}
       />
-      <PanelHandle
-        orientation="horizontal"
-        edge="bottom"
-        label="Resize the pane’s height"
-        testId="master-panel-bottom-handle"
-        value={bottom}
-        min={0}
-        max={maxBottom}
-        grow={-1}
-        onChange={(next) => setPanelBottom(Math.min(maxBottom, Math.max(0, next)) || undefined)}
-        onReset={() => setPanelBottom(bottom === 0 ? 'controls' : undefined)}
-      />
+      {mode === 'cover' && (
+        <PanelHandle
+          orientation="horizontal"
+          edge="bottom"
+          label="Resize the pane’s height"
+          testId="master-panel-bottom-handle"
+          value={bottom}
+          min={0}
+          max={maxBottom}
+          grow={-1}
+          onChange={(next) => setPanelBottom(Math.min(maxBottom, Math.max(0, next)) || undefined)}
+          onReset={() => setPanelBottom(bottom === 0 ? 'controls' : undefined)}
+        />
+      )}
       {listSide ? (
         <header className="master-panel-head">
           <h2>Needs you</h2>

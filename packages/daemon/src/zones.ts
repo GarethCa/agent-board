@@ -11,6 +11,7 @@ import { finiteNumberParam, invalidParams, oneOf, optionalBooleanParam, optional
 import {
   ARRANGE_SPACINGS,
   ZONE_LAYOUT_MODES,
+  ZONE_LAYOUT_RULES,
   DEFAULT_ARRANGE_SPACING,
   DEFAULT_ZONE_SIZE,
   MIN_ZONE_SIZE,
@@ -18,6 +19,7 @@ import {
   ZONE_COLORS,
   type ArrangeSpacing,
   type ZoneLayoutMode,
+  type ZoneLayoutRule,
   type DaemonEvent,
   type DaemonMethods,
   type TrackerProvider,
@@ -66,6 +68,7 @@ interface ZoneRow {
   gate_command: string | null;
   spacing: ArrangeSpacing;
   layout_mode: ZoneLayoutMode;
+  layout_rule: ZoneLayoutRule;
   folded: number;
   tracker_provider: TrackerProvider | null;
   tracker_scope: string | null;
@@ -148,6 +151,20 @@ export interface ZoneTable {
   leastUsedColor(): string;
   /** Remembers a folder a zone was made for. */
   rememberFolder(path: string): void;
+  /**
+   * After the tile `key` (`agent:<id>`, `shell:<id>`) moved to `zoneId` (null, loose): marks it placed by hand if
+   * `byHand` and that zone keeps a layout rule; else drops a mark it had in another zone. Announces each zone whose
+   * marks changed.
+   */
+  tileMoved(key: string, zoneId: string | null, byHand: boolean): void;
+  /**
+   * The tile `key` is in `zoneId` now (null, loose; undefined, gone), however it got there: a mark it had in another
+   * zone goes, so it is not pinned again if it comes back. Not announced: a mark counts only while its tile is in its
+   * zone, so the zone's list is as it was.
+   */
+  tileSeen(key: string, zoneId: string | null | undefined): void;
+  /** Drops the marks of `keys` in the zone (all of them without), announcing it if any went. Whether any did. */
+  dropHandPlaced(zoneId: string, keys?: readonly string[]): boolean;
 }
 
 /** The zones table. `cloneProgress` says how far each clone is: progress lives in memory only. */
@@ -165,6 +182,22 @@ export function createZoneTable(
   const selectAll = db.prepare('SELECT * FROM zones ORDER BY rowid');
   const selectOne = db.prepare('SELECT * FROM zones WHERE id = ?');
   const selectCloning = db.prepare('SELECT * FROM zones WHERE clone_repo IS NOT NULL ORDER BY rowid');
+  // A mark counts only while its tile is in the zone: one that moved away, or is gone, is not listed.
+  const selectHandPlaced = db.prepare(
+    `SELECT tile_key FROM zone_hand_placed h WHERE zone_id = ?1 AND (
+       (tile_key LIKE 'agent:%' AND EXISTS (SELECT 1 FROM agents WHERE session_id = substr(h.tile_key, 7) AND zone_id = ?1))
+       OR (tile_key LIKE 'shell:%' AND EXISTS (SELECT 1 FROM shells WHERE id = substr(h.tile_key, 7) AND zone_id = ?1)))
+     ORDER BY placed_at, tile_key`,
+  );
+  const selectMark = db.prepare('SELECT zone_id FROM zone_hand_placed WHERE tile_key = ?');
+  const upsertMark = db.prepare(
+    `INSERT INTO zone_hand_placed (tile_key, zone_id) VALUES (?, ?)
+     ON CONFLICT (tile_key) DO UPDATE SET zone_id = excluded.zone_id, placed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`,
+  );
+  const deleteMark = db.prepare('DELETE FROM zone_hand_placed WHERE tile_key = ?');
+  const deleteMarkIn = db.prepare('DELETE FROM zone_hand_placed WHERE tile_key = ? AND zone_id = ?');
+  const deleteMarkOutside = db.prepare('DELETE FROM zone_hand_placed WHERE tile_key = ? AND zone_id IS NOT ?');
+  const deleteMarksIn = db.prepare('DELETE FROM zone_hand_placed WHERE zone_id = ?');
   const insert = db.prepare(
     `INSERT INTO zones (id, repo_root, folder, name, color, x, y, width, height, tracker_provider, tracker_scope,
        tracker_project, clone_repo, clone_path, clone_made_folder, clone_made_owner, spacing, group_folder, trusts_folder)
@@ -213,6 +246,8 @@ export function createZoneTable(
     gateCommand: row.gate_command,
     spacing: row.spacing,
     layoutMode: row.layout_mode,
+    layoutRule: row.layout_rule,
+    handPlaced: row.layout_rule === 'off' ? [] : (selectHandPlaced.all(row.id) as { tile_key: string }[]).map((mark) => mark.tile_key),
     folded: row.folded === 1,
     tracker:
       row.tracker_provider === null || row.tracker_scope === null
@@ -299,6 +334,24 @@ export function createZoneTable(
       return ZONE_COLORS.reduce((best, color) => ((uses.get(color) ?? 0) < (uses.get(best) ?? 0) ? color : best));
     },
     rememberFolder,
+    tileMoved(key, zoneId, byHand) {
+      const was = (selectMark.get(key) as { zone_id: string } | undefined)?.zone_id;
+      const ruled = zoneId === null ? undefined : (selectOne.get(zoneId) as ZoneRow | undefined)?.layout_rule;
+      const marks = byHand && ruled !== undefined && ruled !== 'off';
+      // A move that isn't the user's (pushed clear, undone, laid out) keeps the mark while the tile stays in its zone.
+      if (marks) upsertMark.run(key, zoneId);
+      else if (was !== undefined && was !== zoneId) deleteMark.run(key);
+      if (was !== undefined && was !== zoneId) announce(was);
+      if (zoneId !== null && marks && was !== zoneId) announce(zoneId);
+    },
+    tileSeen(key, zoneId) {
+      deleteMarkOutside.run(key, zoneId ?? null);
+    },
+    dropHandPlaced(zoneId, keys) {
+      const changes = keys === undefined ? Number(deleteMarksIn.run(zoneId).changes) : keys.reduce((n, key) => n + Number(deleteMarkIn.run(key, zoneId).changes), 0);
+      if (changes > 0) announce(zoneId);
+      return changes > 0;
+    },
   };
 }
 
@@ -326,6 +379,7 @@ export function zoneHandlers<Context>(
   const updateGateCommand = db.prepare('UPDATE zones SET gate_command = ? WHERE id = ?');
   const updateSpacing = db.prepare('UPDATE zones SET spacing = ? WHERE id = ?');
   const updateLayoutMode = db.prepare('UPDATE zones SET layout_mode = ? WHERE id = ?');
+  const updateLayoutRule = db.prepare('UPDATE zones SET layout_rule = ? WHERE id = ?');
   const updateTracker = db.prepare('UPDATE zones SET tracker_provider = ?, tracker_scope = ?, tracker_project = ? WHERE id = ?');
   // Its tracker stays, and so its issue cards and agents' links: a group's issues start agents in a repo picked for
   // each. The tracker is taken away on its own, from the zone's tracker dialog.
@@ -458,8 +512,13 @@ export function zoneHandlers<Context>(
       const gateCommand = gateCommandParam(fields);
       const spacing = fields.spacing === undefined ? undefined : oneOf(fields, 'spacing', ARRANGE_SPACINGS);
       const layoutMode = fields.layoutMode === undefined ? undefined : oneOf(fields, 'layoutMode', ZONE_LAYOUT_MODES);
-      if (bypass === undefined && trustsFolder === undefined && boardMcp === undefined && agentsOrchestrate === undefined && gateCommand === undefined && spacing === undefined && layoutMode === undefined) {
-        throw invalidParams('give codexBypassHookTrust, trustsFolder, boardMcp, agentsOrchestrate, gateCommand, spacing or layoutMode');
+      const layoutRule = fields.layoutRule === undefined ? undefined : oneOf(fields, 'layoutRule', ZONE_LAYOUT_RULES);
+      if (bypass === undefined && trustsFolder === undefined && boardMcp === undefined && agentsOrchestrate === undefined && gateCommand === undefined && spacing === undefined && layoutMode === undefined && layoutRule === undefined) {
+        throw invalidParams('give codexBypassHookTrust, trustsFolder, boardMcp, agentsOrchestrate, gateCommand, spacing, layoutMode or layoutRule');
+      }
+      // A rule moves the tiles' saved places and a view only draws them elsewhere, so a zone never has both.
+      if (layoutRule !== undefined && layoutRule !== 'off' && layoutMode !== undefined && layoutMode !== 'free') {
+        throw invalidParams(`a zone keeps a layout rule or a ${layoutMode} view, not both`);
       }
       const zone = zones.get(id);
       if (trustsFolder === true && zone.repoRoot === null) {
@@ -468,6 +527,11 @@ export function zoneHandlers<Context>(
       if (gateCommand !== undefined) updateGateCommand.run(gateCommand, id);
       if (spacing !== undefined) updateSpacing.run(spacing, id);
       if (layoutMode !== undefined) updateLayoutMode.run(layoutMode, id);
+      if (layoutMode !== undefined && layoutMode !== 'free' && layoutRule === undefined) updateLayoutRule.run('off', id);
+      if (layoutRule !== undefined && layoutRule !== 'off') updateLayoutMode.run('free', id);
+      if (layoutRule !== undefined) updateLayoutRule.run(layoutRule, id);
+      // The tiles placed by hand were placed against the rule they left: under another rule, or none, they start afresh.
+      if (zones.get(id).layoutRule !== zone.layoutRule) zones.dropHandPlaced(id);
       if (bypass !== undefined) updateBypass.run(bypass ? 1 : 0, id);
       if (trustsFolder !== undefined) updateTrustsFolder.run(trustsFolder ? 1 : 0, id);
       if (boardMcp !== undefined) updateBoardMcp.run(boardMcp ? 1 : 0, id);
@@ -524,6 +588,8 @@ export function zoneHandlers<Context>(
       // A snapshot from before zones had a spacing is of a zone laid out at normal's gaps, as the migration keeps those.
       const spacing = fields.spacing === undefined ? 'normal' : oneOf(fields, 'spacing', ARRANGE_SPACINGS);
       const layoutMode = fields.layoutMode === undefined ? 'free' : oneOf(fields, 'layoutMode', ZONE_LAYOUT_MODES);
+      // A snapshot from before zones kept a rule is of a zone with none.
+      const layoutRule = fields.layoutRule === undefined ? 'off' : oneOf(fields, 'layoutRule', ZONE_LAYOUT_RULES);
       return queue(`zone ${id}`, async () => {
         if (zones.find(id) !== undefined) throw invalidParams(`zone ${id} exists already`);
         // As the setter does; but a folder that has gone since is left out, rather than failing the undo it is for.
@@ -536,7 +602,8 @@ export function zoneHandlers<Context>(
         const kept = plain?.repoRoot === null ? plain.path : null;
         zones.insert({ ...layout, id, name, color, repoRoot: bound?.repoRoot ?? null, folder: bound?.folder ?? '', tracker, spacing, groupFolder: kept });
         updateFillOpacity.run(fillOpacity, id);
-        updateLayoutMode.run(layoutMode, id);
+        updateLayoutMode.run(layoutRule === 'off' ? layoutMode : 'free', id);
+        updateLayoutRule.run(layoutRule, id);
         updateBypass.run(optionalBooleanParam(fields, 'codexBypassHookTrust') === false ? 0 : 1, id);
         updateTrustsFolder.run(bound !== null && optionalBooleanParam(fields, 'trustsFolder') === true ? 1 : 0, id);
         updateBoardMcp.run(optionalBooleanParam(fields, 'boardMcp') === false ? 0 : 1, id);

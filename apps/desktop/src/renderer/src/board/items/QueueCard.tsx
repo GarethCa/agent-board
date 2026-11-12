@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type ComponentProps, type DragEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { ArrowUpToLine, Check, Hand, Inbox, NotebookText, Search, Ticket, Trash2, Undo2 } from 'lucide-react';
 import { jobsFrom } from '@agent-board/daemon/memory-lines';
-import { MAX_DRAIN_DROPS, MAX_JOB_TEXT, type Agent, type QueueAudience, type QueueJob, type QueueRowKind } from '@agent-board/daemon/protocol';
+import { MAX_DRAIN_DROPS, MAX_JOB_TEXT, isQueueWork, type Agent, type QueueAudience, type QueueJob, type QueueRowKind } from '@agent-board/daemon/protocol';
 import { Button, IconButton, Segmented } from '../../ui';
 import type { NeedsYouEntry } from '../../../../shared/needs-you';
 import { itemKind, needsLine } from './to-look-at';
@@ -12,7 +12,10 @@ import { peekKeys, ScopeChip, ListCardAddBox, ListCardFace, ListCardIconView } f
 import { countsText, DONE_SHOWN, doneJobs, jobCorner, jobLine, jobState, matchingJobs, nextJob, openInCardOrder, QUEUE_CARD_ROWS } from './queue-card';
 
 /** A job or note to add: its text, and its link when the line ends ` -> link`. */
-export type AddJob = (job: { kind: QueueRowKind; text: string; link: string | null }) => void;
+/** What the add box adds: the queue's own kind (a task, or backlog on the user's queue), or a note, read, never taken. */
+export type AddKind = 'job' | 'note';
+/** A row put back takes its own kind again. */
+export type AddJob = (job: { kind: AddKind | QueueRowKind; text: string; link: string | null }) => void;
 
 /** The ticket for agents' work, the inbox for the user's own queue. */
 function queueGlyph(audience: QueueAudience): ReactNode {
@@ -23,12 +26,12 @@ function queueGlyph(audience: QueueAudience): ReactNode {
 const a = (noun: string) => `${/^[aeiou]/.test(noun) ? 'an' : 'a'} ${noun}`;
 
 /** What a queue's add box says, for its audience. */
-const placeholderFor = (audience: QueueAudience, kind: QueueRowKind) =>
+const placeholderFor = (audience: QueueAudience, kind: AddKind) =>
   kind === 'note' ? 'Add a note…' : audience === 'user' ? 'Add something to look at…' : 'Add a job…';
 
 /** The box at a card's foot, and the peek's: ↵ queues a job, or a note with the switch; a paste of several lines, one each. */
 function QueueAddBox({ audience, onAdd, autoFocus }: { audience: QueueAudience; onAdd: AddJob; autoFocus?: boolean }) {
-  const [kind, setKind] = useState<QueueRowKind>('job');
+  const [kind, setKind] = useState<AddKind>('job');
   // What a row is called: a job for agents, an item in the user's own queue.
   const forYou = audience === 'user';
   const item = forYou ? 'item' : 'job';
@@ -118,7 +121,7 @@ export interface DragFrom {
 }
 
 /** Whether a row can be handed to an agent: a waiting job of a queue for agents. */
-const handable = (job: QueueJob, audience: QueueAudience) => audience === 'agents' && job.kind === 'job' && job.state === 'queued';
+const handable = (job: QueueJob, audience: QueueAudience) => audience === 'agents' && isQueueWork(job.kind) && job.state === 'queued';
 
 /** A row's drag, for a job that can be handed on: dropped on an idle agent's tile, it opens Hand on. */
 function dragProps(queue: DragFrom | undefined, job: QueueJob, audience: QueueAudience) {
@@ -246,7 +249,7 @@ export function QueueCardView(props: QueueCardViewProps) {
       <div className="listcard-foot">
         <QueueAddBox audience={audience} onAdd={onAdd} autoFocus={focusAdd} />
         <span className="listcard-foot-line">
-          <span>{footText({ more, audience, next, drain, idle: !open.some((job) => job.state === 'taken'), left: open.filter((job) => job.state === 'queued' && job.kind === 'job' && job.drops >= MAX_DRAIN_DROPS).length })}</span>
+          <span>{footText({ more, audience, next, drain, idle: !open.some((job) => job.state === 'taken'), left: open.filter((job) => job.state === 'queued' && isQueueWork(job.kind) && job.drops >= MAX_DRAIN_DROPS).length })}</span>
           <span className="queue-foot-actions">
             {audience === 'agents' && onDrain !== undefined && (drain?.on === true || (next !== undefined && !open.some((job) => job.state === 'taken'))) && (
               <Button size="sm" variant={drain?.on === true ? 'ghost' : 'primary'} className="nodrag" data-testid="queue-drain" onClick={onDrain}>
@@ -386,7 +389,7 @@ export function QueuePeek(props: QueuePeekProps) {
   const rowKeys = (event: KeyboardEvent<HTMLElement>) => {
     const target = event.target as HTMLElement;
     const job = shown.find((each) => each.id === target.dataset.row);
-    if (job !== undefined && (event.key === 'd' || event.key === 'D') && job.kind === 'job' && job.state !== 'done') {
+    if (job !== undefined && (event.key === 'd' || event.key === 'D') && isQueueWork(job.kind) && job.state !== 'done') {
       event.preventDefault();
       onDone(job);
     } else keys(event);
@@ -410,7 +413,7 @@ export function QueuePeek(props: QueuePeekProps) {
         <IconButton icon={<Hand />} size="sm" aria-label={`Hand ${jobLine(job)} to an agent`} tooltip="Hand it to an idle agent" onClick={() => onHand(job)} />
       )}
       {job.state === 'taken' && <IconButton icon={<Undo2 />} size="sm" aria-label={`Put ${jobLine(job)} back`} tooltip="Put it back at the front, for someone else" onClick={() => onDrop(job)} />}
-      {job.kind === 'job' && job.state !== 'done' && <IconButton icon={<Check />} size="sm" aria-label={`Finish ${jobLine(job)}`} tooltip="Done" onClick={() => onDone(job)} />}
+      {isQueueWork(job.kind) && job.state !== 'done' && <IconButton icon={<Check />} size="sm" aria-label={`Finish ${jobLine(job)}`} tooltip="Done" onClick={() => onDone(job)} />}
       <IconButton icon={<Trash2 />} size="sm" aria-label={`Remove ${jobLine(job)}`} tooltip="Remove; its history keeps it" onClick={() => onRemove(job)} />
     </span>
   );

@@ -909,6 +909,7 @@ export async function setOwnStatus(
   done = false,
   character?: CharacterSet,
   category?: WorkCategoryParams,
+  description?: string,
 ): Promise<Agent> {
   if (session.token === undefined || session.caller === null) {
     throw new BoardError(`Only an agent in an agent-board session can set its status: there is no ${BOARD_TOKEN_ENV} here.`);
@@ -919,6 +920,7 @@ export async function setOwnStatus(
     ...(progress === undefined ? {} : { progress }),
     ...(done ? { done } : {}),
     ...(character === undefined ? {} : { character }),
+    ...(description === undefined ? {} : { description }),
     ...category,
   });
 }
@@ -968,6 +970,11 @@ export function categoryAnswer(agent: Agent): string {
   return `Your category: ${categoryWords(agent)}.`;
 }
 
+/** What a status set with a description answers: what the agent is for now, or that it says nothing. */
+export function purposeAnswer(agent: Agent, whose = 'Your'): string {
+  return agent.purpose === null ? `${whose} description is cleared.` : `${whose} description: "${agent.purpose}". It stays until another is set.`;
+}
+
 /** What a status set with a pose answers: the pose drawn, the one set, and when that goes. */
 export function characterAnswer(agent: Agent): string {
   return `Your character: ${characterWords(characterReading(agent))}.`;
@@ -1008,6 +1015,7 @@ export async function setCrewStatus(
   progress: number | undefined,
   character?: CharacterSet,
   category?: WorkCategoryParams,
+  description?: string,
 ): Promise<BoardView> {
   const { token, agent } = await orchestratorTarget(session, ref);
   await session.client.call('orchestrator.setStatus', {
@@ -1016,14 +1024,16 @@ export async function setCrewStatus(
     ...(summary === undefined ? {} : { summary }),
     ...(progress === undefined ? {} : { progress }),
     ...(character === undefined ? {} : { character }),
+    ...(description === undefined ? {} : { description }),
     ...category,
   });
   const fresh = await freshAgentLine(session, agent.sessionId);
   const reading = characterReading(fresh.agent, 'its');
   const pose = character === undefined ? '' : `\nIts character: ${characterWords(reading, 'its own')}.`;
   const kind = category === undefined ? '' : `\nIts category: ${categoryWords(fresh.agent, 'its own')}.`;
+  const about = description === undefined ? '' : `\n${purposeAnswer(fresh.agent, 'Its')}`;
   return {
-    text: `Set the status of ${fresh.line}${pose}${kind}`,
+    text: `Set the status of ${fresh.line}${pose}${kind}${about}`,
     json: { ...agentJson(fresh.refs, fresh.agent, session.caller), ...(character === undefined ? {} : { character: reading }) },
   };
 }

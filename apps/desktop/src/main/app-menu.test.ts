@@ -2,7 +2,7 @@ import type { MenuItemConstructorOptions } from 'electron';
 import { describe, expect, it, vi } from 'vitest';
 import { appMenu, menuTemplate, windowMenu } from './app-menu';
 
-const actions = () => ({ about: vi.fn(), settings: vi.fn(), checkForUpdates: vi.fn(), gettingStarted: vi.fn() });
+const actions = () => ({ about: vi.fn(), settings: vi.fn(), checkForUpdates: vi.fn(), gettingStarted: vi.fn(), overview: vi.fn() });
 const technical = () => ({ simplified: true, on: false, set: vi.fn() });
 const items = (a = actions()) => appMenu('agent-board', a).submenu as MenuItemConstructorOptions[];
 
@@ -42,7 +42,7 @@ describe('the app menu', () => {
   it('has no accelerator but the allow-listed ones, and none a bare key', () => {
     // Menu accelerators are chords the renderer's board and terminal keys also use (see keys/registry.ts), and a key the
     // menu owns can be taken from a focused terminal. Adding one means adding it here, with who owns the routing.
-    const ALLOWED = ['CommandOrControl+,']; // Settings…
+    const ALLOWED = ['CommandOrControl+,', 'CommandOrControl+Shift+O']; // Settings…, Window › Overview
     const accelerators = (list: MenuItemConstructorOptions[]): string[] =>
       list.flatMap((item) => [
         ...(item.accelerator === undefined ? [] : [String(item.accelerator)]),
@@ -77,13 +77,22 @@ describe('the app menu', () => {
 describe('the Window menu', () => {
   const labels = (list: MenuItemConstructorOptions[]) => list.map((item) => item.label ?? item.role ?? item.type);
 
-  it('is the standard one while nothing is minimised', () => {
-    expect(labels(windowMenu(true, []).submenu as MenuItemConstructorOptions[])).toEqual(['minimize', 'zoom', 'separator', 'front']);
+  it('is Overview over the standard one while nothing is minimised', () => {
+    expect(labels(windowMenu(true, vi.fn(), []).submenu as MenuItemConstructorOptions[])).toEqual(['Overview', 'separator', 'minimize', 'zoom', 'separator', 'front']);
+  });
+
+  it('opens the Overview on ⌘⇧O', () => {
+    const a = actions();
+    const windowItem = menuTemplate({ mac: true, packaged: true, name: 'agent-board' }, a, technical()).find((item) => item.role === 'windowMenu')!;
+    const overview = (windowItem.submenu as MenuItemConstructorOptions[]).find((item) => item.label === 'Overview')!;
+    expect(overview.accelerator).toBe('CommandOrControl+Shift+O');
+    (overview.click as () => void)();
+    expect(a.overview).toHaveBeenCalledOnce();
   });
 
   it('lists the minimised windows under a Minimised heading, and restores the one picked', () => {
     const restore = vi.fn();
-    const list = windowMenu(true, [{ title: 'API', restore }, { title: 'Docs', restore: vi.fn() }]).submenu as MenuItemConstructorOptions[];
+    const list = windowMenu(true, vi.fn(), [{ title: 'API', restore }, { title: 'Docs', restore: vi.fn() }]).submenu as MenuItemConstructorOptions[];
     expect(labels(list).slice(-4)).toEqual(['separator', 'Minimised', 'API', 'Docs']);
     expect(list.find((item) => item.label === 'Minimised')?.enabled).toBe(false);
     (list.find((item) => item.label === 'API')!.click as () => void)();

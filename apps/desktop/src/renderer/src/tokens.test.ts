@@ -183,6 +183,13 @@ const LOCAL = [
   // The docked pane's bottom, set inline from script (`usePanelRoom` measures the zoom bar's and the minimap's top).
   '--controls-lift',
   '--edge-room',
+  // The Captain's pane sets on the board how far it pushes the board's edge in, and its width (`MasterPanel`).
+  '--captain-room',
+  '--captain-edge',
+  '--captain-push',
+  '--captain-beside',
+  // How far the creation toolbar moves off the board's middle to clear the islands (`useChromeFolds`).
+  '--toolbar-shift',
   '--for-you-height',
   '--dock-room',
   '--radix-popover-content-available-width',
@@ -193,10 +200,16 @@ const LOCAL = [
   '--pane-strip',
   '--zone-color',
   '--zone-fill-pct',
+  // A work category's colours in the Overview, set on a card or group by its category.
+  '--overview-cat',
+  '--overview-cat-ink',
+  '--overview-cat-soft',
   // The colour of the zone a note sits in, set on the note, and the edge colour derived from it.
   '--agent-note-zone',
   '--agent-note-edge',
   '--rename-gap',
+  // An agent tile's own fill, set by the state rules that change it, under its head's hover buttons.
+  '--tile-fill',
   // How far through an agent says it is, set inline on its tile's progress hairline.
   '--progress',
   '--sticky-color',

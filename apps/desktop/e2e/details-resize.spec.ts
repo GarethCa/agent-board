@@ -1,5 +1,5 @@
 import { expect, type Page } from '@playwright/test';
-import { launch, screen, SHELL_ENV, sessionWindow, showDetails } from './agent-helpers.ts';
+import { launch, screen, SHELL_ENV, sessionWindow, showDetails, windowKey } from './agent-helpers.ts';
 import { test, newShell, removeDataDir, tempDataDir } from './launch.ts';
 
 const strip = (page: Page) => sessionWindow(page).locator('.session-details');
@@ -74,7 +74,7 @@ test('the details strip resizes on its handle: terminal columns follow, below th
     await expect(sessionWindow(window)).toHaveAttribute('data-state', 'attached');
     // Each window opens collapsed; ⌘I opens it at the remembered width.
     await expect(strip(window)).toHaveClass(/session-details-rail/);
-    await window.keyboard.press('ControlOrMeta+i');
+    await window.keyboard.press(windowKey('i'));
     await expect(strip(window)).not.toHaveClass(/session-details-rail/);
     await expect.poll(() => stripWidth(window)).toBe(initial - 50);
     await expect(screen(window)).toBeVisible();

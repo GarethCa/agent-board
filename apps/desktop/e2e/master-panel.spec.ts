@@ -2,7 +2,7 @@ import { expect, type Locator, type Page } from '@playwright/test';
 import { agents, launch, listFinishedTurns, sessionWindow, showDetails, spawnAgent, tile, TURN_MS, useFullSidebar } from './agent-helpers.ts';
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
 import { scratch } from './scratch.ts';
-import { crowdedPanel, LONG, PATH } from './master-helpers.ts';
+import { crowdedPanel, intersecting, LONG, PATH, topRowMeets } from './master-helpers.ts';
 
 const panelOf = (window: Page) => window.getByTestId('master-panel');
 const widthOf = async (window: Page) => Math.round((await panelOf(window).boundingBox())!.width);
@@ -70,19 +70,19 @@ test('the Captain’s panel resizes on its edge and the line under For you, fold
     await expect(handle).toHaveAttribute('role', 'separator');
     await expect.poll(() => widthOf(window)).toBe(360);
 
-    // Dragging the left edge in widens the panel, out narrows it; the arrow keys step it and a double-click resets it.
-    await drag(window, handle, -100, 0);
-    await expect.poll(() => widthOf(window)).toBe(460);
-    await expect(handle).toHaveAttribute('aria-valuenow', '460');
+    // Dragging the left edge in widens the panel (up to 400 px on a 1280 px window), out narrows it; the arrow keys step it and a double-click resets it.
+    await drag(window, handle, -30, 0);
+    await expect.poll(() => widthOf(window)).toBe(390);
+    await expect(handle).toHaveAttribute('aria-valuenow', '390');
     await handle.focus();
     await window.keyboard.press('ArrowRight');
-    await expect.poll(() => widthOf(window)).toBe(444);
+    await expect.poll(() => widthOf(window)).toBe(374);
     await handle.dblclick();
     await expect.poll(() => widthOf(window)).toBe(360);
-    await drag(window, handle, -100, 0);
-    await expect.poll(() => widthOf(window)).toBe(460);
+    await drag(window, handle, -30, 0);
+    await expect.poll(() => widthOf(window)).toBe(390);
 
-    // The For you list is as tall as its line is dragged to (the panel ends above the minimap, so the window is made tall enough to give it room).
+    // The For you list is as tall as its line is dragged to (the window is made taller to give it room).
     const shorter = (await panelOf(window).boundingBox())!.height;
     await window.setViewportSize({ width: 1280, height: 1000 });
     await expect.poll(async () => (await panelOf(window).boundingBox())!.height).toBeGreaterThan(shorter);
@@ -110,7 +110,7 @@ test('the Captain’s panel resizes on its edge and the line under For you, fold
     window = current.window;
     await window.setViewportSize({ width: 1280, height: 1000 });
     await window.getByTestId('master-button').click();
-    await expect.poll(() => widthOf(window)).toBe(460);
+    await expect.poll(() => widthOf(window)).toBe(390);
     await expect.poll(async () => Math.round((await window.getByRole('region', { name: 'For you' }).boundingBox())!.height)).toBe(taller);
     await expect(window.getByTestId('master-watch-row')).toHaveCount(0);
     await window.getByTestId('master-fold-watching').click();
@@ -121,32 +121,50 @@ test('the Captain’s panel resizes on its edge and the line under For you, fold
   }
 });
 
-test('the Captain’s panel sits above the dock: its bottom ends above it and nothing of it is hidden behind', async () => {
+test('the Captain’s panel pushes the board in: flush and full height, no tile moves, the controls and the dock end left of it, and ⌘⇧M in it closes it', async () => {
   const { repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env);
   try {
     await longPanel(window, app, repo);
     const panel = panelOf(window);
-    await expect(panel).toBeVisible();
-    const bottomBefore = (await panel.boundingBox())!;
+    const tileBox = async () => (await tile(window).first().boundingBox())!;
+    const right = (box: { x: number; width: number } | null) => (box === null ? 0 : box.x + box.width);
+    // Closed with the button, then opened with ⌘⇧M from the board: the tile is where it was, both times.
+    await window.getByTestId('master-button').click();
+    await expect(panel).toHaveCount(0);
+    const still = await tileBox();
+    await window.locator('.react-flow__pane').click({ position: { x: 40, y: 200 } });
+    await window.keyboard.press('ControlOrMeta+Shift+M');
+    await expect(panel).toHaveAttribute('data-mode', 'push');
+    await expect.poll(() => window.evaluate(() => document.activeElement?.closest('[data-testid="master-panel"]') !== null)).toBe(true);
+    expect(await tileBox()).toEqual(still);
+    // Flush to the window's right edge, top and bottom.
+    const size = await window.evaluate(() => ({ width: document.documentElement.clientWidth, height: document.documentElement.clientHeight }));
+    const box = (await panel.boundingBox())!;
+    expect([Math.round(box.x + box.width), Math.round(box.y), Math.round(box.y + box.height)]).toEqual([size.width, 0, size.height]);
+    // The zoom bar, the minimap and the top-right island end left of it; so does the dock, with a window in it.
+    for (const selector of ['.island-bottom-right', '.board-minimap', '.island-top-right']) {
+      expect(right(await window.locator(selector).first().boundingBox()), selector).toBeLessThanOrEqual(box.x);
+    }
+    // The top row fits the narrower board: no island meets another, or the pane.
+    await expect.poll(() => topRowMeets(window)).toEqual([]);
     await tile(window).first().dblclick();
     await window.getByRole('button', { name: 'Minimise session window' }).click();
-    const dock = window.getByTestId('dock-item');
-    await expect(dock).toHaveCount(1);
-    const dockBox = async () => (await window.locator('.session-dock').boundingBox())!;
-    // The panel gives way to the dock: it ends above the dock's top edge, and the zoom island, under it, stays put.
-    await expect.poll(async () => (await panel.boundingBox())!.y + (await panel.boundingBox())!.height).toBeLessThanOrEqual((await dockBox()).y);
-    const box = (await panel.boundingBox())!;
-    expect(box.y + box.height).toBeLessThanOrEqual(bottomBefore.y + bottomBefore.height);
-    // Every corner of the panel is the panel's own: the dock isn't drawn over it, and it isn't drawn over the dock.
-    const owner = await window.evaluate(
-      ({ x, y }) => (document.elementFromPoint(x, y)?.closest('[data-testid="master-panel"]') ? 'panel' : 'other'),
-      { x: box.x + box.width - 6, y: box.y + box.height - 6 },
-    );
-    expect(owner).toBe('panel');
-    const dockNow = await dockBox();
-    expect(dockNow.x + dockNow.width <= box.x || dockNow.y >= box.y + box.height).toBe(true);
+    await expect(window.getByTestId('dock-item')).toHaveCount(1);
+    await expect.poll(async () => right(await window.locator('.session-dock').boundingBox())).toBeLessThanOrEqual(box.x);
+    expect((await panel.boundingBox())!).toEqual(box);
+    // ⌘⇧M with the focus in it closes it, and the tile still hasn't moved.
+    await panel.getByRole('button').first().focus();
+    await window.keyboard.press('ControlOrMeta+Shift+M');
+    await expect(panel).toHaveCount(0);
+    expect(await tileBox()).toEqual(still);
+    // On the narrowest board it pushes, at its least width, the top row still fits.
+    await window.setViewportSize({ width: 1160, height: 800 });
+    await window.getByTestId('master-button').click();
+    await expect(panel).toHaveAttribute('data-mode', 'push');
+    await expect.poll(() => widthOf(window)).toBe(280);
+    await expect.poll(() => topRowMeets(window)).toEqual([]);
   } finally {
     await app.close();
     await removeDataDir(dataDir);
@@ -183,14 +201,6 @@ test('every agent’s details strip, which shares nothing with the Captain’s p
   }
 });
 
-/** Whether any two of the boxes share area. */
-const intersecting = (boxes: Record<string, { x: number; y: number; width: number; height: number } | null>) => {
-  const named = Object.entries(boxes).filter((entry): entry is [string, NonNullable<(typeof entry)[1]>] => entry[1] !== null);
-  return named.flatMap(([a, p], i) =>
-    named.slice(i + 1).flatMap(([b, q]) => (p.x < q.x + q.width && q.x < p.x + p.width && p.y < q.y + q.height && q.y < p.y + p.height ? [`${a} / ${b}`] : [])),
-  );
-};
-
 test('dragged as wide as it goes, the Captain’s panel leaves the zones pill, the dock, the zoom bar and Edge rules their room, on the board', async () => {
   const { repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
@@ -209,7 +219,7 @@ test('dragged as wide as it goes, the Captain’s panel leaves the zones pill, t
     await tile(window).first().dblclick();
     await window.getByRole('button', { name: 'Minimise session window' }).click();
     await expect(window.getByTestId('dock-item')).toHaveCount(1);
-    await window.setViewportSize({ width: 1100, height: 760 });
+    await window.setViewportSize({ width: 1280, height: 760 });
     await drag(window, window.getByTestId('master-panel-handle'), -2000, 0);
     await expect.poll(() => widthOf(window)).toBeGreaterThan(360);
     await row('the widest panel, with a docked window');

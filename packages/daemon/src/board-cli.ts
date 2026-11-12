@@ -46,6 +46,7 @@ import {
   characterAnswer,
   setCrewStatus,
   setOwnStatus,
+  purposeAnswer,
   recordEntry,
   pinEntry,
   setOwnPage,
@@ -126,6 +127,10 @@ import {
   MAX_PAGE_TEXT,
   MAX_PIN_LABEL,
   MAX_PIN_NOTE,
+  MAX_JOB_HEADLINE,
+  QUEUE_ADD_KINDS,
+  QUEUE_ROW_KINDS,
+  type QueueAddKind,
   PAGE_ICONS,
   PAGE_TONES,
   MAX_STATUS_LENGTH,
@@ -298,9 +303,10 @@ ORCHESTRATING
                         layout; --boxes draws it in characters.
   zone screenshot [<zone ref>] [--out <file>] [--style board|lofi]
                         A PNG of your zone as the app draws it, terminals hidden.
-  zone layout free|shelves|clusters [<zone ref>]
-                        How your zone draws what it holds: free (as placed), shelves
-                        (To do, Doing, Waiting, Done) or clusters. Moves no tile.
+  zone layout free|lanes|shelves|clusters [<zone ref>]
+                        How your zone lays out what it holds: free (as placed), lanes (a
+                        lane per ticket, kept), shelves (To do, Doing, Waiting, Done) or
+                        clusters. Only lanes moves tiles.
   zone add --group --name <name> [--color <c>] [--at <x>,<y>] [--size <w>,<h>]
                         Make a group beside your zone. \`zone rename|resize|remove\` change
                         the groups you, or an agent you started, made.
@@ -460,7 +466,7 @@ decision instead, use the MCP tool \`show_doc\` with plan.
   },
   status: {
     usage:
-      'agent-board status set [<summary>] [--agent <ref>] [--progress <0-100>] [--done] [--pose <pose> [--face <face>] [--prop <prop>]] [--category <category> [--label <text>] [--on "<who> · <ref>"]] | status poses',
+      'agent-board status set [<summary>] [--agent <ref>] [--progress <0-100>] [--done] [--pose <pose> [--face <face>] [--prop <prop>]] [--category <category> [--label <text>] [--on "<who> · <ref>"]] [--description <text>] | status poses',
     text: `Sets your own tile's status: one line, at most ${MAX_STATUS_LENGTH} characters, saying what you are doing
 now, as the change you are making ("Moving session ids to the daemon"), not the task you were
 given. Your tile shows it in place of your task. Set it once you understand the work, and again
@@ -508,6 +514,9 @@ permission prompt of yours waits on the user, the overview shows needs-help over
   --category <c>   Your work's category, or none.
   --label <text>   Your own word for it, with --category.
   --on <who · ref> Who it waits on, with --category waiting-on-others or in-review.
+  --description <text>
+                   What you are for, in up to 80 characters; it stays until you set another,
+                   and "" clears it. ⌘K shows it under your name.
   --json           Print the agent as JSON (with --agent, as \`show --json\` prints it).`,
   },
   record: {
@@ -1231,7 +1240,7 @@ and what moves keeps clear of them. It is never run by itself. It takes no --by,
       'agent-board zone add --group --name <name> [--color <#rrggbb>] [--at <x>,<y>] [--size <w>,<h>] | ' +
       'zone rename <ref> <name> [--color <c>] | zone resize <ref> --size <w>,<h> [--at <x>,<y>] | zone remove <ref> | ' +
       'zone map [<ref>] [--boxes] [--sections] | zone screenshot [<ref>] [--out <file.png>] [--style board|lofi] | ' +
-      'zone layout free|shelves|clusters [<ref>]',
+      'zone layout free|lanes|shelves|clusters [<ref>]',
     text: `Groups (zones bound to no repo) for an orchestrator to sort its crew into
 (\`agent-board help orchestrate\`). \`agent-board zones\` lists every zone.
 
@@ -1271,12 +1280,14 @@ first: a picture costs a model far more to read.
 
 \`zone layout\` sets how your zone (or <ref>, in your scope) draws what it holds, as the zone's
 Layout menu does in the app. free: each tile where it was put (every zone starts free).
+lanes: a rule the zone keeps, a lane per ticket, laid out again whenever its work changes; a
+tile the user drags leaves the rule where it is put, and \`arrange\` there follows the rule.
 shelves: its work as one stack per ticket on To do, Doing, Waiting and Done shelves, under a
 head row of the zone's leads and shells; a click on a stack fans its tiles out below the shelves.
 clusters: each ticket's tiles drawn together under its label, what needs the user first, under
-the same head row. No tile's own place changes, so going back to free shows the zone as it was.
-A zone is never laid out so by itself: choose shelves when its work is easier to follow by
-status, clusters when by ticket.
+the same head row. Shelves and clusters change no tile's own place, so going back to free shows
+the zone as it was; lanes moves them, so free after it leaves them in their lanes. Choose
+shelves when its work is easier to follow by status, clusters or lanes when by ticket.
 
   --group          Make a group (an orchestrator makes no other zone).
   --name <name>    Its name.
@@ -1524,29 +1535,39 @@ together, use a steps card (\`steps --help\`).
   },
   queue: {
     usage:
-      'agent-board queue ls | queue read <queue> | queue add <queue> [--kind job|note] [--front] [--link <url>] [--file <path>|-] [--] <line>... | ' +
-      'queue take <queue> [<job>] | queue drop <queue> <job> | queue done <queue> <job> | queue edit <queue> <job> [--link <url>] [--] [<text>...] | ' +
+      'agent-board queue ls | queue read <queue> | queue add <queue> [--kind <kind>] [--front] [--link <url>] [--body <text>] [--file <path>|-] [--] <line>... | ' +
+      'queue take <queue> [<job>] | queue drop <queue> <job> | queue done <queue> <job> [--result <text>] | queue edit <queue> <job> [--link <url>] [--] [<text>...] | ' +
       'queue move <queue> <job> <before>|top|last | queue drain <queue> on|off [--most 1-3] | queue rm <queue> <job> | queue history <queue> <job> | queue restore <queue> <job> <version> | queue new [--for-user] <title>...',
-    text: `A queue holds jobs in order, for agents to take one at a time, and plain notes. Its scope is
+    text: `A queue holds jobs in order, for agents to take one at a time, and info to read. Its scope is
 a memory's: where it sits. What goes in and comes out is for agents in scope and the user to
 decide. A queue for the user (--for-user) holds what is ready for them to look at: agents add to
 it, and only the user takes from it.
 
+Kinds. An agents' queue: task (the default), request (asked of whoever takes it), prompt (a
+prompt to run as it stands), and info (read, never taken). The user's queue: backlog (the
+default), review (a change to look over), questions, and read. job and note still work: a job
+is the queue's default kind, a note is info (read, on the user's queue). A queue that changes
+hands takes its rows' kinds with it: task and backlog swap, info and read swap, and the rest
+become a request or backlog.
+
   queue ls                      The queues you can read.
-  queue read <queue>            Its jobs and notes in order (the next job first), then those done.
+  queue read <queue>            Its rows in order (the next job first), then those done.
   queue add <queue> <line>...   Queue a job a line, at the end (--front: at the front, in the
                                 order given). " -> <link>" at a line's end is its link (or
-                                --link for one). --kind note adds notes instead.
+                                --link for one). --kind sets their kind (above). With
+                                --body <text>, the line is one job's headline (at most
+                                ${MAX_JOB_HEADLINE} characters) and the body its detail.
   queue take <queue> [<job>]    Take the next job, or that one: it is yours until you finish or
                                 drop it. If your session ends first, it goes back to the front.
-  queue done <queue> <job>      It is done.
+  queue done <queue> <job>      It is done. --result <text> says what was done, for whoever
+                                reads the queue next.
   queue drop <queue> <job>      Put it back at the front, for someone else. Each drop is counted.
   queue edit <queue> <job> [<text>]
                                 Change its text, or --link ("" clears it).
   queue move <queue> <job> <before>|top|last
                                 Put it just before another open job, at the top, or last:
                                 the next \`take\` takes them in this order.
-  queue rm <queue> <job>        Remove a job or note.
+  queue rm <queue> <job>        Remove a row.
   queue history <queue> <job>   Its versions, newest first.
   queue restore <queue> <job> <version>
                                 Put a version's text and link back (or the job, once removed).
@@ -1759,6 +1780,7 @@ const OPTIONS = {
   pose: { type: 'string' },
   face: { type: 'string' },
   category: { type: 'string' },
+  description: { type: 'string' },
   on: { type: 'string' },
   prop: { type: 'string' },
   title: { type: 'string' },
@@ -1847,6 +1869,7 @@ const OPTIONS = {
   link: { type: 'string' },
   front: { type: 'boolean' },
   'for-user': { type: 'boolean' },
+  body: { type: 'string' },
   most: { type: 'string' },
   prefab: { type: 'string' },
   add: { type: 'boolean' },
@@ -1860,7 +1883,7 @@ const STATUS_ONLY: ReadonlySet<Option> = new Set<Option>(['progress', 'done', 'a
 
 /** The options each command takes beyond `--json` (which every one but `status`'s set, `rpc` and `mcp` takes too). */
 export const COMMAND_OPTIONS: Record<string, readonly Option[]> = {
-  status: ['progress', 'done', 'agent', 'pose', 'face', 'prop', 'category', 'label', 'on'],
+  status: ['progress', 'done', 'agent', 'pose', 'face', 'prop', 'category', 'label', 'on', 'description'],
   record: ['title', 'for'],
   pin: ['note', 'label', 'for'],
   unpin: ['label', 'for'],
@@ -1892,7 +1915,7 @@ export const COMMAND_OPTIONS: Record<string, readonly Option[]> = {
   steps: ['title', 'file', 'mine', 'undo', 'send'],
   memory: ['key', 'no-key', 'file', 'doc', 'search', 'pin', 'unpin'],
   remind: ['mine'],
-  queue: ['kind', 'front', 'link', 'file', 'for-user', 'most'],
+  queue: ['kind', 'front', 'link', 'file', 'for-user', 'most', 'body', 'result'],
 };
 
 /** A command's result: what it prints, and its exit code (0 for a bare string). */
@@ -2045,7 +2068,8 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
       if (pose === undefined && (string('face') !== undefined || string('prop') !== undefined)) throw new UsageError('--face and --prop go with a --pose');
       const kind = string('category');
       if (kind === undefined && (string('label') !== undefined || string('on') !== undefined)) throw new UsageError('--label and --on go with a --category');
-      if (summary === undefined && pose === undefined && kind === undefined) throw new UsageError('give a summary, a --pose, a --category, or more');
+      const description = string('description');
+      if (summary === undefined && pose === undefined && kind === undefined && description === undefined) throw new UsageError('give a summary, a --pose, a --category, a --description, or more');
       const progress = string('progress') === undefined ? undefined : Number(string('progress'));
       if (progress !== undefined && !isStatusProgress(progress)) {
         throw new UsageError('--progress must be a whole number from 0 to 100');
@@ -2062,14 +2086,15 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
       if (crewMember !== undefined && values.done === true) throw new UsageError('--done is for your own status: a crew member says it is finished itself');
       return async (session) => {
         if (crewMember !== undefined) {
-          const view = await setCrewStatus(session, crewMember, summary, progress, character, category);
+          const view = await setCrewStatus(session, crewMember, summary, progress, character, category, description);
           return values.json ? JSON.stringify(view.json, null, 2) : view.text;
         }
-        const agent = await setOwnStatus(session, summary, progress, values.done === true, character, category);
+        const agent = await setOwnStatus(session, summary, progress, values.done === true, character, category, description);
         if (values.json) return JSON.stringify(agent, null, 2);
         const lines = summary === undefined ? [] : [`status set: ${statusLine(agent.status!)}${agent.workFinishedAt === null ? '' : ' (finished)'}`];
         if (character !== undefined) lines.push(characterAnswer(agent));
         if (category !== undefined || values.done === true) lines.push(categoryAnswer(agent));
+        if (description !== undefined) lines.push(purposeAnswer(agent));
         return lines.join('\n');
       };
     }
@@ -2731,8 +2756,8 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
     }
     case 'queue': {
       const [sub, ref, ...after] = positionals;
-      const allowed: Record<string, readonly Option[]> = { add: ['kind', 'front', 'link', 'file'], edit: ['link'], new: ['for-user'], drain: ['most'] };
-      for (const option of ['kind', 'front', 'link', 'file', 'for-user', 'most'] as const) {
+      const allowed: Record<string, readonly Option[]> = { add: ['kind', 'front', 'link', 'file', 'body'], done: ['result'], edit: ['link'], new: ['for-user'], drain: ['most'] };
+      for (const option of ['kind', 'front', 'link', 'file', 'for-user', 'most', 'body', 'result'] as const) {
         if (values[option] !== undefined && !(allowed[sub ?? ''] ?? []).includes(option)) throw new UsageError(`--${option} is not for \`queue ${sub ?? ''}\``);
       }
       const needRef = () => {
@@ -2757,15 +2782,24 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
           return async (session) => print(await readQueue(session, queue));
         }
         case 'add': {
-          const kind = string('kind') ?? 'job';
-          if (kind !== 'job' && kind !== 'note') throw new UsageError('--kind is job or note');
+          const kind = string('kind');
+          if (kind !== undefined && !(QUEUE_ADD_KINDS as readonly string[]).includes(kind)) throw new UsageError(`--kind is one of ${QUEUE_ROW_KINDS.join(', ')} (or job, note)`);
+          const headed = string('body');
           let body: string;
           if (string('file') === '-') {
             if (after.length > 0) throw new UsageError('give the lines or --file, not both');
             body = readFileSync(0, 'utf8').replace(/\r\n?/g, '\n');
           } else body = string('file') === undefined ? after.join('\n') : text(2);
           if (body.trim() === '') throw new UsageError('give the jobs to queue, one a line, after the queue, or --file');
-          return run({ action: 'add', text: body, kind, front: values.front === true, ...(string('link') === undefined ? {} : { link: string('link') }) });
+          if (headed !== undefined && body.includes('\n')) throw new UsageError('with --body, give one headline: the body holds the rest');
+          return run({
+            action: 'add',
+            text: body,
+            ...(headed === undefined ? {} : { body: headed }),
+            ...(kind === undefined ? {} : { kind: kind as QueueAddKind }),
+            front: values.front === true,
+            ...(string('link') === undefined ? {} : { link: string('link') }),
+          });
         }
         case 'take':
           if (after.length > 1) throw new UsageError('give the queue, and at most one job');
@@ -2773,7 +2807,7 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
         case 'drop':
           return run({ action: 'drop', job: oneJob('drop') });
         case 'done':
-          return run({ action: 'done', job: oneJob('finish') });
+          return run({ action: 'done', job: oneJob('finish'), ...(string('result') === undefined ? {} : { result: string('result') }) });
         case 'rm':
         case 'remove':
           return run({ action: 'remove', job: oneJob('remove') });

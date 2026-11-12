@@ -24,7 +24,7 @@ function job(id: string, fields: Partial<QueueJob> = {}): QueueJob {
   return {
     id,
     queueId: 'q1',
-    kind: 'job',
+    kind: 'task',
     text: `job ${id}`,
     link: null,
     state: 'queued',
@@ -33,6 +33,8 @@ function job(id: string, fields: Partial<QueueJob> = {}): QueueJob {
     drops: 0,
     doneBy: null,
     doneAt: null,
+    result: null,
+    hiddenUntil: null,
     madeBy: { kind: 'user' },
     changedBy: { kind: 'user' },
     lastChange: 'add',
@@ -60,7 +62,7 @@ describe('a queue card', () => {
 
   it('lists the taken ones first, then the rest in order; the next is the first waiting job, never a note', () => {
     const jobs = [
-      job('note', { kind: 'note' }),
+      job('note', { kind: 'info' }),
       job('a'),
       job('t', { state: 'taken', takenBy: agent }),
       job('b'),
@@ -69,7 +71,7 @@ describe('a queue card', () => {
     expect(openInCardOrder(jobs).map((each) => each.id)).toEqual(['t', 'note', 'a', 'b']);
     expect(doneJobs(jobs).map((each) => each.id)).toEqual(['d']);
     expect(nextJob(jobs)?.id).toBe('a');
-    expect(nextJob([job('n', { kind: 'note' })])).toBeUndefined();
+    expect(nextJob([job('n', { kind: 'info' })])).toBeUndefined();
   });
 
   it('says where each row is, a job dropped back dashed, with the try that comes next in its corner', () => {
@@ -83,7 +85,7 @@ describe('a queue card', () => {
     expect([1, 2, 3, 4, 11, 12, 13, 21, 22, 23, 101, 111, 112].map(ordinal)).toEqual(['1st', '2nd', '3rd', '4th', '11th', '12th', '13th', '21st', '22nd', '23rd', '101st', '111th', '112th']);
     expect(jobState(job('t', { state: 'taken' }), next).text).toBe('taken');
     expect(jobState(job('d', { state: 'done' }), next).text).toBe('done');
-    expect(jobState(job('n', { kind: 'note' }), next).text).toBe('note');
+    expect(jobState(job('n', { kind: 'info' }), next).text).toBe('note');
   });
 
   it('names its taker, who finished it, its link said short, or the agent that queued it: never the user', () => {
@@ -99,7 +101,7 @@ describe('a queue card', () => {
 
   it('counts its rows by where they are', () => {
     expect(countsText([])).toBe('No jobs yet');
-    expect(countsText([job('a'), job('b'), job('t', { state: 'taken' }), job('n', { kind: 'note' }), job('d', { state: 'done' })])).toBe(
+    expect(countsText([job('a'), job('b'), job('t', { state: 'taken' }), job('n', { kind: 'info' }), job('d', { state: 'done' })])).toBe(
       '2 queued · 1 taken · 1 note · 1 done',
     );
     expect(countsText([job('a')], 'user')).toBe('1 to look at');

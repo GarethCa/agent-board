@@ -712,3 +712,48 @@ describe('the clock-watches migration', () => {
     expect(db.prepare('SELECT COUNT(*) AS n FROM clock_changes').get()).toEqual({ n: 0 });
   });
 });
+
+describe('the queue-kinds migration', () => {
+  it("names each queue row's kind by who its queue is for, in the rows and their history, and leaves a memory's history alone", () => {
+    const db = new DatabaseSync(':memory:');
+    db.exec('PRAGMA foreign_keys = ON');
+    const at = MIGRATIONS.findIndex((m) => m.name === 'queue_kinds');
+    expect(at).toBeGreaterThan(0);
+    migrate(db, MIGRATIONS.slice(0, at));
+    const who = JSON.stringify({ kind: 'user' });
+    db.exec(`INSERT INTO board_items (id, kind, x, y, width, height, z, data) VALUES
+        ('work', 'queue', 0, 0, 340, 244, 1, '{"title":"Work","audience":"agents"}'),
+        ('mine', 'queue', 0, 0, 340, 244, 2, '{"title":"Mine","audience":"user"}'),
+        ('mem', 'memory', 0, 0, 340, 244, 3, '{"title":"Mem"}');
+      INSERT INTO queue_jobs (id, item_id, kind, text, position, drops, done_by, done_at, made_by) VALUES
+        ('w1', 'work', 'job', 'Fix it', 1, 2, NULL, NULL, '${who}'),
+        ('w2', 'work', 'note', 'Ask first', 2, 0, NULL, NULL, '${who}'),
+        ('m1', 'mine', 'job', 'Look at PR', 1, 0, '${who}', '2026-11-01T10:00:00Z', '${who}'),
+        ('m2', 'mine', 'note', 'Findings', 2, 0, NULL, NULL, '${who}');
+      INSERT INTO board_history (item_id, row_id, action, value, by) VALUES
+        ('work', 'w1', 'add', '{"kind":"job","text":"Fix it"}', '${who}'),
+        ('mine', 'm2', 'add', '{"kind":"note","text":"Findings"}', '${who}'),
+        ('mine', 'm1', 'remove', NULL, '${who}'),
+        ('mem', 'e1', 'add', '{"kind":"note","text":"kept"}', '${who}');`);
+
+    migrate(db, MIGRATIONS.slice(0, at + 1));
+
+    expect(db.prepare('SELECT id, kind, text, drops, done_at, result, hidden_until FROM queue_jobs ORDER BY id').all()).toEqual([
+      { id: 'm1', kind: 'backlog', text: 'Look at PR', drops: 0, done_at: '2026-11-01T10:00:00Z', result: null, hidden_until: null },
+      { id: 'm2', kind: 'read', text: 'Findings', drops: 0, done_at: null, result: null, hidden_until: null },
+      { id: 'w1', kind: 'task', text: 'Fix it', drops: 2, done_at: null, result: null, hidden_until: null },
+      { id: 'w2', kind: 'info', text: 'Ask first', drops: 0, done_at: null, result: null, hidden_until: null },
+    ]);
+    expect(db.prepare('SELECT row_id, value FROM board_history ORDER BY seq').all()).toEqual([
+      { row_id: 'w1', value: '{"kind":"task","text":"Fix it"}' },
+      { row_id: 'm2', value: '{"kind":"read","text":"Findings"}' },
+      { row_id: 'm1', value: null },
+      { row_id: 'e1', value: '{"kind":"note","text":"kept"}' },
+    ]);
+    expect(() => db.exec(`INSERT INTO queue_jobs (id, item_id, kind, text, position, made_by) VALUES ('x', 'work', 'job', 'Old', 3, '${who}')`)).toThrow(/CHECK/);
+    expect((db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'queue_jobs' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as { name: string }[]).map((row) => row.name)).toEqual([
+      'queue_jobs_item',
+      'queue_jobs_taker',
+    ]);
+  });
+});

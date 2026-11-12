@@ -1,7 +1,7 @@
 // Where a crew starts from, in both designs: New agent's Crew, the board's right-click menu and ⌘K's Crews group.
 import { expect, type Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
-import { launch, zoneControl } from '../agent-helpers.ts';
+import { launch, windowKey, zoneControl } from '../agent-helpers.ts';
 import { test, browseForZone, pickFolderNext, removeDataDir, tempDataDir } from '../launch.ts';
 import { RENDER_ARGS, RENDER_ENV, VIEWPORT, ignorePointer, pinFonts, pinRandomText, settle } from '../render.ts';
 import { scratch } from '../scratch.ts';
@@ -68,7 +68,7 @@ for (const { theme, suffix } of THEMES) {
 
         // A crew of more than three, for its +N.
         await saveBigCrew(window);
-        await window.keyboard.press(process.platform === 'darwin' ? 'Meta+k' : 'Control+k');
+        await window.keyboard.press(windowKey('k'));
         const spotlight = window.getByRole('dialog', { name: 'Jump to a session, zone or setting' });
         await spotlight.getByRole('combobox', { name: 'Jump to a session, zone or setting' }).fill('crew');
         await expect(spotlight.getByTestId('spotlight-row').filter({ hasText: 'Crew library' })).toBeVisible();

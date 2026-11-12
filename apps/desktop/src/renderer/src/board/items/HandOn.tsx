@@ -2,7 +2,7 @@
 // what to send it. Only that text is typed at the agent's prompt, as the user's message, and the job is taken for it.
 import { useEffect, useState } from 'react';
 import { jobBrief } from '@agent-board/daemon/memory-lines';
-import { MAX_JOB_TEXT, takesHandOn, type Agent, type BoardItem, type QueueJob } from '@agent-board/daemon/protocol';
+import { MAX_JOB_TEXT, isQueueWork, takesHandOn, type Agent, type BoardItem, type QueueJob } from '@agent-board/daemon/protocol';
 import { Button, Dialog } from '../../ui';
 import { STATE_LABELS } from '../../states';
 import { inHandScope, openHandOn, useHandOn, type QueueBoard } from './queue-board';
@@ -87,7 +87,7 @@ function HandOnFor({ queue, jobId, sessionId, board, onError }: { queue: BoardIt
     window.agentBoard.items.readQueue(queue.id).then(
       (view) => {
         if (!current) return;
-        const found = view.jobs.find((each) => each.id === jobId && each.state === 'queued' && each.kind === 'job');
+        const found = view.jobs.find((each) => each.id === jobId && each.state === 'queued' && isQueueWork(each.kind));
         if (found === undefined) {
           onError(`That job in “${data.title}” isn't waiting any more`);
           close();

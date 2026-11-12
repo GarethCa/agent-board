@@ -249,6 +249,7 @@ export const ZONE_IPC = {
   bind: 'zone:bind',
   update: 'zone:update',
   configure: 'zone:configure',
+  followRule: 'zone:followRule',
   fold: 'zone:fold',
   unfold: 'zone:unfold',
   setTracker: 'zone:setTracker',
@@ -303,6 +304,8 @@ export interface ZonesApi {
   update(id: string, layout: ZoneLayout): Promise<Zone>;
   /** Changes a zone's settings. */
   configure(id: string, settings: Partial<ZoneSettings>): Promise<Zone>;
+  /** Puts `tiles` (tile keys) the user placed by hand back under the zone's layout rule, and lays the zone out by it. */
+  followRule(id: string, tiles: string[]): Promise<Zone>;
   /** Folds a zone to a chip: its agents that can pause are paused, and the result says which were kept live and why. */
   fold(id: string): Promise<ZoneFoldResult>;
   /** Unfolds a zone. Its paused agents stay paused unless `wake` asks for them. */
@@ -1246,6 +1249,8 @@ export interface WindowTarget {
 export const WINDOW_QUERY = {
   popOut: 'popOut',
   settings: 'settings',
+  /** Set for the Overview window (main/overview-window.ts). */
+  overview: 'overview',
   show: 'show',
   kind: 'kind',
   title: 'title',
@@ -1549,6 +1554,19 @@ export const SETUP_IPC = {
   installCli: 'setup:installCli',
 } as const;
 
+export const OVERVIEW_IPC = {
+  seen: 'overview:seen',
+  markSeen: 'overview:markSeen',
+} as const;
+
+/** The Overview window's last look, which main keeps across restarts. */
+export interface OverviewApi {
+  /** When the user last looked, as an ISO time: the first time the window opened, until Mark all seen moves it. */
+  seen(): Promise<string>;
+  /** Moves the last look to now, and resolves with it. */
+  markSeen(): Promise<string>;
+}
+
 /** What first-run onboarding checks and sets up. */
 export interface SetupApi {
   /** Whether the CLI is installed, its version and whether it is signed in, as the daemon finds it. */
@@ -1589,6 +1607,7 @@ export interface AgentBoardApi {
   restartDaemon(force: boolean): Promise<RestartDaemonResult>;
   sessions: SessionsApi;
   zones: ZonesApi;
+  overview: OverviewApi;
   items: ItemsApi;
   connectors: ConnectorsApi;
   flowEdges: FlowEdgesApi;

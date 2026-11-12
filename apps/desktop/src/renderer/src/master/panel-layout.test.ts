@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clampForYouHeight, clampPanelWidth, DEFAULT_PANEL_WIDTH, foldedSections, maxForYouHeight, maxPanelBottom, maxPanelWidth, MIN_FOR_YOU_HEIGHT, MIN_PANEL_HEIGHT, MIN_PANEL_WIDTH, panelBottom } from './panel-layout';
+import { clampForYouHeight, clampPanelWidth, DEFAULT_PANEL_WIDTH, foldedSections, maxForYouHeight, maxPanelBottom, maxPanelWidth, MIN_FOR_YOU_HEIGHT, MIN_PANEL_HEIGHT, MIN_PANEL_WIDTH, paneLayout, paneMode, panelBottom, PUSH_KEEP_BOARD, PUSH_TOP_ROW } from './panel-layout';
 
 describe('the Captain’s panel layout', () => {
   it('keeps the width between its least and most of the board', () => {
@@ -52,5 +52,50 @@ describe('the panel’s bottom edge', () => {
   it('leaves the panel its least height', () => {
     expect(maxPanelBottom(800, 60, 12)).toBe(800 - 60 - 12 - MIN_PANEL_HEIGHT);
     expect(maxPanelBottom(200, 60, 12)).toBe(0);
+  });
+});
+
+describe('the pane beside the board, or over it', () => {
+  const room = (board: number, extra: Partial<{ height: number; taken: number; lift: number }> = {}) => ({ board, height: 800, taken: 0, lift: 90, ...extra });
+
+  it('pushes the board where its least leaves the top row its room, and covers it on a narrower one', () => {
+    expect(paneMode(PUSH_TOP_ROW + MIN_PANEL_WIDTH)).toBe('push');
+    expect(paneMode(1280)).toBe('push');
+    expect(paneMode(PUSH_TOP_ROW + MIN_PANEL_WIDTH - 1)).toBe('cover');
+    // With Edge rules open the board also keeps them their room, and the bottom row beside them.
+    expect(paneMode(412 + PUSH_KEEP_BOARD + MIN_PANEL_WIDTH, 412)).toBe('push');
+    expect(paneMode(412 + PUSH_KEEP_BOARD + MIN_PANEL_WIDTH - 1, 412)).toBe('cover');
+    // Not yet measured, it is drawn as it will most likely be.
+    expect(paneMode(0)).toBe('push');
+  });
+
+  it('takes its width from the board when it pushes, and nothing when it covers', () => {
+    expect(paneLayout(room(1400), 400, undefined, 14)).toMatchObject({ mode: 'push', width: 400, room: 400 });
+    expect(paneLayout(room(700), 400, undefined, 14)).toMatchObject({ mode: 'cover', width: 400, room: 0 });
+  });
+
+  it('pushing, runs full height whatever bottom was left, with nothing under it to end above', () => {
+    expect(paneLayout(room(1400), 360, 'controls', 14)).toMatchObject({ bottom: 0, maxBottom: 0 });
+    expect(paneLayout(room(1400), 360, '200', 14)).toMatchObject({ bottom: 0, maxBottom: 0 });
+  });
+
+  it('covering, keeps the bottom it was left at, from its flush top', () => {
+    expect(paneLayout(room(700), 360, 'controls', 14)).toMatchObject({ bottom: 90, maxBottom: maxPanelBottom(800, 0, 14) });
+    expect(paneLayout(room(700), 360, undefined, 14).bottom).toBe(0);
+  });
+
+  it('pushing, leaves the narrower board its top row, its bottom row and Edge rules', () => {
+    expect(paneLayout(room(2400), 5000, undefined, 14).widest).toBe(maxPanelWidth(2400));
+    expect(paneLayout(room(1280, { taken: 14 }), 5000, undefined, 14)).toMatchObject({ widest: 1280 - PUSH_TOP_ROW, width: 1280 - PUSH_TOP_ROW });
+    expect(paneLayout(room(1400, { taken: 412 }), 5000, undefined, 14).widest).toBe(1400 - 412 - PUSH_KEEP_BOARD);
+    expect(paneLayout(room(PUSH_TOP_ROW + MIN_PANEL_WIDTH), 5000, undefined, 14)).toMatchObject({ mode: 'push', widest: MIN_PANEL_WIDTH, width: MIN_PANEL_WIDTH });
+  });
+
+  it('covering, leaves Edge rules its room', () => {
+    expect(paneLayout(room(800, { taken: 412 }), 5000, undefined, 14).widest).toBe(maxPanelWidth(800, 412));
+  });
+
+  it('keeps the chosen width until the board is measured', () => {
+    expect(paneLayout(room(0, { height: 0 }), 512, undefined, 14)).toMatchObject({ width: 512, widest: DEFAULT_PANEL_WIDTH, bottom: 0 });
   });
 });

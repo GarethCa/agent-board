@@ -1,12 +1,12 @@
 // A memory's looks, apart from the board: the open card, the folded icon and the peek. They take what to show and what
 // to do as props, so the gallery draws them as the board does.
 import { useEffect, useRef, useState, type ComponentProps, type KeyboardEvent, type ReactNode } from 'react';
-import { Brain, FileText, Pin, PinOff, Search, Trash2 } from 'lucide-react';
+import { Brain, Eye, FileText, Maximize2, Pin, PinOff, Search, Trash2 } from 'lucide-react';
 import { entryFrom } from '@agent-board/daemon/memory-lines';
-import { MAX_MEMORY_VALUE, type MemoryEntry } from '@agent-board/daemon/protocol';
+import { MAX_MEMORY_VALUE, type MemoryEntry, type MemoryReaders } from '@agent-board/daemon/protocol';
 import { IconButton } from '../../ui';
 import { peekKeys, ScopeChip, ListCardAddBox, ListCardFace, ListCardIconView } from './ListCardParts';
-import { CARD_ROWS, countText, entryLine, entryName, filePreview, isOld, matching, whenText, whoText } from './memory-card';
+import { ageText, cardRows, countText, entryLine, entryName, filePreview, isStale, matching, staleCount, whenText, whoText } from './memory-card';
 
 /** What the add box makes of what was typed: `key: value` (the key one word) is a keyed entry, anything else a note. */
 export type AddEntry = (entry: { key: string | null; text: string }) => void;
@@ -32,7 +32,7 @@ function MemoryAddBox({ onAdd, autoFocus }: { onAdd: AddEntry; autoFocus?: boole
  * card the time alone (who is its tooltip), in the peek who wrote it too.
  */
 function EntryRow({ entry, now, who = false }: { entry: MemoryEntry; now: Date; who?: boolean }) {
-  const when = isOld(entry, now) ? 'old' : whenText(entry.updatedAt, now);
+  const when = isStale(entry, now) ? 'stale' : whenText(entry.updatedAt, now);
   return (
     <>
       <span className="memory-key" data-note={entry.key === null || undefined} title={entryName(entry)}>
@@ -62,15 +62,17 @@ interface MemoryCardViewProps {
   scope: string;
   /** Its zone's colour, for the scope chip's dot. */
   zoneColor?: string;
-  /** Its entries, in list order: the card lists the first few. */
+  /** Its entries, in list order: the card lists its first documents and facts. */
   entries: readonly MemoryEntry[];
+  /** How many agents read it, and who last did: none until its entries are read. */
+  readers?: MemoryReaders;
   /** How many it holds: its saved count until its entries are read. */
   count?: number;
   /** Whether its entries are read yet: until then it says nothing of being empty. */
   loaded?: boolean;
   now: Date;
   onAdd: AddEntry;
-  /** Opens the peek, with every entry. */
+  /** Opens it full screen, with every entry. */
   onOpen(): void;
   /** The entry an agent just wrote, which flashes once. */
   fresh?: string;
@@ -80,12 +82,24 @@ interface MemoryCardViewProps {
   children?: ReactNode;
 }
 
+/** Who wrote a card's row last, and how long ago; stale, if it is. */
+function RowWho({ entry, now }: { entry: MemoryEntry; now: Date }) {
+  const stale = isStale(entry, now);
+  return (
+    <span className="listcard-who" data-stale={stale || undefined} title={`${whoText(entry.changedBy)} wrote it${stale ? ': not changed or confirmed for 30 days' : ''}`}>
+      {whoText(entry.changedBy)} · {stale ? 'stale' : ageText(entry.updatedAt, now)}
+    </span>
+  );
+}
+
 /**
- * A memory open on the board (A): a raised card in the theme's neutrals, with the brain's face and count at its head's
- * left, its name and who may use it, the newest entries (pinned first) and a box to remember something.
+ * A memory open on the board, its notebook look: the brain's face and count at its head's left, its name and who may use
+ * it; then its documents by title and its facts (pinned first), each with who wrote it and when; a box to remember a
+ * fact; and at its foot how many agents read it, how many entries are stale, and Open, full screen.
  */
-export function MemoryCardView({ title, scope, zoneColor, entries, count = entries.length, loaded = true, now, onAdd, onOpen, fresh, focusAdd, children }: MemoryCardViewProps) {
-  const rows = entries.slice(0, CARD_ROWS);
+export function MemoryCardView({ title, scope, zoneColor, entries, readers, count = entries.length, loaded = true, now, onAdd, onOpen, fresh, focusAdd, children }: MemoryCardViewProps) {
+  const { docs, facts, docCount, factCount } = cardRows(entries);
+  const stale = staleCount(entries, now);
   return (
     <div className="listcard listcard-unfolded" data-testid="memory-card" onDoubleClick={(event) => (event.stopPropagation(), onOpen())}>
       {children}
@@ -96,16 +110,42 @@ export function MemoryCardView({ title, scope, zoneColor, entries, count = entri
       </div>
       {!loaded ? (
         <div className="listcard-rows" />
-      ) : rows.length === 0 ? (
+      ) : entries.length === 0 ? (
         <div className="listcard-empty">
           <b>Nothing remembered yet</b>
-          <span>Type a note, or key: value. Agents read and write here with agent-board memory.</span>
+          <span>Type a fact, or key: value; open it to write a document. Agents read and write here with agent-board memory.</span>
         </div>
       ) : (
         <ul className="listcard-rows" aria-label="Newest entries">
-          {rows.map((entry) => (
-            <li key={entry.id} className="listcard-row" data-fresh={entry.id === fresh || undefined}>
-              <EntryRow entry={entry} now={now} />
+          {docs.length > 0 && (
+            <li className="memory-section" aria-hidden="true">
+              <FileText /> Docs · {docCount}
+            </li>
+          )}
+          {docs.map((doc) => (
+            <li key={doc.id} className="listcard-row memory-doc-row" data-fresh={doc.id === fresh || undefined}>
+              <span className="memory-doc-title" title={entryName(doc)}>
+                <FileText className="memory-file-mark" aria-label="Document" />
+                <b>{entryName(doc)}</b>
+              </span>
+              <RowWho entry={doc} now={now} />
+            </li>
+          ))}
+          {facts.length > 0 && (
+            <li className="memory-section" aria-hidden="true">
+              <Brain /> Facts · {factCount}
+            </li>
+          )}
+          {facts.map((fact) => (
+            <li key={fact.id} className="listcard-row" data-fresh={fact.id === fresh || undefined}>
+              <span className="memory-key" data-note={fact.key === null || undefined} title={entryName(fact)}>
+                {fact.pinned && <Pin className="memory-pin-mark" aria-label="Pinned" />}
+                <span className="memory-key-name">{entryName(fact)}</span>
+              </span>
+              <span className="listcard-value" title={fact.text}>
+                {entryLine(fact)}
+              </span>
+              <RowWho entry={fact} now={now} />
             </li>
           ))}
         </ul>
@@ -113,9 +153,20 @@ export function MemoryCardView({ title, scope, zoneColor, entries, count = entri
       <div className="listcard-foot">
         <MemoryAddBox onAdd={onAdd} autoFocus={focusAdd} />
         <span className="listcard-foot-line">
-          <span>{countText(entries)}</span>
-          <button type="button" className="listcard-open nodrag" onClick={onOpen}>
-            Open ↗
+          {readers !== undefined && readers.count > 0 ? (
+            <span className="memory-read" title={readers.last === null ? undefined : `Last read by ${readers.last.name}`}>
+              <Eye aria-hidden="true" /> read by {readers.count}
+            </span>
+          ) : (
+            <span>{countText(entries)}</span>
+          )}
+          {stale > 0 && (
+            <span className="memory-stale-count" title="Not changed or confirmed for 30 days">
+              {stale} stale
+            </span>
+          )}
+          <button type="button" className="listcard-open nodrag" aria-label="Open full screen" onClick={onOpen}>
+            <Maximize2 aria-hidden="true" /> Open
           </button>
         </span>
       </div>
@@ -146,6 +197,8 @@ interface MemoryPeekProps {
   focusAdd?: boolean;
   /** Whether it takes the focus as it opens: not in the gallery. */
   autoFocus?: boolean;
+  /** Opens it full screen, where documents are written. */
+  onFull?(): void;
 }
 
 /**
@@ -153,7 +206,7 @@ interface MemoryPeekProps {
  * file's opens its first lines. Each row pins or removes; the box at its foot remembers something new. Keys: / searches,
  * ↑ and ↓ move between rows, E (or ↵) edits the row, ⌫ removes it.
  */
-export function MemoryPeek({ title, scope, zoneColor, entries, now, onAdd, onEdit, onPin, onRemove, onGone, search: initial = '', focusAdd = false, autoFocus = true }: MemoryPeekProps) {
+export function MemoryPeek({ title, scope, zoneColor, entries, now, onAdd, onEdit, onPin, onRemove, onGone, search: initial = '', focusAdd = false, autoFocus = true, onFull }: MemoryPeekProps) {
   const [search, setSearch] = useState(initial);
   // The entry as it was when its edit began: an agent's write since shows on the row.
   const [editing, setEditing] = useState<{ entry: MemoryEntry; text: string }>();
@@ -188,6 +241,7 @@ export function MemoryPeek({ title, scope, zoneColor, entries, now, onAdd, onEdi
       <div className="listcard-peek-head">
         <b className="listcard-title">{title}</b>
         <ScopeChip scope={scope} zoneColor={zoneColor} />
+        {onFull !== undefined && <IconButton icon={<Maximize2 />} size="xs" aria-label="Open full screen" tooltip="Full screen: documents, history, who read it" onClick={onFull} />}
       </div>
       <label className="listcard-search">
         <Search className="listcard-search-mark" aria-hidden="true" />

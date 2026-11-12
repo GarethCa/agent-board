@@ -450,7 +450,7 @@ test('an agent is found by name from ⌘K, and its tile’s More menu works from
   }
 });
 
-test('hovering a tile moves nothing on it: its state stays at the bottom and its corner actions show', async () => {
+test('hovering a tile moves nothing on it: its state stays at the bottom and its corner actions show over the end of its name, as focus does', async () => {
   classicOnly();
   const { dir, repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
@@ -479,6 +479,20 @@ test('hovering a tile moves nothing on it: its state stays at the bottom and its
     await expect(card.locator('.ui-pill')).toBeVisible();
     // The same either way: its parts are where they were.
     expect(await boxes()).toEqual(before);
+    // The corner is laid over the end of the head, so the name runs to the tile's edge under it.
+    const [nameBox, cornerBox] = await Promise.all([settledBox(card.locator('.hybrid-tile-name')), settledBox(corner)]);
+    expect(nameBox.x + nameBox.width).toBeGreaterThanOrEqual(cornerBox.x + cornerBox.width - 1);
+    // The keyboard reaches them hidden: Tab onto one shows the corner.
+    await window.mouse.move(0, 0);
+    await expect(corner).toHaveCSS('opacity', '0');
+    await card.getByRole('button', { name: 'Expand' }).focus();
+    await expect(corner).toHaveCSS('opacity', '1');
+    // While its name is typed, the buttons give the field the whole head.
+    await card.getByRole('button', { name: 'Rename' }).click();
+    await expect(card.locator('.editable-name-field')).toBeVisible();
+    await expect(corner).toHaveCSS('visibility', 'hidden');
+    await window.keyboard.press('Escape');
+    await expect(card.locator('.editable-name-field')).toHaveCount(0);
   } finally {
     await app.close();
     await removeDataDir(dataDir);

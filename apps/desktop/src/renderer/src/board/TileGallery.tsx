@@ -162,6 +162,7 @@ export const galleryAgent = (state: AgentState): Agent => ({
   status: null,
   character: null,
   workCategory: null,
+  purpose: null,
   workFinishedAt: null,
   startup: null,
   hooksSilent: false,

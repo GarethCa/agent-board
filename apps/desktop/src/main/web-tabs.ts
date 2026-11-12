@@ -3,7 +3,7 @@ import { isWebTabUrl, WEB_TAB_RULE } from '@agent-board/daemon/web-url';
 import { WEB_TAB_IPC, type FindResult, type WebTabBounds, type WebTabKey, type WebTabState } from '../preload/api';
 import { headless } from './background';
 import { openWebLink, openWebTabLink } from './links';
-import { webKey } from './web-keys';
+import { takesKeyboard, webKey } from './web-keys';
 import { passkeyNotice, probePasskeys } from './web-passkeys';
 import { lockDownContents, lockDownSession } from './web-lockdown';
 import { lockDownPlanContents, lockDownPlanSession, PLAN_URL } from './plan-lockdown';
@@ -389,9 +389,8 @@ export function registerWebTabIpc({
       else if (action === 'hardReload') contents.reloadIgnoringCache();
       else if (!tab.owner.isDestroyed()) {
         const pressed: WebTabKey = { key: key.key, code: key.code, metaKey: key.meta, ctrlKey: key.control, shiftKey: key.shift, altKey: key.alt };
-        // ⌘K opens the switcher over the window, whose field takes the keyboard from the page; ⌘J moves the keyboard to
-        // the window's header.
-        if (key.code === 'KeyK' || key.code === 'KeyJ') tab.owner.focus();
+        // ⌘K and ⌘⇧P open a field over the window, which takes the keyboard from the page; ⌘J moves it to the header.
+        if (takesKeyboard(key.code)) tab.owner.focus();
         tab.owner.send(WEB_TAB_IPC.key, tabId, pressed);
       }
     });

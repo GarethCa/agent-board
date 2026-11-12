@@ -167,7 +167,7 @@ describe('the board MCP tools and the agent-board CLI', () => {
       command: 'status',
       positional: ['summary'],
       renamed: { character: 'pose', waiting_on: 'on' },
-      options: ['progress', 'done', 'agent', 'pose', 'category', 'label', 'on'],
+      options: ['progress', 'done', 'agent', 'pose', 'category', 'label', 'on', 'description'],
     },
     { tool: 'needs_you', command: 'needs-you', positional: ['reason'] },
     { tool: 'open_pr', command: 'open-pr' },
@@ -255,7 +255,8 @@ describe('the board MCP tools and the agent-board CLI', () => {
     },
     { tool: 'queue_new', command: 'queue', positional: ['title'], renamed: { for_user: 'for-user' }, options: ['for-user'] },
     { tool: 'queue_read', command: 'queue', positional: ['queue', 'job'], options: [] },
-    { tool: 'queue_update', command: 'queue', positional: ['queue', 'action', 'job', 'text', 'version', 'to', 'on'], options: ['kind', 'front', 'link', 'most'] },
+    // A headline is the CLI's line, given with --body.
+    { tool: 'queue_update', command: 'queue', positional: ['queue', 'action', 'job', 'text', 'headline', 'version', 'to', 'on'], options: ['kind', 'front', 'link', 'most', 'body', 'result'] },
     { tool: 'remind', command: 'remind', positional: ['text'], options: [] },
     { tool: 'remind_read', command: 'remind', options: ['mine'] },
     { tool: 'remind_update', command: 'remind', positional: ['action', 'line'], options: [] },

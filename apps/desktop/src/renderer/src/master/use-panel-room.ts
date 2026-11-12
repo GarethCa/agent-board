@@ -4,7 +4,7 @@ import { tokenNumber } from '../theme';
 export interface PanelRoom {
   /** The board's width, 0 until measured. */
   board: number;
-  /** What the Edge rules panel and the panel's margin take beside it, in px. */
+  /** What the Edge rules panel and its margin take, in px, and an inset. */
   taken: number;
   /** How far above the board's bottom inset the zoom bar's top is, or the minimap's when it shows, plus a gap: where the panel's bottom goes. */
   lift: number;
@@ -13,9 +13,9 @@ export interface PanelRoom {
 }
 
 /**
- * The board the panel is docked on, where its bottom goes (the snap position a gap above the zoom bar and the minimap, whatever size they are, which the panel overlays by default) and what it needs beside it: its own margin and the Edge rules panel when it is
- * open, which the panel sits beside. The zoom bar, the minimap, the zones pill and the dock are in the bottom rows the
- * panel ends above, so they take none of its width. Measured again when the board or the Edge rules panel changes.
+ * The board the panel is docked on, where its bottom goes when it covers the board (the snap position a gap above the zoom bar and the minimap, whatever size they are, which it overlays by default) and what Edge rules takes when it is
+ * open, which sits left of the panel: its width and its margin. Measured again when the board or the Edge rules panel changes. The board is measured whole, the room the
+ * panel pushes it in by included, so what the panel does to it never feeds back into it.
  */
 export function usePanelRoom(panel: RefObject<HTMLElement | null>): PanelRoom {
   const [room, setRoom] = useState<PanelRoom>({ board: 0, taken: 0, lift: 0, height: 0 });

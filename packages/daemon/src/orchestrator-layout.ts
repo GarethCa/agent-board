@@ -55,7 +55,8 @@ import {
   COLOR_SLOTS,
   DEFAULT_ARRANGE_SETTINGS,
   DEFAULT_ZONE_SIZE,
-  ZONE_LAYOUT_MODES,
+  ZONE_LAYOUT_CHOICES,
+  zoneLayoutChoiceFields,
   NOTE_KINDS,
   CONNECTOR_STYLES,
   MAX_CONNECTOR_LABEL,
@@ -103,6 +104,7 @@ import {
   type Shell,
   type TileSide,
   type Zone,
+  type ZoneLayoutRule,
   type CaptureStyle,
   drawnZoneSize,
   type ZoneMap,
@@ -116,6 +118,7 @@ import { facingSides, shapeSize } from './diagram.ts';
 import { layOutDiagram, MAX_MERMAID_LENGTH, parseMermaid } from './mermaid.ts';
 import type { CaptureHost } from './zone-captures.ts';
 import type { LayoutMeasures } from './layout-measures.ts';
+import type { ZoneTable } from './zones.ts';
 import { zoneSketch, type SketchLine } from './zone-sketch.ts';
 
 export type LayoutMethods = Pick<
@@ -139,6 +142,7 @@ export type LayoutMethods = Pick<
   | 'orchestrator.connect'
   | 'orchestrator.editConnector'
   | 'orchestrator.removeConnector'
+  | 'zone.followRule'
 >;
 
 /** Calls one of the daemon's own methods, as the app would. */
@@ -158,7 +162,28 @@ export interface LayoutHandlerOptions {
   capture: CaptureHost['request'];
   /** How the app draws the board, as it measured it (`layout-measures.ts`). */
   measures: LayoutMeasures;
+  /** The zones' tiles placed by hand (`zones.ts`): putting one back under its zone's rule drops its mark. */
+  zones: Pick<ZoneTable, 'dropHandPlaced'>;
 }
+
+/** How each layout rule arranges its zone, and its name in a refusal. */
+const RULE_ARRANGES: Record<Exclude<ZoneLayoutRule, 'off'>, { by: ArrangeBy; layout: ArrangeLayout; name: string }> = {
+  lanes: { by: 'issue', layout: 'rows', name: 'Lanes' },
+};
+
+/** The refusal to arrange `zone`, which keeps a rule, any other way. */
+const keepsRule = (zone: Zone): RpcMethodError =>
+  invalidParams(`${zone.name} keeps the ${zone.layoutRule === 'off' ? '' : RULE_ARRANGES[zone.layoutRule].name} rule: set it free first (zone layout free) to arrange it another way`);
+
+/** Whether `zone` is laid out as its tiles are put: free, with no rule (a zone not found, as it was). */
+const laidOutByHand = (zone: Pick<Zone, 'layoutMode' | 'layoutRule'> | undefined): boolean =>
+  zone === undefined || (zone.layoutMode === 'free' && zone.layoutRule === 'off');
+
+/**
+ * Who lays a zone out by its rule: on the user's side, as the board's own Tidy is, whoever's change set it off; named
+ * as the rule in the activity log, which it writes to only when it moved something.
+ */
+const THE_RULE: Orchestrator = { sessionId: 'user', name: 'the rule', zoneId: null, repoRoot: '', orchestrate: 'board', agent: null };
 
 /** Where each orchestrator's arrange settings are kept (`ArrangeSettings`), by its session id. */
 const ARRANGE_SETTINGS_VIEW_KEY = 'arrangeSettings';
@@ -665,6 +690,7 @@ export function layoutHandlers<Context extends BoardConnection>({
   close,
   capture,
   measures,
+  zones,
   warn = () => {},
 }: LayoutHandlerOptions): RpcHandlers<LayoutMethods & Pick<DaemonMethods, 'orchestrator.spawn' | 'orchestrator.close'>, Context> {
   const zoneMadeBy = db.prepare('SELECT made_by FROM zones WHERE id = ?');
@@ -1126,6 +1152,9 @@ export function layoutHandlers<Context extends BoardConnection>({
     const zoneId = reviewer.zoneId;
     if (zoneId === null || (reviewer.reviewOf === null && reviewer.reviews === null)) return reviewer;
     try {
+      // In a zone with a rule, the rule puts it beside its implementer.
+      const rule = (await call('zone.list', undefined)).find((zone) => zone.id === zoneId)?.layoutRule;
+      if (rule !== undefined && rule !== 'off') return reviewer;
       const me = caller();
       return await arranging(zoneId, () => joinNow(me, reviewer, zoneId));
     } catch (error) {
@@ -1329,11 +1358,14 @@ export function layoutHandlers<Context extends BoardConnection>({
   /**
    * Arranges `zoneId` for `me` as its settings say, with `changes` (read in the zone's layout queue, so a refusal is
    * logged) kept once nothing can refuse it: its zone is in scope and may grow as it needs; `how` says in the activity log what moved it to. One arrange of a
-   * zone at a time: two at once would each make its lanes' labels and notes.
+   * zone at a time: two at once would each make its lanes' labels and notes. `quiet`, it is logged only if it moved a tile
+   * or resized the zone, as a rule's passes are.
    */
-  const arrangeIn = (me: Orchestrator, zoneId: string | null, changes: () => Partial<ArrangeSettings>, how = ''): Promise<ArrangeResult> => {
+  const arrangeIn = (me: Orchestrator, zoneId: string | null, changes: () => Partial<ArrangeSettings>, how = '', quiet = false): Promise<ArrangeResult> => {
     const entry: ActivityEntry = { detail: '' };
-    return access.logged(me, 'arrange', entry, () => arranging(zoneId ?? '', async () => {
+    /** Whether it moved a tile or resized the zone. */
+    let changedAny = false;
+    const arrange = () => arranging(zoneId ?? '', async (): Promise<ArrangeResult> => {
       const changed = changes();
       if (zoneId === null) throw invalidParams(`${me.agent === null ? 'you have' : 'your tile is in'} no zone: name the zone to arrange`);
       /** The zone and its crew as they are now, and the lanes the crew falls into, from a first pass. */
@@ -1344,13 +1376,17 @@ export function layoutHandlers<Context extends BoardConnection>({
         // On shelves or in clusters it lays itself out: an arrange would move the places it isn't drawn at, and free would
         // not be as it was.
         if (zone.layoutMode !== 'free') throw invalidParams(`${zone.name} is laid out ${zone.layoutMode === 'shelves' ? 'on status shelves' : 'in clusters, by ticket'}: set it free first (zone layout free) to arrange it`);
+        // A zone with a rule is laid out by it, on the user's side, and only so.
+        const rule = zone.layoutRule === 'off' ? undefined : RULE_ARRANGES[zone.layoutRule];
+        if (rule !== undefined && (me.agent !== null || changed.by !== undefined || changed.layout !== undefined)) throw keepsRule(zone);
         // Kept only once the arrange is sure to go ahead: a refused one keeps nothing.
-        const { by, layout } = { ...(await settingsOf(me)), ...changed };
+        const { by, layout } = rule ?? { ...(await settingsOf(me)), ...changed };
         // What it lays out round is as big as the app draws it.
         const inZone = placedOf(board)
           .filter((each) => each.zoneId === zone.id)
           .map((each) => asDrawn(each));
-        const tiles = crewOf(me, board, zone);
+        // A tile the user placed by hand stays where they put it, in the way of the rest.
+        const tiles = crewOf(me, board, zone).filter((tile) => !zone.handPlaced.includes(tile.id));
         const moving = new Set(tiles.map((tile) => tile.id));
         // What an arrange of its crew made before (each cluster's label and note) it places again, in place.
         const clusters = by === 'issue' && layout !== 'grid';
@@ -1382,7 +1418,7 @@ export function layoutHandlers<Context extends BoardConnection>({
         const current = new Map((await call('item.list', undefined)).map((item) => [item.id, item]));
         const filling = [...matchParts(first, parts).matched, ...byHand].map(([slot, item]) => [slot, current.get(item.id) ?? item] as const);
         const noteHeights = noteHeightsOf(me, first, new Map(filling), standing);
-        return { board, zone, by, layout, inZone, tiles, leadNotes, clusters, parts, stale, links, standing, spacing, grid, first, byHand, obstacles, filling, noteHeights };
+        return { board, zone, rule, by, layout, inZone, tiles, leadNotes, clusters, parts, stale, links, standing, spacing, grid, first, byHand, obstacles, filling, noteHeights };
       };
       let now = await read();
       // A lane's agent note about to say something new says it first, in place, so the app can measure what its text
@@ -1434,7 +1470,7 @@ export function layoutHandlers<Context extends BoardConnection>({
           throw error;
         }
       }
-      const { board, zone, by, layout, inZone, tiles, leadNotes, clusters, parts, stale, links, standing, spacing, grid, obstacles, byHand } = now;
+      const { board, zone, rule, by, layout, inZone, tiles, leadNotes, clusters, parts, stale, links, standing, spacing, grid, obstacles, byHand } = now;
       const { heights: noteHeights, widths: noteWidths } = now.noteHeights;
       const unmeasured = !measures.live() || (clusters && now.noteHeights.guessed.size > 0);
       // Laid out round `stay` too: the parts it could find no room to park, left where they are.
@@ -1499,7 +1535,10 @@ export function layoutHandlers<Context extends BoardConnection>({
       // Nowhere to park them: the crew is laid out again round them where they are, never on top of them.
       if (laid.parkKeys.length > 0 && laid.parked.length === 0) laid = plan(laid.toPark.map((item) => ({ x: item.x, y: item.y, width: item.width, height: item.height })));
       const { arranged, positions, matched, left, toPark, parked, sizeWith } = laid;
-      const { width, height } = sizeWith(parked);
+      const fitted = sizeWith(parked);
+      // A zone kept by a rule keeps the size the user gave it (its lanes wrap to its width): only grown to fit, never
+      // shrunk, so a resize stays, and the rule's own growth is no new change to lay it out by.
+      const { width, height } = rule === undefined ? fitted : { width: Math.max(fitted.width, zone.width), height: Math.max(fitted.height, zone.height) };
       // Checked before anything moves, so a refused arrange leaves the zone as it was: its notes written first too.
       try {
         checkGrowth(board, zone, { width, height }, 'arranged,');
@@ -1519,6 +1558,7 @@ export function layoutHandlers<Context extends BoardConnection>({
         moved.push({ target: { kind: placed.kind as LayoutTarget['kind'], id: placed.id }, zoneId: zone.id, ...spot });
       }
       await growTo(zone, { width, height });
+      changedAny = moved.length > 0 || width !== zone.width || height !== zone.height;
       for (const item of leadNotes) {
         const spot = arranged.notes.get(item.id)!;
         if (item.x !== spot.x || item.y !== spot.y) await call('item.update', { id: item.id, zoneId: zone.id, ...spot });
@@ -1539,7 +1579,12 @@ export function layoutHandlers<Context extends BoardConnection>({
         }
       }
       return { zoneId: zone.id, width, height, moved, unmeasured };
-    }));
+    });
+    if (!quiet) return access.logged(me, 'arrange', entry, arrange);
+    return arrange().then(
+      (result) => (changedAny ? access.logged(me, 'arrange', entry, () => result) : result),
+      (error: unknown) => access.logged(me, 'arrange', entry, () => Promise.reject(error as Error)),
+    );
   };
 
   /**
@@ -1552,8 +1597,8 @@ export function layoutHandlers<Context extends BoardConnection>({
     try {
       const me = caller();
       if (!(await settingsOf(me)).auto) return false;
-      // A zone on shelves or in clusters lays itself out: nothing to arrange, and nothing to warn of.
-      if (((await readBoard()).zones.find((zone) => zone.id === zoneId)?.layoutMode ?? 'free') !== 'free') return false;
+      // A zone on shelves, in clusters or with a rule lays itself out: nothing to arrange, and nothing to warn of.
+      if (!laidOutByHand((await readBoard()).zones.find((zone) => zone.id === zoneId))) return false;
       await arrangeIn(me, zoneId, () => ({}), ', by itself');
       return true;
     } catch (error) {
@@ -1609,6 +1654,7 @@ export function layoutHandlers<Context extends BoardConnection>({
         const aside = zone === undefined || (place.at === undefined && place.near === undefined) ? [] : roomFor(me, board, zone, rect, tileKey(target));
         const grown = zone === undefined ? undefined : grownWith(zone, { ...spot, ...size }, isNote, aside);
         if (zone !== undefined) checkGrowth(board, zone, grown!, 'moved there,');
+        // Never placed by hand, wherever it is put: only the user's own move takes a tile out of its zone's rule.
         await moveTo(placed, zoneId, spot);
         for (const each of aside) await moveTo(each.placed, zoneId, each.spot);
         if (grown !== undefined) await growTo(zone, grown);
@@ -1620,14 +1666,24 @@ export function layoutHandlers<Context extends BoardConnection>({
     'orchestrator.arrange': async (params, connection) => {
       const p = paramsObject(params);
       const me = access.caller('orchestrator.arrange', p, connection);
-      return arrangeIn(me, optionalStringParam(p, 'zoneId') ?? me.zoneId, () => {
+      const zoneId = optionalStringParam(p, 'zoneId') ?? me.zoneId;
+      const changes = () => {
         const by = optionalStringParam(p, 'by') as ArrangeBy | undefined;
         if (by !== undefined && !ARRANGE_BYS.includes(by)) throw invalidParams(`by must be ${ARRANGE_BYS.join(', ')}`);
         const layout = optionalStringParam(p, 'layout') as ArrangeLayout | undefined;
         if (layout !== undefined && !ARRANGE_LAYOUTS.includes(layout)) throw invalidParams(`layout must be ${ARRANGE_LAYOUTS.join(', ')}`);
         const auto = optionalBooleanParam(p, 'auto');
         return { ...(by === undefined ? {} : { by }), ...(layout === undefined ? {} : { layout }), ...(auto === undefined ? {} : { auto }) };
-      });
+      };
+      // An agent's arrange of a zone with a rule lays it out by the rule, once it may lay that zone out at all.
+      const board = me.agent === null || zoneId === null ? undefined : await readBoard();
+      const ruled = board?.zones.find((zone) => zone.id === zoneId && zone.layoutRule !== 'off');
+      if (ruled === undefined) return arrangeIn(me, zoneId, changes);
+      const { by, layout, auto } = changes();
+      checkDestination(me, board!, ruled.id);
+      if (by !== undefined || layout !== undefined) throw keepsRule(ruled);
+      if (auto !== undefined) await keepSettings(me, { auto });
+      return arrangeIn(THE_RULE, ruled.id, () => ({}), `, by its rule, for ${me.name}`);
     },
 
     'orchestrator.arrangeBoard': async (params, connection) => {
@@ -1798,15 +1854,15 @@ export function layoutHandlers<Context extends BoardConnection>({
     'orchestrator.zoneLayout': async (params, connection) => {
       const p = paramsObject(params);
       const me = access.caller('orchestrator.zoneLayout', p, connection);
-      const mode = oneOf(p, 'mode', ZONE_LAYOUT_MODES);
+      const mode = oneOf(p, 'mode', ZONE_LAYOUT_CHOICES);
       const entry: ActivityEntry = { detail: mode };
       return access.logged(me, 'zone-layout', entry, async () => {
         const zoneId = optionalStringParam(p, 'zoneId') ?? me.zoneId;
         if (zoneId === null) throw invalidParams(`${me.agent === null ? 'you have' : 'your tile is in'} no zone: name the zone to lay out`);
         const zone = checkDestination(me, await readBoard(), zoneId)!;
         entry.on = { id: zone.id, name: zone.name };
-        // Only how the zone draws what it holds: no tile's saved place changes, so back to free is as it was.
-        return call('zone.configure', { id: zone.id, layoutMode: mode });
+        // A view only changes how the zone draws what it holds, so back to free is as it was; a rule lays it out (`zone-rules.ts`).
+        return call('zone.configure', { id: zone.id, ...zoneLayoutChoiceFields(mode) });
       });
     },
 
@@ -2140,6 +2196,22 @@ export function layoutHandlers<Context extends BoardConnection>({
         await call('connector.delete', { id: connector.id });
         return null;
       });
+    },
+
+    // The user's: what an agent arranges in a zone with a rule goes through `orchestrator.arrange`.
+    'zone.followRule': async (params) => {
+      const p = paramsObject(params);
+      const id = stringParam(p, 'id');
+      const tiles: unknown = p.tiles;
+      if (!Array.isArray(tiles) || !tiles.every((key) => typeof key === 'string')) throw invalidParams('tiles must be a list of tile keys ([] to put none back)');
+      const zone = (await call('zone.list', undefined)).find((each) => each.id === id);
+      if (zone === undefined) throw invalidParams(`no zone ${id}`);
+      if (zone.layoutRule === 'off') throw invalidParams(`${zone.name} keeps no layout rule`);
+      // Back under the rule, then laid out by it with the rest.
+      zones.dropHandPlaced(id, tiles);
+      // Laid out again whenever the zone's work changes: a pass that changed nothing isn't worth a line in the log.
+      await arrangeIn(THE_RULE, id, () => ({}), ', by its rule', true);
+      return (await call('zone.list', undefined)).find((each) => each.id === id) ?? zone;
     },
   };
 }

@@ -18,7 +18,7 @@ import { registerTechnical } from './technical';
 import { registerDock } from './dock';
 import { backgroundMode, enterBackgroundMode, headless, revealWindow } from './background';
 import { BUILD } from './build';
-import { chromeOptions, type ChromeFor } from './chrome';
+import { chromeFor, chromeOptions } from './chrome';
 import { registerExternalIpc } from './external';
 import { registerConnectorIpc } from './connectors';
 import { registerFlowEdgeIpc } from './flow-edges';
@@ -37,6 +37,7 @@ import { guardWindow } from './links';
 import { createNotifier, registerNotifications } from './notifications';
 import { registerSessionIpc } from './sessions';
 import { registerSettingsWindow } from './settings-window';
+import { registerOverviewWindow } from './overview-window';
 import { registerSetupIpc, setAppMenu } from './setup';
 import { registerShellIpc } from './shells';
 import { registerTrackerIpc } from './trackers';
@@ -96,6 +97,9 @@ const BOARD_MIN_SIZE = { minWidth: 640, minHeight: 480 };
 /** The narrowest the Settings window gets: its sidebar and a page of rows still fit side by side. */
 const SETTINGS_MIN_SIZE = { minWidth: 620, minHeight: 400 };
 
+/** The narrowest the Overview window gets: its toolbar on two rows and two columns of threads side by side. */
+const OVERVIEW_MIN_SIZE = { minWidth: 720, minHeight: 420 };
+
 /** Opens a renderer window: the board, or with `query` set, one view of it such as a popped-out session window. */
 function openWindow(
   query: Record<string, string> = {},
@@ -110,7 +114,7 @@ function openWindow(
     parent,
   }: { title?: string; width?: number; height?: number; x?: number; y?: number; hidden?: boolean; offscreenScale?: number; parent?: BrowserWindow } = {},
 ): BrowserWindow {
-  const kind: ChromeFor = WINDOW_QUERY.popOut in query ? 'pop-out' : WINDOW_QUERY.settings in query ? 'settings' : 'board';
+  const kind = chromeFor(query);
   const window = new BrowserWindow({
     width,
     height,
@@ -126,7 +130,7 @@ function openWindow(
     // The desk of the theme it opens in (the same under either design), so it never flashes another before the page paints.
     backgroundColor: themeFor(appearance.current(), nativeTheme.shouldUseDarkColors).desk,
     ...chromeOptions(process.platform, kind),
-    ...(kind === 'settings' ? SETTINGS_MIN_SIZE : kind === 'pop-out' || hidden ? {} : BOARD_MIN_SIZE),
+    ...(kind === 'settings' ? SETTINGS_MIN_SIZE : kind === 'overview' ? OVERVIEW_MIN_SIZE : kind === 'pop-out' || hidden ? {} : BOARD_MIN_SIZE),
     // Background mode shows the window without focus once it has loaded; headless mode never shows it.
     show: !backgroundMode && !hidden,
     webPreferences: {
@@ -246,13 +250,10 @@ registerUnsavedPlanEditIpc();
 // to sessions of their own and it is emptied, once, not again at every other setting's change while it stays off; and
 // emptied as the app connects while it is off, should anything have been left in it.
 let keptWebLogins: boolean | undefined;
-const settingsWindow = registerSettingsWindow({
-  open: openWindow,
-  board: liveBoard,
-  // A headless test can't use a real full screen, which shows the window and takes a Space (background.ts), so it sets
-  // this variable in the main process to have the board count as full screen. Never in a packaged build.
-  isFullScreen: (window) => window.isFullScreen() || (!app.isPackaged && process.env.AGENT_BOARD_TEST_FULL_SCREEN === '1'),
-});
+// A headless test can't use a real full screen, which shows the window and takes a Space (background.ts), so it sets
+// this variable in the main process to have the board count as full screen. Never in a packaged build.
+const boardFullScreen = (window: BrowserWindow) => window.isFullScreen() || (!app.isPackaged && process.env.AGENT_BOARD_TEST_FULL_SCREEN === '1');
+const settingsWindow = registerSettingsWindow({ open: openWindow, board: liveBoard, isFullScreen: boardFullScreen });
 /** "Extended keyboard shortcuts", as the windows last saved it: read once the view state is up, then followed. */
 let extendedShortcuts = true;
 const webTabs = registerWebTabIpc({
@@ -294,6 +295,12 @@ const design = registerDesign(dataDir);
 const technical = registerTechnical(dataDir);
 const dock = registerDock(dataDir);
 const view = daemonViewState(daemon);
+const overviewWindow = registerOverviewWindow({
+  open: openWindow,
+  board: liveBoard,
+  view,
+  isFullScreen: boardFullScreen,
+});
 registerViewIpc(view, (key, value) => {
   if (key === VIEW_KEYS.extendedShortcuts) extendedShortcuts = value !== false;
 });
@@ -330,7 +337,7 @@ void app.whenReady().then(() => {
     openAgent(sessionId);
   };
   stopNotifications = registerNotifications(daemon, notify, openFromNotification, showBoard, isSimplified);
-  setAppMenu(() => openBoard(), () => settingsWindow.show(), { design, technical }, { liveBoard, openBoard });
+  setAppMenu(() => openBoard(), { settings: () => settingsWindow.show(), overview: () => overviewWindow.show() }, { design, technical }, { liveBoard, openBoard });
   // Start (or find) the daemon at launch, not when the window first asks.
   daemon.call('daemon.health').catch((error: unknown) => console.error('agent-board: could not reach the daemon:', error));
   openBoard();

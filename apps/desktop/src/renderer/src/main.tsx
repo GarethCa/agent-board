@@ -2,6 +2,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { describeBuild } from '@agent-board/daemon/protocol';
 import '@fontsource-variable/bricolage-grotesque/opsz.css';
+import '@fontsource-variable/inter/index.css';
 import '@fontsource-variable/jetbrains-mono/index.css';
 // Every subset (Latin Extended, Cyrillic): each loads only when a note uses its letters.
 import '@fontsource/caveat/600.css';
@@ -11,6 +12,7 @@ import './theme-packs.css';
 import './ui/ui.css';
 import './app.css';
 import './chrome/chrome.css';
+import './overview/overview.css';
 import './onboarding/onboarding.css';
 import './demo/demo.css';
 import { App } from './App';
@@ -26,6 +28,8 @@ import { ShelvesGallery } from './session/ShelvesGallery';
 import { WINDOW_QUERY, windowTargetFrom } from '../../preload/api';
 import { PopOutWindow } from './windows/PopOutWindow';
 import { SettingsWindow } from './chrome/SettingsWindow';
+import { OverviewWindow } from './overview/OverviewWindow';
+import { OverviewGallery } from './overview/OverviewGallery';
 import { CAPTURE_FRAME } from './board/capture-mode';
 import { DEMO } from './demo/demo-mode';
 import { ReviewsProvider } from './review/ReviewsProvider';
@@ -38,6 +42,7 @@ import { followDock } from './dock';
 import { followExtendedShortcuts } from './keys/extended-shortcuts';
 import { followEscapeHatch } from './keys/escape-hatch';
 import { ToastProvider, TooltipProvider } from './ui';
+import { ParkThought } from './keys/ParkThought';
 
 const root = document.getElementById('root');
 if (!root) throw new Error('missing #root element');
@@ -46,10 +51,13 @@ if (!root) throw new Error('missing #root element');
 const popOut = windowTargetFrom(new URLSearchParams(location.search), WINDOW_QUERY.popOut);
 // Set by the main process for the Settings window (main/settings-window.ts): the pane it opens on, or empty.
 const settings = new URLSearchParams(location.search).get(WINDOW_QUERY.settings) ?? undefined;
+// Set by the main process for the Overview window (main/overview-window.ts).
+const overview = new URLSearchParams(location.search).has(WINDOW_QUERY.overview);
 
 // The build is in the board's title so screenshots and bug reports name the commit. A popped-out window is titled by
 // its session (PopOutWindow), which this would otherwise overwrite whenever it resolved later, and Settings is Settings.
 if (settings !== undefined) document.title = 'Settings';
+else if (overview) document.title = 'Overview';
 else if (popOut === undefined) void window.agentBoard.build().then((build) => (document.title = `agent-board · ${describeBuild(build)}`));
 
 // The theme for the window's light or dark mode, which the Appearance setting drives (themes.ts): set before the first
@@ -97,6 +105,11 @@ createRoot(root).render(
         {settings !== undefined ? (
           <DaemonGate>
             <SettingsWindow initial={settings} />
+            <ParkThought />
+          </DaemonGate>
+        ) : overview ? (
+          <DaemonGate>
+            <OverviewWindow />
           </DaemonGate>
         ) : popOut !== undefined ? (
           <DaemonGate>
@@ -121,6 +134,9 @@ createRoot(root).render(
           <div className="gallery">
             <QueueHandOnGallery />
           </div>
+        ) : location.hash === '#gallery-overview' ? (
+          // A page of its own: the Overview window, full size, at eight in the morning.
+          <OverviewGallery />
         ) : location.hash === '#gallery-crew-card' ? (
           // A page of its own too: a crew card in each of its looks.
           <div className="gallery">

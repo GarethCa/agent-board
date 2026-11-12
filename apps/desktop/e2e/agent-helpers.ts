@@ -8,6 +8,7 @@ import { readFileSync } from 'node:fs';
 import { drag } from './board-helpers.ts';
 import { connectedDaemonPid, launchApp, runDesign, type LaunchOptions } from './launch.ts';
 import { isSettingsWindow, openSettings } from './settings-helpers.ts';
+import { TEST_SHELL } from './test-shell.ts';
 
 /** Launches the app on `dataDir` with `env` and extra switches `args`, and waits for it to reach its daemon. */
 export async function launch(dataDir: string, env: Record<string, string>, args: string[] = [], options: LaunchOptions = {}): Promise<{ app: ElectronApplication; window: Page }> {
@@ -29,7 +30,7 @@ export async function listFinishedTurns(page: Page): Promise<void> {
 export const MASTER_KEY = process.platform === 'darwin' ? 'Meta+Shift+m' : 'Control+Shift+m';
 
 // A plain, non-login sh: never the developer's own shell, rc files or profile.
-export const SHELL_ENV = { SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' };
+export const SHELL_ENV = { SHELL: TEST_SHELL, AGENT_BOARD_LOGIN_SHELL: '0' };
 
 /** The key typed into the app's Linear prompts; the fixture server takes any. */
 export const LINEAR_API_KEY = 'lin_api_e2e0123456789';

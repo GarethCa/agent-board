@@ -154,6 +154,17 @@ export interface Zone {
   /** How it lays out what it holds (`ZONE_LAYOUT_MODES`). Free until set, for a new zone too. */
   layoutMode: ZoneLayoutMode;
   /**
+   * The layout rule it keeps (`ZONE_LAYOUT_RULES`): off, or a rule the daemon lays it out by again whenever its work
+   * changes. Only a free zone keeps one: a rule moves the tiles' saved places, a view (shelves, clusters) draws them
+   * elsewhere. Off until set, for a new zone too.
+   */
+  layoutRule: ZoneLayoutRule;
+  /**
+   * The tiles in it placed by hand while it keeps a rule, by key (`agent:<session id>`, `shell:<id>`): the
+   * rule leaves each where it was put, until it is put back under the rule (`zone.followRule`). Empty while it keeps none.
+   */
+  handPlaced: string[];
+  /**
    * Whether it is folded to a chip while it is not needed (`zone.fold`). Its place and size stay as they were, so
    * unfolding puts it back exactly; its agents were paused when it folded, and unfolding wakes none unless asked.
    */
@@ -189,12 +200,12 @@ export type ZoneSnapshot = Pick<
   Zone,
   'id' | 'name' | 'color' | 'fillOpacity' | 'x' | 'y' | 'width' | 'height' | 'codexBypassHookTrust' | 'boardMcp' | 'agentsOrchestrate' | 'gateCommand' | 'tracker' | 'defaultRepo'
 > &
-  Partial<Pick<Zone, 'repoRoot' | 'folder' | 'spacing' | 'groupFolder' | 'trustsFolder' | 'layoutMode'>>;
+  Partial<Pick<Zone, 'repoRoot' | 'folder' | 'spacing' | 'groupFolder' | 'trustsFolder' | 'layoutMode' | 'layoutRule'>>;
 
 /** What `zone.restore` needs to make `zone` again: the fields of a `ZoneSnapshot`, and no others. */
 export function zoneSnapshot(zone: ZoneSnapshot): ZoneSnapshot {
-  const { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, tracker, defaultRepo, repoRoot, folder, spacing, groupFolder, trustsFolder, layoutMode } = zone;
-  return { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, tracker, defaultRepo, repoRoot, folder, spacing, groupFolder, trustsFolder, layoutMode };
+  const { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, tracker, defaultRepo, repoRoot, folder, spacing, groupFolder, trustsFolder, layoutMode, layoutRule } = zone;
+  return { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, tracker, defaultRepo, repoRoot, folder, spacing, groupFolder, trustsFolder, layoutMode, layoutRule };
 }
 
 /**
@@ -372,6 +383,7 @@ export interface ZoneSettings {
   gateCommand: string | null;
   spacing: ArrangeSpacing;
   layoutMode: ZoneLayoutMode;
+  layoutRule: ZoneLayoutRule;
 }
 
 /**
@@ -381,6 +393,30 @@ export interface ZoneSettings {
  */
 export const ZONE_LAYOUT_MODES = ['free', 'shelves', 'clusters'] as const;
 export type ZoneLayoutMode = (typeof ZONE_LAYOUT_MODES)[number];
+
+/**
+ * The layout rule a zone keeps (`Zone.layoutRule`): `off`, each tile where it was put; `lanes`, a lane per ticket, its
+ * leads and shells in a head row, laid out again as work comes and goes. Off until the user (or an agent) picks.
+ */
+export const ZONE_LAYOUT_RULES = ['off', 'lanes'] as const;
+export type ZoneLayoutRule = (typeof ZONE_LAYOUT_RULES)[number];
+
+/**
+ * A zone's layout as the one picker offers it: a free zone with no rule (`free`), a rule it keeps (`lanes`), or a view
+ * (`shelves`, `clusters`). Each sets both `Zone.layoutMode` and `Zone.layoutRule` (`zoneLayoutChoiceFields`).
+ */
+export const ZONE_LAYOUT_CHOICES = ['free', 'lanes', 'shelves', 'clusters'] as const;
+export type ZoneLayoutChoice = (typeof ZONE_LAYOUT_CHOICES)[number];
+
+/** The picker's choice for `zone`: its rule if it keeps one, else its layout mode. */
+export function zoneLayoutChoiceOf(zone: Pick<Zone, 'layoutMode' | 'layoutRule'>): ZoneLayoutChoice {
+  return zone.layoutRule === 'off' ? zone.layoutMode : zone.layoutRule;
+}
+
+/** The fields that make a zone laid out as `layout`. */
+export function zoneLayoutChoiceFields(layout: ZoneLayoutChoice): { layoutMode: ZoneLayoutMode; layoutRule: ZoneLayoutRule } {
+  return layout === 'lanes' ? { layoutMode: 'free', layoutRule: layout } : { layoutMode: layout, layoutRule: 'off' };
+}
 
 /** One window of plan usage, from a reading: how much of it is used, in percent, and when it resets. */
 export interface UsageWindow {
@@ -1517,6 +1553,11 @@ export interface TileMove {
    * meanwhile (an orchestrator's arrange) keeps that place.
    */
   ifUnplaced?: boolean;
+  /**
+   * The user put it there by hand (a drag, a nudge, a resize from its left or top edge): in a zone that keeps a layout
+   * rule, the tile is marked placed by hand (`Zone.handPlaced`), and the rule leaves it where it was put.
+   */
+  byHand?: boolean;
 }
 
 /** The agent CLI a session runs. */
@@ -1806,6 +1847,12 @@ export interface Agent {
    * what kind of wait its work is in. Null until one is set, and once cleared, when the board guesses (`workCategory`).
    */
   workCategory: AgentWorkCategory | null;
+  /**
+   * What it says it is for, in at most `MAX_PURPOSE_LENGTH` characters (`board.setStatus` with `description`), or its
+   * orchestrator said for it: ⌘K's sub line for it and its tile's tooltip. Unlike its status, it stays until it is set
+   * again; null while none is set. Not its `description`, the task it was started with.
+   */
+  purpose: string | null;
   /**
    * When it said its work is finished: it handed off (`board.handoff`) or set its status as done
    * (`board.setStatus` with `done`). A turn ending is not finishing: an agent may end turns while its background work
@@ -2784,6 +2831,10 @@ export const MAX_QUEUE_OPEN = 200;
 export const MAX_JOB_TEXT = 16_000;
 /** The longest a job's link is. */
 export const MAX_JOB_LINK = 500;
+/** The longest a job's headline (its first line) is, given as a headline. */
+export const MAX_JOB_HEADLINE = 80;
+/** The longest result a job's finisher leaves on it. */
+export const MAX_JOB_RESULT = 2_000;
 /** How many of a row's past versions are kept: its value after each change, newest first. */
 export const MAX_HISTORY_VERSIONS = 20;
 /** Days an entry goes untouched (neither changed nor confirmed) before it reads as stale. */
@@ -2861,21 +2912,51 @@ export interface MemoryEntry {
   listed?: { bytes: number; lines: number };
 }
 
-/** The kinds of row a queue holds: a job, which is taken and done, and a plain note, which is neither. */
-export const QUEUE_ROW_KINDS = ['job', 'note'] as const;
+/**
+ * The kinds of row an agents' queue holds: a task, a request (someone asks for something) and a prompt (a message to
+ * start an agent with), each taken by an agent and done; and info, which agents read and never take or finish.
+ */
+export const AGENT_QUEUE_KINDS = ['task', 'request', 'prompt', 'info'] as const;
+/** The kinds of row the user's queue holds, each one the user finishes: a review, questions, backlog, and something to read. */
+export const USER_QUEUE_KINDS = ['review', 'questions', 'backlog', 'read'] as const;
+export const QUEUE_ROW_KINDS = [...AGENT_QUEUE_KINDS, ...USER_QUEUE_KINDS] as const;
 export type QueueRowKind = (typeof QUEUE_ROW_KINDS)[number];
+/** The kinds a queue for `audience` takes. */
+export const queueKindsFor = (audience: QueueAudience): readonly QueueRowKind[] => (audience === 'user' ? USER_QUEUE_KINDS : AGENT_QUEUE_KINDS);
+/** The kind an add gives when it names none: a task, or backlog on the user's queue. */
+export const defaultQueueKind = (audience: QueueAudience): QueueRowKind => (audience === 'user' ? 'backlog' : 'task');
+/** Info is read alone: never taken, never done, and not counted as waiting. Every other kind is work. */
+export const isQueueWork = (kind: QueueRowKind): boolean => kind !== 'info';
+/** What an add's kind may be: a kind, or a name from before kinds (`job` is the queue's default kind, `note` is info). */
+export const QUEUE_ADD_KINDS = [...QUEUE_ROW_KINDS, 'job', 'note'] as const;
+export type QueueAddKind = (typeof QUEUE_ADD_KINDS)[number];
+/**
+ * A row's kind on a queue for `audience`: its own if the queue takes it, else the nearest there. A queue whose audience
+ * changes moves its rows' kinds over with this, so a row to read stays one to read, and work stays work: a task and
+ * backlog swap, info and read swap, a review or questions become a request, and a request or a prompt becomes backlog.
+ */
+export const queueKindOn = (audience: QueueAudience, kind: QueueRowKind): QueueRowKind => {
+  if (queueKindsFor(audience).includes(kind)) return kind;
+  if (audience === 'user') return kind === 'info' ? 'read' : 'backlog';
+  return kind === 'read' ? 'info' : kind === 'backlog' ? 'task' : 'request';
+};
 
-/** Where a job is: waiting, taken by an agent (a lease its session holds), or done. A note is always queued. */
+/** Where a job is: waiting, taken by an agent (a lease its session holds), or done. Info is always queued. */
 export type QueueJobState = 'queued' | 'taken' | 'done';
 
-/** One job, or note, of a queue, in its order. */
+/** One job, or info, of a queue, in its order. */
 export interface QueueJob {
   id: string;
   queueId: string;
   kind: QueueRowKind;
+  /** Its headline is the first line, its body the rest (see `jobParts` in `memory-lines.ts`). */
   text: string;
   link: string | null;
   state: QueueJobState;
+  /** What its finisher said was done, as it was done. */
+  result: string | null;
+  /** Put off for later on the user's queue: hidden from it until then. */
+  hiddenUntil: string | null;
   /** Its taker while taken. */
   takenBy: StepsWho | null;
   takenAt: string | null;
@@ -2899,7 +2980,7 @@ export interface TakenJob {
   job: QueueJob;
 }
 
-/** What last happened to a job or note, as its history records it. */
+/** What last happened to a job or info, as its history records it. */
 export type QueueJobChange = 'add' | 'edit' | 'take' | 'drop' | 'done' | 'restore';
 
 /** How many agents read an entry, or any of a memory's, and who last did. */
@@ -2947,19 +3028,25 @@ export type MemoryChange =
   | { action: 'confirm'; entry: string };
 
 /**
- * A change to a queue. `job` names a job or note by its id or the start of it. `take` without `job` takes the first
- * queued job. `drop` puts a taken job back at the front, counting the drop; `restore` puts back a version's text and link.
- * `move` puts an open job or note just before the open one `before`, or last for null.
+ * A change to a queue. `job` names a job or info by its id or the start of it. `add` takes the text whole, or a
+ * `headline` and a `body`; a kind of `job` or `note` (the names before kinds) reads as the queue's default kind, or info
+ * (something to read on the user's queue). `take` without `job` takes the first queued job. `drop` puts a taken job back
+ * at the front, counting the drop; `done` keeps its finisher's `result`; `restore` puts back a version's text and link.
+ * `move` puts an open job or info just before the open one `before`, or last for null. On the user's queue, `later`
+ * hides an open job until `until` (null shows it again), and `skip` puts a shown one behind the next shown open job.
+ * Neither makes a version: the job is as it was.
  */
 export type QueueChange =
-  | { action: 'add'; kind?: QueueRowKind; text: string; link?: string | null; front?: boolean }
+  | { action: 'add'; kind?: QueueAddKind; text?: string; headline?: string; body?: string; link?: string | null; front?: boolean }
   | { action: 'edit'; job: string; text?: string; link?: string | null }
   | { action: 'remove'; job: string }
   | { action: 'take'; job?: string }
   | { action: 'drop'; job: string }
-  | { action: 'done'; job: string }
+  | { action: 'done'; job: string; result?: string }
   | { action: 'restore'; job: string; version: number }
-  | { action: 'move'; job: string; before: string | null };
+  | { action: 'move'; job: string; before: string | null }
+  | { action: 'later'; job: string; until: string | null }
+  | { action: 'skip'; job: string };
 
 /** A new to-do list's size: its head, three lines and its foot. */
 export const TODO_CARD_SIZE = { width: 300, height: 196 };
@@ -3191,6 +3278,9 @@ export const MAX_DESCRIPTION_LENGTH = 500;
 
 /** Longest status summary an agent can set: a line or two on its tile. */
 export const MAX_STATUS_LENGTH = 200;
+
+/** Longest purpose an agent can set (`Agent.purpose`): one short line in ⌘K. */
+export const MAX_PURPOSE_LENGTH = 80;
 
 /** What an agent may record about its own work: a pull request, a hand-off doc, an agent it started, a pin. */
 export const AGENT_RECORD_KINDS = ['pr', 'doc', 'crew', 'pin'] as const;
@@ -5009,7 +5099,7 @@ export interface DaemonMethods {
    * `board.setStatus` does, saying who set it. The latest of the two wins. An agent outside its crew, an orchestrator
    * of wider scope or the caller itself is refused with `outOfScope`.
    */
-  'orchestrator.setStatus': { params: { token?: string; sessionId: string; summary?: string; progress?: number; character?: CharacterSet } & WorkCategoryParams; result: Agent };
+  'orchestrator.setStatus': { params: { token?: string; sessionId: string; summary?: string; progress?: number; character?: CharacterSet; description?: string } & WorkCategoryParams; result: Agent };
   /**
    * Waits until every agent (or, with `any`, one) is in one of `states` (`SETTLED_STATES` by default), or `timeoutMs`
    * passes (`DEFAULT_ORCHESTRATOR_WAIT_MS`, at most `MAX_ORCHESTRATOR_WAIT_MS`). An agent sent a message or started
@@ -5143,10 +5233,17 @@ export interface DaemonMethods {
   /** Deletes a group it (or its crew) made, as the board's Delete does (`zone.dissolve`): its tiles and notes stay, loose. */
   'orchestrator.removeZone': { params: { token?: string; id: string }; result: null };
   /**
-   * Sets how a zone in its scope (its own by default) lays out what it holds (`Zone.layoutMode`), as the zone's Layout
-   * menu does: the agent's way to opt a zone into shelves or clusters, or back to free. Moves no tile's saved place.
+   * Sets how a zone in its scope (its own by default) lays out what it holds (`ZoneLayoutChoice`), as the zone's Layout
+   * menu does: the agent's way to opt a zone into a rule (lanes), shelves or clusters, or back to free. Only a rule moves
+   * tiles' saved places: the zone is laid out by it at once.
    */
-  'orchestrator.zoneLayout': { params: { token?: string; zoneId?: string; mode: ZoneLayoutMode }; result: Zone };
+  'orchestrator.zoneLayout': { params: { token?: string; zoneId?: string; mode: ZoneLayoutChoice }; result: Zone };
+  /**
+   * Puts the tiles `tiles` (keys, as `Zone.handPlaced` has them) of a zone that keeps a layout rule back under it, and
+   * lays the zone out by its rule again. `[]` puts none back: the zone is only laid out again. The board's Put back
+   * under the rule, and how the daemon applies a rule as the zone's work changes. Refused for a zone that keeps no rule.
+   */
+  'zone.followRule': { params: { id: string; tiles: string[] }; result: Zone };
   /**
    * Puts a sticky note (or a text item) of `text` on the board, marked as made by it, at `place` (`LayoutPlace`; in its
    * own zone by default), clear of the tiles and items there, in a zone in its scope or one it made.
@@ -5257,10 +5354,11 @@ export interface DaemonMethods {
    * `board.identify` does. With `done`, it also says its work is finished (`Agent.workFinishedAt`). With `character`, it
    * sets the pose its character strikes (`Agent.character`), refusing a word outside its list with the list.
    * With `category`, it sets its work category whole (`Agent.workCategory`, ADR-0024), with a `label` and, for the two
-   * that wait on others, a `waitingOn`; `none` clears it. `done` with no category is Done. Any of the three may be left
+   * that wait on others, a `waitingOn`; `none` clears it. `done` with no category is Done. With `description`, it sets
+   * what it is for (`Agent.purpose`), trimmed and at most `MAX_PURPOSE_LENGTH`; '' clears it. Any of these may be left
    * out, but not all.
    */
-  'board.setStatus': { params: { token: string; summary?: string; progress?: number; done?: boolean; character?: CharacterSet } & WorkCategoryParams; result: Agent };
+  'board.setStatus': { params: { token: string; summary?: string; progress?: number; done?: boolean; character?: CharacterSet; description?: string } & WorkCategoryParams; result: Agent };
   /**
    * Records an entry on the sidebar of the agent holding `token` (`Agent.records`): a pull request by its GitHub URL,
    * with its title if known, or a hand-off doc by its path (relative to where the session started, or absolute), which

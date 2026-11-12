@@ -8,7 +8,7 @@ if ! command -v openbox >/dev/null 2>&1; then
 fi
 # xvfb-run -a takes the first free display from -n on; starting from a number of our own keeps two runs that start at
 # once from picking the same one.
-exec xvfb-run -n $((100 + $$ % 400)) -a sh -c '
+exec xvfb-run -n $((100 + $$ % 400)) -a -s "-screen 0 2560x1600x24" sh -c '
   if command -v openbox >/dev/null 2>&1; then
     openbox >/dev/null 2>&1 &
     # Give it a moment to start managing windows before the first test opens one.

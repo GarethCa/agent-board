@@ -3,16 +3,18 @@ import { rmSync } from 'node:fs';
 import { agents, launch, spawnAgent, tile, TURN_MS } from './agent-helpers.ts';
 import { test, browseForZone, pickFolderNext, removeDataDir, tempDataDir } from './launch.ts';
 import { scratch } from './scratch.ts';
+import { settledBox } from './board-helpers.ts';
 
-// An agent's tile under the Simplified design is a calm tile: its window controls always shown along its top edge, one
-// grey line, its status, and a filled button only while it needs the user.
+// An agent's tile under the Simplified design is a calm tile: its window controls along its top edge, shown while it
+// needs the user and otherwise on hover or focus, one grey line, its status, and a filled button only while it needs
+// the user.
 
 const CONTROLS = ['Fold to a chip', 'Expand', 'Pop out', 'More', 'Close agent'];
 
 const chip = (page: Page) => page.locator('[data-testid="agent-tile"][data-folded]');
 const filled = (card: Locator) => card.locator('[data-testid="tile-action"][data-prominent]');
 
-/** Each window control is shown at rest, with nothing hovered, at full strength unless disabled, and 24px square on the board. */
+/** Each window control of a tile that needs you is shown at rest, with nothing hovered, at full strength unless disabled, and 24px square on the board. */
 async function controlsAtRest(card: Locator): Promise<void> {
   const controls = card.getByTestId('tile-controls');
   for (const name of CONTROLS) {
@@ -48,7 +50,7 @@ test('an agent that needs permission shows its window controls at rest, inside t
     // Its technical layer stays out until Show technical details adds it.
     await expect(card.getByTestId('tile-technical')).toBeHidden();
 
-    // At the least tile width, 200px, all five controls still sit inside the tile, beside its name.
+    // At the least tile width, 200px, the pencil and all five controls still sit inside the tile, over the end of its name.
     await card.evaluate((element) => ((element as HTMLElement).style.width = '200px'));
     const inside = await card.evaluate((element) => {
       const edge = element.getBoundingClientRect();
@@ -57,7 +59,7 @@ test('an agent that needs permission shows its window controls at rest, inside t
         return box.left >= edge.left && box.right <= edge.right - 1 && box.width >= 24;
       });
     });
-    expect(inside).toEqual([true, true, true, true, true]);
+    expect(inside).toEqual([true, true, true, true, true, true]);
     await expect(card.locator('.hybrid-tile-name')).toBeVisible();
     await card.evaluate((element) => ((element as HTMLElement).style.width = ''));
 
@@ -75,7 +77,7 @@ test('an agent that needs permission shows its window controls at rest, inside t
   }
 });
 
-test('an agent whose last message asks fills Answer; Close asks before stopping it, and its closed tile has no filled button and folds to a chip, by Fold or Close, never deleted', async () => {
+test('an agent whose last message asks fills Answer; Close asks before stopping it, and its closed tile has no filled button, shows its controls only on hover or focus, and folds to a chip, by Fold or Close, never deleted', async () => {
   const { dir, repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env, [], { design: 'simplified' });
@@ -118,6 +120,22 @@ test('an agent whose last message asks fills Answer; Close asks before stopping 
     await expect(chip(window)).toHaveCount(0);
     await expect(tile(window)).not.toHaveAttribute('data-status', 'needs-you');
     await expect(filled(tile(window))).toHaveCount(0);
+    // Needing nothing, its controls are hidden at rest and laid over its head, so its name has the width. Hover shows
+    // them and moves nothing; so does Tab, as they stay in the tab order.
+    await window.locator('.react-flow__pane').click({ position: { x: 20, y: 300 } });
+    await window.mouse.move(0, 0);
+    const controls = tile(window).getByTestId('tile-controls');
+    const name = tile(window).locator('.hybrid-tile-name');
+    await expect(controls).toHaveCSS('opacity', '0');
+    const named = await settledBox(name);
+    await tile(window).hover();
+    await expect(controls).toHaveCSS('opacity', '1');
+    expect(await settledBox(name)).toEqual(named);
+    await window.mouse.move(0, 0);
+    await expect(controls).toHaveCSS('opacity', '0');
+    await tile(window).getByRole('button', { name: 'Expand', exact: true }).focus();
+    await expect(controls).toHaveCSS('opacity', '1');
+    await tile(window).getByRole('button', { name: 'Expand', exact: true }).blur();
     const fold = tile(window).getByRole('button', { name: 'Fold to a chip' });
     await expect(fold).toBeEnabled();
     await fold.click();

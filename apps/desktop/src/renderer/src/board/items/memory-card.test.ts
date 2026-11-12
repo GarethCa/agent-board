@@ -1,6 +1,30 @@
 import { describe, expect, it } from 'vitest';
 import type { MemoryEntry } from '@agent-board/daemon/protocol';
-import { countText, entryLine, entryName, filePreview, freshEntry, inListOrder, isOld, matching, memoryData, newestWrite, newMemoryData, scopeText, whenText, whoText } from './memory-card';
+import {
+  agoText,
+  ageText,
+  cardRows,
+  countText,
+  entryBytes,
+  entryLine,
+  entryName,
+  filePreview,
+  freshEntry,
+  inListOrder,
+  isStale,
+  lastReaderText,
+  matching,
+  memoryData,
+  newestWrite,
+  newMemoryData,
+  readersOf,
+  readersText,
+  scopeText,
+  sizeText,
+  staleCount,
+  whenText,
+  whoText,
+} from './memory-card';
 
 const NOW = new Date(2026, 10, 5, 15, 0);
 const agent = { kind: 'agent', sessionId: 's1', name: 'impl-2' } as const;
@@ -58,14 +82,61 @@ describe('a memory card', () => {
     expect(entryLine(entry('empty.md', { file: true, text: '' }))).toBe('(empty file)');
   });
 
-  it('says who wrote a row and when: the time today, the weekday this week, else the date; old after 30 days', () => {
+  it('says who wrote a row and when: the time today, the weekday this week, else the date; stale after 30 days', () => {
     expect(whoText({ kind: 'user' })).toBe('you');
     expect(whoText(agent)).toBe('impl-2');
     expect(whenText(new Date(2026, 10, 5, 10, 40).toISOString(), NOW)).toBe('10:40');
     expect(whenText(new Date(2026, 10, 2, 10, 40).toISOString(), NOW)).toBe('Mon');
     expect(whenText(new Date(2026, 9, 20, 10, 40).toISOString(), NOW)).toBe('20 Oct');
-    expect(isOld(entry('a', { updatedAt: new Date(2026, 9, 1).toISOString() }), NOW)).toBe(true);
-    expect(isOld(entry('a', { updatedAt: new Date(2026, 9, 10).toISOString() }), NOW)).toBe(false);
+    const stale = entry('a', { updatedAt: new Date(2026, 9, 1).toISOString() });
+    expect(isStale(stale, NOW)).toBe(true);
+    expect(isStale(entry('a', { updatedAt: new Date(2026, 9, 10).toISOString() }), NOW)).toBe(false);
+    expect(staleCount([stale, entry('b')], NOW)).toBe(1);
+  });
+
+  it('says how long ago, short on a row and as words in a sentence', () => {
+    const ago = (ms: number) => new Date(NOW.getTime() - ms).toISOString();
+    expect(ageText(ago(20_000), NOW)).toBe('now');
+    expect(ageText(ago(5 * 60_000), NOW)).toBe('5 min');
+    expect(ageText(ago(2 * 3_600_000 + 60_000), NOW)).toBe('2 h');
+    expect(ageText(ago(3 * 86_400_000), NOW)).toBe('3 d');
+    expect(ageText(new Date(2026, 9, 1).toISOString(), NOW)).toBe('1 Oct');
+    expect(ageText('not a date', NOW)).toBe('');
+    expect(agoText(ago(20_000), NOW)).toBe('just now');
+    expect(agoText(ago(5 * 60_000), NOW)).toBe('5 min ago');
+    expect(agoText(new Date(2026, 9, 1).toISOString(), NOW)).toBe('1 Oct');
+  });
+
+  it('lists documents first on the card, in the rows that fit whole: a second section head takes a row', () => {
+    const docs = ['d1', 'd2', 'd3'].map((id) => entry(id, { file: true }));
+    const facts = ['f1', 'f2', 'f3'].map((id) => entry(id));
+    const ids = (rows: { docs: MemoryEntry[]; facts: MemoryEntry[] }) => [...rows.docs, ...rows.facts].map((each) => each.id);
+    // Both sections: one row each, under their two heads.
+    expect(ids(cardRows([...docs, ...facts]))).toEqual(['d1', 'f1']);
+    expect(cardRows([...docs, ...facts])).toMatchObject({ docCount: 3, factCount: 3 });
+    // One section: three rows under its head.
+    expect(ids(cardRows(facts))).toEqual(['f1', 'f2', 'f3']);
+    expect(ids(cardRows(docs))).toEqual(['d1', 'd2', 'd3']);
+    // With more room, documents take one row while there are facts, and the rest when there are few.
+    expect(ids(cardRows([...docs, ...facts], 5))).toEqual(['d1', 'f1', 'f2', 'f3']);
+    expect(ids(cardRows([...docs, facts[0]!], 5))).toEqual(['d1', 'd2', 'd3', 'f1']);
+    expect(ids(cardRows(docs, 2))).toEqual(['d1', 'd2']);
+  });
+
+  it("gives a document's size from its text, or from an agent's listing, which leaves the text out", () => {
+    expect(entryBytes(entry('a', { text: 'héllo' }))).toBe(6);
+    expect(entryBytes(entry('a', { text: '', listed: { bytes: 2150, lines: 40 } }))).toBe(2150);
+    expect([sizeText(640), sizeText(2150), sizeText(1_300_000)]).toEqual(['640 B', '2.1 KB', '1.2 MB']);
+  });
+
+  it('says who read an entry, and who did last', () => {
+    const readers = { e1: { count: 9, last: { name: 'impl-634', at: new Date(NOW.getTime() - 3 * 60_000).toISOString() } }, e2: { count: 1, last: { name: 'lead', at: NOW.toISOString() } } };
+    expect(readersText(readersOf(readers, 'e1'))).toBe('Read by 9 agents');
+    expect(readersText(readersOf(readers, 'e2'))).toBe('Read by 1 agent');
+    expect(readersText(readersOf(readers, 'e3'))).toBe('No agent has read it yet');
+    expect(readersText(readersOf(undefined, 'e1'))).toBe('No agent has read it yet');
+    expect(lastReaderText(readersOf(readers, 'e1'), NOW)).toBe('last: impl-634, 3 min ago');
+    expect(lastReaderText(readersOf(readers, 'e3'), NOW)).toBeUndefined();
   });
 
   it("shows and searches a file by its start: 40 lines, or 4000 characters of one huge line", () => {
@@ -75,6 +146,7 @@ describe('a memory card', () => {
     const big = entry('bundle.js', { file: true, text: `${'x'.repeat(5000)} needle` });
     expect(matching([big], 'needle')).toEqual([]);
     expect(matching([big], 'bundle')).toHaveLength(1);
+    expect(matching([big], 'needle', true)).toHaveLength(1);
   });
 
   it('counts its entries and pins at its foot', () => {

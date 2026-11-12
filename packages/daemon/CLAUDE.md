@@ -4,10 +4,10 @@ The daemon owns the board: the SQLite database, the agents' terminals, the hooks
 
 ## Big files: read them in parts
 
-`protocol.ts` (about 6,000 lines), `board-cli.ts`, `agents.ts`, `orchestrator-layout.ts`, `board-ops.ts`, `board-mcp.ts`, `daemon.ts`, `agent-spawns.ts`, `orchestrators.ts`. Look up the line first (go to definition, or `rg -n`), then read about 80 lines around it.
+`protocol.ts` (over 6,000 lines), `board-cli.ts`, `agents.ts`, `orchestrator-layout.ts`, `board-mcp.ts`, `board-ops.ts` (each over 2,000), `daemon.ts`, `orchestrators.ts`, `agent-spawns.ts`, `board-arrange.ts`, `memory-queue.ts`, `flow-edges.ts`, `deliveries.ts` (each over 1,000). Every file over 300 lines is named on this page. Look up the line first (go to definition, or `rg -n`), then read about 80 lines around it.
 
-- `protocol.ts`: every type the daemon and its clients share. `DaemonMethods` (about line 4170) lists each RPC method with its params and result. `DaemonEvent` (about line 5890) lists the events it pushes.
-- `daemon.ts`: starts everything. `handlers` (about line 860) maps each RPC method to the module that serves it.
+- `protocol.ts`: every type the daemon and its clients share. The interface `DaemonMethods` lists each RPC method with its params and result. The type `DaemonEvent` lists the events it pushes. Go to their definitions; don't scroll.
+- `daemon.ts`: starts everything. The `handlers` object in it maps each RPC method to the module that serves it.
 
 ## By subsystem
 
@@ -21,11 +21,11 @@ The daemon owns the board: the SQLite database, the agents' terminals, the hooks
 | Messages between agents | `deliveries.ts`, `sender-marker.ts`, `reply-paths.ts`, `handoff-text.ts`, `flow-edges.ts`, `flow-conditions.ts`, `flow-payloads.ts`, `flow-approvals.ts` |
 | Transcripts and chat | `transcripts.ts`, `transcript-adapters.ts`, `claude-transcript.ts`, `external-sessions.ts`, `external-hooks.ts`, `resume-external.ts` |
 | Board items | `items.ts`, `connectors.ts`, `agent-notes.ts`, `documents.ts`, `memory-queue.ts`, `steps.ts`, `clocks.ts`, `schedules.ts`, `cron.ts`, `link-cards.ts`, `link-metadata.ts`, `image-store.ts`, `image-sweeper.ts`, `mermaid.ts`, `diagram.ts` |
-| Zones and layout | `zones.ts`, `zone-*.ts`, `repo-zone.ts`, `board-layout.ts`, `board-arrange.ts`, `arrange-board.ts`, `board-tidy.ts`, `board-room.ts`, `shelf-layout.ts`, `tile-position.ts`, `layout-measures.ts`, `work-units.ts` |
-| Orchestrators and crews | `orchestrators.ts`, `orchestrator-layout.ts`, `master.ts`, `crew-*.ts`, `prefab-library.ts`, `role-templates.ts` |
-| What agents call (CLI and MCP) | `board-cli.ts`, `board-ops.ts`, `board-mcp.ts`, `board-mcp-http.ts`, `*-ops.ts` (layout, memory, steps, clock), `asks.ts`, `selection-asks.ts`, `agent-page.ts`, `agent-records.ts`, `character.ts` |
+| Zones and layout | `zones.ts`, `zone-*.ts` (among them `zone-sources.ts`, a zone from a GitHub repo, and `zone-map.ts`, a zone as the map an orchestrator reads), `repo-zone.ts`, `board-layout.ts`, `board-arrange.ts`, `arrange-board.ts`, `board-tidy.ts`, `board-room.ts`, `shelf-layout.ts`, `tile-position.ts`, `layout-measures.ts`, `work-units.ts` |
+| Orchestrators and crews | `orchestrators.ts`, `orchestrator-layout.ts`, `master.ts`, `crew-*.ts` (among them `crew-loop.ts`, a running crew's loop, and `crew-prefabs.ts`, a saved crew shape and its `.crew.json`), `prefab-library.ts`, `role-templates.ts` |
+| What agents call (CLI and MCP) | `board-cli.ts`, `board-ops.ts`, `board-mcp.ts`, `board-mcp-http.ts`, `board.ts` (the `board.*` RPC methods and who may call them), `*-ops.ts` (among them `layout-ops.ts` for `move`, `arrange`, `zone` and `note`, and `memory-ops.ts` for `memory` and `queue`; also steps and clock), `asks.ts`, `selection-asks.ts`, `agent-page.ts`, `agent-records.ts`, `character.ts` |
 | Reviews, gates, pull requests | `reviews.ts`, `review-doc.ts`, `gates.ts`, `gate-rules.ts`, `gate-output.ts`, `gate-actions.ts`, `pull-requests.ts`, `agent-pull-requests.ts`, `pull-request-tabs.ts`, `push-targets.ts`, `trackers.ts` |
-| Settings and the rest | `settings.ts`, `setup-checks.ts`, `permissions.ts`, `usage.ts`, `time-zone.ts`, `cli.ts`, `cli-install.ts` |
+| Settings and the rest | `protocol.ts` (the shared types, above), `settings.ts`, `setup-checks.ts`, `permissions.ts`, `usage.ts`, `time-zone.ts`, `cli.ts`, `cli-install.ts` |
 
 ## Adding an RPC method
 

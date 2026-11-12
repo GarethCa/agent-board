@@ -51,6 +51,51 @@ export function panelBottom(stored: string | undefined, lift: number, max: numbe
 /** The furthest up the bottom edge goes on a board this tall (`top` is the panel's top, in px from the board's top): the panel keeps its least height. */
 export const maxPanelBottom = (boardHeight: number, top: number, inset: number): number => Math.max(0, boardHeight - top - inset - MIN_PANEL_HEIGHT);
 
+/** Pushing, the pane leaves the board at least this much: the top row fits it, folded (chrome-folds.ts). */
+export const PUSH_TOP_ROW = 880;
+
+/** Pushing, the pane leaves the board at least this much beside it, besides Edge rules: room for the zones pill, a dock and the zoom bar. */
+export const PUSH_KEEP_BOARD = 480;
+
+/** What a pushing pane leaves the board, with `taken` px of it for its margin and Edge rules. */
+const pushKeeps = (taken: number): number => Math.max(PUSH_TOP_ROW, taken + PUSH_KEEP_BOARD);
+
+/** `push`: the pane is beside the board, which ends at its left edge. `cover`: it lies over the board's right side. */
+export type PaneMode = 'push' | 'cover';
+
+/**
+ * How the pane meets a board this wide: beside it if the board keeps its room with the pane at its least, or else over it,
+ * as what is left would be too thin. Before the board is measured, as it will most likely be.
+ */
+export const paneMode = (boardWidth: number, taken = 0): PaneMode => (boardWidth > 0 && boardWidth - pushKeeps(taken) < MIN_PANEL_WIDTH ? 'cover' : 'push');
+
+export interface PaneLayout {
+  mode: PaneMode;
+  width: number;
+  /** The widest it can be dragged. */
+  widest: number;
+  /** Its bottom edge, in px up from the board's bottom inset; 0 is full height. */
+  bottom: number;
+  /** The furthest up its bottom edge goes; 0 when it can't be dragged up. */
+  maxBottom: number;
+  /** How far the board's right edge comes in for it. */
+  room: number;
+}
+
+/**
+ * Where the pane goes on the board `room` measures (`usePanelRoom`), at the width the user chose and the bottom they left it at.
+ * Pushing, it is full height, with nothing under it to end above, and never so wide that the narrower board loses its top
+ * row, its bottom row or Edge rules, which opens on it; it pushes only where its least fits beside that room. Covering, it keeps its dragged bottom, from its top at the
+ * window's edge, and leaves Edge rules its room.
+ */
+export function paneLayout(room: { board: number; height: number; taken: number; lift: number }, chosen: number, storedBottom: string | undefined, inset: number): PaneLayout {
+  const mode = paneMode(room.board, room.taken);
+  const widest = room.board === 0 ? DEFAULT_PANEL_WIDTH : mode === 'push' ? maxPanelWidth(room.board, pushKeeps(room.taken)) : maxPanelWidth(room.board, room.taken);
+  const width = room.board === 0 ? chosen : Math.min(widest, Math.max(MIN_PANEL_WIDTH, Math.round(chosen)));
+  const maxBottom = mode === 'push' || room.height === 0 ? 0 : maxPanelBottom(room.height, 0, inset);
+  return { mode, width, widest, bottom: panelBottom(storedBottom, room.lift, maxBottom), maxBottom, room: mode === 'push' ? width : 0 };
+}
+
 const widthStore = storedValue('agent-board.master-panel-width');
 const forYouStore = storedValue('agent-board.master-panel-for-you-height');
 const bottomStore = storedValue('agent-board.master-panel-bottom');

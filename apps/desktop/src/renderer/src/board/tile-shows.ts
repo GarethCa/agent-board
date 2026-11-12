@@ -179,13 +179,17 @@ export function branchSaysMore(agent: Pick<Agent, 'branch' | 'reviews' | 'issue'
   return branch !== id && !branch.startsWith(`${id}-`);
 }
 
-/** Its hover card's details, one line each: what the quiet tile leaves off. Empty when none applies. */
+/**
+ * Its hover card's details, one line each: what it says it is for, which no tile shows, and what the quiet tile leaves
+ * off. Empty when none applies.
+ */
 export function tileDetails(
-  agent: Pick<Agent, 'branch' | 'reviews' | 'issue' | 'trustedByZone' | 'status'>,
+  agent: Pick<Agent, 'branch' | 'reviews' | 'issue' | 'trustedByZone' | 'status' | 'purpose'>,
   shows: TileShows,
   branchShown: boolean,
 ): string[] {
   const lines: string[] = [];
+  if (agent.purpose) lines.push(`For: ${agent.purpose}`);
   if (!branchShown && branchLine(agent) !== '') lines.push(`Branch: ${branchLine(agent)}`);
   if (!shows.setBy && agent.status?.setBy != null) lines.push(`Status set by ${agent.status.setBy}`);
   if (!shows.trusted && agent.trustedByZone) lines.push("Trusted by its zone's setting: Claude's trust screen was answered by that setting, not by you");

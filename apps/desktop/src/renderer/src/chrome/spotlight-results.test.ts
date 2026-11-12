@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent, Shell, Zone } from '@agent-board/daemon/protocol';
-import { fuzzyMatch, RECENT_LIMIT, SETTINGS_LIMIT, CREWS_GROUP, newAgentLeads, spotlightGroups, type SpotlightRow } from './spotlight-results';
+import { fuzzyMatch, RECENT_LIMIT, SETTINGS_LIMIT, CREWS_GROUP, FILTERS_GROUP, newAgentLeads, parseFilters, sideBySide, spotlightGroups, spotlightStep, type SpotlightRow } from './spotlight-results';
 
 const zone = (id: string, name: string): Zone => ({ id, name, color: '#3b5bdb' }) as Zone;
 
@@ -24,6 +24,9 @@ const agent = (name: string, more: Partial<Agent> = {}): Agent =>
     compactingSince: null,
     finishedAt: null,
     createdAt: '2026-10-01T10:00:00.000Z',
+    purpose: null,
+    status: null,
+    pullRequests: [],
     ...more,
   }) as Agent;
 
@@ -42,15 +45,15 @@ describe('spotlightGroups before anything is typed', () => {
 
     expect(groups.map((group) => group.label)).toEqual(['Needs you', 'Recent', 'Zones']);
     expect(names(groups[0]!.rows)).toEqual(['Review 202']);
-    expect(groups[0]!.rows[0]!.sub).toBe('agent-board · asks: Approve the push?');
+    expect(groups[0]!.rows[0]!.sub).toBe('asks: Approve the push?');
     expect(names(groups[1]!.rows)).toEqual(['Master', 'Theme packs']);
     expect(names(groups[2]!.rows)).toEqual(['agent-board', 'website']);
   });
 
-  it('says what a waiting agent last asked in its terminal, on one line', () => {
+  it('says what a waiting agent last asked in its terminal, on one line, without its zone beside Recent', () => {
     const asking = agent('Pick a database', { state: 'waiting', lastMessage: 'Which database should I use,\nPostgres or SQLite?' });
     const [needing] = spotlightGroups('', { agents: [asking], shells: [], zones, shows: 'turns' });
-    expect(needing!.rows[0]!.sub).toBe('agent-board · Which database should I use, Postgres or SQLite?');
+    expect(needing!.rows[0]!.sub).toBe('Which database should I use, Postgres or SQLite?');
   });
 
   it('leaves out a seen ask, empty groups, and a shell that is another window’s tab', () => {
@@ -112,6 +115,140 @@ describe('spotlightGroups once something is typed', () => {
 
   it('is empty when nothing matches', () => {
     expect(spotlightGroups('zzzz', { agents: [agent('One')], shells: [], zones, shows: 'turns' })).toEqual([]);
+  });
+});
+
+const pr = (number: number, title: string) => ({ number, title, state: 'OPEN', url: `https://example.com/pull/${number}` }) as unknown as NonNullable<Agent['pullRequests']>[number];
+const issue = (id: string, title: string): Agent['issue'] => ({ provider: 'linear', id, title, url: 'https://x' });
+const typed = (query: string, agents: Agent[], shells: Shell[] = []) => spotlightGroups(query, { agents, shells, zones, shows: 'turns' });
+const only = (query: string, agents: Agent[], shells: Shell[] = []) => typed(query, agents, shells)[0]?.rows ?? [];
+
+describe('what an agent says it is for', () => {
+  it('is the sub line, in place of its zone and branch', () => {
+    const [recent] = typed('', [agent('Quiet hours', { purpose: 'Hooks go quiet outside work hours' }), agent('Plain')]);
+    expect(recent!.rows.map(({ sub, purpose }) => [sub, purpose])).toEqual([
+      ['Hooks go quiet outside work hours', true],
+      ['agent-board · plain', undefined],
+    ]);
+  });
+
+  it('gives way to what an agent asks while it needs you', () => {
+    const asking = agent('Asking', { state: 'waiting', purpose: 'Something', ask: { question: 'Push?' } as Agent['ask'] });
+    expect(typed('', [asking])[0]!.rows[0]!.sub).toBe('asks: Push?');
+    expect(typed('push', [asking])[0]!.rows[0]!.sub).toBe('agent-board · asks: Push?');
+  });
+});
+
+describe('ranking a match by the field it is in', () => {
+  // Each agent holds "overview" in one field only, at the start and not the whole field, so only the weights differ.
+  const holding = {
+    name: agent('Overview'),
+    issue: agent('A', { issue: issue('OVERVIEW-1', 'x') }),
+    desc: agent('B', { purpose: 'overview window' }),
+    branch: agent('C', { branch: 'overview-x' }),
+    prTitle: agent('D', { pullRequests: [pr(9, 'overview later')] }),
+    status: agent('E', { status: { summary: 'overview next' } as Agent['status'] }),
+    said: agent('F', { lastMessage: 'overview done' }),
+  };
+
+  it('ranks the name, then the issue, description, branch, PR title, status line and what it said', () => {
+    const shuffled = [holding.said, holding.prTitle, holding.branch, holding.name, holding.status, holding.desc, holding.issue];
+    expect(names(only('overview', shuffled))).toEqual(['Overview', 'A', 'B', 'C', 'D', 'E', 'F']);
+  });
+
+  it('ranks a PR number with the issue, above the description', () => {
+    const byNumber = agent('Numbered', { pullRequests: [pr(571, 'Hooks')] });
+    const byDesc = agent('Described', { purpose: 'follow up #571' });
+    expect(names(only('#571', [byDesc, byNumber]))).toEqual(['Numbered', 'Described']);
+  });
+
+  it('matches a PR number only as a whole run', () => {
+    expect(only('51', [agent('Numbered', { pullRequests: [pr(571, 'Hooks')] })])).toEqual([]);
+  });
+});
+
+describe('the labelled snippet of why a row matched', () => {
+  it('names the field and marks the words, for a match outside the name', () => {
+    const rows = only('overview', [
+      agent('Numbered', { pullRequests: [pr(596, 'Overview window')] }),
+      agent('Described', { purpose: 'Draws the overview' }),
+      agent('Branched', { branch: 'fix-overview' }),
+      agent('Talked', { lastMessage: 'the overview is done' }),
+      agent('Busy', { status: { summary: 'on the overview' } as Agent['status'] }),
+    ]);
+    expect(Object.fromEntries(rows.map((row) => [row.name, row.snippet]))).toEqual({
+      Described: { label: 'desc', text: 'Draws the overview', marks: [10, 11, 12, 13, 14, 15, 16, 17] },
+      Branched: { label: 'branch', text: 'fix-overview', marks: [4, 5, 6, 7, 8, 9, 10, 11] },
+      Numbered: { label: 'PR', text: '#596 Overview window', marks: [5, 6, 7, 8, 9, 10, 11, 12] },
+      Busy: { label: 'status', text: 'on the overview', marks: [7, 8, 9, 10, 11, 12, 13, 14] },
+      Talked: { label: 'said', text: 'the overview is done', marks: [4, 5, 6, 7, 8, 9, 10, 11] },
+    });
+  });
+
+  it('marks a PR number in its snippet', () => {
+    expect(only('#596', [agent('Numbered', { pullRequests: [pr(596, 'Overview window')] })])[0]!.snippet).toEqual({
+      label: 'PR',
+      text: '#596 Overview window',
+      marks: [0, 1, 2, 3],
+    });
+  });
+
+  it('is left out when the name matched best, which keeps its usual sub line', () => {
+    const [row] = only('quiet', [agent('Quiet hours', { lastMessage: 'quiet now', purpose: 'Hooks go quiet' })]);
+    expect(row!.snippet).toBeUndefined();
+    expect(row!.sub).toBe('Hooks go quiet');
+  });
+
+  it('starts at a word near the match in a long field, after an ellipsis', () => {
+    const said = 'I have finished the first pass over the code and rebased on the hooks branch';
+    const [row] = only('rebased', [agent('Long', { lastMessage: said })]);
+    expect(row!.snippet!.text.startsWith('…')).toBe(true);
+    expect(row!.snippet!.text.endsWith('rebased on the hooks branch')).toBe(true);
+    const marked = row!.snippet!.marks.map((at) => row!.snippet!.text[at]).join('');
+    expect(marked).toBe('rebased');
+  });
+});
+
+describe('colon prefixes', () => {
+  it('reads each prefix, its value to the next space, and the words left', () => {
+    expect(parseFilters('zone:hiit review')).toEqual({ filters: [{ prefix: 'zone:', value: 'hiit' }], rest: 'review' });
+    expect(parseFilters('pr: Issue:ABC-1 docs')).toEqual({
+      filters: [
+        { prefix: 'pr:', value: '' },
+        { prefix: 'issue:', value: 'ABC-1' },
+      ],
+      rest: 'docs',
+    });
+    expect(parseFilters('plain words')).toEqual({ filters: [], rest: 'plain words' });
+  });
+
+  it('lists the filters for a lone colon, and those a started name fits', () => {
+    const [group] = typed(':', [agent('One')]);
+    expect(group!.label).toBe(FILTERS_GROUP);
+    expect(names(group!.rows)).toEqual(['zone:', 'pr:', 'issue:']);
+    expect(names(typed(':zo', [agent('One')])[0]!.rows)).toEqual(['zone:']);
+  });
+
+  it('keeps the sessions in a zone, ranked by the words left', () => {
+    const inSite = [agent('Site review', { zoneId: 'z2' }), agent('Site deploy', { zoneId: 'z2' })];
+    const sources = [...inSite, agent('Board review')];
+    expect(names(only('zone:webs review', sources, [shell('web shell', { zoneId: 'z2' })]))).toEqual(['Site review']);
+    expect(names(only('zone:website', sources, [shell('web shell', { zoneId: 'z2' })])).sort()).toEqual(['Site deploy', 'Site review', 'web shell']);
+  });
+
+  it('keeps agents with a pull request, by its number or title, with the PR as the snippet', () => {
+    const agents = [agent('Hooks', { pullRequests: [pr(571, 'Hooks go quiet')] }), agent('Overview', { pullRequests: [pr(596, 'Overview window')] }), agent('None')];
+    expect(names(only('pr:', agents)).sort()).toEqual(['Hooks', 'Overview']);
+    expect(names(only('pr:#571', agents))).toEqual(['Hooks']);
+    expect(names(only('pr:overview', agents))).toEqual(['Overview']);
+    expect(only('pr:571', agents)[0]!.snippet).toEqual({ label: 'PR', text: '#571 Hooks go quiet', marks: [] });
+  });
+
+  it('keeps agents on an issue, by its id or title, and no shells', () => {
+    const agents = [agent('One', { issue: issue('ABC-12', 'Login page') }), agent('Two', { issue: issue('ABC-99', 'Billing') }), agent('Three')];
+    expect(names(only('issue:abc-12', agents, [shell('abc-12 shell')]))).toEqual(['One']);
+    expect(names(only('issue:billing', agents))).toEqual(['Two']);
+    expect(only('issue:zzz', agents)).toEqual([]);
   });
 });
 
@@ -251,10 +388,25 @@ describe('spotlightGroups and actions', () => {
     expect(actionNames('nw')).toEqual([]);
   });
 
-  it('offers New agent only where one can start, lists no actions before typing, and none under Classic', () => {
+  it('offers New agent only where one can start, lists no actions before typing, and under Classic only Park a thought', () => {
     expect(actionNames('new ag', { canStartAgent: false })).toEqual([]);
     expect(spotlightGroups('', sources).some((group) => group.label === 'Actions')).toBe(false);
     expect(actionNames('new ag', { simplified: false })).toEqual([]);
+    expect(actionNames('preferences', { simplified: false })).toEqual([]);
+  });
+
+  it('finds Park a thought, under either design, by its name or other words, its key in its sub line', () => {
+    for (const simplified of [true, false]) {
+      expect(actionNames('park', { simplified })).toEqual(['Park a thought']);
+      expect(actionNames('idea', { simplified })).toEqual(['Park a thought']);
+    }
+    const row = spotlightGroups('park', sources).find((group) => group.label === 'Actions')?.rows[0];
+    expect(row?.sub).toMatch(/your queue · (⌘⇧P|Ctrl\+Shift\+P)$/);
+  });
+
+  it('leaves Park a thought’s key out of its sub line while the extended keys are off, as the key does nothing then', () => {
+    const row = spotlightGroups('park', { ...sources, extended: false }).find((group) => group.label === 'Actions')?.rows[0];
+    expect(row?.sub).toBe('A line at the back of your queue');
   });
 });
 
@@ -301,5 +453,55 @@ describe('spotlightGroups and the Dock setting under Classic', () => {
 
   it('adds no Windows group while the dock shows everything', () => {
     expect(spotlightGroups('', { ...sources, windows }).some((group) => group.label === 'Windows')).toBe(false);
+  });
+});
+
+describe('spotlightStep, the arrow keys over Needs you beside Recent', () => {
+  const asking = (name: string) => agent(name, { state: 'waiting', ask: { question: 'Go?' } as Agent['ask'] });
+  const groups = spotlightGroups('', {
+    agents: [asking('N1'), asking('N2'), agent('R1', { createdAt: '2026-10-03T00:00:00.000Z' }), agent('R2', { createdAt: '2026-10-02T00:00:00.000Z' }), agent('R3')],
+    shells: [],
+    zones,
+    shows: 'turns',
+  });
+  const key = (name: string) => `agent:s-${name}`;
+
+  it('lays them side by side only while both are listed', () => {
+    expect(sideBySide(groups)).toBe(true);
+    expect(sideBySide(typed('', [agent('R1')]))).toBe(false);
+    expect(sideBySide(typed('r', [asking('N1'), agent('R1')]))).toBe(false);
+  });
+
+  it('crosses to the same place in the other column with ← →, the last row of a shorter one', () => {
+    expect(spotlightStep(groups, key('N2'), 'right')).toBe(key('R2'));
+    expect(spotlightStep(groups, key('R3'), 'left')).toBe(key('N2'));
+    expect(spotlightStep(groups, key('R1'), 'right')).toBe(key('R1'));
+    expect(spotlightStep(groups, 'zone:z1', 'left')).toBe('zone:z1');
+  });
+
+  it('moves within a column with ↑ ↓, then on to the band below and round to the first row', () => {
+    expect(spotlightStep(groups, key('N1'), 'down')).toBe(key('N2'));
+    expect(spotlightStep(groups, key('N2'), 'down')).toBe('zone:z1');
+    expect(spotlightStep(groups, key('R3'), 'down')).toBe('zone:z1');
+    expect(spotlightStep(groups, 'zone:z1', 'up')).toBe(key('N2'));
+    expect(spotlightStep(groups, 'zone:z2', 'down')).toBe(key('N1'));
+    expect(spotlightStep(groups, key('R1'), 'up')).toBe('zone:z2');
+  });
+
+  it('walks Recent under Needs you once a narrow window stacks them, and ← → stay put', () => {
+    expect(spotlightStep(groups, key('N2'), 'down', true)).toBe(key('R1'));
+    expect(spotlightStep(groups, key('R1'), 'up', true)).toBe(key('N2'));
+    expect(spotlightStep(groups, key('R3'), 'down', true)).toBe('zone:z1');
+    expect(spotlightStep(groups, 'zone:z1', 'up', true)).toBe(key('R3'));
+    expect(spotlightStep(groups, key('N2'), 'right', true)).toBe(key('N2'));
+    expect(spotlightStep(groups, key('R2'), 'left', true)).toBe(key('R2'));
+  });
+
+  it('starts at the first row when none is active, and walks a single list as before', () => {
+    expect(spotlightStep(groups, undefined, 'down')).toBe(key('N1'));
+    const flat = typed('qx', [agent('Qx1'), agent('Qx2')]);
+    expect(spotlightStep(flat, key('Qx1'), 'down')).toBe(key('Qx2'));
+    expect(spotlightStep(flat, key('Qx2'), 'down')).toBe(key('Qx1'));
+    expect(spotlightStep(flat, key('Qx1'), 'up')).toBe(key('Qx2'));
   });
 });

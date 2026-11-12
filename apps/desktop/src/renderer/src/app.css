@@ -147,7 +147,7 @@ kbd {
 .restart-banner {
   position: absolute;
   top: calc(var(--island-inset) + var(--island-height) + var(--space-2));
-  left: 50%;
+  left: calc((100% - var(--captain-push, 0px)) / 2);
   z-index: var(--layer-notice);
   translate: -50% 0;
 }
@@ -161,6 +161,8 @@ kbd {
 }
 
 .board .react-flow {
+  /* The Captain's pane pushes the board's right edge in; its left edge stays, so the view keeps its place and zoom. Over React Flow's own inline style. */
+  width: calc(100% - var(--captain-push)) !important;
   background: var(--surface);
 }
 
@@ -899,6 +901,8 @@ kbd {
     var(--raised) 0 var(--space-2-5),
     color-mix(in srgb, var(--state-hibernated) 5%, var(--raised)) var(--space-2-5) calc(2 * var(--space-2-5))
   );
+  /* What its head's hover buttons sit on: between its two stripes. */
+  --tile-fill: color-mix(in srgb, var(--state-hibernated) 2.5%, var(--raised));
 }
 
 .hybrid-tile-agent[data-state='hibernated'] :is(.hybrid-tile-name, .hybrid-tile-description) {
@@ -997,8 +1001,9 @@ kbd {
   white-space: nowrap;
 }
 
-/* The head's corner: the actions, always shown, softer until the tile is hovered or holds the focus (only their opacity
-   changes, so nothing moves). It gives way before the name does, so the head never leaves the tile. */
+/* The head's corner: the actions. Shown always (a Settings choice), they sit beside the name, softer until the tile is
+   hovered or holds the focus (only their opacity changes, so nothing moves), and give way before the name does, so the
+   head never leaves the tile. The quiet tile lays them over the head instead (below). */
 .hybrid-tile-corner {
   display: grid;
   flex: 0 1 auto;
@@ -1017,7 +1022,7 @@ kbd {
   transition: opacity var(--motion-fast) var(--ease-out);
 }
 
-/* Never hidden: softer at rest, full on hover or focus. */
+/* Softer at rest, full on hover or focus. */
 .hybrid-tile-actions {
   gap: var(--space-px);
   padding: var(--space-px);
@@ -1040,22 +1045,83 @@ kbd {
   opacity: 1;
 }
 
-/* The quiet tile's corner shows only on hover, focus, selection, or with its menu open. It keeps its room at rest, so
-   showing it moves nothing and covers nothing. Hidden, it still takes clicks: a pointer over it hovers the tile, which
-   shows it. */
-.hybrid-tile[data-corner='hover'] .hybrid-tile-corner {
+/* The quiet tile's buttons, in Classic's corner and the calm tile's controls alike, show only on hover, focus, selection,
+   with a menu open, or while it needs you. At rest the name has the whole head: the buttons are laid over its end, on
+   the tile's own fill, so showing them moves nothing and resizes nothing. Hidden, they keep their hit areas and stay in
+   the tab order (opacity only), so a pointer over them hovers the tile and Tab onto one shows them all. */
+.hybrid-tile[data-corner='hover'] .hybrid-tile-head {
+  position: relative;
+}
+
+.hybrid-tile[data-corner='hover'] :is(.hybrid-tile-corner, .calm-tile-controls) {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: 0;
+  max-width: 100%;
+  /* A soft edge where the buttons meet the name, not a cut through a letter. */
+  padding-inline-start: var(--space-4);
+  background: linear-gradient(to right, transparent, var(--tile-fill, var(--raised)) var(--space-3));
   opacity: 0;
   transition: opacity var(--motion-fast) var(--ease-out);
 }
 
-.hybrid-tile[data-corner='hover']:is(:hover, :focus-within) .hybrid-tile-corner,
-.react-flow__node.selected .hybrid-tile[data-corner='hover'] .hybrid-tile-corner,
-.hybrid-tile[data-corner='hover'] .hybrid-tile-corner:has([data-state='open']) {
+.hybrid-tile[data-corner='hover']:is(:hover, :focus-within, [data-needs-you], [data-status='needs-you']) :is(.hybrid-tile-corner, .calm-tile-controls),
+.react-flow__node.selected .hybrid-tile[data-corner='hover'] :is(.hybrid-tile-corner, .calm-tile-controls),
+.hybrid-tile[data-corner='hover'] :is(.hybrid-tile-corner, .calm-tile-controls):has([data-state='open']) {
   opacity: 1;
 }
 
 .hybrid-tile[data-corner='hover'] .hybrid-tile-actions {
   opacity: 1;
+}
+
+/* While the tile needs you its buttons stay shown, so they sit beside its name, which ends in an ellipsis rather than
+   under them; it is a change of state, not a hover, that moves them. The same on a screen with no hover (touch), where
+   a tap must not land on a button it can't see. */
+.hybrid-tile[data-corner='hover']:is([data-needs-you], [data-status='needs-you']) :is(.hybrid-tile-corner, .calm-tile-controls) {
+  position: static;
+  padding-inline-start: 0;
+  background: none;
+}
+
+/* Beside the buttons, the name gives way first, down to its ellipsis, so every button stays inside a narrow tile. */
+.hybrid-tile[data-corner='hover']:is([data-needs-you], [data-status='needs-you']) .hybrid-tile-name {
+  min-width: 0;
+}
+
+@media (hover: none) {
+  .hybrid-tile[data-corner='hover'] :is(.hybrid-tile-corner, .calm-tile-controls) {
+    position: static;
+    padding-inline-start: 0;
+    background: none;
+    opacity: 1;
+  }
+
+  .hybrid-tile[data-corner='hover'] .hybrid-tile-name {
+    min-width: 0;
+  }
+}
+
+/* While its name is being typed, the buttons give the field the whole head, and take no clicks. */
+.hybrid-tile[data-corner='hover'] .hybrid-tile-head:has(.editable-name-field) :is(.hybrid-tile-corner, .calm-tile-controls) {
+  visibility: hidden;
+}
+
+/* The pencil sits with the other buttons, so a long name needs no room kept for it; in the calm tile's controls it is a
+   24px target like theirs. */
+.hybrid-tile[data-corner='hover'] .hybrid-tile-name-long {
+  padding-inline-end: 0;
+}
+
+.hybrid-tile[data-corner='hover'] :is(.hybrid-tile-corner, .calm-tile-controls) .ui-icon-button.rename-button {
+  border-width: 1px;
+  margin-inline-start: 0;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.calm-tile[data-corner='hover'] .calm-tile-controls .ui-icon-button.rename-button {
+  width: var(--space-6);
 }
 
 /* How far through it says it is: a hairline on the tile's bottom edge, which takes no room. */
@@ -1460,6 +1526,7 @@ kbd {
   outline-offset: -1px;
   border-color: transparent;
   background: var(--tile-starting);
+  --tile-fill: var(--tile-starting);
 }
 
 .hybrid-tile-agent[data-start] .hybrid-tile-name {
@@ -1709,6 +1776,18 @@ kbd {
 }
 
 .hybrid-tile-muted svg {
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+}
+
+/* A tile placed by hand in a zone with a layout rule: a quiet pin beside its name, shown at rest. */
+.tile-hand-placed {
+  display: inline-flex;
+  flex: none;
+  color: var(--muted);
+}
+
+.tile-hand-placed svg {
   width: var(--icon-xs);
   height: var(--icon-xs);
 }
@@ -2154,6 +2233,7 @@ kbd {
   outline-style: solid;
   outline-width: 2.5px;
   background: var(--raised);
+  --tile-fill: var(--raised);
 }
 
 .calm-tile:is([data-state='stopped-by-restart'], [data-state='hibernated']) {
@@ -2170,14 +2250,15 @@ kbd {
 }
 
 .calm-tile .hybrid-tile-name {
-  /* Room for the five controls on the narrowest tile: the name gives way first, to its second line, then an ellipsis. */
+  /* The controls are laid over the head, so the name has its width: a second line, then an ellipsis. */
   min-width: var(--space-12);
   font-size: var(--font-size-md);
   font-weight: var(--weight-semibold);
   letter-spacing: normal;
 }
 
-/* The window controls, always shown at full strength along the top edge, each a 24px target. */
+/* The window controls along the top edge, each a 24px target, at full strength when shown: on hover or focus, as the
+   quiet tile's corner is (above). */
 .calm-tile-controls {
   display: flex;
   flex: none;
@@ -5401,7 +5482,8 @@ button.chat-chip[aria-expanded='true'] {
   }
 
   .hybrid-tile-agent,
-  .hybrid-tile-actions {
+  .hybrid-tile-actions,
+  .hybrid-tile[data-corner='hover'] :is(.hybrid-tile-corner, .calm-tile-controls) {
     transition: none;
   }
 }
@@ -6435,6 +6517,562 @@ button.chat-chip[aria-expanded='true'] {
   font-family: var(--font-mono);
   font-size: var(--font-size-2xs);
   white-space: pre-wrap;
+}
+
+/* A memory's card, its notebook look: documents by title, then facts, each under a small heading. */
+.memory-section {
+  display: flex;
+  grid-column: 1 / 4;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1-5) var(--space-1) var(--space-0-5);
+  color: var(--muted);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+}
+
+.memory-section svg {
+  width: var(--font-size-xs);
+  height: var(--font-size-xs);
+}
+
+.memory-section + .listcard-row {
+  border-top: 0;
+}
+
+.memory-doc-title {
+  display: flex;
+  overflow: hidden;
+  grid-column: 1 / 3;
+  align-items: center;
+  min-width: 0;
+  gap: var(--space-1);
+}
+
+.memory-doc-title b {
+  overflow: hidden;
+  font-weight: var(--weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-doc-title .memory-file-mark {
+  color: var(--accent-strong);
+}
+
+.listcard-who[data-stale] {
+  color: var(--warning-ink);
+}
+
+.memory-read {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.memory-read svg,
+.listcard-open svg {
+  width: var(--font-size-xs);
+  height: var(--font-size-xs);
+}
+
+.memory-stale-count {
+  padding: 0 var(--space-1-5);
+  border: 1px solid var(--warning-edge);
+  border-radius: var(--radius-pill);
+  background: var(--warning-soft);
+  color: var(--warning-ink);
+  font-size: var(--font-size-2xs);
+}
+
+.memory-read ~ .listcard-open,
+.memory-stale-count ~ .listcard-open {
+  margin-left: auto;
+}
+
+.listcard-foot-line:has(.memory-stale-count) {
+  gap: var(--space-2);
+  justify-content: flex-start;
+}
+
+.listcard-open {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+/* A memory full screen: its head and tabs, a bar of search and filters, then its list beside the entry picked. */
+.memory-full {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: var(--layer-dialog);
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  width: min(1180px, calc(100vw - var(--space-8)));
+  height: min(820px, calc(100vh - var(--space-8)));
+  overflow: hidden;
+  translate: -50% -50%;
+  animation: ui-rise var(--motion-fast) var(--ease-out);
+}
+
+.memory-full[data-inline='true'] {
+  position: relative;
+  top: auto;
+  left: auto;
+  z-index: auto;
+  width: 1080px;
+  height: 680px;
+  translate: none;
+  animation: none;
+}
+
+.memory-full-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2-5);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--separator);
+}
+
+.memory-full-face {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: var(--space-8);
+  height: var(--space-8);
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.memory-full-face svg {
+  width: var(--font-size-lg);
+  height: var(--font-size-lg);
+}
+
+.memory-full-title {
+  overflow: hidden;
+  margin: 0;
+  font-size: var(--font-size-lg);
+  font-weight: var(--weight-bold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-full-tabs {
+  margin-left: auto;
+}
+
+.memory-full-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--separator);
+  background: var(--sunken);
+}
+
+.memory-full-search {
+  flex: 0 1 320px;
+  background: var(--raised);
+}
+
+.memory-full-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-0-5) var(--space-2);
+  border: 1px solid var(--control-edge);
+  border-radius: var(--radius-pill);
+  background: var(--raised);
+  color: var(--text-soft);
+  font: inherit;
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+}
+
+.memory-full-chip svg {
+  width: var(--font-size-xs);
+  height: var(--font-size-xs);
+}
+
+.memory-full-chip[aria-pressed='true'] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.memory-full-chip[data-tone='warn'][aria-pressed='true'] {
+  border-color: var(--warning-edge);
+  background: var(--warning-soft);
+  color: var(--warning-ink);
+}
+
+.memory-full-chip:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.memory-full-chip:focus-visible,
+.memory-full-item:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+.memory-full-bar-end {
+  display: flex;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+
+.memory-full-body {
+  display: grid;
+  grid-template-columns: minmax(220px, 290px) minmax(0, 1fr);
+  min-height: 0;
+}
+
+.memory-full-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  margin: 0;
+  padding: var(--space-2);
+  overflow: auto;
+  border-right: 1px solid var(--separator);
+  list-style: none;
+}
+
+.memory-full-group {
+  padding: var(--space-2) var(--space-2) var(--space-1);
+  color: var(--muted);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+}
+
+.memory-full-item {
+  display: grid;
+  width: 100%;
+  gap: var(--space-0-5);
+  padding: var(--space-1-5) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.memory-full-item:hover {
+  background: var(--hover);
+}
+
+.memory-full-item[aria-current='true'] {
+  background: var(--accent-soft);
+}
+
+.memory-full-item-name {
+  display: flex;
+  overflow: hidden;
+  align-items: center;
+  gap: var(--space-1-5);
+  font-size: var(--font-size-sm);
+}
+
+.memory-full-item-name svg {
+  flex: none;
+  width: var(--font-size-sm);
+  height: var(--font-size-sm);
+  color: var(--muted);
+}
+
+.memory-full-item-name b {
+  overflow: hidden;
+  font-weight: var(--weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-full-item-sub {
+  overflow: hidden;
+  padding-left: calc(var(--font-size-sm) + var(--space-1-5));
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-full-item[data-stale] .memory-full-item-sub {
+  color: var(--warning-ink);
+}
+
+.memory-full-none {
+  padding: var(--space-4) var(--space-2);
+  color: var(--muted);
+  font-size: var(--font-size-sm);
+  text-align: center;
+}
+
+.memory-full-detail {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.memory-full-empty {
+  display: grid;
+  align-content: center;
+  max-width: 420px;
+  margin: auto;
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: var(--font-size-sm);
+  text-align: center;
+}
+
+.memory-full-empty b {
+  color: var(--text);
+}
+
+.memory-full-entry {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  gap: var(--space-2-5);
+  padding: var(--space-4) var(--space-5);
+}
+
+.memory-full-entry-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.memory-full-name {
+  flex: 1 1 240px;
+  min-width: 0;
+  padding: var(--space-1) var(--space-1-5);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--font-size-lg);
+  font-weight: var(--weight-bold);
+}
+
+.memory-full-name[data-mono] {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-md);
+}
+
+.memory-full-name:hover {
+  border-color: var(--control-edge);
+}
+
+.memory-full-name:focus {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+.memory-full-entry-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-left: auto;
+}
+
+.memory-full-stale {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0 0 0 var(--space-2);
+  border: 1px solid var(--warning-edge);
+  border-radius: var(--radius-pill);
+  background: var(--warning-soft);
+  color: var(--warning-ink);
+  font-size: var(--font-size-xs);
+}
+
+.memory-full-conflict {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--warning-edge);
+  border-radius: var(--radius-md);
+  background: var(--warning-soft);
+  color: var(--warning-ink);
+  font-size: var(--font-size-sm);
+}
+
+.memory-full-conflict span {
+  flex: 1;
+}
+
+.memory-full-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-0-5);
+  padding: var(--space-1);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-md);
+  background: var(--sunken);
+}
+
+.memory-full-status {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+}
+
+.memory-full-text {
+  display: flex;
+  flex: 1 0 200px;
+  min-height: 0;
+}
+
+.memory-full-editor {
+  flex: 1;
+  min-height: 160px;
+  padding: var(--space-3);
+  border: 1px solid var(--control-edge);
+  border-radius: var(--radius-md);
+  background: var(--raised);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  line-height: var(--leading-roomy);
+  resize: none;
+}
+
+.memory-full-editor[data-mono] {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+}
+
+.memory-full-editor:focus {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+.memory-full-doc {
+  flex: 1;
+  max-width: 72ch;
+  font-size: var(--font-size-sm);
+  line-height: var(--leading-roomy);
+}
+
+.memory-full-doc :is(h2, h3, h4) {
+  margin: var(--space-3) 0 var(--space-1);
+  font-weight: var(--weight-bold);
+}
+
+.memory-full-doc h2 {
+  font-size: var(--font-size-lg);
+}
+
+.memory-full-doc h3 {
+  font-size: var(--font-size-md);
+}
+
+.memory-full-doc h4 {
+  font-size: var(--font-size-sm);
+}
+
+.memory-full-doc pre {
+  margin: var(--space-2) 0;
+  padding: var(--space-2) var(--space-3);
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+}
+
+.memory-full-who {
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--separator);
+}
+
+.memory-full-who h3,
+.memory-full-new h3 {
+  margin: 0 0 var(--space-2);
+  color: var(--muted);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+}
+
+.memory-full-timeline {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.memory-full-timeline li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--separator);
+  color: var(--text-soft);
+  font-size: var(--font-size-xs);
+}
+
+.memory-full-timeline li[data-now] {
+  border-left-color: var(--accent);
+  color: var(--text);
+}
+
+.memory-full-timeline time {
+  color: var(--muted);
+}
+
+.memory-full-readers {
+  margin: var(--space-2) 0 0;
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+}
+
+.memory-full-readers b {
+  color: var(--text-soft);
+  font-weight: var(--weight-semibold);
+}
+
+.memory-full-new .memory-full-editor {
+  flex: 1;
+}
+
+.memory-full-new-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.memory-full-new-foot .memory-full-status {
+  margin-right: auto;
+  margin-left: 0;
+}
+
+/* The gallery's full screen, drawn in place under its cards. */
+.listcard-gallery-full {
+  padding: var(--space-3);
 }
 
 .listcard-peek-none {
@@ -9334,7 +9972,8 @@ button.chat-chip[aria-expanded='true'] {
 .edge-rules {
   position: absolute;
   top: calc(var(--island-inset) * 2 + var(--island-height));
-  right: var(--island-inset);
+  /* Left of the Captain's pane, whether it pushes the board or covers it. */
+  right: calc(var(--island-inset) + var(--captain-beside, 0px));
   bottom: var(--island-inset);
   z-index: var(--layer-chrome);
   display: flex;
