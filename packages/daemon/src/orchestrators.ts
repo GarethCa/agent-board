@@ -15,7 +15,7 @@ import { refOf } from './crew-flags.ts';
 import { markSender, sendTrailer } from './sender-marker.ts';
 import { sendTrail } from './send-log.ts';
 import { createReplyPaths } from './reply-paths.ts';
-import { invalidParams, oneOf, optionalBooleanParam, optionalCharacterParam, optionalCountParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
+import { invalidParams, oneOf, optionalBooleanParam, optionalCharacterParam, optionalWorkCategoryParam, optionalCountParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
 import {
   BOARD_ERROR,
   CREW_EVENT_KINDS,
@@ -1076,11 +1076,13 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
             }
             return agents.setStatus(
               agent.sessionId,
-              optionalStringParam(p, 'summary') ?? null,
-              p.progress === undefined ? null : (p.progress as number),
-              false,
+              {
+                summary: optionalStringParam(p, 'summary') ?? null,
+                progress: p.progress === undefined ? null : (p.progress as number),
+                character: optionalCharacterParam(p),
+                category: optionalWorkCategoryParam(p),
+              },
               me.agent === null ? null : me.name,
-              optionalCharacterParam(p),
             );
           });
         },

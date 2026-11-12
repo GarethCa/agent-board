@@ -110,7 +110,7 @@ const BUSY: Agent = {
   plan: { id: 'plan', version: 3, title: 'Export invoices as CSV', format: 'markdown', presentedAt: at('09:31'), expiresAt: null, left: false, decision: null, author: 'agent', path: null } as unknown as Agent['plan'],
   docs: [{ id: 'spec', sessionId: BUSY_ID, path: `${WORKTREE}/docs/csv-columns.md`, title: 'CSV column spec', format: 'markdown', version: 2, writtenAt: at('09:48'), writtenBy: 'agent', editable: true, shownAt: at('09:48') }] as unknown as Agent['docs'],
   subagents: [{ id: 'explore', type: 'Explore', state: 'running', startedAt: at('10:38'), endedAt: null, result: null }] as unknown as Agent['subagents'],
-  schedule: { clockId: 'clock', cron: '0 9 * * 1-5', prompt: 'Check the nightly export', enabled: true, nextRunAt: '2026-01-02T09:00:00.000Z', lastRun: null } as unknown as Agent['schedule'],
+  schedule: { clockId: 'clock', cron: '0 9 * * 1-5', prompt: 'Check the nightly export', enabled: true, nextRunAt: '2026-01-02T09:00:00.000Z', lastRun: null, hibernates: false } as unknown as Agent['schedule'],
   records: [
     record({ kind: 'pr', key: 'acme/billing#482', url: 'https://github.com/acme/billing/pull/482', title: 'Export invoices as CSV', recordedAt: at('10:20') }),
     ...CREW.map((member) => record({ kind: 'crew', key: member.sessionId })),

@@ -47,6 +47,27 @@ for (const { theme, suffix } of THEMES) {
   }
 }
 
+// Every look of a to-do list: lines left, a line under the pointer, stepped in, editing, adding, all done, empty, the clipboard look, and folded.
+for (const { theme, suffix } of THEMES) {
+  const shot = `todo-gallery${suffix}`;
+  test(`every look of a to-do list: the to-do gallery, ${theme}`, async () => {
+    needsBaselines(shot);
+    const dataDir = tempDataDir();
+    const { app, window } = await launchGallery(dataDir, theme, undefined, {}, '#gallery-todo');
+    try {
+      const gallery = window.getByTestId('todo-gallery');
+      await expect(gallery).toBeVisible();
+      await pinFonts(window);
+      await ignorePointer(window);
+      await settle(window);
+      await expect.soft(gallery).toHaveScreenshot(`${shot}.png`, SHOT);
+    } finally {
+      await app.close();
+      await removeDataDir(dataDir);
+    }
+  });
+}
+
 // The quick ask on an agent's tile: its chip on asking tiles, and the ask open at each place, in both designs.
 for (const { theme, suffix } of THEMES) {
   for (const design of ['classic', 'simplified'] as const) {

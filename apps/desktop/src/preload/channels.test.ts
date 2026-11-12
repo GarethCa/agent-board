@@ -104,6 +104,7 @@ const CHANNELS: string[] = [
   'item:add-clock',
   'item:change-memory',
   'item:change-queue',
+  'item:change-todo',
   'item:changed',
   'item:clock-changed',
   'item:clocks',

@@ -25,6 +25,32 @@ describe("an agent tile's body", () => {
     expect(untyped).not.toContain('data-testid="tile-character"');
   });
 
+  it("says the board can't follow a session that sent no hooks, with Open and Restart, over its flag, once its task is typed", () => {
+    const silent = render({ ...idle, hooksSilent: true, flag: { id: 1, reason: 'Pick a cache', at: AT, to: 'user', via: null } });
+    expect(silent).toContain('data-testid="tile-hooks-silent"');
+    expect(silent).toContain('No hooks from this session:</strong> the board can&#x27;t follow its turns');
+    expect(silent).toContain('data-testid="hooks-silent-open"');
+    expect(silent).toContain('data-testid="hooks-silent-restart"');
+    // Unpressed, it says what it does; a first press only asks "Restart?" (two-step.test.ts).
+    expect(silent).toMatch(/data-testid="hooks-silent-restart"[^>]*>(?:<[^>]+>)*[^<]*Stop and restart</);
+    expect(silent).not.toContain('Restart?');
+    expect(silent).not.toContain('data-testid="tile-flag"');
+    // Its untyped task comes first: a task never typed is what to act on, and hooks off is often why it was never typed.
+    const untyped = render({ ...idle, hooksSilent: true, untypedPrompt: 'Pick a database' });
+    expect(untyped).toContain('data-testid="tile-untyped"');
+    expect(untyped).not.toContain('tile-hooks-silent');
+    expect(render(idle)).not.toContain('tile-hooks-silent');
+  });
+
+  it("offers no Stop and restart on a session that can't restart in place: a reviewer, or one run in its shell", () => {
+    const reviewer = render({ ...idle, hooksSilent: true, reviewOf: 'impl-1' });
+    expect(reviewer).toContain('data-testid="tile-hooks-silent"');
+    expect(reviewer).toContain('data-testid="hooks-silent-open"');
+    expect(reviewer).not.toContain('hooks-silent-restart');
+    const inShell = render({ ...idle, hooksSilent: true, shellHarness: 'claude' });
+    expect(inShell).not.toContain('hooks-silent-restart');
+  });
+
   it('says what the agent is for, not its last message, when it waits', () => {
     const html = render(idle);
     expect(html).toContain('Fix the checkout flake');

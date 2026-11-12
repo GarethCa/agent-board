@@ -61,7 +61,7 @@ describe('the channels main handles', () => {
     ['asks', registerAskIpc, ['ask:answer', 'ask:send', 'ask:toCard', 'doc:comment', 'doc:read', 'doc:save', 'plan:decide', 'plan:edit', 'plan:list', 'steps:answer', 'steps:send', 'steps:tick']],
     ['unsaved plan edits', registerUnsavedPlanEditIpc, ['plan:markUnsavedEdit', 'plan:unsavedEdits']],
     ['gates', registerGateIpc, ['gate:list', 'gate:log', 'gate:merge', 'gate:run', 'gate:sendFailure', 'gate:status', 'gate:stop']],
-    ['items', (d: DaemonLink) => registerItemIpc(d, '/data'), ['item:add-clock', 'item:change-memory', 'item:change-queue', 'item:clocks', 'item:create', 'item:delete', 'item:hand-job', 'item:import-image', 'item:list', 'item:memory-history', 'item:queue-history', 'item:read-memory', 'item:read-queue', 'item:taken-jobs', 'item:update']],
+    ['items', (d: DaemonLink) => registerItemIpc(d, '/data'), ['item:add-clock', 'item:change-memory', 'item:change-queue', 'item:change-todo', 'item:clocks', 'item:create', 'item:delete', 'item:hand-job', 'item:import-image', 'item:list', 'item:memory-history', 'item:queue-history', 'item:read-memory', 'item:read-queue', 'item:taken-jobs', 'item:update']],
     ['orchestrators', registerOrchestratorIpc, ['orchestrator:activity', 'orchestrator:check-prefab', 'orchestrator:crew-round', 'orchestrator:import-prefab', 'orchestrator:prefabs', 'orchestrator:remove-prefab', 'orchestrator:save-prefab', 'orchestrator:start-prefab', 'orchestrator:stop-crew', 'orchestrator:usage']],
     ['pull requests', registerPullRequestIpc, ['pull-request:approve', 'pull-request:details', 'pull-request:merge']],
     ['reviews', registerReviewIpc, ['review:dismiss', 'review:list', 'review:merge', 'review:send', 'review:set-cap', 'review:start']],

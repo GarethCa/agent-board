@@ -1,11 +1,12 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { AGENT_FACES, AGENT_PROPS } from '@agent-board/daemon/character';
 import type { Agent, NeedsYouShows, Subagent } from '@agent-board/daemon/protocol';
 import { CalmTile } from './CalmTile';
 import { Captain, CAPTAIN_SIZES, Character } from './Character';
 import { CHARACTER_POSES } from './character-figures';
-import { CharacterGallery, CharacterStylesGallery } from './CharacterGallery';
+import { CharacterGallery, CharacterLooksGallery, CharacterStylesGallery } from './CharacterGallery';
 import { HybridTile } from './HybridTile';
 import { MAX_PERCHED } from './perch';
 import type { TileData } from './tile';
@@ -79,6 +80,33 @@ describe('the character gallery', () => {
     }
   });
 
+  it('draws every face and prop an agent may give its pose, each its own drawing, in every style, on the page with the poses', () => {
+    const page = charactersIn(renderToStaticMarkup(createElement(CharacterLooksGallery)));
+    expect(page).toHaveLength((AGENT_FACES.length + AGENT_PROPS.length) * 6);
+    for (const style of ['bean', 'pebble', 'pixel'] as const) {
+      const drawing = (look: { face?: (typeof AGENT_FACES)[number]; prop?: (typeof AGENT_PROPS)[number] }) =>
+        charactersIn(renderToStaticMarkup(createElement(Character, { harness: 'claude', pose: 'reading', style, ...look })))[0]!.drawing;
+      const plain = drawing({});
+      const faces = AGENT_FACES.map((face) => drawing({ face }));
+      expect(new Set([plain, ...faces]).size, `${style} faces`).toBe(AGENT_FACES.length + 1);
+      // Reading's own prop is the book: the agent giving it draws the pose as it is.
+      const props = AGENT_PROPS.filter((prop) => prop !== 'book').map((prop) => drawing({ prop }));
+      expect(new Set([plain, ...props]).size, `${style} props`).toBe(AGENT_PROPS.length);
+      expect(drawing({ prop: 'book' }), `${style} book`).toBe(plain);
+    }
+  });
+
+  it("draws a prop the agent gave in the working colour, while its pose's own keeps the board's colour for it", () => {
+    for (const style of ['bean', 'pebble', 'pixel'] as const) {
+      const drawing = (prop?: 'docclock' | 'magnifier') =>
+        charactersIn(renderToStaticMarkup(createElement(Character, { harness: 'claude', pose: 'waiting-on-review', style, ...(prop === undefined ? {} : { prop }) })))[0]!.drawing;
+      expect(drawing(), style).toContain('var(--state-hibernated)');
+      expect(drawing('docclock'), style).toBe(drawing());
+      expect(drawing('magnifier'), style).toContain('var(--accent)');
+      expect(drawing('magnifier'), style).not.toContain('var(--state-');
+    }
+  });
+
   it("paints every style's body with one class, so the design picks its colour and the harness never does", () => {
     for (const style of ['bean', 'pebble', 'pixel'] as const) {
       for (const harness of ['claude', 'codex'] as const) {
@@ -89,11 +117,15 @@ describe('the character gallery', () => {
   });
 
   it('keeps every drawing small, for a board of 40 tiles: each element is one more on every tile', () => {
+    const elements = (drawing: string) => (drawing.match(/<(?!\/)/g) ?? []).length;
     for (const style of ['bean', 'pebble', 'pixel'] as const) {
       for (const pose of CHARACTER_POSES) {
         const { drawing } = charactersIn(renderToStaticMarkup(createElement(Character, { harness: 'claude', pose, style })))[0]!;
-        expect((drawing.match(/<(?!\/)/g) ?? []).length, `${style} ${pose}`).toBeLessThanOrEqual(13);
+        expect(elements(drawing), `${style} ${pose}`).toBeLessThanOrEqual(13);
       }
+    }
+    for (const { attributes, drawing } of charactersIn(renderToStaticMarkup(createElement(CharacterLooksGallery)))) {
+      expect(elements(drawing), `${attributes['data-style']} ${attributes['data-face'] ?? attributes['data-prop']}`).toBeLessThanOrEqual(13);
     }
   });
 
@@ -112,7 +144,7 @@ const paints = (html: string) => [...html.matchAll(/(?:^|[\s;"])(?:fill|stroke)(
 
 describe('the palette', () => {
   it("paints each pose in every style only with the figure's tokens and the colour the board gives its state", () => {
-    const html = renderToStaticMarkup(createElement(CharacterStylesGallery));
+    const html = renderToStaticMarkup(createElement(CharacterStylesGallery)) + renderToStaticMarkup(createElement(CharacterLooksGallery));
     expect(new Set(paints(html).filter((paint) => !/^var\(--(figure-(ink|paper|body|eye)|accent|state-[\w-]+)\)$/.test(paint)))).toEqual(new Set(['none']));
   });
 
@@ -242,6 +274,7 @@ describe('subagents on a Hybrid tile', () => {
       spawnedBy: null,
       ledBy: null,
       startup: null,
+      hooksSilent: false,
       unsent: null,
       untypedPrompt: null,
       trustFolder: null,
@@ -251,6 +284,7 @@ describe('subagents on a Hybrid tile', () => {
       undelivered: [],
       status: null,
       character: null,
+      workCategory: null,
       workFinishedAt: null,
       flag: null,
       ...fields,
@@ -357,6 +391,21 @@ describe('subagents on a Hybrid tile', () => {
     }
   });
 
+  it('draws the face and prop the agent gave its pose, and says whose pose it is on hover; the board draws its own over them', () => {
+    const character = (setBy: string | null) => ({ pose: 'reading' as const, face: 'puzzled' as const, prop: 'magnifier' as const, setAt: new Date().toISOString(), setBy });
+    expect(tile([], 'claude', { character: character(null) })).toMatch(
+      /<span class="tile-character" data-pose="reading" title="Reading · set by the agent"><svg[^>]*data-testid="tile-character" data-pose="reading" data-face="puzzled" data-prop="magnifier"/,
+    );
+    expect(tile([], 'claude', { character: character('lead') })).toContain('title="Reading · set by ◎ lead"');
+    // In the agent's word, not the board's: it set running a tool.
+    const running = { pose: 'running-a-tool' as const, face: null, prop: null, setAt: new Date().toISOString(), setBy: null };
+    expect(tile([], 'claude', { character: running })).toContain('title="Running a tool · set by the agent"');
+    const asking = tile([], 'claude', { state: 'needs-permission', character: character(null) });
+    expect(asking).toMatch(/<span class="tile-character" data-pose="needs-permission"><svg[^>]*data-testid="tile-character" data-pose="needs-permission" data-harness/);
+    // The board's own pose has nothing more to say on hover than its word.
+    expect(tile([])).toMatch(/<span class="tile-character" data-pose="running">/);
+  });
+
   it('draws what it hands on and what it times as its own pose, with no second robot over the tile', () => {
     const html = tile([], 'claude', { state: 'on-command' });
     expect(html).toMatch(/data-testid="tile-character" data-pose="on-command"/);
@@ -387,7 +436,7 @@ describe('subagents on a Hybrid tile', () => {
 
   it('carries a clock badge with its next run while it has a schedule, and none while it has none (its More menu schedules it)', () => {
     const nextRunAt = new Date(Date.now() + 60 * 60_000);
-    const schedule = { clockId: 'clock-1', cron: '0 * * * *', prompt: 'Sweep', enabled: true, nextRunAt: nextRunAt.toISOString(), lastRun: null };
+    const schedule = { clockId: 'clock-1', cron: '0 * * * *', prompt: 'Sweep', enabled: true, nextRunAt: nextRunAt.toISOString(), lastRun: null, hibernates: false };
     const time = `${String(nextRunAt.getHours()).padStart(2, '0')}:${String(nextRunAt.getMinutes()).padStart(2, '0')}`;
 
     // It says the time to go; its clock time is in its tooltip.

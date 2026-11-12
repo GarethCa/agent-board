@@ -264,7 +264,7 @@ export function cronWords(expression: string): string {
 const twoDigits = (value: number) => String(value).padStart(2, '0');
 
 /** `at` in local time from `now`: `16:00` today, else `2026-10-31 02:36`. */
-function sinceWords(at: Date, now: Date): string {
+export function sinceWords(at: Date, now: Date): string {
   const time = `${twoDigits(at.getHours())}:${twoDigits(at.getMinutes())}`;
   if (at.toDateString() === now.toDateString()) return time;
   return `${at.getFullYear()}-${twoDigits(at.getMonth() + 1)}-${twoDigits(at.getDate())} ${time}`;

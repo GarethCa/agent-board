@@ -52,7 +52,14 @@ first, so adding and removing files in a loop can't grow the database without en
 entries are text kept in their row, not on disk as images are, so a file's versions and its restore go through the same
 table with nothing to sweep. Neither table has a foreign key to `board_items`: undoing an item's delete makes it again
 with the same id, and finds its rows still there. The daemon sweeps rows whose item is gone as it starts. A change runs in
-one transaction, and then updates the card's count, so `item.updated` tells the app of every change.
+one transaction, and then updates the card's count, so `item.updated` tells the app of every change. Which agents read
+an entry is a row of `memory_reads` per entry and agent session, holding the agent's name as it read and when it last
+did: written when an agent's read returns that entry's whole text (a fact in a listing, a document only when it is
+named), never for the user's own reads. Readers are of the text they read: a change to an entry's text (an edit, its
+key set again, a restore) clears them, and a pin or a confirm keeps them. A memory's readers are those of the entries it
+holds now. It has no foreign key either, so a removed entry put back as it was keeps its readers, and the same sweep
+takes the rows of memories that are gone. A confirm is a `board_history` row with no value, the newest replacing one
+just before it, and the per-row trim counts only the others.
 
 Removing a zone still moves its items loose, but `board_items_leave_removed_zone` now also sets a memory's or queue's
 `noAgents`: loose, it would otherwise widen from its zone's agents to every agent on the board. The user chooses its

@@ -694,3 +694,21 @@ describe('the agent-had-turn migration', () => {
     ]);
   });
 });
+
+describe('the clock-watches migration', () => {
+  it("leaves each clock's earlier runs as over, with no flag, and starts no changes", () => {
+    const db = new DatabaseSync(':memory:');
+    const at = MIGRATIONS.findIndex((m) => m.name === 'clock_watches');
+    expect(at).toBeGreaterThan(0);
+    migrate(db, MIGRATIONS.slice(0, at));
+    db.exec(`INSERT INTO clock_runs (clock_id, due_at, fired_at, outcome, session_id, agent_name)
+      VALUES ('c', '2026-11-01T08:00:00Z', '2026-11-01T08:00:00Z', 'started', 'a', 'Sweeper');`);
+
+    migrate(db, MIGRATIONS.slice(0, at + 1));
+
+    expect(db.prepare('SELECT outcome, awaits_turn, flag_reason, finished_at FROM clock_runs').all()).toEqual([
+      { outcome: 'started', awaits_turn: 0, flag_reason: null, finished_at: null },
+    ]);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM clock_changes').get()).toEqual({ n: 0 });
+  });
+});

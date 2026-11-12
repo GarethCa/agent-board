@@ -61,6 +61,7 @@ const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}
   spawnedBy: null,
   ledBy: null,
   startup: null,
+  hooksSilent: false,
   unsent: null,
   untypedPrompt: null,
   trustFolder: null,
@@ -70,6 +71,7 @@ const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}
   undelivered: [],
   status: null,
   character: null,
+  workCategory: null,
   workFinishedAt: null,
   flag: null,
   ...fields,
@@ -174,13 +176,23 @@ describe('the needs-you inbox', () => {
   });
 
   it('lists a scheduled run that needs you, but not a scheduled agent waiting for its next run', () => {
-    const schedule = { clockId: 'clock-1', cron: '@daily', prompt: 'Sweep', enabled: true, nextRunAt: '2026-10-10T00:00:00.000Z', lastRun: null };
+    const schedule = { clockId: 'clock-1', cron: '@daily', prompt: 'Sweep', enabled: true, nextRunAt: '2026-10-10T00:00:00.000Z', lastRun: null, hibernates: false };
     const agents = [
       agent('between-runs', 'scheduled', { schedule }),
       agent('asking', 'needs-permission', { schedule, permissions: [prompt] }),
       agent('waiting', 'waiting', { schedule }),
     ];
     expect(needsYou(agents, 'turns').map((a) => a.sessionId)).toEqual(['asking', 'waiting']);
+  });
+
+  it("leaves out a clock's quiet runs, its agent hibernated or idle between them, and lists one its run flagged you from", () => {
+    const schedule = { clockId: 'clock-1', cron: '@hourly', prompt: 'Check Slack', enabled: true, nextRunAt: '2026-10-10T00:00:00.000Z', lastRun: null, hibernates: true };
+    const agents = [
+      agent('quiet', 'hibernated', { schedule, endedAt: '2026-10-09T10:01:00.000Z' }),
+      agent('idle', 'scheduled', { schedule: { ...schedule, hibernates: false } }),
+      agent('flagged', 'scheduled', { schedule, flag: flag('user') }),
+    ];
+    for (const shows of ['explicit', 'turns'] as const) expect(needsYou(agents, shows).map((a) => a.sessionId)).toEqual(['flagged']);
   });
 
   it('never lists or counts an agent on a command it left running', () => {

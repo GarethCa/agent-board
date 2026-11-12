@@ -288,12 +288,57 @@ describe('Claude agents', () => {
         isAgentUpdate(e) && e.agent.sessionId === agent.sessionId && e.agent.untypedPrompt === 'Tidy the docs' && e.agent.state === 'idle',
     );
     expect(offered.agent.startup).toBeNull();
+    // No hook ever came: the board can't follow its turns, and its tile says so.
+    expect(offered.agent.hooksSilent).toBe(true);
     expect(await client.call('agent.answer', { sessionId: agent.sessionId, text: 'Also lint' })).toEqual({ queued: true });
     expect(recorder.screenText(agent.sessionId)).not.toContain('Tidy the docs');
 
     expect((await client.call('agent.typeFirstPrompt', { sessionId: agent.sessionId })).untypedPrompt).toBeNull();
     await recorder.waitForText(agent.sessionId, '> Tidy the docs');
     await expect(client.call('agent.typeFirstPrompt', { sessionId: agent.sessionId })).rejects.toThrow('has no first prompt waiting to be typed');
+  });
+
+  it('says the board hears nothing from an agent given up on as starting with no hook, until its first hook', async () => {
+    const clock = createFakeClock(new Date());
+    const { client, recorder } = await agentDaemon('output', { clock, noSessionStart: true });
+    const zone = await addZone(client, tempRepo());
+    const agent = await client.call('agent.spawn', { zoneId: zone.id, prompt: 'Tidy the docs', ...SIZE });
+    await client.call('session.attach', { sessionId: agent.sessionId });
+    expect((await client.call('agent.list'))[0]).toMatchObject({ state: 'starting', hooksSilent: false });
+
+    clock.advance(60_000);
+    await untilAgent(recorder, agent.sessionId, (a) => a.hooksSilent);
+
+    const silentAt = recorder.events.length;
+    await client.call('session.write', { sessionId: agent.sessionId, data: 'Say hi\r' });
+    await untilAgent(recorder, agent.sessionId, (a) => !a.hooksSilent, silentAt);
+    expect((await client.call('agent.list'))[0]!.hooksSilent).toBe(false);
+  });
+
+  it('keeps saying the board hears nothing from an agent with its hooks off through its Restart and a daemon restart', async () => {
+    const home = tempDataDir();
+    mkdirSync(join(home, '.claude'), { recursive: true });
+    writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({ disableAllHooks: true }));
+    const dataDir = tempDataDir();
+    const clock = createFakeClock(new Date());
+    const first = await agentDaemon('output', { home, dataDir, clock });
+    const zone = await addZone(first.client, tempRepo());
+    const agent = await first.client.call('agent.spawn', { zoneId: zone.id, prompt: 'Tidy the docs', ...SIZE });
+    await first.client.call('session.attach', { sessionId: agent.sessionId });
+    clock.advance(60_000);
+    await untilAgent(first.recorder, agent.sessionId, (a) => a.hooksSilent);
+
+    // The warning's Restart, which stops it first: its hooks are still off, so it still says so, however long it runs.
+    await first.client.call('agent.stop', { sessionId: agent.sessionId });
+    const restarted = await first.client.call('agent.resume', { sessionId: agent.sessionId });
+    expect(restarted).toMatchObject({ endedAt: null, hooksSilent: true });
+    clock.advance(60_000);
+    expect((await first.client.call('agent.list'))[0]!.hooksSilent).toBe(true);
+
+    await first.daemon.stop();
+    const second = await agentDaemon('output', { home, dataDir });
+    const resumed = await second.client.call('agent.resume', { sessionId: agent.sessionId });
+    expect(resumed).toMatchObject({ endedAt: null, hooksSilent: true });
   });
 
   it("raises needs-you for a Claude agent's untyped task, and never types it into a prompt the user typed by hand", async () => {

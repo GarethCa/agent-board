@@ -30,6 +30,7 @@ import {
   localServersOf,
   newWebTabs,
   pullRequestChoices,
+  todoChoice,
   sessionChoices,
   surfaceAgentIds,
   shellOwner,
@@ -116,6 +117,8 @@ export interface WindowPanesControl {
   localServers: LocalServer[];
   /** The agent's pull requests the + menu offers to open as a tab. */
   pullRequestChoices: { label: string; surface: Surface }[];
+  /** The agent's to-do list, for the + menu to open as a tab: undefined outside an agent's window, or once it is shown. */
+  todoChoice: Surface | undefined;
   /** Splits the pane (else the focused one), a new shell tab in the new pane, beside it or below it, with the keyboard. */
   split(direction: SplitDirection, paneId?: string): void;
   /**
@@ -168,6 +171,7 @@ function sessionsOf(surface: WindowSurface): string[] {
     case 'web':
     case 'gate':
     case 'plan':
+    case 'todo':
     case 'doc':
     case 'document':
       return [];
@@ -562,6 +566,7 @@ export function useWindowPanes(
     navigated: (web) => void change((current) => updateSurface(current, web)),
     localServers: localServersOf(shellStates),
     pullRequestChoices: pullRequestChoices(agents?.find((each) => owner.kind === 'agent' && each.sessionId === owner.agent.sessionId)?.pullRequests ?? [], shown),
+    todoChoice: todoChoice(owner, shown),
     split,
     splitFromDetails,
     resize: async (splitId, ratio) => {

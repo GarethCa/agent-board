@@ -143,6 +143,7 @@ const api: AgentBoardApi = {
     queueHistory: (id, job) => invoke(ITEM_IPC.queueHistory, id, job),
     handJob: (id, job, sessionId, text) => invoke(ITEM_IPC.handJob, id, job, sessionId, text),
     takenJobs: () => invoke(ITEM_IPC.takenJobs),
+    changeTodo: (id, change) => invoke(ITEM_IPC.changeTodo, id, change),
   },
   connectors: {
     list: () => invoke(CONNECTOR_IPC.list),

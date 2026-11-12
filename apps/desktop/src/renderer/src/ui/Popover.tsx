@@ -18,6 +18,8 @@ interface PopoverProps {
   onPointerDownOutside?(event: Event): void;
   /** As it closes and gives focus back to its button: `preventDefault()` keeps focus where it went instead. */
   onCloseAutoFocus?(event: Event): void;
+  /** Hears Esc before it closes: `preventDefault()` keeps it open, for a field inside that takes Esc itself. */
+  onEscapeKeyDown?(event: KeyboardEvent): void;
 }
 
 /**
@@ -34,6 +36,7 @@ export function Popover({
   className,
   onPointerDownOutside,
   onCloseAutoFocus,
+  onEscapeKeyDown,
   ...rest
 }: PopoverProps) {
   return (
@@ -50,6 +53,7 @@ export function Popover({
           onKeyDown={(event) => event.stopPropagation()}
           onPointerDownOutside={onPointerDownOutside}
           onCloseAutoFocus={onCloseAutoFocus}
+          onEscapeKeyDown={onEscapeKeyDown}
         >
           {content}
         </RadixPopover.Content>

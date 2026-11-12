@@ -51,6 +51,8 @@ test('an agent sets its status with agent-board status set (after the MCP set_st
     await expect(card).toHaveText(/I know where I am\./);
     // It never takes the pointer, and goes as the pointer leaves the tile: a click below it lands on what is there.
     expect(await card.evaluate((element) => getComputedStyle(element).pointerEvents)).toBe('none');
+    // Nor does the box it is placed in, which would catch the click in its stead.
+    expect(await card.evaluate((element) => getComputedStyle(element.parentElement!).pointerEvents)).toBe('none');
     const box = (await tile(window).boundingBox())!;
     await window.mouse.move(box.x + box.width / 2, box.y + box.height + 40);
     await expect(card).toHaveCount(0);

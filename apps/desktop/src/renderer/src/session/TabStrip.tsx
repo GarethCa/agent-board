@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
-import { Columns2, EyeOff, FolderOpen, GitPullRequest, Globe, PanelsTopLeft, Play, Plus, SquareTerminal, X } from 'lucide-react';
+import { Columns2, EyeOff, FolderOpen, GitPullRequest, Globe, PanelsTopLeft, Play, Plus, SquareCheckBig, SquareTerminal, X } from 'lucide-react';
 import type { PackageScripts } from '@agent-board/daemon/protocol';
 import { useSimplified } from '../design';
 import { binding, chordText, keyText } from '../keys/registry';
@@ -46,6 +46,8 @@ interface TabStripProps {
   sessions: { label: string; onSelect(): void }[];
   /** The agent's pull requests the + menu offers to open as a tab here. */
   pullRequests?: { label: string; onSelect(): void }[];
+  /** Opens the agent's to-do list as a tab here: undefined where there is none to open. */
+  onOpenTodo?(): void;
   /** Asks for a page to open in a web tab here: the + menu's "Web…", or its "Private web…" for a `private` one. */
   onOpenWeb?(options?: { private?: boolean }): void;
   /** Named "Shell", not just +, while the window has no tab but its own, so the way to one is plain to see. */
@@ -83,6 +85,7 @@ export function TabStrip({
   scripts,
   sessions,
   pullRequests = [],
+  onOpenTodo,
   onOpenWeb,
   named,
   shells = true,
@@ -160,6 +163,7 @@ export function TabStrip({
     ...sessions.map((session): MenuEntry => ({ label: session.label, icon: <PanelsTopLeft />, onSelect: session.onSelect })),
     ...(pullRequests.length === 0 ? [] : (['separator', { heading: 'Open a pull request' }] as MenuEntry[])),
     ...pullRequests.map((pr): MenuEntry => ({ label: pr.label, icon: <GitPullRequest />, onSelect: pr.onSelect })),
+    ...(onOpenTodo === undefined ? [] : (['separator', { label: 'To-do list', icon: <SquareCheckBig />, hint: 'Its reminders for you', onSelect: onOpenTodo }] as MenuEntry[])),
     ...(simplified && shells ? (['separator', { heading: 'Split' }, { label: 'Split right', icon: <Columns2 />, shortcut: keyText('window.splitBeside'), onSelect: onSplit }] as MenuEntry[]) : []),
   ];
   const slot = over !== undefined && accepting ? <span className="session-tab-slot" data-testid="session-tab-slot" aria-hidden /> : null;

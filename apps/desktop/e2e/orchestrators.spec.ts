@@ -13,10 +13,18 @@ import { openSettings, settingsSection } from './settings-helpers.ts';
 /** The tile of the agent named `name`. */
 const agentTile = (window: Page, name: string) => tile(window).filter({ has: window.getByTitle(name, { exact: true }) });
 
-/** Picks how the board shows an orchestrator's agents, in the Settings window's Board › Crews. */
-async function setCrewLook(window: Page, look: 'In a crew frame' | 'With a “from” chip' | 'Off'): Promise<void> {
+type CrewLookLabel = 'In a crew frame' | 'With a “from” chip' | 'Off';
+
+/**
+ * Picks how the board shows an orchestrator's agents, in the Settings window's Board › Crews, after it shows `from`,
+ * the look the board has now. A Settings window left open hears of a change made on the board a moment after the board
+ * shows it: until then it may still show `look` checked, and checking it again would save nothing.
+ */
+async function setCrewLook(window: Page, from: CrewLookLabel, look: CrewLookLabel): Promise<void> {
   const settings = await openSettings(window, 'board.crews');
-  const choice = settingsSection(settings, 'Crews').getByRole('radiogroup', { name: 'Agents an orchestrator starts' }).getByRole('radio', { name: look });
+  const looks = settingsSection(settings, 'Crews').getByRole('radiogroup', { name: 'Agents an orchestrator starts' });
+  await expect(looks.getByRole('radio', { name: from })).toBeChecked();
+  const choice = looks.getByRole('radio', { name: look });
   await choice.check();
   await expect(choice).toBeChecked();
 }
@@ -49,7 +57,7 @@ test('an orchestrator in a zone that lets it starts two workers: they sit in its
     await expect(frame).toContainText(/'s crew$/);
     await expect(window.getByTestId('from-chip')).toHaveCount(0);
 
-    await setCrewLook(window, 'With a “from” chip');
+    await setCrewLook(window, 'In a crew frame', 'With a “from” chip');
     await expect(frame).toHaveCount(0);
     await expect(window.getByTestId('from-chip')).toHaveCount(2);
     await workers[0]!.getByTestId('from-chip').hover();
@@ -69,7 +77,7 @@ test('an orchestrator in a zone that lets it starts two workers: they sit in its
     await expect(window.getByTestId('from-chip')).toHaveCount(0);
 
     // Settings has the same choice: Off there is checked in the popover too, and the other way round.
-    await setCrewLook(window, 'Off');
+    await setCrewLook(window, 'In a crew frame', 'Off');
     await expect(frame).toHaveCount(0);
     await window.getByRole('button', { name: 'View', exact: true }).click();
     await expect(view.getByRole('group', { name: 'Crews' }).getByRole('button', { name: 'Off' })).toHaveAttribute('aria-pressed', 'true');

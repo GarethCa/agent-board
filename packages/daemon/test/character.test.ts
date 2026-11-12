@@ -5,6 +5,7 @@ import {
   characterChoices,
   characterLive,
   characterReading,
+  lookShown,
   parseCharacter,
   poseShown,
   type CharacterPose,
@@ -79,6 +80,16 @@ describe("reading an agent's character", () => {
       expect(poseShown('running', agent({ state, character: set('testing') }))).toBe('running');
       expect(poseShown('waiting-on-review', agent({ state, character: set('testing') }))).toBe('waiting-on-review');
     }
+  });
+
+  it("draws the agent's face and prop, and who set them, only with its own pose: a board's pose keeps its own", () => {
+    const own = set('reading', { face: 'puzzled', prop: 'magnifier' });
+    expect(lookShown('running', agent({ character: own }))).toEqual({ pose: 'reading', face: 'puzzled', prop: 'magnifier', setBy: null });
+    expect(lookShown('running', agent({ character: set('testing', { setBy: 'lead' }) }))).toEqual({ pose: 'testing', setBy: 'lead' });
+    expect(lookShown('failed', agent({ character: own }))).toEqual({ pose: 'failed' });
+    expect(lookShown('running', agent())).toEqual({ pose: 'running' });
+    // An agent from an older daemon has no character at all.
+    expect(lookShown('running', { ...agent(), character: undefined } as unknown as Agent)).toEqual({ pose: 'running' });
   });
 
   it('says what is shown, whose the pose is, and when it goes', () => {

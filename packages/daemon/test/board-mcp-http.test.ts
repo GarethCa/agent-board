@@ -91,7 +91,12 @@ describe('the board MCP over HTTP', () => {
     const mcp = mcpAs(one.token);
 
     expect((await mcp.initialize()).instructions).toBe(BOARD_MCP_INSTRUCTIONS);
-    expect(await mcp.listTools()).toEqual(['whoami', 'board', 'usage', 'connections', 'handoff', 'ask', 'present_plan', 'show_doc', 'set_status', 'needs_you', 'open_pr', 'record_pr', 'record_doc', 'pin', 'unpin', 'steps_new', 'steps_read', 'steps_update', 'memory_new', 'memory_read', 'memory_update', 'queue_new', 'queue_read', 'queue_update', 'set_page']);
+    expect(await mcp.listTools()).toEqual(['whoami', 'board', 'usage', 'connections', 'handoff', 'ask', 'present_plan', 'show_doc', 'set_status', 'needs_you', 'open_pr', 'record_pr', 'record_doc', 'pin', 'unpin', 'steps_new', 'steps_read', 'steps_update', 'memory_new', 'memory_read', 'memory_update', 'queue_new', 'queue_read', 'queue_update', 'remind', 'remind_read', 'remind_update', 'set_page', 'clock_add', 'clock_set', 'save_clock_template', 'list_clock_templates', 'remove_clock_template']);
+    // Not an orchestrator, it still adds a clock of its own.
+    expect(await mcp.callTool('clock_add', { cron: '0 9 * * 1-5', prompt: 'Check the PRs', after: 'hibernate' })).toEqual({
+      text: expect.stringMatching(/^Added item:\S+ {2}Weekdays 09:00 \(0 9 \* \* 1-5\) {2}messages agent:\S+ one, hibernating it after each run/),
+      isError: false,
+    });
     expect((await mcp.callTool('whoami', {})).text).toMatch(new RegExp(`^you {6}agent:${one.agent.sessionId.slice(0, 4)}\\w* {2}one`));
     expect(await mcp.callTool('set_status', { summary: 'Moving session ids', progress: 40 })).toEqual({
       text: 'Your tile now says: Moving session ids',
@@ -101,6 +106,29 @@ describe('the board MCP over HTTP', () => {
     const agents = await client.call('agent.list');
     expect(agents.find((a) => a.sessionId === one.agent.sessionId)!.status).toMatchObject({ summary: 'Moving session ids', progress: null });
     expect(agents.find((a) => a.sessionId === two.agent.sessionId)!.status).toBeNull();
+  });
+
+  it('lets an agent that is no orchestrator save, list and remove clock templates, its own alone, and start its own clock from one', async () => {
+    const { client, agentWithToken, mcpAs } = await httpDaemon();
+    const one = await agentWithToken('one');
+    const two = await agentWithToken('two');
+    const mcp = mcpAs(one.token);
+
+    expect(await mcp.callTool('save_clock_template', { name: 'PR watch', cron: '0 9 * * 1-5', prompt: 'Check the PRs', after: 'hibernate' })).toEqual({
+      text: 'Saved "PR watch"  Weekdays 09:00 (0 9 * * 1-5)  hibernates its agent after each run  saved by one\n    "Check the PRs"',
+      isError: false,
+    });
+    expect(await mcp.callTool('save_clock_template', { name: 'Fresh', cron: '@daily', prompt: 'Go', after: 'close', result: 'handoff' })).toMatchObject({
+      isError: true,
+      text: expect.stringContaining('--result must be history or note'),
+    });
+    expect(await mcp.callTool('list_clock_templates', {})).toEqual({ text: expect.stringMatching(/^"PR watch" .+ saved by one\n {4}"Check the PRs"$/), isError: false });
+    expect(await mcp.callTool('clock_add', { template: 'pr watch' })).toMatchObject({ isError: false, text: expect.stringContaining('hibernating it after each run') });
+    expect((await client.call('item.list')).find((item) => item.kind === 'clock')!.data).toMatchObject({ prompt: 'Check the PRs', agent: one.agent.sessionId });
+
+    expect(await mcpAs(two.token).callTool('remove_clock_template', { template: 'PR watch' })).toMatchObject({ isError: true, text: expect.stringContaining("isn't one you saved") });
+    expect(await mcp.callTool('remove_clock_template', { template: 'PR watch' })).toEqual({ text: 'Removed the template "PR watch".', isError: false });
+    expect(await client.call('clockTemplate.list', {})).toEqual([]);
   });
 
   it('keeps an agent to what its session may do: an orchestrator tool it was not listed is refused', async () => {
@@ -211,5 +239,21 @@ describe('the board MCP over HTTP', () => {
     answer();
     for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read()) seen += chunk.value;
     expect(seen).toMatch(/^(: keep-alive\n\n)+event: message\ndata: \{.*"text":"Redis".*\}\n\n$/);
+  });
+
+  it('keeps text whole as a document with memory_update, lists it by its title, and confirms an entry', async () => {
+    const { agentWithToken, mcpAs } = await httpDaemon();
+    const mcp = mcpAs((await agentWithToken('one')).token);
+    expect((await mcp.callTool('memory_new', { title: 'Handbook' })).isError).toBe(false);
+    await mcp.callTool('memory_update', { memory: 'Handbook', action: 'add', text: 'db-host: pg.internal' });
+    const added = await mcp.callTool('memory_update', { memory: 'Handbook', action: 'add', document: 'Runbook', text: 'Step one\nStep two' });
+    expect(added.text).toContain('Remembered Runbook in “Handbook”');
+    expect((await mcp.callTool('memory_update', { memory: 'Handbook', action: 'add', document: 'Runbook', key: 'x', text: 'y' })).text).toContain('a document is its title and text');
+
+    const listed = await mcp.callTool('memory_read', { memory: 'Handbook' });
+    expect(listed.text).toContain('document “Runbook”');
+    expect(listed.text).not.toContain('Step two');
+    expect((await mcp.callTool('memory_read', { memory: 'Handbook', entry: 'Runbook' })).text).toContain('Step two');
+    expect((await mcp.callTool('memory_update', { memory: 'Handbook', action: 'confirm', entry: 'db-host' })).text).toMatch(/^Confirmed db-host in “Handbook”/);
   });
 });

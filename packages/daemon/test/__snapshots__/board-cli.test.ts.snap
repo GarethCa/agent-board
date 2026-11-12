@@ -356,25 +356,27 @@ with:
 `;
 
 exports[`agent-board --help > has help for memory 1`] = `
-"usage: agent-board memory ls | memory read <memory> [<entry>] [--search <text>] | memory add <memory> [--key <key>|--no-key] [--file <path>] [--] <text>... | memory edit <memory> <entry> [--key <key>|--no-key] [--pin|--unpin] [--] [<text>...] | memory rm <memory> <entry> | memory history <memory> <entry> | memory restore <memory> <entry> <version> | memory new <title>...
+"usage: agent-board memory ls | memory read <memory> [<entry>] [--search <text>] | memory add <memory> [--key <key>|--no-key] [--file <path>|--doc <title>] [--] <text>... | memory edit <memory> <entry> [--key <key>|--no-key] [--pin|--unpin] [--] [<text>...] | memory rm <memory> <entry> | memory history <memory> <entry> | memory restore <memory> <entry> <version> | memory confirm <memory> <entry> | memory new <title>...
 
 A memory is shared context on the board: what agents and people want kept, read and changed
 by anyone in its scope. In a zone, its scope is that zone's agents (and orchestrators whose scope
 reaches it); loose on the board, every agent's; set to No agents, only the user's. Read the
 memories you can at the start of work, and keep what the next agent needs in one.
 
-It holds three kinds of entry:
-  key: value       A value under a key (one word). Setting a key again replaces its value.
-  a note           Text with no key, kept as written.
-  a file           A whole file (up to 1 MB), kept under its name, with its first lines shown.
+It holds facts and documents:
+  key: value       A fact under a key (one word). Setting a key again replaces its value.
+  a note           A fact with no key, kept as written.
+  a document       Text kept whole (up to 1 MB) under its title: listed by its title and size,
+                   read only when named.
 
   memory ls                     The memories you can read.
-  memory read <memory>          Every entry, pinned first, then newest first; --search <text>
-                                only those holding it. With <entry> (a key, or its #id), that
-                                one in full: a file whole.
+  memory read <memory>          Its facts in full, pinned first, then newest first, then its
+                                documents by title; --search <text> only those holding it. With
+                                <entry> (a key, a document's title, or its #id), that one in full.
   memory add <memory> <text>    Remember something: "key: value", or a note. --key <key> names it
-                                (spaces and all), --no-key keeps "a: b" as a note, --file <path>
-                                keeps that file under its name (or --key).
+                                (spaces and all), --no-key keeps "a: b" as a note. --doc <title>
+                                keeps the text as a document; --file <path> keeps that file as
+                                one, under its name (or --key).
   memory edit <memory> <entry> [<text>]
                                 Change its text, key (--key, or --no-key), or pin (--pin keeps
                                 it in the top rows, --unpin).
@@ -383,11 +385,14 @@ It holds three kinds of entry:
                                 Its versions, newest first: every change anyone made, removes too.
   memory restore <memory> <entry> <version>
                                 Put a version back, undoing the changes after it.
+  memory confirm <memory> <entry>
+                                Say it is still true: it no longer reads as stale.
   memory new <title>            Put a new memory beside your tile.
 
-<memory> is its ref (item:3f2a) or its title. An entry left 30 days reads as old. Anyone in scope
+<memory> is its ref (item:3f2a) or its title. An entry left 30 days reads as stale. Reading a fact,
+or a document by name, counts you among its readers. Anyone in scope
 may change any entry, the user's too: history takes a change back. At most 500 entries and 8 MB a
-memory, and 4,000 characters a value (keep longer text as a file).
+memory, and 4,000 characters a value (keep longer text as a document).
 
   --json                        Print it as JSON.
 "
@@ -869,6 +874,34 @@ delete a record, not edit it.
 "
 `;
 
+exports[`agent-board --help > has help for remind 1`] = `
+"usage: agent-board remind [add] [--] <text>... | remind ls [--mine] | remind done <n> | remind undo <n> | remind rm <n>
+
+A to-do list holds reminders for the user: things only they can do, such as sending a pull
+request for approval, answering a question on it, or restarting the app. Each agent has one
+list, under its tile, made by its first to-do; the user keeps lists of their own too. The user
+ticks, edits, moves and takes off any line. Nothing is done for them, and nothing tells you when
+they tick one: read your list when you need to know.
+
+  remind <text>...              Add each <text> as a to-do (a line break in one makes two). Start
+                                with \`remind add\` when the to-do's first word is ls, done, undo
+                                or rm.
+  remind ls                     The to-do lists you can read, each line numbered, with who ticked
+                                it and when: \`[x] Send the PR for approval · you, 14:06\`.
+  remind ls --mine              Only your own list.
+  remind done <n>               Tick line <n> of your list, one you wrote: it is done after all.
+  remind undo <n>               Untick it.
+  remind rm <n>                 Take it off: the user need not do it now.
+
+<n> is the line's number in \`remind ls --mine\` as the list is now: the user may have moved
+lines since you read it, and the answer names the line it changed. A line the user wrote is
+theirs to tick or take off. At most 100 lines a list, and 500 characters a line. For questions the user answers
+together, use a steps card (\`steps --help\`).
+
+  --json                        Print it as JSON.
+"
+`;
+
 exports[`agent-board --help > has help for restart 1`] = `
 "usage: agent-board restart <ref> [--fresh [--] [<prompt>] | --file <path>] [--json]
 
@@ -931,6 +964,11 @@ commands do:
   flowEdge.list
   item.list
   clock.list
+  clock.self
+  clock.addSelf
+  clockTemplate.list
+  clockTemplate.save
+  clockTemplate.remove
   connector.list
   board.identify
   board.setStatus
@@ -955,6 +993,9 @@ commands do:
   board.readQueue
   board.changeQueue
   board.queueHistory
+  board.remind
+  board.readTodos
+  board.changeTodo
   board.openPullRequest
   orchestrator.activity
   usage.get
@@ -1019,26 +1060,48 @@ refused. Outside a session it reaches every method, as the app does.
 `;
 
 exports[`agent-board --help > has help for schedule 1`] = `
-"usage: agent-board schedule add '<cron>' (--to <ref> | --fresh [--zone <ref>] [--harness claude|codex] [--model <m>] [--role <r>] [--keep] [--result history|note|handoff [--handoff-to <ref>]]) [--file <path> | [--] <prompt>] | schedule list | schedule remove <ref>
+"usage: agent-board schedule add '<cron>' (--to <ref> | --fresh [--zone <ref>] [--harness claude|codex] [--model <m>] [--role <r>] [--keep] [--result history|note|handoff [--handoff-to <ref>]] | --self [--after hibernate|idle]) [--file <path> | [--] <prompt>] | schedule list | schedule remove <ref> | schedule set [--self | <ref>] --after hibernate|close|idle --why "…" | schedule stop [--self | <ref>] --why "…" | schedule add --template <name> [<cron> [<prompt>]] [--to <ref> | --self | --fresh …] | schedule template save <name> (--from <ref> | '<cron>' [--after <mode>] [--harness, --model, --role, --keep, --result] [--] <prompt>) | schedule template list | schedule template remove <name>
 
-Schedules for an orchestrator (\`agent-board help orchestrate\`): each is a clock on the board,
-marked as made by you, that fires on a five-field cron expression (minute hour day month
-weekday, or @daily, @hourly…) in the machine's local time. Quote the expression.
+Schedules, each a clock on the board that fires on a five-field cron expression (minute
+hour day month weekday, or @daily, @hourly…) in the machine's local time. Quote the expression.
 
-With --to, it sends <prompt> to that agent at each fire time, as its next message (relaunching
-it if its session has ended; a time at which it is busy is skipped, and three skipped in a
-row while it was still working flag it: its turn looks stuck). The clock goes on the agent's
-tile's left. With --fresh, it starts a fresh agent each time, in --zone (your zone by
-default) with <prompt> as its task, waits for its turn to end, keeps its final message in the
-clock's run history, and closes it (--keep leaves it open); a time at which the last run is
-still going is skipped. --result note also leaves the result as a note where its tile was;
+Any agent has a clock of its own: one that messages it, or whose run started it.
+\`schedule add --self\` adds one beside your tile, for a long watch, hibernating you after each
+run (--after hibernate: you are paused, and the next run wakes you in the same conversation)
+or leaving you idle (the default). \`schedule set --after hibernate|close|idle\` changes what it
+does with you after each run: close starts a fresh agent each run instead, and closes you once
+this run is over. \`schedule stop\` turns it off; only the user turns it on again. Both need
+--why, which the user sees on the clock, and act on your own clock: name it with <ref> if you
+have more than one.
+
+An orchestrator (\`agent-board help orchestrate\`) also adds clocks for its crew, marked as
+made by it. With --to, it sends <prompt> to that agent at each fire time, as its next message
+(relaunching it if its session has ended; a time at which it is busy is skipped, and three
+skipped in a row while it was still working flag it: its turn looks stuck). The clock goes on
+the agent's tile's left. With --fresh, it starts a fresh agent each time, in --zone (your zone
+by default) with <prompt> as its task, waits for its turn to end, keeps its final message in
+the clock's run history, and closes it (--keep leaves it open); a time at which the last run
+is still going is skipped. --result note also leaves the result as a note where its tile was;
 --result handoff hands it to --handoff-to's agent.
 
 \`schedule list\` prints each clock's ref, its schedule, what it does, when it next runs and how
 its last run went: for a run of skips, how many, since when and why. \`schedule remove\` removes only a clock you, or an agent you started, made;
 in a shell, or outside agent-board, any.
 
+A template is a clock saved under a name, for any zone, to start new ones from: its schedule,
+prompt and mode, and a fresh agent's settings, never the agent it messages. \`schedule template
+save <name> --from <clock>\` saves a clock, or give its cron, prompt and --after (with --after
+close, a fresh agent's options); saving under a name you saved replaces it. \`schedule add
+--template <name>\` starts a clock from it: a cron, a prompt, --to, --self or --fresh given
+override its own. \`schedule template remove\` removes only a template you saved; in a shell, or
+outside agent-board, any.
+
   --to <ref>         The agent it messages, in your scope.
+  --self             Message you: a clock of your own.
+  --after <mode>     What your own clock does with you after each run: hibernate, close or idle.
+  --why <text>       Why you are changing your own clock.
+  --template <name>  Start from a saved template.
+  --from <ref>       The clock \`schedule template save\` saves.
   --fresh            Start a fresh agent each run instead.
   --zone <ref>       A fresh agent's zone, in your scope.
   --harness, --model, --role
@@ -1142,7 +1205,7 @@ Everything about one zone, agent, shell, edge or item. \`agent-board show me\` s
 `;
 
 exports[`agent-board --help > has help for status 1`] = `
-"usage: agent-board status set [<summary>] [--agent <ref>] [--progress <0-100>] [--done] [--pose <pose> [--face <face>] [--prop <prop>]] | status poses
+"usage: agent-board status set [<summary>] [--agent <ref>] [--progress <0-100>] [--done] [--pose <pose> [--face <face>] [--prop <prop>]] [--category <category> [--label <text>] [--on "<who> · <ref>"]] | status poses
 
 Sets your own tile's status: one line, at most 200 characters, saying what you are doing
 now, as the change you are making ("Moving session ids to the daemon"), not the task you were
@@ -1172,12 +1235,25 @@ waiting-on-review when your next turn starts; \`--pose none\` gives the board's 
 board's own states (needs you, a problem, a usage limit, paused, done) are drawn over yours,
 which shows again after. Setting a pose often is fine: the tile draws the last one.
 
-  --agent <ref>    Set this crew member's line or pose, not your own.
+--category says what kind of wait your work is in, for the overview the user reads at a glance:
+needs-help, ready-for-review, blocked, waiting-on-others, in-review, working or done. Set it
+when that changes, above all when your work waits on someone other than the user: \`--category
+waiting-on-others --on "Northwind Pay support · #48213"\`. --on names who it waits on, with their
+reference after " · ", and is only for waiting-on-others and in-review. --label is your own word
+for it, at most 40 characters ("With Legal"), shown in place of the category's name. A category
+stays until you set another, and a set replaces all of it; --done with no category is done, which
+your next prompt clears; \`--category none\` gives the board's guess back. While a question or a
+permission prompt of yours waits on the user, the overview shows needs-help over yours.
+
+  --agent <ref>    Set this crew member's line, pose or category, not your own.
   --progress <n>   0 to 100.
   --done           Your work is finished (not with --agent).
   --pose <pose>    Your character's pose, or none (\`status poses\`).
   --face <face>    Its face, with --pose.
   --prop <prop>    Its prop, with --pose.
+  --category <c>   Your work's category, or none.
+  --label <text>   Your own word for it, with --category.
+  --on <who · ref> Who it waits on, with --category waiting-on-others or in-review.
   --json           Print the agent as JSON (with --agent, as \`show --json\` prints it).
 "
 `;
@@ -1466,6 +1542,10 @@ COMMANDS
   memory ls|read|add|edit|rm|history|restore|new ...
                         Shared context: keyed values, notes and whole files that agents in
                         scope read and write, and people on the board. See \`memory --help\`.
+  remind "<text>"... | remind ls [--mine] | remind done|undo|rm <n>
+                        Add a to-do for the user to your to-do list, under your tile (agents
+                        only): something only they can do. A tick tells you nothing; \`remind
+                        ls --mine\` shows which are done. See \`remind --help\`.
   queue ls|read|add|take|drop|done|edit|rm|history|restore|new ...
                         Jobs to take one at a time, and notes, for agents or for the user.
                         A job you take goes back if your session ends. See \`queue --help\`.
@@ -1482,6 +1562,13 @@ COMMANDS
   handoff [--to <ref>] [--message <text>] [--handover <path>] [--data <json>]
                         Hand your finished work to the next agent over your own outgoing
                         edges, once it is ready, and say it is finished. See \`handoff --help\`.
+  schedule add '<cron>' --self [--after hibernate|idle] [--] <prompt>
+                        Add a clock of your own beside your tile, for a long watch: it
+                        messages you at each fire time (agents only). \`schedule set|stop\`
+                        change what it does with you after each run, or turn it off, saying
+                        why. See \`schedule --help\`.
+  schedule template save <name> --from <clock> | schedule template list | schedule template remove <name>
+                        Save a clock to start new ones from: \`schedule add --template <name>\`.
   mcp                   Serve these as MCP tools on stdio, for a harness. Two are MCP tools
                         alone, as they wait on the user longer than a shell command runs:
                         ask (a question in the user's Needs you inbox) and show_doc with plan

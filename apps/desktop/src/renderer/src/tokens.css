@@ -276,6 +276,20 @@
   --quick-ask-dot-ring: 0 0 0 2px var(--shadow-attention-ring); /* round the dot of the question open */
   --quick-ask-dot-radius: 50%; /* a question's dot */
   --steps-strip-max: 40vh; /* the most of a session window the strip above its composer takes */
+  /* A to-do list: teal, its own, and never the needs-you orange, since a to-do holds no agent up. */
+  --todo: var(--paint-teal);
+  --todo-band: var(--shape-fill-teal); /* its head */
+  --todo-ink: var(--shape-ink-teal); /* its words in teal: the zone, Add a to-do */
+  --todo-on: var(--raised); /* a glyph or count on solid teal */
+  --todo-solid: var(--todo-ink); /* solid teal under a count or a glyph: the teal that reads on --raised, so --raised reads on it */
+  --todo-cursor: inset 3px 0 0 var(--todo); /* the line the keys are on, once stepped in */
+  --todo-soft: color-mix(in srgb, var(--todo) 10%, var(--raised)); /* the empty list's icon */
+  --todo-edge: color-mix(in srgb, var(--todo) 38%, var(--border)); /* round the card and the pill */
+  --todo-box-edge: color-mix(in srgb, var(--todo) 55%, var(--border)); /* an unticked box */
+  --todo-badge-ring: 0 0 0 1.5px color-mix(in srgb, var(--raised) 65%, transparent); /* round the zone tab's count */
+  --todo-board: color-mix(in srgb, var(--paint-teal) 82%, var(--text)); /* the clipboard look's board, behind its sheet */
+  --todo-clip: color-mix(in srgb, var(--muted) 50%, var(--raised)); /* the clip at the board's top */
+  --todo-clip-dark: color-mix(in srgb, var(--muted) 80%, var(--raised)); /* the clip's foot, for its metal shading */
   --agent-note-term-code: var(--window-added);
   --agent-note-term-prompt: var(--harness-claude); /* the ❯ before each line */
   --agent-note-term-edited: #f0a36b;
@@ -1135,6 +1149,9 @@
  */
 :root[data-theme='dark'] {
   color-scheme: dark;
+
+  /* The clipboard look's board: the deep teal of a dark desk, not its bright paint */
+  --todo-board: color-mix(in srgb, var(--paint-teal) 28%, var(--surface));
 
   /* Surfaces */
   --surface: #1b1a19;

@@ -9,6 +9,7 @@ import {
   STEPS_CARD_SIZE,
   MEMORY_CARD_SIZE,
   QUEUE_CARD_SIZE,
+  TODO_CARD_SIZE,
   STICKY_COLORS,
   STICKY_SIZE,
   type BoardItemKind,
@@ -36,6 +37,8 @@ import { newStepsData, StepsNode } from './StepsNode';
 import { newStickyData, StickyNode, stickyData } from './StickyNode';
 import { filledIn, inSlot, newShapeData, newTextData, shapeData, textData } from './text-style';
 import { TextNode } from './TextNode';
+import { newTodoData } from './todo-view';
+import { TodoNode } from './TodoNode';
 
 /** What the board needs to know about a kind of board item. A new kind plugs in here. */
 export interface ItemKind {
@@ -198,6 +201,15 @@ export const ITEM_KINDS: Record<BoardItemKind, ItemKind> = {
     newData: ({ zoneName }) => ({ ...newQueueData(zoneName) }),
     editOnCreate: true,
     minimapColor: () => 'var(--raised)',
+  },
+  // An agent's (`remind`), under its tile, or the user's from the board's menus, its add field open as it is made.
+  todo: {
+    label: 'to-do list',
+    node: TodoNode,
+    size: TODO_CARD_SIZE,
+    newData: () => ({ ...newTodoData() }),
+    editOnCreate: true,
+    minimapColor: () => 'var(--todo)',
   },
   // The daemon's, made as a crew starts: none is made from the board's menus.
   crew: {

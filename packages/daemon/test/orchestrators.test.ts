@@ -1196,13 +1196,13 @@ describe('agent-board mcp for an orchestrator', () => {
     const leadMcp = mcpAs(setup, lead.token);
     expect((await leadMcp.initialize()).instructions).toBe(`${BOARD_MCP_INSTRUCTIONS} ${ORCHESTRATOR_INSTRUCTIONS}`);
     expect(await leadMcp.listTools()).toEqual([
-      'whoami', 'board', 'usage', 'connections', 'handoff', 'ask', 'present_plan', 'show_doc', 'set_status', 'needs_you', 'open_pr', 'record_pr', 'record_doc', 'pin', 'unpin', 'steps_new', 'steps_read', 'steps_update', 'memory_new', 'memory_read', 'memory_update', 'queue_new', 'queue_read', 'queue_update', 'set_page', 'new_agent', 'send', 'wait', 'read', 'interrupt', 'set_effort', 'continue_on_credits', 'restart', 'pause', 'wake', 'add_edge', 'list_edges', 'remove_edge', 'move', 'arrange', 'zone_layout', 'map', 'zone_screenshot', 'add_note',
+      'whoami', 'board', 'usage', 'connections', 'handoff', 'ask', 'present_plan', 'show_doc', 'set_status', 'needs_you', 'open_pr', 'record_pr', 'record_doc', 'pin', 'unpin', 'steps_new', 'steps_read', 'steps_update', 'memory_new', 'memory_read', 'memory_update', 'queue_new', 'queue_read', 'queue_update', 'remind', 'remind_read', 'remind_update', 'set_page', 'clock_add', 'clock_set', 'save_clock_template', 'list_clock_templates', 'remove_clock_template', 'new_agent', 'send', 'wait', 'read', 'interrupt', 'set_effort', 'continue_on_credits', 'restart', 'pause', 'wake', 'add_edge', 'list_edges', 'remove_edge', 'move', 'arrange', 'zone_layout', 'map', 'zone_screenshot', 'add_note',
       'edit_note', 'remove_note', 'add_shape', 'add_diagram', 'export_diagram', 'edit_shape', 'remove_shape', 'connect', 'edit_connector', 'remove_connector', 'add_schedule', 'list_schedules', 'remove_schedule', 'prefabs', 'roles', 'set_role', 'remove_role', 'close', 'handover',
     ]);
 
     const plainMcp = mcpAs(setup, plain.token);
     expect((await plainMcp.initialize()).instructions).toBe(BOARD_MCP_INSTRUCTIONS);
-    expect(await plainMcp.listTools()).toEqual(['whoami', 'board', 'usage', 'connections', 'handoff', 'ask', 'present_plan', 'show_doc', 'set_status', 'needs_you', 'open_pr', 'record_pr', 'record_doc', 'pin', 'unpin', 'steps_new', 'steps_read', 'steps_update', 'memory_new', 'memory_read', 'memory_update', 'queue_new', 'queue_read', 'queue_update', 'set_page']);
+    expect(await plainMcp.listTools()).toEqual(['whoami', 'board', 'usage', 'connections', 'handoff', 'ask', 'present_plan', 'show_doc', 'set_status', 'needs_you', 'open_pr', 'record_pr', 'record_doc', 'pin', 'unpin', 'steps_new', 'steps_read', 'steps_update', 'memory_new', 'memory_read', 'memory_update', 'queue_new', 'queue_read', 'queue_update', 'remind', 'remind_read', 'remind_update', 'set_page', 'clock_add', 'clock_set', 'save_clock_template', 'list_clock_templates', 'remove_clock_template']);
   });
 
   it('joins two of its agents with an edge, and removes it, over the tools', async () => {
@@ -2258,7 +2258,7 @@ describe('agents setting their characters’ poses', () => {
     await expect(connection.call('board.setStatus', { token, character: { pose: 'testing', prop: 'hammer' } } as never)).rejects.toMatchObject({
       message: expect.stringMatching(/unknown prop 'hammer'; props: dots/),
     });
-    await expect(connection.call('board.setStatus', { token })).rejects.toMatchObject({ message: expect.stringMatching(/a status summary, a character pose, or both/) });
+    await expect(connection.call('board.setStatus', { token })).rejects.toMatchObject({ message: expect.stringMatching(/a status summary, a character pose, a category, or more/) });
     await expect(connection.call('board.setStatus', { token, progress: 40, character: { pose: 'testing' } })).rejects.toMatchObject({
       message: expect.stringMatching(/progress goes with a status summary/),
     });
@@ -2472,7 +2472,158 @@ describe('agents setting their characters’ poses', () => {
     expect(answer).toMatchObject({ isError: false });
     expect(answer.text.split('\n').at(-1)).toBe(JSON.stringify({ ok: true, shown: 'reading', yours: 'reading', expires: 'at turn end, or 20 minutes after this set' }));
     expect(await mcp.callTool('set_status', { character: { pose: 'dancing' } })).toMatchObject({ isError: true, text: expect.stringMatching(/unknown pose 'dancing'/) });
-    expect(await mcp.callTool('set_status', {})).toMatchObject({ isError: true, text: expect.stringMatching(/a summary, a character, or both/) });
+    expect(await mcp.callTool('set_status', {})).toMatchObject({ isError: true, text: expect.stringMatching(/a summary, a character, a category, or more/) });
+  });
+});
+
+describe('agents setting their work categories', () => {
+  const listed = async (setup: Setup, sessionId: string) => (await setup.client.call('agent.list')).find((agent) => agent.sessionId === sessionId)!;
+  const WAITING = { category: 'waiting-on-others', label: 'With Legal', waitingOn: { who: 'Northwind Pay support', ref: '#48213' } } as const;
+
+  it('sets its own with a label and who it waits on, keeps it when its line changes, and clears it with none', async () => {
+    const setup = await orchestrateDaemon();
+    const { agent, token, connection } = await agentSide(setup, setup.zone.id);
+
+    const set = await connection.call('board.setStatus', { token, ...WAITING });
+    expect(set).toMatchObject({
+      status: null,
+      workCategory: { category: 'waiting-on-others', label: 'With Legal', waitingOn: { who: 'Northwind Pay support', ref: '#48213' }, setAt: expect.any(String), setBy: null },
+    });
+    expect(await connection.call('board.setStatus', { token, summary: 'Chasing the refund' })).toMatchObject({
+      status: { summary: 'Chasing the refund' },
+      workCategory: { category: 'waiting-on-others', label: 'With Legal' },
+    });
+    // A new set replaces all of it: a label or who it waits on left out goes.
+    expect(await connection.call('board.setStatus', { token, category: 'blocked' })).toMatchObject({ workCategory: { category: 'blocked', label: null, waitingOn: null } });
+    expect(await connection.call('board.setStatus', { token, category: 'none' })).toMatchObject({ status: { summary: 'Chasing the refund' }, workCategory: null });
+    expect((await listed(setup, agent.sessionId)).workCategory).toBeNull();
+  });
+
+  it('keeps what it set across a restart of the daemon', async () => {
+    const dataDir = tempDataDir();
+    const setup = await orchestrateDaemon({ dataDir });
+    const { agent, token, connection } = await agentSide(setup, setup.zone.id);
+    await connection.call('board.setStatus', { token, ...WAITING });
+    await setup.daemon.stop();
+
+    const again = await startOrchestrateDaemon({ dataDir });
+    const client = await connectTestClient(again);
+    expect((await client.call('agent.list')).find((each) => each.sessionId === agent.sessionId)?.workCategory).toMatchObject({
+      category: 'waiting-on-others',
+      label: 'With Legal',
+      waitingOn: { who: 'Northwind Pay support', ref: '#48213' },
+    });
+  });
+
+  it('is Done when it says its work is done, unless it names another, and a Done goes with its next prompt', async () => {
+    const setup = await orchestrateDaemon({ repeat: true });
+    const { agent, token, connection } = await agentSide(setup, setup.zone.id);
+
+    expect(await connection.call('board.setStatus', { token, summary: 'PR open', done: true, category: 'ready-for-review' })).toMatchObject({
+      workCategory: { category: 'ready-for-review' },
+    });
+    expect(await connection.call('board.setStatus', { token, summary: 'Merged', done: true })).toMatchObject({ workCategory: { category: 'done' } });
+
+    const since = setup.recorder.events.length;
+    await setup.client.call('agent.answer', { sessionId: agent.sessionId, text: 'Also add a test' });
+    await setup.recorder.waitFor(
+      (e: DaemonEvent): e is AgentUpdatedEvent =>
+        e.type === 'agent.updated' && e.agent.sessionId === agent.sessionId && e.agent.workFinishedAt === null && setup.recorder.events.indexOf(e) >= since,
+    );
+    expect((await listed(setup, agent.sessionId)).workCategory).toBeNull();
+
+    // One that is not Done stays through its prompts.
+    await connection.call('board.setStatus', { token, ...WAITING });
+    const again = setup.recorder.events.length;
+    await setup.client.call('agent.answer', { sessionId: agent.sessionId, text: 'Any news?' });
+    await setup.recorder.waitFor(
+      (e: DaemonEvent): e is HookEvent =>
+        e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'UserPromptSubmit' && setup.recorder.events.indexOf(e) >= again,
+    );
+    expect((await listed(setup, agent.sessionId)).workCategory).toMatchObject({ category: 'waiting-on-others' });
+  });
+
+  it('refuses an unknown category by naming them, a label or a who with none, too long, or a who for a category not waiting on others', async () => {
+    const setup = await orchestrateDaemon();
+    const { token, connection } = await agentSide(setup, setup.zone.id);
+    const refused = (params: Record<string, unknown>, message: RegExp) =>
+      expect(connection.call('board.setStatus', { token, ...params } as never)).rejects.toMatchObject({ code: RPC_ERROR.invalidParams, message: expect.stringMatching(message) });
+
+    await refused({ category: 'stuck' }, /unknown category 'stuck'; categories: needs-help, ready-for-review, blocked, waiting-on-others, in-review, working, done, none/);
+    await refused({ label: 'With Legal' }, /a label goes with a category/);
+    await refused({ category: 'none', label: 'With Legal' }, /category none takes no label or waitingOn/);
+    await refused({ category: 'blocked', label: 'x'.repeat(41) }, /the label is 41 characters; at most 40/);
+    await refused({ category: 'blocked', label: '  ' }, /the label must not be blank/);
+    await refused({ category: 'blocked', waitingOn: { who: 'Legal' } }, /waitingOn is only for waiting-on-others and in-review/);
+    await refused({ category: 'in-review', waitingOn: { ref: '#1' } }, /waitingOn needs a who/);
+    await refused({ category: 'in-review', waitingOn: { who: 'y'.repeat(81) } }, /who is 81 characters; at most 80/);
+    await refused({}, /a status summary, a character pose, a category, or more/);
+  });
+
+  it('sets the category of an agent in its crew, saying who set it, and refuses one outside it', async () => {
+    const setup = await orchestrateDaemon();
+    const lead = await agentSide(setup, setup.zone.id, 'zone');
+    const worker = await lead.connection.call('orchestrator.spawn', { token: lead.token, name: 'worker', prompt: 'Print your board identity' });
+    const outsider = await userAgent(setup.client, setup.zone.id, 'outsider');
+
+    expect(await lead.connection.call('orchestrator.setStatus', { token: lead.token, sessionId: worker.sessionId, category: 'in-review', waitingOn: { who: 'reviewer' } })).toMatchObject({
+      workCategory: { category: 'in-review', waitingOn: { who: 'reviewer', ref: null }, setBy: lead.agent.name },
+    });
+    await expect(lead.connection.call('orchestrator.setStatus', { token: lead.token, sessionId: outsider.sessionId, category: 'blocked' })).rejects.toMatchObject({
+      code: BOARD_ERROR.outOfScope,
+    });
+    expect((await listed(setup, outsider.sessionId)).workCategory).toBeNull();
+  });
+
+  it('is `status set --category --label --on` over the CLI, `set_status` with category over the MCP, and in identify and show', async () => {
+    const setup = await orchestrateDaemon();
+    const lead = await agentSide(setup, setup.zone.id, 'zone');
+    const worker = await lead.connection.call('orchestrator.spawn', { token: lead.token, name: 'worker' });
+    const env = { [BOARD_SOCKET_ENV]: setup.daemon.socketPath, [BOARD_TOKEN_ENV]: lead.token };
+    const run = async (command: string, args: string[]) => {
+      let out = '';
+      const code = await runBoardCommand(command, args, { out: (text) => (out += text), err: (text) => (out += text), env });
+      return { code, out };
+    };
+
+    expect(await run('status', ['set', '--category', 'waiting-on-others', '--label', 'With Legal', '--on', 'Northwind Pay support · #48213'])).toEqual({
+      code: 0,
+      out: 'Your category: Waiting on others "With Legal", waiting on Northwind Pay support · #48213, yours; it stays until another is set, or none.\n',
+    });
+    expect((await listed(setup, lead.agent.sessionId)).workCategory).toMatchObject({ waitingOn: { who: 'Northwind Pay support', ref: '#48213' } });
+    expect(await run('identify', [])).toMatchObject({ code: 0, out: expect.stringMatching(/\ncategory Waiting on others "With Legal", waiting on Northwind Pay support · #48213, yours;/) });
+    expect(await run('status', ['set', 'Merged', '--done'])).toEqual({
+      code: 0,
+      out: 'status set: Merged (finished)\nYour category: Done, yours; it goes with the next prompt.\n',
+    });
+    expect(await run('status', ['set', '--category', 'none'])).toEqual({ code: 0, out: expect.stringMatching(/^Your category: none set: the board guesses one/) });
+    // Identify says what the board guesses, and why.
+    expect(await run('identify', [])).toMatchObject({
+      code: 0,
+      out: expect.stringMatching(/\ncategory none set: the board guesses (Working|Done|Needs help)( \(.+\))?; set one with `agent-board status set --category`\n/),
+    });
+    expect(await run('status', ['set', '--label', 'With Legal'])).toEqual({ code: 2, out: expect.stringMatching(/--label and --on go with a --category/) });
+    expect(await run('status', ['set', '--category', 'stuck'])).toEqual({ code: 2, out: expect.stringMatching(/unknown category 'stuck'; categories: needs-help/) });
+    expect(await run('status', ['set', '--category', 'blocked', '--on', 'Legal'])).toEqual({ code: 2, out: expect.stringMatching(/--on is only for waiting-on-others and in-review/) });
+    expect(await run('send', ['agent:x', 'hi', '--category', 'done'])).toEqual({ code: 2, out: expect.stringMatching(/--category is only for `status set`/) });
+    expect(await run('status', ['set', '--agent', `agent:${worker.sessionId.slice(0, 4)}`, '--category', 'in-review', '--on', 'reviewer'])).toEqual({
+      code: 0,
+      out: expect.stringMatching(/\nIts category: In review, waiting on reviewer, set by .+; it stays until another is set, or none\.\n?$/),
+    });
+    expect(await run('show', [`agent:${worker.sessionId.slice(0, 4)}`])).toMatchObject({ code: 0, out: expect.stringMatching(/\n {2}category +In review, waiting on reviewer, set by /) });
+
+    const mcp = mcpAs(setup, lead.token);
+    expect(await mcp.callTool('set_status', { category: 'in-review', waiting_on: { who: 'Ada', ref: 'PR #12' } })).toEqual({
+      isError: false,
+      text: 'Your category: In review, waiting on Ada · PR #12, yours; it stays until another is set, or none.',
+    });
+    expect(await mcp.callTool('set_status', { category: 'working', waiting_on: { who: 'Ada' } })).toMatchObject({
+      isError: true,
+      text: expect.stringMatching(/waiting_on is only for waiting-on-others and in-review/),
+    });
+    expect(await mcp.callTool('set_status', {})).toMatchObject({ isError: true, text: expect.stringMatching(/a summary, a character, a category, or more/) });
+    const json = JSON.parse((await run('show', ['--json', `agent:${lead.agent.sessionId.slice(0, 4)}`])).out) as { workCategory: unknown };
+    expect(json.workCategory).toMatchObject({ category: 'in-review', waitingOn: { who: 'Ada', ref: 'PR #12' }, setBy: null });
   });
 });
 

@@ -340,7 +340,8 @@ const scripts: Record<FakeScenario, Script> = {
    * a steps card of those lines and waits on its step n. `Steps: <line> ;; <line> …`
    * prints its board token, then puts up a steps card of those lines with `steps_new` and ends its turn. `Memory: <title>` and `Queue: <title>` print its board
    * token, then put up a memory or a queue of that title with `memory_new` or `queue_new`, and end its turn. `Record PR: <url>` records that pull request on its sidebar with `record_pr`, and ends its turn. `Pins: <path>` writes and shows that Markdown file, then pins it as `Report`, a `shot.png` beside
-   * it, a link to `http://localhost:9/preview` and a note labelled `Test logins`.
+   * it, a link to `http://localhost:9/preview` and a note labelled `Test logins`. `Clock: <json>` prints its board
+   * token, then changes its own clock with `clock_set` and those arguments, and ends its turn on the reply.
    */
   async 'ask-plan'(session, prompt) {
     await session.submit(prompt);
@@ -363,10 +364,21 @@ const scripts: Record<FakeScenario, Script> = {
       await session.runShell('echo "identity:$AGENT_BOARD_IDENTITY:end"');
       return say(await session.callMcpTool('agent-board', 'steps_new', { steps: steps.split(' ;; ').join('\n') }));
     }
+    // `Remind: <line> ;; …` adds those lines to its to-do list for the user.
+    const reminded = /^Remind: (.*)/.exec(prompt)?.[1];
+    if (reminded !== undefined) {
+      await session.runShell('echo "identity:$AGENT_BOARD_IDENTITY:end"');
+      return say(await session.callMcpTool('agent-board', 'remind', { text: reminded.split(' ;; ').join('\n') }));
+    }
     const made = /^(Memory|Queue): (.*)/.exec(prompt);
     if (made !== null) {
       await session.runShell('echo "identity:$AGENT_BOARD_IDENTITY:end"');
       return say(await session.callMcpTool('agent-board', made[1] === 'Memory' ? 'memory_new' : 'queue_new', { title: made[2]! }));
+    }
+    const clocked = /^Clock: (.*)/.exec(prompt)?.[1];
+    if (clocked !== undefined) {
+      await session.runShell('echo "identity:$AGENT_BOARD_IDENTITY:end"');
+      return say(await session.callMcpTool('agent-board', 'clock_set', JSON.parse(clocked) as Record<string, unknown>));
     }
     const recorded = /^Record PR: (.*)/.exec(prompt)?.[1];
     if (recorded !== undefined) return say(await session.callMcpTool('agent-board', 'record_pr', { url: recorded }));
@@ -459,13 +471,13 @@ const scripts: Record<FakeScenario, Script> = {
    * fires its `Stop` too, after the interrupt;
    * `Work slowly` runs `sleep 5`; `Work slowly, then fail` and `Work slowly, then hit the rate limit` run it, then
    * fail the turn (Claude's StopFailure: `server_error`, `rate_limit`);
-   * `Ask permission` plays `permission`; `Run: ‹command› | ‹what it is for›` asks to run that command and says whether it ran; `Think, then send a subagent` thinks a step and plays `subagent`; `Ask: …`, `Plan: …`, `Flag: …`, `Doc: …` and `Pins: …` play `ask-plan`; `Hit the rate limit` plays `rate-limit`. Any other prompt is a worker's:
+   * `Ask permission` plays `permission`; `Run: ‹command› | ‹what it is for›` asks to run that command and says whether it ran; `Think, then send a subagent` thinks a step and plays `subagent`; `Ask: …`, `Plan: …`, `Flag: …`, `Doc: …` and `Pins: …` and `Remind: …` play `ask-plan`; `Hit the rate limit` plays `rate-limit`. Any other prompt is a worker's:
    * it writes `.agent-board/handover.md` in its shell and ends on `STATUS: done`.
    */
   async orchestrate(session, prompt) {
     // Prompts that play another scenario, which submits them itself.
     if (prompt === 'Ask permission') return scripts.permission(session, prompt);
-    if (/^(Ask( only| in words| several| briefly| on the board)?|Plan( doc on the board| doc by CLI)?|Flag|Doc( on the board)?|Pins): /.test(prompt)) return scripts['ask-plan'](session, prompt);
+    if (/^(Ask( only| in words| several| briefly| on the board)?|Plan( doc on the board| doc by CLI)?|Flag|Doc( on the board)?|Pins|Remind): /.test(prompt)) return scripts['ask-plan'](session, prompt);
     await session.submit(prompt);
     // A plain command it needs permission for, with what it is for, and what came of the answer.
     const run = /^Run: (.*?) \| (.*)$/.exec(prompt);

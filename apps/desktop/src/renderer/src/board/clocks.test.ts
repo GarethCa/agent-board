@@ -26,10 +26,12 @@ const run = (outcome: ClockRun['outcome'], fields: Partial<ClockRun> = {}): Cloc
   agentName: null,
   finishedAt: null,
   result: null,
+  awaitsTurn: false,
+  flag: null,
   ...fields,
 });
 
-const status = (fields: Partial<ClockStatus> = {}): ClockStatus => ({ id: 'c', nextRunAt: new Date(2026, 9, 10, 9).toISOString(), runs: [], skips: null, ...fields });
+const status = (fields: Partial<ClockStatus> = {}): ClockStatus => ({ id: 'c', nextRunAt: new Date(2026, 9, 10, 9).toISOString(), runs: [], skips: null, changes: [], ...fields });
 
 const names: Record<string, string> = { a: 'Nightly deps check' };
 const nameOf = (sessionId: string) => names[sessionId];
@@ -40,6 +42,7 @@ describe('clockData', () => {
       cron: '@hourly',
       enabled: true,
       does: 'message',
+      hibernate: false,
       agent: 'a',
       prompt: '',
       fresh: { harness: 'claude', model: null, role: null, closeWhenDone: true },

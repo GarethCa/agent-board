@@ -484,9 +484,10 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
 
   /**
    * Queues `text`, typed as `line`, for the agent not up yet (`queueUntilUp`), handing it to `undelivered` if it is
-   * never typed: the sender has heard it was queued, so it is never dropped unsaid.
+   * never typed: the sender has heard it was queued, so it is never dropped unsaid. `notTyped` hears why too: a
+   * scheduled run's clock, whose run would otherwise wait on a turn that never starts.
    */
-  const queueOrHandBack = (sessionId: string, line: string, what: string, text: string, trail?: SendTrail) => {
+  const queueOrHandBack = (sessionId: string, line: string, what: string, text: string, trail?: SendTrail, notTyped?: (reason: string) => void) => {
     const item = { sessionId, what, text, ...(trail === undefined ? {} : { trail }) };
     queuedItems.add(item);
     void queueUntilUp(sessionId, line, what, () => {
@@ -499,6 +500,7 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
         if (!queuedItems.delete(item)) return;
         trailTyped(trail, typed);
         options.undelivered(sessionId, what, text, typed.reason);
+        notTyped?.(typed.reason);
       })
       .catch((error: Error) => options.log(`could not keep ${what} for ${sessionId}, never delivered: ${error.message}`));
   };
@@ -980,21 +982,32 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
       }
     },
 
-    runScheduled(sessionId: string, prompt: string): RunStart {
+    runScheduled(sessionId: string, prompt: string, notTyped?: (reason: string) => void): RunStart {
       const row = getRow(sessionId);
       if (row === undefined) return { started: false, reason: 'the agent has been deleted' };
       // A paused agent carries on its conversation, Codex's too; an ended one starts Codex on a new one, as always.
       if (row.ended_at !== null) return relaunch(row, prompt, 'for its scheduled run', row.hibernated_at === null ? undefined : row.harness_session_id);
       if (beingPaused(row)) return { started: false, reason: 'it was being paused' };
       if (notUp.has(sessionId)) {
-        queueOrHandBack(sessionId, inputFor(sessionId, answerInput(oneLine(prompt))), 'A scheduled run', prompt);
+        queueOrHandBack(sessionId, inputFor(sessionId, answerInput(oneLine(prompt))), 'A scheduled run', prompt, undefined, notTyped);
         return { started: true, queued: true };
       }
-      const reason = unsent.has(sessionId) ? UNSENT_REASON : whyNotReadyNow(sessionId, row);
+      // A line still being typed, an earlier run's or the user's, starts a turn this one would only queue behind.
+      const reason = unsent.has(sessionId)
+        ? UNSENT_REASON
+        : (whyNotReadyNow(sessionId, row) ?? (answering.has(sessionId) || sending.has(sessionId) ? 'a message is being sent to it' : undefined));
       if (reason !== undefined) return { started: false, reason };
+      // Started as far as its caller knows: one that turns out not typed is told so, as no turn of it will end.
       typeLine(sessionId, prompt, 'A scheduled run', () => stillReady(sessionId, false)).then(
-        (typed) => !typed.typed && options.log(`skipped a run of ${sessionId}: ${typed.reason}`),
-        (error: Error) => options.log(`could not start a run of ${sessionId}: ${error.message}`),
+        (typed) => {
+          if (typed.typed) return;
+          options.log(`skipped a run of ${sessionId}: ${typed.reason}`);
+          notTyped?.(typed.reason);
+        },
+        (error: Error) => {
+          options.log(`could not start a run of ${sessionId}: ${error.message}`);
+          notTyped?.(error.message);
+        },
       );
       return { started: true };
     },

@@ -80,6 +80,13 @@ describe('placed', () => {
     ]);
   });
 
+  it("makes a copy of an agent's to-do list the user's, its lines as they were", () => {
+    const lines = [{ id: 't1', text: 'Restart the app', by: { kind: 'agent', sessionId: 's1', name: 'Fixer' }, at: '2026-11-11T09:00:00.000Z', done: null }];
+    const list = { id: 'l1', kind: 'todo' as const, x: 0, y: 0, width: 300, height: 196, rotation: 0, data: { owner: { kind: 'agent', sessionId: 's1', name: 'Fixer' }, lines } };
+    const [copy] = placed({ items: [list], connectors: [] }, { dx: 20, dy: 20 }, () => 'new').items;
+    expect(copy?.data).toEqual({ owner: { kind: 'user' }, lines });
+  });
+
   it('takes a connector copied before lines bent as having no bends', () => {
     const copy = twoNotes();
     const older = JSON.stringify({ ...copy, connectors: copy.connectors.map((connector) => ({ ...connector, points: undefined })) });

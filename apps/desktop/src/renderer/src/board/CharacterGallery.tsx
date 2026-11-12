@@ -1,8 +1,11 @@
 import { useState } from 'react';
+import { AGENT_FACES, AGENT_PROPS } from '@agent-board/daemon/character';
 import type { Harness } from '@agent-board/daemon/protocol';
+import { useSimplified } from '../design';
 import { HARNESSES } from '../harness';
 import { Captain, CAPTAIN_SIZES, Character } from './Character';
 import { CHARACTER_POSES, type CharacterPose } from './character-figures';
+import { MARK_CHARACTER_HEIGHT } from './StatusMark';
 import { TileCharacter } from './TileCharacter';
 import { CHARACTER_STYLE_LABELS, type DrawnStyle } from './characters';
 
@@ -37,6 +40,34 @@ export function CharacterStylesGallery() {
               GALLERY_HARNESSES.map((harness) => (
                 <td key={`${style}/${harness}`}>
                   <Character harness={harness} pose={pose} style={style} height={34} />
+                </td>
+              )),
+            )}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+/**
+ * Every face and prop an agent may give its pose, in every style and body: the faces on reading, the props on writing.
+ * On the same page as the poses, as `#gallery-characters`, at the size the design draws an agent's character: Simplified's
+ * status mark is smaller than Classic's tile.
+ */
+export function CharacterLooksGallery() {
+  const height = useSimplified() ? MARK_CHARACTER_HEIGHT : 34;
+  const looks = [...AGENT_FACES.map((face) => ({ name: face, pose: 'reading' as const, face })), ...AGENT_PROPS.map((prop) => ({ name: prop, pose: 'writing' as const, prop }))];
+  return (
+    <table className="character-gallery" data-testid="character-looks">
+      <tbody>
+        {looks.map(({ name, ...look }) => (
+          <tr key={name}>
+            <th>{name}</th>
+            {STYLES.flatMap((style) =>
+              GALLERY_HARNESSES.map((harness) => (
+                <td key={`${style}/${harness}`}>
+                  <Character harness={harness} {...look} style={style} height={height} />
                 </td>
               )),
             )}

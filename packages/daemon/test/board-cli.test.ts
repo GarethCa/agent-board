@@ -664,14 +664,71 @@ describe('schedules from the command line', () => {
     await usage(['add'], "give the schedule's cron expression");
     await usage(['add', '61 * * * *', '--to', 'a', '--', 'Go'], 'bad minute field');
     await usage(['add', '@daily', '--to', 'a'], 'give the schedule its prompt');
-    await usage(['add', '@daily', '--', 'Go'], 'give --to <agent> to message one, or --fresh');
-    await usage(['add', '@daily', '--to', 'a', '--fresh', '--', 'Go'], 'give --to <agent> to message one, or --fresh');
+    await usage(['add', '@daily', '--', 'Go'], 'give --to <agent> to message one, --self to message you, or --fresh');
+    await usage(['add', '@daily', '--to', 'a', '--fresh', '--', 'Go'], 'give --to <agent> to message one, --self to message you, or --fresh');
+    await usage(['add', '@daily', '--to', 'a', '--self', '--', 'Go'], 'give --to <agent> to message one, --self to message you, or --fresh');
+    await usage(['add', '@daily', '--to', 'a', '--after', 'idle', '--', 'Go'], '--after');
+    await usage(['add', '@daily', '--self', '--after', 'close', '--', 'Go'], '--after');
+    await usage(['set', '--after', 'idle'], '--why');
+    await usage(['set', '--why', 'Done'], '--after');
+    await usage(['stop'], '--why');
+    await usage(['list', '--why', 'x'], '--why');
+    await usage(['set', '--self', 'item:1', '--after', 'idle', '--why', 'x'], 'give one schedule ref, or --self');
     await usage(['add', '@daily', '--to', 'a', '--role', 'x', '--', 'Go'], '--role is only for --fresh');
     await usage(['add', '@daily', '--fresh', '--result', 'email', '--', 'Go'], '--result must be history, note, handoff');
     await usage(['add', '@daily', '--fresh', '--result', 'handoff', '--', 'Go'], '--result handoff goes with --handoff-to');
     await usage(['list', '--to', 'a'], '--to is only for `schedule add`');
     await usage(['remove'], 'give one schedule ref');
     await usage(['pause', 'item:1'], 'the schedule commands are');
+    await usage(['add', '--template', 'Slack', '--to', 'a', '--self'], 'give --to <agent> to message one, --self to message you, or --fresh');
+    await usage(['list', '--from', 'item:1'], '--from is only for `schedule template save`');
+    await usage(['template', 'save'], 'give the template a name');
+    await usage(['template', 'save', 'Slack'], 'a cron expression has five fields');
+    await usage(['template', 'save', 'Slack', '@daily'], 'give the template its prompt');
+    await usage(['template', 'save', 'Slack', '--from', 'item:1', '@daily', '--', 'Go'], 'give --from <clock>');
+    await usage(['template', 'save', 'Slack', '@daily', '--role', 'x', '--', 'Go'], '--role is only for --after close');
+    await usage(['template', 'save', 'Slack', '@daily', '--after', 'close', '--result', 'handoff', '--', 'Go'], 'must be history or note');
+    await usage(['template', 'save', 'Slack', '@daily', '--to', 'a', '--', 'Go'], '--to is not for `schedule template`');
+    await usage(['template', 'list', 'extra'], 'unexpected');
+    await usage(['template', 'list', '--after', 'idle'], '--after is only for `schedule template save`');
+    await usage(['template', 'remove'], 'give one template name');
+    await usage(['template', 'copy'], 'the template commands are');
+  });
+
+  it('saves a template, lists it, starts clocks from it and removes it, as the user', async () => {
+    const { env, client, fixTests, web } = await board();
+    const saved = await run(env, 'schedule', 'template', 'save', 'Slack watch', '*/30 9-17 * * 1-5', '--after', 'hibernate', '--', 'Check Slack');
+    expect(saved).toMatchObject({ code: 0, out: expect.stringContaining('"Slack watch"') });
+    await run(env, 'schedule', 'template', 'save', 'Deps', '@daily', '--after', 'close', '--role', 'reviewer', '--result', 'note', '--', 'Check the deps');
+
+    const listed = (await run(env, 'schedule', 'template', 'list')).out;
+    expect(listed).toMatch(/"Deps" {2}Daily 00:00 \(@daily\) {2}starts a fresh reviewer each run {2}saved by the user\n {4}"Check the deps"/);
+    expect(listed).toContain('hibernates its agent after each run  saved by the user');
+
+    const message = await run(env, 'schedule', 'add', '--template', 'slack watch', '--to', 'fix-tests', '--json');
+    expect(message.code).toBe(0);
+    const { item } = JSON.parse(message.out) as { item: { data: unknown } };
+    expect(item.data).toMatchObject({ cron: '*/30 9-17 * * 1-5', prompt: 'Check Slack', does: 'message', hibernate: true, agent: fixTests.sessionId });
+    const fresh = await run(env, 'schedule', 'add', '--template', 'Deps', '@hourly', '--zone', 'web', '--json');
+    expect(fresh).toMatchObject({ code: 0, err: '' });
+    expect(JSON.parse(fresh.out)).toMatchObject({ item: { zoneId: web.id, data: { cron: '@hourly', does: 'fresh', result: 'note', fresh: { role: 'reviewer' } } } });
+    expect(await run(env, 'schedule', 'add', '--template', 'Nope', '--to', 'fix-tests')).toMatchObject({ code: 1, err: expect.stringContaining('no clock template Nope') });
+
+    // --fresh with one setting keeps the template's others: its harness, role and closing its agent.
+    await run(env, 'schedule', 'template', 'save', 'Review', '@daily', '--after', 'close', '--harness', 'codex', '--role', 'reviewer', '--keep', '--', 'Review the PRs');
+    const merged = await run(env, 'schedule', 'add', '--template', 'review', '--fresh', '--model', 'small', '--zone', 'web', '--json');
+    expect(merged).toMatchObject({ code: 0, err: '' });
+    expect(JSON.parse(merged.out)).toMatchObject({ item: { data: { prompt: 'Review the PRs', does: 'fresh', fresh: { harness: 'codex', model: 'small', role: 'reviewer', closeWhenDone: false } } } });
+
+    // A name matches in another case of A to Z only, as the daemon matches it.
+    await run(env, 'schedule', 'template', 'save', 'Étude', '@daily', '--', 'Practise');
+    expect(await run(env, 'schedule', 'add', '--template', 'étude', '--to', 'fix-tests')).toMatchObject({ code: 1, err: expect.stringContaining('no clock template étude') });
+    expect(await run(env, 'schedule', 'template', 'remove', 'étude')).toMatchObject({ code: 1, err: expect.stringContaining('no clock template étude') });
+    expect(await run(env, 'schedule', 'template', 'remove', 'ÉTUDE')).toMatchObject({ code: 0, out: 'Removed the template "ÉTUDE".\n' });
+
+    expect(await run(env, 'schedule', 'template', 'remove', 'deps')).toMatchObject({ code: 0 });
+    expect(await run(env, 'schedule', 'template', 'remove', 'Review')).toMatchObject({ code: 0 });
+    expect((await client.call('clockTemplate.list', {})).map((each) => each.name)).toEqual(['Slack watch']);
   });
 
   it('adds a clock that messages an agent beside its tile and one that starts fresh agents, lists them and removes them, as the user', async () => {

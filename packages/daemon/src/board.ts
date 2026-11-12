@@ -4,7 +4,7 @@ import type { AgentHost } from './agents.ts';
 import { checkPayloadPath } from './flow-payloads.ts';
 import type { FlowEdgeHost } from './flow-edges.ts';
 import { paneIds } from './pane-layout.ts';
-import { invalidParams, optionalBooleanParam, optionalCharacterParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
+import { invalidParams, optionalBooleanParam, optionalCharacterParam, optionalWorkCategoryParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
 import {
   BOARD_CALLER_METHODS,
   BOARD_ERROR,
@@ -30,7 +30,7 @@ type MemoryQueueMethod = `board.${'new' | 'list' | 'read' | 'change'}${'Memory' 
  */
 type BoardMethods = Pick<
   DaemonMethods,
-  Exclude<Extract<keyof DaemonMethods, `board.${string}`>, 'board.ask' | 'board.presentPlan' | 'board.showDoc' | 'board.openPullRequest' | 'board.newSteps' | 'board.readSteps' | 'board.updateSteps' | MemoryQueueMethod>
+  Exclude<Extract<keyof DaemonMethods, `board.${string}`>, 'board.ask' | 'board.presentPlan' | 'board.showDoc' | 'board.openPullRequest' | 'board.newSteps' | 'board.readSteps' | 'board.updateSteps' | MemoryQueueMethod | 'board.remind' | 'board.readTodos' | 'board.changeTodo'>
 >;
 
 /**
@@ -223,14 +223,13 @@ export function boardHandlers<Context extends BoardConnection>(
       const p = paramsObject(params);
       const who = caller(p, connection);
       if (who.kind !== 'agent') throw invalidParams('only an agent has a status; this is a shell tile');
-      return agents.setStatus(
-        who.tileId,
-        optionalStringParam(p, 'summary') ?? null,
-        p.progress === undefined ? null : (p.progress as number),
-        optionalBooleanParam(p, 'done') ?? false,
-        null,
-        optionalCharacterParam(p),
-      );
+      return agents.setStatus(who.tileId, {
+        summary: optionalStringParam(p, 'summary') ?? null,
+        progress: p.progress === undefined ? null : (p.progress as number),
+        done: optionalBooleanParam(p, 'done') ?? false,
+        character: optionalCharacterParam(p),
+        category: optionalWorkCategoryParam(p),
+      });
     },
     'board.record': (params, connection) => {
       const p = paramsObject(params);

@@ -15,6 +15,7 @@ import { FoldButton, FoldedZone } from './FoldedZone';
 import { ProjectWell } from './ProjectWell';
 import type { ClusterView, ShelfView } from './shelves';
 import { ClustersView, ShelvesView } from './ShelvesView';
+import { ZoneTodoBadge } from './items/ZoneTodoBadge';
 import {
   MIN_ZONE_SIZE,
   TRACKER_PROVIDERS,
@@ -415,6 +416,7 @@ function ClassicZone({
           {unbound && clone === null && <span className="zone-tab-dot" aria-hidden="true" />}
           <span className="zone-tab-kind">{clone !== null ? 'clone' : unbound ? 'group' : zone.kind}</span>
           <EditableName className="zone-tab-name" value={zone.name} renaming={renaming} label="Zone name" />
+          <ZoneTodoBadge zoneId={zone.id} />
           {clone !== null && (
             <span className="zone-clone" data-testid="zone-clone" role="status" aria-label={`Cloning ${clone.repo}`}>
               <span className="zone-clone-bar" aria-hidden="true">

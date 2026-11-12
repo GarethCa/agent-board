@@ -88,8 +88,27 @@ function agentDrawn(plain: CharacterPose, pose: AgentPose, agent: NeedsYouFacts)
 
 /** The pose drawn for `agent`: its own over `plain`, the pose the board would draw, where the board lets it. */
 export function poseShown(plain: CharacterPose, agent: NeedsYouFacts & Pick<Agent, 'character'>): CharacterPose {
-  const own = agent.character?.pose;
-  return own !== undefined && agentDrawn(plain, own, agent) ? DRAWN_AS[own] : plain;
+  return lookShown(plain, agent).pose;
+}
+
+/**
+ * How a character is drawn: its pose, and when that pose is the agent's own, the face and prop it gave and who set it.
+ * A board's pose keeps its own face and prop: the crossed eyes of a problem can't be changed.
+ */
+export interface CharacterLook {
+  pose: CharacterPose;
+  face?: AgentFace;
+  prop?: AgentProp;
+  /** Set only for the agent's own pose: null when the agent set it, or its orchestrator's name. */
+  setBy?: string | null;
+}
+
+/** The look drawn for `agent`: its own pose, face and prop over `plain`, the pose the board would draw, where the board lets it. */
+export function lookShown(plain: CharacterPose, agent: NeedsYouFacts & Pick<Agent, 'character'>): CharacterLook {
+  // `?? null`: an agent from an older daemon has no `character`, and draws the board's pose.
+  const own = agent.character ?? null;
+  if (own === null || !agentDrawn(plain, own.pose, agent)) return { pose: plain };
+  return { pose: DRAWN_AS[own.pose], ...(own.face === null ? {} : { face: own.face }), ...(own.prop === null ? {} : { prop: own.prop }), setBy: own.setBy };
 }
 
 /** The word for each pose an agent reads back (`shown`): its own poses' words, and the board's states by their names. */

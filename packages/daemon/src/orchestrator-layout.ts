@@ -639,10 +639,10 @@ function expandedOf(board: Board): ExpandedBox[] {
 const paddingOf = (zone: Pick<Zone, 'spacing'>): number => SPACING_GAPS[zone.spacing].padding;
 
 /**
- * Where something of `size` goes beside the agent's tile, in its zone (or loose with it): to its right, else the
- * nearest spot clear of everything else there. Undefined for an agent with no tile.
+ * Where something of `size` goes beside the agent's tile, in its zone (or loose with it): to its right (or `side`),
+ * else the nearest spot clear of everything else there. Undefined for an agent with no tile.
  */
-export async function spotBesideAgent(call: DaemonCall, sessionId: string, size: Size): Promise<BoardPlace | undefined> {
+export async function spotBesideAgent(call: DaemonCall, sessionId: string, size: Size, side: 'right' | 'below' = 'right'): Promise<BoardPlace | undefined> {
   const board = await readLayoutBoard(call);
   const tile = placedOf(board).find((each) => each.kind === 'agent' && each.id === sessionId);
   if (tile === undefined) return undefined;
@@ -653,7 +653,7 @@ export async function spotBesideAgent(call: DaemonCall, sessionId: string, size:
   if (zone === undefined) blocking.push(...board.zones);
   const region =
     zone === undefined ? { left: -Infinity, top: -Infinity, right: Infinity, bottom: Infinity } : { left: paddingOf(zone), top: paddingOf(zone), right: Infinity, bottom: Infinity };
-  const spot = nearestFreeSpot(besideSpot(tile.rect, 'right', size), blocking, region, size)!;
+  const spot = nearestFreeSpot(besideSpot(tile.rect, side, size), blocking, region, size)!;
   return { zoneId: tile.zoneId, x: spot.x, y: spot.y };
 }
 

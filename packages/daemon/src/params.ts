@@ -1,7 +1,8 @@
 // Checks for RPC params, which arrive untyped off the wire. Each throws an `invalidParams` error naming the bad field.
-import { MAX_EDGE_POINTS, MAX_NAME_LENGTH, RPC_ERROR, type EdgePoint } from './protocol.ts';
+import { MAX_EDGE_POINTS, MAX_NAME_LENGTH, RPC_ERROR, type EdgePoint, type WorkCategorySet } from './protocol.ts';
 import { RpcMethodError } from './rpc.ts';
 import { parseCharacter, type CharacterSet } from './character.ts';
+import { parseWorkCategorySet } from './work-category.ts';
 
 /** Largest terminal dimension accepted, in cells. */
 const MAX_DIMENSION = 1_000;
@@ -40,6 +41,15 @@ export function optionalCharacterParam(params: Record<string, unknown>): Charact
   if (params.character === undefined) return undefined;
   try {
     return parseCharacter(params.character);
+  } catch (error) {
+    throw invalidParams((error as Error).message);
+  }
+}
+
+/** An agent's work category set (`board.setStatus`), if given: `category`, with a `label` and a `waitingOn` if it gave them. */
+export function optionalWorkCategoryParam(params: Record<string, unknown>): WorkCategorySet | undefined {
+  try {
+    return parseWorkCategorySet({ category: params.category, label: params.label, waitingOn: params.waitingOn });
   } catch (error) {
     throw invalidParams((error as Error).message);
   }

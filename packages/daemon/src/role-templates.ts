@@ -94,8 +94,9 @@ const BUILT_IN: Partial<Record<AgentRole, string>> = {
 
 - Worktree: \`{{worktree}}\` (your current directory). Branch: \`{{branch}}\`.
 
-Read the issue and the repo's own instructions first. Work test-first, commit in small steps on \`{{branch}}\`, and
-write what you did, how to verify it and anything left over in \`.agent-board/handover.md\` before you finish.
+Read the issue, the repo's own instructions and what other agents left (\`agent-board memory ls\`, then \`memory read <memory>\`) first. Work test-first, commit in small steps on \`{{branch}}\`, and
+write what you did, how to verify it and anything left over in \`.agent-board/handover.md\` before you finish. Before you finish, also add what the
+next agent should know with \`agent-board memory add <memory> "key: value"\` (\`memory new\` first if there is none).
 Record each pull request you open with \`agent-board record pr <url>\`, and the handover with \`agent-board record doc
 .agent-board/handover.md\` (add \`--for orchestrator\` when an orchestrator started you).`,
   reviewer: `You are an adversarial reviewer for {{issue}}, review round {{round}}.
@@ -118,7 +119,7 @@ and record it with \`agent-board record doc .agent-board/review.md\`. Do not edi
 };
 
 /** The orchestrator role's template when neither the zone nor the app keeps one: what New agent offers as its task. */
-const ORCHESTRATOR_TEMPLATE = `Orchestrate this zone's open issues: start an agent for each one, start a reviewer on its branch when it is done, and merge on a green gate. Use \`agent-board help orchestrate\` for the commands. Record each pull request you open with \`agent-board record pr <url>\`, and ask each agent you start to record its own and its handover \`--for orchestrator\`. Keep going until the issues are done or you need the user.`;
+const ORCHESTRATOR_TEMPLATE = `Orchestrate this zone's open issues: start an agent for each one, start a reviewer on its branch when it is done, and merge on a green gate. When your crew has room, take the next item from the zone's queue with \`agent-board queue take <queue>\`, and \`queue done\` it once finished. Use \`agent-board help orchestrate\` for the commands. Record each pull request you open with \`agent-board record pr <url>\`, and ask each agent you start to record its own and its handover \`--for orchestrator\`. Keep going until the issues are done or you need the user.`;
 
 type RoleTemplateMethods = Pick<DaemonMethods, 'zone.roleTemplates' | 'zone.setRoleTemplate' | 'zone.resetRoleTemplate'>;
 type DefaultRoleMethods = Pick<DaemonMethods, 'orchestrator.roles' | 'orchestrator.setRole' | 'orchestrator.removeRole'>;

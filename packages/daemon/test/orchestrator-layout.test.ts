@@ -49,9 +49,9 @@ function markMadeBy(setup: Setup, id: string, sessionId: string) {
 type Setup = Awaited<ReturnType<typeof layoutDaemon>>;
 
 /** An agent in `zoneId` the user let orchestrate at `scope`, connected as itself: its board token presented. */
-async function lead(setup: Setup, zoneId: string, scope: 'zone' | 'repo' | 'board' = 'zone', name = 'lead') {
+async function lead(setup: Setup, zoneId: string, scope: 'zone' | 'repo' | 'board' = 'zone', name = 'lead', role?: Agent['role']) {
   const { daemon, client, recorder } = setup;
-  const agent = await client.call('agent.spawn', { zoneId, name, prompt: 'Print your board identity', orchestrate: scope, ...SIZE });
+  const agent = await client.call('agent.spawn', { zoneId, name, prompt: 'Print your board identity', orchestrate: scope, ...(role == null ? {} : { role, noTemplate: true }), ...SIZE });
   await client.call('session.attach', { sessionId: agent.sessionId });
   await recorder.waitForText(agent.sessionId, ':end\r\n');
   const token = /identity:(.*):end\r\n/.exec(recorder.screenText(agent.sessionId))![1]!;
@@ -1717,6 +1717,26 @@ describe('arranging a unit of work with a ticket and a pull request', () => {
   });
 });
 
+describe('arranging the agents an agent started', () => {
+  it("lanes the user's own implementer with the helper it started, apart from the arranging lead's own crew", async () => {
+    const setup = await layoutDaemon();
+    const fix = await lead(setup, setup.zone.id, 'zone', 'fix', 'implementer');
+    await fix.connection.call('orchestrator.spawn', { token: fix.token, name: 'helper', role: 'implementer' });
+    const me = await lead(setup, setup.zone.id, 'zone', 'arranger');
+    await me.connection.call('orchestrator.spawn', { token: me.token, name: 'menu', role: 'implementer', branch: 'acme-199-menu-scroll' });
+    await me.connection.call('orchestrator.arrange', { token: me.token });
+    const rects = await rectsIn(setup.client, setup.zone.id);
+    const [fixAt, helperAt, menuAt] = [rects.get('fix')!, rects.get('helper')!, rects.get('menu')!];
+    // One lane, the helper after the agent that started it; the lead's own worker in a lane of its own.
+    expect(helperAt.y).toBe(fixAt.y);
+    expect(helperAt.x).toBeGreaterThan(fixAt.x);
+    expect(menuAt.y).not.toBe(fixAt.y);
+    const notes = (await setup.client.call('item.list')).filter((item) => item.kind === 'agent-note').map((item) => String(item.data.text));
+    expect(notes.find((text) => text.includes('**fix**'))).toContain('**helper**');
+    expectNoOverlap(rects);
+  });
+});
+
 function overlapping(a: Zone, b: Zone): boolean {
   return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 }
@@ -1747,6 +1767,25 @@ describe('orchestrator.addClock and removeClock', () => {
     await expect(me.connection.call('orchestrator.removeClock', { token: me.token, id: users.id })).rejects.toMatchObject({ code: BOARD_ERROR.outOfScope });
     await me.connection.call('orchestrator.removeClock', { token: me.token, id: fresh.id });
     expect((await setup.client.call('item.list')).filter((item) => item.kind === 'clock').map((item) => item.id).sort()).toEqual([messaging.id, users.id].sort());
+  });
+
+  it("starts a clock from a template: one that starts its own agent goes in the caller's zone; one that messages an agent needs it named", async () => {
+    const setup = await layoutDaemon();
+    const me = await lead(setup, setup.zone.id);
+    await setup.client.call('clockTemplate.save', { name: 'Slack watch', data: { cron: '*/30 9-17 * * 1-5', prompt: 'Check Slack', hibernate: true, startsAgent: true } });
+    await setup.client.call('clockTemplate.save', { name: 'Report', data: { cron: '@hourly', prompt: 'Report in' } });
+
+    const watch = await me.connection.call('orchestrator.addClock', { token: me.token, data: {}, template: 'slack watch' });
+    expect(watch).toMatchObject({ kind: 'clock', zoneId: setup.zone.id, data: { cron: '*/30 9-17 * * 1-5', prompt: 'Check Slack', does: 'message', hibernate: true, startsAgent: true, agent: null } });
+    expect(await lastLine(setup.client)).toMatchObject({ action: 'add-clock', outcome: 'done', detail: expect.stringContaining(`starting its agent in ${setup.zone.name}`) });
+
+    await expect(me.connection.call('orchestrator.addClock', { token: me.token, data: {}, template: 'Report' })).rejects.toMatchObject({
+      code: RPC_ERROR.invalidParams,
+      message: 'give the agent the clock messages',
+    });
+    const worker = await me.connection.call('orchestrator.spawn', { token: me.token, name: 'worker' });
+    const report = await me.connection.call('orchestrator.addClock', { token: me.token, data: { agent: worker.sessionId }, template: 'Report' });
+    expect(report.data).toMatchObject({ cron: '@hourly', prompt: 'Report in', does: 'message', agent: worker.sessionId });
   });
 });
 

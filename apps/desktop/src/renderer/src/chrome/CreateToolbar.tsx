@@ -1,4 +1,4 @@
-import { Brain, ChevronDown, Hand, ListTodo, MousePointer2, PenLine, Plus, Shapes, SquareDashed, SquareDashedMousePointer, SquareTerminal, StickyNote, Ticket, Type } from 'lucide-react';
+import { Brain, ChevronDown, Hand, ListTodo, MousePointer2, PenLine, Plus, Shapes, SquareCheckBig, SquareDashed, SquareDashedMousePointer, SquareTerminal, StickyNote, Ticket, Type } from 'lucide-react';
 import { useRef, useState, type PointerEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { GHOST_LABELS, TOOL_DRAG_MIN, ToolGhost, type ArmedTool } from '../board/ToolOverlay';
@@ -28,6 +28,8 @@ export interface CreateToolbarProps {
   onMemory(): void;
   /** Puts a new queue in the middle of the board, ready to add jobs to. */
   onQueue(): void;
+  /** Puts a new to-do list of the user's in the middle of the board, ready to type its first line into. */
+  onTodo(): void;
   /** The size on screen of the ghost tile the Agent and Shell tools carry, at the board's zoom. */
   ghostSize: { width: number; height: number };
   /** The Agent or Shell tool dragged straight off the toolbar and let go at `at`, on the screen. */
@@ -45,7 +47,7 @@ export type DraggedTool = 'agent' | 'shell';
  * Under the Simplified design it holds fewer buttons: Select, Box select and Hand as in Classic, a Draw menu with the
  * drawing tools, and New agent, whose menu adds the Shell tool as a new terminal. Every tool keeps its key.
  */
-export function CreateToolbar({ mode, onMode, tool, onTool, onSticky, onSteps, onMemory, onQueue, ghostSize, onDropTool }: CreateToolbarProps) {
+export function CreateToolbar({ mode, onMode, tool, onTool, onSticky, onSteps, onMemory, onQueue, onTodo, ghostSize, onDropTool }: CreateToolbarProps) {
   const drag = useToolDrag(onDropTool);
   const simplified = useSimplified();
   // A click arms the tool, for a click on the board; a drag off the button puts the tile where it is let go.
@@ -81,7 +83,7 @@ export function CreateToolbar({ mode, onMode, tool, onTool, onSticky, onSteps, o
       <Island className="create-toolbar island-top-centre" role="toolbar" aria-label="Create">
         {pointerTools}
         <IslandSeparator />
-        <DrawMenu tool={tool} onTool={onTool} onSticky={onSticky} onSteps={onSteps} onMemory={onMemory} onQueue={onQueue} />
+        <DrawMenu tool={tool} onTool={onTool} onSticky={onSticky} onSteps={onSteps} onMemory={onMemory} onQueue={onQueue} onTodo={onTodo} />
         <IslandSeparator />
         <div className="create-toolbar-split">
           {newAgent}
@@ -108,8 +110,8 @@ export function CreateToolbar({ mode, onMode, tool, onTool, onSticky, onSteps, o
       <ShapeTool armed={tool === 'shape'} onTool={onTool} />
       <div className="create-toolbar-add">
         <ToolButton label="Zone" icon={<SquareDashedMousePointer />} shortcut={keyText('make.zone')} hint="Add a zone: drag out where it goes" pressed={tool === 'zone'} onClick={() => toggle('zone')} data-tour="add-zone" />
-        <Menu entries={keepEntries({ onSteps, onMemory, onQueue })} align="end">
-          <ToolButton label="More to add" className="create-toolbar-add-more" icon={<ChevronDown />} hint="Add steps, a memory or a queue" />
+        <Menu entries={keepEntries({ onSteps, onMemory, onQueue, onTodo })} align="end">
+          <ToolButton label="More to add" className="create-toolbar-add-more" icon={<ChevronDown />} hint="Add steps, a memory, a queue or a to-do list" />
         </Menu>
       </div>
       <IslandSeparator />
@@ -129,12 +131,13 @@ export function CreateToolbar({ mode, onMode, tool, onTool, onSticky, onSteps, o
   );
 }
 
-/** The cards that keep things for people and agents: steps, a memory and a queue, each with its key. In Classic's "More to add" menu and the Simplified design's Draw menu. */
-function keepEntries({ onSteps, onMemory, onQueue }: Pick<CreateToolbarProps, 'onSteps' | 'onMemory' | 'onQueue'>): MenuEntry[] {
+/** The cards that keep things for people and agents: steps, a memory, a queue and a to-do list, each with its key if it has one. In Classic's "More to add" menu and the Simplified design's Draw menu. */
+function keepEntries({ onSteps, onMemory, onQueue, onTodo }: Pick<CreateToolbarProps, 'onSteps' | 'onMemory' | 'onQueue' | 'onTodo'>): MenuEntry[] {
   return [
     { label: 'Steps', icon: <ListTodo />, shortcut: keyText('make.steps'), hint: 'Questions and to-dos, in order', onSelect: onSteps },
     { label: 'Memory', icon: <Brain />, shortcut: keyText('make.memory'), hint: 'Notes and decisions you and agents keep for each other', onSelect: onMemory },
     { label: 'Queue', icon: <Ticket />, shortcut: keyText('make.queue'), hint: 'Jobs in order, for agents to take one at a time', onSelect: onQueue },
+    { label: 'To-do list', icon: <SquareCheckBig />, hint: 'Things for you to do; agents add them with remind', onSelect: onTodo },
   ];
 }
 
@@ -146,7 +149,7 @@ const DRAW_TOOLS: ReadonlySet<ArmedTool> = new Set(['text', 'shape', 'zone']);
  * Shape, or pressing S, opens the shape picker under the button, as the Shape tool's own button does under Classic. A
  * pick arms its tool, even one already armed: a menu row is no toggle.
  */
-function DrawMenu({ tool, onTool, onSticky, onSteps, onMemory, onQueue }: Pick<CreateToolbarProps, 'tool' | 'onTool' | 'onSticky' | 'onSteps' | 'onMemory' | 'onQueue'>) {
+function DrawMenu({ tool, onTool, onSticky, onSteps, onMemory, onQueue, onTodo }: Pick<CreateToolbarProps, 'tool' | 'onTool' | 'onSticky' | 'onSteps' | 'onMemory' | 'onQueue' | 'onTodo'>) {
   const shapes = useShapePicker(tool === 'shape', onTool);
   const entries: MenuEntry[] = [
     { label: 'Sticky note', icon: <StickyNote />, shortcut: keyText('make.note'), onSelect: onSticky },
@@ -154,7 +157,7 @@ function DrawMenu({ tool, onTool, onSticky, onSteps, onMemory, onQueue }: Pick<C
     { label: 'Shape', icon: <Shapes />, shortcut: keyText('make.shape'), onSelect: () => onTool('shape') },
     { label: 'Zone', icon: <SquareDashedMousePointer />, shortcut: keyText('make.zone'), onSelect: () => onTool('zone') },
     'separator',
-    ...keepEntries({ onSteps, onMemory, onQueue }),
+    ...keepEntries({ onSteps, onMemory, onQueue, onTodo }),
   ];
   const pressed = tool !== undefined && DRAW_TOOLS.has(tool);
   return (

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { PaneLayout } from '@agent-board/daemon/pane-layout';
 import type { Agent, Shell } from '@agent-board/daemon/protocol';
 import type { Surface } from '@agent-board/daemon/window-layout';
-import { liveShellCount, localServersOf, OWN_TAB, pullRequestChoices, sessionChoices, shellsChipLabel, surfaceAgentIds, tabAtDigit, tabKey, tabLiveShells, windowShells, windowSurfaces, windowTabs, wordedTabLabel, type TabOwner } from './tabs';
+import { liveShellCount, localServersOf, OWN_TAB, pullRequestChoices, sessionChoices, shellsChipLabel, surfaceAgentIds, tabAtDigit, tabKey, tabLiveShells, todoChoice, windowShells, windowSurfaces, windowTabs, wordedTabLabel, type TabOwner } from './tabs';
 
 const agent = { sessionId: 'agent-1', harness: 'claude' } as Agent;
 const byAgent: TabOwner = { kind: 'agent', agent };
@@ -187,6 +187,22 @@ describe("a window's surfaces", () => {
     ]);
   });
 
+  it("shows an agent's to-do list as To do in its own window, after its agent elsewhere, and none once the agent has gone", () => {
+    const shown: Surface[] = [{ kind: 'todo', sessionId: agent.sessionId }, { kind: 'todo', sessionId: 'agent-2' }, { kind: 'todo', sessionId: 'gone' }];
+    expect(windowSurfaces(byAgent, [], shown, targets).map((each) => [each.key, each.label, each.kind])).toEqual([
+      ['own', 'claude', 'tab'],
+      [`todo:${agent.sessionId}`, 'To do', 'todo'],
+      ['todo:agent-2', 'To do · impl-auth', 'todo'],
+    ]);
+  });
+
+  it("offers its agent's to-do list until it is shown, and none in a tab window", () => {
+    expect(todoChoice(byAgent, [])).toEqual({ kind: 'todo', sessionId: agent.sessionId });
+    expect(todoChoice(byAgent, [{ kind: 'todo', sessionId: 'agent-2' }])).toEqual({ kind: 'todo', sessionId: agent.sessionId });
+    expect(todoChoice(byAgent, [{ kind: 'todo', sessionId: agent.sessionId }])).toBeUndefined();
+    expect(todoChoice({ kind: 'tabs', id: 'popped' }, [])).toBeUndefined();
+  });
+
   it('shows the web pages its layout holds among its pull requests, in their order, each named by its host', () => {
     const pr: Surface = { kind: 'pr', repo: 'acme/app', number: 41 };
     const web: Surface = { kind: 'web', id: 'w1', url: 'http://localhost:5173/app' };
@@ -282,9 +298,10 @@ describe('the agents a window renders every change of', () => {
       { kind: 'session', target: { kind: 'shell', id: 'tile' } },
       { kind: 'gate', sessionId: 'a' },
       { kind: 'doc', sessionId: 'b', path: '/x.md' },
+      { kind: 'todo', sessionId: 'c' },
       { kind: 'web', id: 'w', url: 'https://example.com' },
     ];
-    expect(surfaceAgentIds(owner, shown)).toEqual(['a', 'b', 'own']);
+    expect(surfaceAgentIds(owner, shown)).toEqual(['a', 'b', 'c', 'own']);
     expect(surfaceAgentIds(undefined, [])).toEqual([]);
   });
 });

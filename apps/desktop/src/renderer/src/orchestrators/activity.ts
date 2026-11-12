@@ -46,6 +46,8 @@ const VERBS: Record<OrchestratorAction, { done: string; tried: string; of?: stri
   'remove-role': { done: 'removed', tried: 'remove', of: 'the default role ', nothing: 'a default role' },
   'save-prefab': { done: 'saved', tried: 'save', of: 'the crew prefab ', nothing: 'a crew prefab' },
   'remove-prefab': { done: 'removed', tried: 'remove', of: 'the crew prefab ', nothing: 'a crew prefab' },
+  'save-clock-template': { done: 'saved', tried: 'save', of: 'the clock template ', nothing: 'a clock template' },
+  'remove-clock-template': { done: 'removed', tried: 'remove', of: 'the clock template ', nothing: 'a clock template' },
   'stop-crew': { done: 'stopped', tried: 'stop', of: 'the crew ', nothing: 'a crew' },
   'crew-round': { done: 'gave one more round to', tried: 'give one more round to', of: 'the crew ', nothing: 'a crew' },
   'set-status': { done: 'set the status of', tried: 'set the status of' },

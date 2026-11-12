@@ -17,6 +17,9 @@ function agent(sessionId: string, fields: Partial<Agent> = {}): Agent {
     reviews: null,
     reviewOf: null,
     role: null,
+    roleName: null,
+    master: false,
+    spawnedBy: null,
     issue: null,
     state: 'idle',
     endedAt: null,
@@ -142,6 +145,19 @@ describe('layoutShelves', () => {
       ['waiting', 1],
       ['done', 1],
     ]);
+  });
+
+  it('stacks the agents an implementer started with it, but never a lead\'s crew with the lead', () => {
+    const agents = [
+      ...crew().map((each) => (each.role === 'implementer' && each.sessionId !== 'impl-4' ? { ...each, spawnedBy: 'lead' } : each)),
+      agent('helper-4', { role: 'implementer', spawnedBy: 'impl-4', state: 'running', createdAt: at(7) }),
+      agent('rev-4', { role: 'reviewer', spawnedBy: 'impl-4', createdAt: at(8) }),
+    ];
+    const members = (pinned: Set<string>) => layoutShelves(input(agents, { pinned })).stacks.map((stack) => stack.members);
+    expect(members(new Set(['lead']))).toContainEqual(['impl-4', 'helper-4', 'rev-4']);
+    // Freed from the head row, the lead is a stack of its own: its crew stays in theirs.
+    expect(members(new Set())).toContainEqual(['lead']);
+    expect(members(new Set())).toContainEqual(['impl-1', 'rev-1']);
   });
 
   it('pins the zone\'s leads top-left in the head row, then its shells; a lead freed is a stack like any other', () => {

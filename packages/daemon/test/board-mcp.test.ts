@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { fakeHarnessEnv, McpClient } from '@agent-board/fake-harness';
 import { COMMAND_HELP, COMMAND_OPTIONS } from '../src/board-cli.ts';
-import { BOARD_MCP_INSTRUCTIONS, BOARD_MCP_TOOLS, ORCHESTRATOR_MCP_TOOLS } from '../src/board-mcp.ts';
+import { BOARD_MCP_INSTRUCTIONS, BOARD_MCP_TOOLS, ORCHESTRATOR_INSTRUCTIONS, ORCHESTRATOR_MCP_TOOLS } from '../src/board-mcp.ts';
 import type { Agent, AgentUpdatedEvent, DaemonEvent, Harness } from '../src/protocol.ts';
 import { connectTestClient, recordEvents, startTestDaemon, TEST_CLI_LAUNCHER, tempDataDir, tempRepo } from './helpers.ts';
 
@@ -131,6 +131,27 @@ describe('agent-board mcp over stdio', () => {
   });
 });
 
+describe("the board MCP server's instructions", () => {
+  // Claude defers the board's tools, so an agent reads only these instructions before it calls one: they name the moment.
+  it('tell every agent to read the memory before it starts and add to it before it finishes', () => {
+    expect(BOARD_MCP_INSTRUCTIONS).toMatch(/before you start[^.]*`memory_read`/i);
+    expect(BOARD_MCP_INSTRUCTIONS).toMatch(/before you finish or hand off[^.]*`memory_update`/i);
+  });
+
+  it('tell an orchestrator to take the next item from its queue when its crew has room, and finish it', () => {
+    expect(ORCHESTRATOR_INSTRUCTIONS).toMatch(/when your crew has room[^.]*`queue_update` take/i);
+    expect(ORCHESTRATOR_INSTRUCTIONS).toContain('done');
+  });
+
+  it('list the memories with memory_read before reading one, and name the moment in the memory tools too', () => {
+    expect(BOARD_MCP_INSTRUCTIONS).toMatch(/list memories with `memory_read`, then read/);
+    const description = (name: string) => BOARD_MCP_TOOLS.find((tool) => tool.name === name)!.description;
+    expect(description('memory_read')).toMatch(/^Read what other agents left before you start\./);
+    expect(description('memory_update')).toMatch(/^Change a memory:/);
+    expect(description('memory_update')).toContain('Add what the next agent should know before you finish.');
+  });
+});
+
 describe('the board MCP tools and the agent-board CLI', () => {
   /**
    * Each tool's CLI command, with the tool arguments that are positional there (no option) and the ones the CLI spells
@@ -141,7 +162,13 @@ describe('the board MCP tools and the agent-board CLI', () => {
     { tool: 'board', command: 'tree' },
     { tool: 'handoff', command: 'handoff', renamed: { handover_path: 'handover', json: 'data' } },
     // The tool's character, one object, is the CLI's --pose with its --face and --prop.
-    { tool: 'set_status', command: 'status', positional: ['summary'], renamed: { character: 'pose' }, options: ['progress', 'done', 'agent', 'pose'] },
+    {
+      tool: 'set_status',
+      command: 'status',
+      positional: ['summary'],
+      renamed: { character: 'pose', waiting_on: 'on' },
+      options: ['progress', 'done', 'agent', 'pose', 'category', 'label', 'on'],
+    },
     { tool: 'needs_you', command: 'needs-you', positional: ['reason'] },
     { tool: 'open_pr', command: 'open-pr' },
     // With plan, it is present_plan, which waits on the user longer than a shell command runs: the tool's alone.
@@ -204,9 +231,16 @@ describe('the board MCP tools and the agent-board CLI', () => {
     { tool: 'connect', command: 'connect', positional: ['from', 'to'], renamed: { from_label: 'from-label', to_label: 'to-label' } },
     { tool: 'edit_connector', command: 'connector', positional: ['connector'], renamed: { from_label: 'from-label', to_label: 'to-label' } },
     { tool: 'remove_connector', command: 'connector', positional: ['connector'], options: [] },
-    { tool: 'add_schedule', command: 'schedule', positional: ['cron'], renamed: { prompt: 'file', handoff_to: 'handoff-to' } },
+    { tool: 'add_schedule', command: 'schedule', positional: ['cron'], renamed: { prompt: 'file', handoff_to: 'handoff-to' }, options: ['file', 'fresh', 'handoff-to', 'harness', 'keep', 'model', 'result', 'role', 'template', 'to', 'zone'] },
+    // `schedule add --self`: self is the tool, not an option.
+    { tool: 'clock_add', command: 'schedule', positional: ['cron'], renamed: { prompt: 'file' }, options: ['after', 'file', 'template'] },
     { tool: 'list_schedules', command: 'schedule', options: [] },
+    { tool: 'save_clock_template', command: 'schedule', positional: ['name', 'cron'], renamed: { prompt: 'file' }, options: ['after', 'file', 'from', 'harness', 'keep', 'model', 'result', 'role'] },
+    { tool: 'list_clock_templates', command: 'schedule', options: [] },
+    { tool: 'remove_clock_template', command: 'schedule', positional: ['template'], options: [] },
     { tool: 'remove_schedule', command: 'schedule', positional: ['schedule'], options: [] },
+    // `schedule set` and `schedule stop`: stop is the subcommand, not an option.
+    { tool: 'clock_set', command: 'schedule', positional: ['schedule', 'stop'], options: ['after', 'why'] },
     { tool: 'steps_new', command: 'steps', renamed: { steps: 'file' }, options: ['title', 'file'] },
     { tool: 'steps_read', command: 'steps', positional: ['card'], options: ['mine'] },
     { tool: 'steps_update', command: 'steps', positional: ['card', 'action', 'step', 'answer'], renamed: { steps: 'file' }, options: ['file', 'undo', 'send'] },
@@ -216,12 +250,15 @@ describe('the board MCP tools and the agent-board CLI', () => {
       tool: 'memory_update',
       command: 'memory',
       positional: ['memory', 'action', 'entry', 'text', 'version'],
-      renamed: { no_key: 'no-key', pinned: 'pin' },
-      options: ['key', 'no-key', 'file', 'pin'],
+      renamed: { no_key: 'no-key', pinned: 'pin', document: 'doc' },
+      options: ['key', 'no-key', 'file', 'doc', 'pin'],
     },
     { tool: 'queue_new', command: 'queue', positional: ['title'], renamed: { for_user: 'for-user' }, options: ['for-user'] },
     { tool: 'queue_read', command: 'queue', positional: ['queue', 'job'], options: [] },
     { tool: 'queue_update', command: 'queue', positional: ['queue', 'action', 'job', 'text', 'version', 'to', 'on'], options: ['kind', 'front', 'link', 'most'] },
+    { tool: 'remind', command: 'remind', positional: ['text'], options: [] },
+    { tool: 'remind_read', command: 'remind', options: ['mine'] },
+    { tool: 'remind_update', command: 'remind', positional: ['action', 'line'], options: [] },
     { tool: 'usage', command: 'usage', options: [] },
     { tool: 'roles', command: 'roles', options: [] },
     { tool: 'prefabs', command: 'prefab', positional: ['name'], options: [] },

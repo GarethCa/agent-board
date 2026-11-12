@@ -499,7 +499,7 @@ export interface ZoneLayout {
  * never one of the user's stickies. A `clock` is a schedule (`ClockData`). A `crew` is a running crew's card (`CrewCardData`),
  * which the board keeps.
  */
-export const BOARD_ITEM_KINDS = ['sticky', 'text', 'shape', 'image', 'link', 'issue', 'agent-note', 'clock', 'document', 'plan', 'steps', 'memory', 'queue', 'crew'] as const;
+export const BOARD_ITEM_KINDS = ['sticky', 'text', 'shape', 'image', 'link', 'issue', 'agent-note', 'clock', 'document', 'plan', 'steps', 'memory', 'queue', 'crew', 'todo'] as const;
 export type BoardItemKind = (typeof BOARD_ITEM_KINDS)[number];
 
 /**
@@ -1802,6 +1802,11 @@ export interface Agent {
   /** The pose it set for its character, while it lasts; null for none, when the board draws its own. */
   character: AgentCharacter | null;
   /**
+   * The work category it set for itself (`board.setStatus` with `category`, ADR-0024), or its orchestrator set for it:
+   * what kind of wait its work is in. Null until one is set, and once cleared, when the board guesses (`workCategory`).
+   */
+  workCategory: AgentWorkCategory | null;
+  /**
    * When it said its work is finished: it handed off (`board.handoff`) or set its status as done
    * (`board.setStatus` with `done`). A turn ending is not finishing: an agent may end turns while its background work
    * runs. Null until then, and again from its next prompt.
@@ -1988,6 +1993,12 @@ export interface Agent {
    * came up). Null otherwise.
    */
   startup: AgentStartup | null;
+  /**
+   * The live agent stopped showing `starting` before its session sent any hook (hooks off, not installed, or unable to
+   * reach the daemon), and none has come since: the board can't follow its turns, so its state, needs-you and hand-offs
+   * don't work. Its tile says so. Cleared by its first hook.
+   */
+  hooksSilent: boolean;
 }
 
 /** Something sent to an agent before its session was up and never typed (`Agent.undelivered`). */
@@ -2106,6 +2117,8 @@ export interface AgentSchedule {
   nextRunAt: string | null;
   /** The last time it fired, or null if it hasn't yet. */
   lastRun: ScheduleRun | null;
+  /** Whether the clock pauses the agent once each run's turn ends (`ClockData.hibernate`), until its next run wakes it. */
+  hibernates: boolean;
 }
 
 /** A schedule as the user sets it. */
@@ -2137,6 +2150,25 @@ export interface ScheduleRun {
 /** What a clock does when it fires: messages the agent it is joined to, or starts a fresh agent for the run. */
 export const CLOCK_ACTIONS = ['message', 'fresh'] as const;
 export type ClockAction = (typeof CLOCK_ACTIONS)[number];
+
+/**
+ * What a clock does with its agent once a run's turn has ended: `hibernate` pauses it (its conversation kept, so the
+ * next run carries on from what it has seen), `close` gives every run a fresh agent and closes it (a `fresh` clock),
+ * and `idle` leaves it at its prompt (a `message` clock that doesn't hibernate).
+ */
+export const CLOCK_MODES = ['hibernate', 'close', 'idle'] as const;
+export type ClockMode = (typeof CLOCK_MODES)[number];
+
+/** A clock's mode, from what it does and whether it hibernates its agent: a clock made before modes doesn't. */
+export function clockMode(data: Pick<ClockData, 'does' | 'hibernate'>): ClockMode {
+  if (data.does === 'fresh') return 'close';
+  return data.hibernate === true ? 'hibernate' : 'idle';
+}
+
+/** The fields of a clock's data that set `mode`. */
+export function withClockMode(mode: ClockMode): Pick<ClockData, 'does' | 'hibernate'> {
+  return { does: mode === 'close' ? 'fresh' : 'message', hibernate: mode === 'hibernate' };
+}
 
 /**
  * Where a fresh agent's result goes: the clock's run history alone, the history and an agent note where its tile was,
@@ -2178,6 +2210,11 @@ export interface ClockData {
   does: ClockAction;
   /** The agent it messages (`message`); null while unjoined. */
   agent: string | null;
+  /**
+   * Whether a `message` clock pauses its agent once each run's turn has ended (`clockMode` `hibernate`). Missing on a
+   * clock made before it, which doesn't.
+   */
+  hibernate?: boolean;
   /** What it sends the agent, or a fresh agent's task. */
   prompt: string;
   fresh: ClockFreshAgent;
@@ -2186,6 +2223,84 @@ export interface ClockData {
   handoffTo: string | null;
   /** Whether it is drawn folded to a pill. */
   folded: boolean;
+  /**
+   * Whether an unjoined `message` clock starts its own agent on its first fire, as a fresh one starts (`fresh`'s
+   * harness, model and role, under the clock, named from its task), then joins it. Missing on a clock made before it.
+   */
+  startsAgent?: boolean;
+  /** The agent that last set its mode (`clock.self`), and why; the user setting the mode clears it. */
+  modeSetBy?: ClockMark | null;
+  /** The agent that turned it off (`clock.self`), and why; the user turning it on again clears it. */
+  stoppedBy?: ClockMark | null;
+}
+
+/** An agent's change to its own clock, as the clock's data keeps it. */
+export interface ClockMark {
+  sessionId: string;
+  /** The agent's name, as it was. */
+  name: string;
+  why: string;
+  at: string;
+}
+
+/** The longest reason an agent gives for changing its own clock. */
+export const MAX_CLOCK_WHY = 200;
+
+/** One change an agent made to its own clock (`clock.self`), newest first in its status. */
+export interface ClockChange {
+  id: number;
+  /** The run it was made in, if one of the clock's runs was going for that agent. */
+  runId: number | null;
+  at: string;
+  sessionId: string;
+  agentName: string;
+  /** `mode`: set to `value` (a `ClockMode`); `stop`: turned off. */
+  change: 'mode' | 'stop';
+  value: string | null;
+  why: string;
+}
+
+/** What `clock.self` changes on the caller's own clock: its mode, or turns it off. */
+export interface ClockSelfParams {
+  token?: string;
+  /** The clock, for an agent with more than one. */
+  clock?: string;
+  after?: ClockMode;
+  stop?: boolean;
+  why: string;
+}
+
+/**
+ * The part of a clock a saved template keeps, to start new clocks from: what it does and when, never which agent it
+ * messages, where a hand-off goes, whether it is on, or how it is drawn.
+ */
+export type ClockTemplateData = Pick<ClockData, 'cron' | 'prompt' | 'does' | 'fresh' | 'result'> & Pick<Partial<ClockData>, 'hibernate' | 'startsAgent'>;
+/** The data keys a template keeps. */
+export const CLOCK_TEMPLATE_KEYS = ['cron', 'prompt', 'does', 'hibernate', 'startsAgent', 'fresh', 'result'] as const satisfies readonly (keyof ClockTemplateData)[];
+/** The most characters of a template's name. */
+export const MAX_CLOCK_TEMPLATE_NAME = 60;
+/** The most templates one agent saves, and the most there are in all. */
+export const MAX_CLOCK_TEMPLATES_PER_AGENT = 50;
+export const MAX_CLOCK_TEMPLATES = 200;
+
+/** A clock saved under a name to start new ones from (ADR-0017), kept by the daemon for every zone. */
+export interface ClockTemplate {
+  id: string;
+  /** Unique, whatever its case. */
+  name: string;
+  data: ClockTemplateData;
+  /** The agent that saved it, by session id; null for the user's. Only it, or the user, removes it. */
+  madeBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ClockTemplateSaveParams {
+  token?: string;
+  name: string;
+  /** Its data, filled in from a new clock's; or `fromClock` to save that clock's. */
+  data?: Partial<ClockTemplateData>;
+  fromClock?: string;
 }
 
 /** A clock's size as a card, and folded to a pill. */
@@ -2202,10 +2317,17 @@ export interface ClockRun extends ScheduleRun {
   sessionId: string | null;
   /** That agent's name, as it was: a fresh one is gone once its run is over. */
   agentName: string | null;
-  /** When a fresh agent's run finished or failed. */
+  /** When the run finished or failed: a fresh agent's, or one that waits for the turn it sent (`awaitsTurn`). */
   finishedAt: string | null;
-  /** A fresh agent's final message. */
+  /** The final message of the run's turn: a fresh agent's, or the turn a message started. */
   result: string | null;
+  /**
+   * Whether the run's message started a turn that the run waits to end, as a fresh agent's run does: it is going on while
+   * `finishedAt` is null. Its outcome stays `started`, so an older daemon, which settles only `running` runs, leaves it.
+   */
+  awaitsTurn: boolean;
+  /** The reason the run's agent flagged you for a look (`needs_you`) while the run went on; null for a quiet run. */
+  flag: string | null;
 }
 
 /** The skips a clock's latest runs are, one after another since its last run that was not a skip: how many, since when, and why. */
@@ -2238,6 +2360,8 @@ export interface ClockStatus {
   nextRunAt: string | null;
   runs: ClockRun[];
   skips: ClockSkips | null;
+  /** The changes its agents made to it (`clock.self`), newest first, at most `CLOCK_RUNS_KEPT`. */
+  changes: ClockChange[];
 }
 
 /** Where `clock.add` puts a new clock: beside an agent's tile (on its left, joined to it), or at a place. */
@@ -2662,7 +2786,7 @@ export const MAX_JOB_TEXT = 16_000;
 export const MAX_JOB_LINK = 500;
 /** How many of a row's past versions are kept: its value after each change, newest first. */
 export const MAX_HISTORY_VERSIONS = 20;
-/** Days an entry goes untouched before it reads as old. */
+/** Days an entry goes untouched (neither changed nor confirmed) before it reads as stale. */
 export const MEMORY_OLD_DAYS = 30;
 
 /**
@@ -2733,6 +2857,8 @@ export interface MemoryEntry {
   changedBy: StepsWho;
   createdAt: string;
   updatedAt: string;
+  /** Set on a document an agent's read of its memory lists by its title alone: its size, its `text` then left out (''). */
+  listed?: { bytes: number; lines: number };
 }
 
 /** The kinds of row a queue holds: a job, which is taken and done, and a plain note, which is neither. */
@@ -2776,17 +2902,28 @@ export interface TakenJob {
 /** What last happened to a job or note, as its history records it. */
 export type QueueJobChange = 'add' | 'edit' | 'take' | 'drop' | 'done' | 'restore';
 
+/** How many agents read an entry, or any of a memory's, and who last did. */
+export interface MemoryReaders {
+  count: number;
+  last: { name: string; at: string } | null;
+}
+
 /** A memory, or a queue, with what it holds. */
 export interface MemoryView {
   item: BoardItem;
   entries: MemoryEntry[];
+  /**
+   * Who read them: an agent reads an entry when its whole text comes back to it (a fact or note as a memory is read, a
+   * document only when named). `entries` holds those of the entries given, by id.
+   */
+  readers: { memory: MemoryReaders; entries: Record<string, MemoryReaders> };
 }
 export interface QueueView {
   item: BoardItem;
   jobs: QueueJob[];
 }
 
-/** One version of an entry or a job: its value after a change (null once removed), by whom and when. */
+/** One version of an entry or a job: its value after a change (null once removed, or for a confirm), by whom and when. */
 export interface HistoryVersion<Row> {
   /** What a restore names it by; higher is newer. */
   version: number;
@@ -2798,13 +2935,16 @@ export interface HistoryVersion<Row> {
 
 /**
  * A change to a memory. `entry` names an entry by its key, or by its id or the start of it. `add` with a key that is
- * there already replaces its value; `restore` puts back one of its versions, after a remove too.
+ * there already replaces its value; `restore` puts back one of its versions, after a remove too. `confirm` says an entry
+ * is still true: it is touched, so it no longer reads as stale, and its history gets a `confirm` row with no value, which
+ * no restore takes and no trim counts.
  */
 export type MemoryChange =
   | { action: 'add'; key?: string | null; text: string; file?: boolean }
   | { action: 'edit'; entry: string; text?: string; key?: string | null; pinned?: boolean }
   | { action: 'remove'; entry: string }
-  | { action: 'restore'; entry: string; version: number };
+  | { action: 'restore'; entry: string; version: number }
+  | { action: 'confirm'; entry: string };
 
 /**
  * A change to a queue. `job` names a job or note by its id or the start of it. `take` without `job` takes the first
@@ -2820,6 +2960,57 @@ export type QueueChange =
   | { action: 'done'; job: string }
   | { action: 'restore'; job: string; version: number }
   | { action: 'move'; job: string; before: string | null };
+
+/** A new to-do list's size: its head, three lines and its foot. */
+export const TODO_CARD_SIZE = { width: 300, height: 196 };
+/** A to-do list folded to its pill: its tick and how many are left. */
+export const TODO_PILL_SIZE = { width: 184, height: 36 };
+/** The most lines a to-do list holds, ticked ones too. */
+export const MAX_TODO_LINES = 100;
+/** The longest a to-do line is, in characters. */
+export const MAX_TODO_TEXT = 500;
+
+/**
+ * One line of a to-do list: something for the user to do. Ticking it changes nothing else and tells no one: who ticked
+ * it and when is kept, for its writer to read if it asks.
+ */
+export interface TodoLine {
+  /** Stays as lines are added, moved and ticked. */
+  id: string;
+  text: string;
+  /** Who wrote it: the list's agent, or the user. */
+  by: StepsWho;
+  at: string;
+  done: { by: StepsWho; at: string } | null;
+}
+
+/**
+ * A to-do list's `data`: reminders for the user. An agent's list (`owner` the agent) is made by its first `remind`,
+ * under its tile, and stays after the agent has gone; the user's own lists are the user's. Its scope is a steps card's.
+ */
+export interface TodoData {
+  owner: StepsWho;
+  lines: TodoLine[];
+  /** Folded to its pill. */
+  folded?: boolean;
+}
+
+/**
+ * A change to a to-do list. `line` names a line by its id. `add` puts its text after the line `after`, or last;
+ * `move` puts a line at place `to` (from 0); `clear` takes the ticked lines off; `restore` puts a line taken off back at
+ * place `at`, as it was (an undo).
+ */
+export type TodoChange =
+  | { action: 'add'; text: string; after?: string | null }
+  | { action: 'edit'; line: string; text: string }
+  | { action: 'tick'; line: string; done: boolean }
+  | { action: 'remove'; line: string }
+  | { action: 'clear' }
+  | { action: 'move'; line: string; to: number }
+  | { action: 'restore'; line: TodoLine; at: number };
+
+/** A change an agent makes to a line it wrote on its own list: ticks it, unticks it, or takes it off. */
+export type AgentTodoChange = { action: 'tick'; line: string; done: boolean } | { action: 'remove'; line: string };
 
 /**
  * An agent spawned by an agent inside the same harness process (e.g. Claude's Agent tool), drawn as a character on
@@ -3162,6 +3353,51 @@ export interface AgentStatus {
 }
 
 /**
+ * The seven work categories (ADR-0024), ordered by who acts next: the user, then what is stuck, then other people,
+ * then the agent itself. `work-category.ts` groups them, names them and guesses one for an agent that set none.
+ */
+export const WORK_CATEGORIES = ['needs-help', 'ready-for-review', 'blocked', 'waiting-on-others', 'in-review', 'working', 'done'] as const;
+export type WorkCategory = (typeof WORK_CATEGORIES)[number];
+
+/** The most characters an agent's own label for its category may have ("With Legal"). */
+export const MAX_WORK_LABEL_LENGTH = 40;
+
+/** The most characters who an agent waits on, or its reference, may have. */
+export const MAX_WAITING_ON_LENGTH = 80;
+
+/** Who an agent's work waits on, and a reference of theirs if it gave one (a ticket, a PR): "Northwind Pay support", "#48213". */
+export interface WaitingOn {
+  who: string;
+  ref: string | null;
+}
+
+/** A work category as set (`Agent.workCategory`): the category, the agent's own label for it, who it waits on, and when. */
+export interface AgentWorkCategory {
+  category: WorkCategory;
+  /** Shown in place of the category's name; its colour and order stay the category's. Null for the name. */
+  label: string | null;
+  /** Only for the two categories that wait on others; null otherwise, or when it named no one. */
+  waitingOn: WaitingOn | null;
+  setAt: string;
+  /** The orchestrator's name when it, not the agent, set it; null when the agent did. */
+  setBy: string | null;
+}
+
+/** A work category as `board.setStatus` and `orchestrator.setStatus` take it: `none` clears it. */
+export interface WorkCategoryParams {
+  category?: WorkCategory | 'none';
+  label?: string;
+  waitingOn?: { who: string; ref?: string };
+}
+
+/** A category to set (`board.setStatus`, `orchestrator.setStatus`): one of the seven, or null to clear it. */
+export interface WorkCategorySet {
+  category: WorkCategory | null;
+  label?: string;
+  waitingOn?: { who: string; ref?: string };
+}
+
+/**
  * The pose an agent set for its character (`board.setStatus` with `character`), with its face and prop if it
  * gave them. A working pose goes at its turn's end or `CHARACTER_EXPIRY_MS` after its set; a resting one when its next
  * turn starts (`character.ts`).
@@ -3326,6 +3562,8 @@ export const ORCHESTRATOR_ACTIONS = [
   'remove-role',
   'save-prefab',
   'remove-prefab',
+  'save-clock-template',
+  'remove-clock-template',
   'stop-crew',
   'crew-round',
   'set-status',
@@ -4771,7 +5009,7 @@ export interface DaemonMethods {
    * `board.setStatus` does, saying who set it. The latest of the two wins. An agent outside its crew, an orchestrator
    * of wider scope or the caller itself is refused with `outOfScope`.
    */
-  'orchestrator.setStatus': { params: { token?: string; sessionId: string; summary?: string; progress?: number; character?: CharacterSet }; result: Agent };
+  'orchestrator.setStatus': { params: { token?: string; sessionId: string; summary?: string; progress?: number; character?: CharacterSet } & WorkCategoryParams; result: Agent };
   /**
    * Waits until every agent (or, with `any`, one) is in one of `states` (`SETTLED_STATES` by default), or `timeoutMs`
    * passes (`DEFAULT_ORCHESTRATOR_WAIT_MS`, at most `MAX_ORCHESTRATOR_WAIT_MS`). An agent sent a message or started
@@ -4948,7 +5186,7 @@ export interface DaemonMethods {
    * scope goes on that agent's tile's left; one that starts a fresh agent goes in a zone in its scope (`zoneId`, its own
    * by default). A hand-off's agent must be in its scope too.
    */
-  'orchestrator.addClock': { params: { token?: string; data: Partial<ClockData>; zoneId?: string }; result: BoardItem };
+  'orchestrator.addClock': { params: { token?: string; data: Partial<ClockData>; zoneId?: string; template?: string }; result: BoardItem };
   /** Deletes a clock it (or its crew) made; a user-side caller any. */
   'orchestrator.removeClock': { params: { token?: string; id: string }; result: null };
   /** The app's default roles, by name. */
@@ -5018,9 +5256,11 @@ export interface DaemonMethods {
    * `invalidParams` for a shell's, a blank summary or a bad progress. Makes the connection the session's, as
    * `board.identify` does. With `done`, it also says its work is finished (`Agent.workFinishedAt`). With `character`, it
    * sets the pose its character strikes (`Agent.character`), refusing a word outside its list with the list.
-   * `summary` may be left out for a pose alone, but not both.
+   * With `category`, it sets its work category whole (`Agent.workCategory`, ADR-0024), with a `label` and, for the two
+   * that wait on others, a `waitingOn`; `none` clears it. `done` with no category is Done. Any of the three may be left
+   * out, but not all.
    */
-  'board.setStatus': { params: { token: string; summary?: string; progress?: number; done?: boolean; character?: CharacterSet }; result: Agent };
+  'board.setStatus': { params: { token: string; summary?: string; progress?: number; done?: boolean; character?: CharacterSet } & WorkCategoryParams; result: Agent };
   /**
    * Records an entry on the sidebar of the agent holding `token` (`Agent.records`): a pull request by its GitHub URL,
    * with its title if known, or a hand-off doc by its path (relative to where the session started, or absolute), which
@@ -5207,6 +5447,15 @@ export interface DaemonMethods {
   'board.drainQueue': { params: { token: string; id: string; on: boolean; most?: number }; result: BoardItem };
   /** The versions of the queue's job `job`, newest first. */
   'board.queueHistory': { params: { token: string; id: string; job: string }; result: HistoryVersion<QueueJob>[] };
+  /**
+   * Adds lines for the user to the caller's to-do list, one a text, making the list under its tile if it has none.
+   * Nothing waits on them and no one is told when they are ticked.
+   */
+  'board.remind': { params: { token: string; text: string[] }; result: { item: BoardItem; added: TodoLine[] } };
+  /** The to-do lists the caller reads (in its zone, zones its scope reaches, and loose ones); with `mine`, only its own. */
+  'board.readTodos': { params: { token: string; mine?: boolean }; result: BoardItem[] };
+  /** The caller ticks, unticks or takes off a line it wrote on its own list. */
+  'board.changeTodo': { params: { token: string; change: AgentTodoChange }; result: BoardItem };
   /** The memory `id` with its entries, for the user, as `board.readMemory` has them. */
   'memory.read': { params: { id: string; search?: string; entry?: string }; result: MemoryView };
   /** The user changes the memory `id`, as `board.changeMemory` does. */
@@ -5219,6 +5468,8 @@ export interface DaemonMethods {
   'queue.change': { params: { id: string; change: QueueChange }; result: { item: BoardItem; job: QueueJob | null } };
   /** The versions of a job, for the user. */
   'queue.history': { params: { id: string; job: string }; result: HistoryVersion<QueueJob>[] };
+  /** The user changes the to-do list `id`: any line on it, whoever wrote it. */
+  'todo.change': { params: { id: string; change: TodoChange }; result: BoardItem };
   /**
    * The user hands the queue `id`'s waiting job `job` to the idle agent `sessionId` in its scope: the job is taken for
    * that agent, and `text` (what the user chose to send, nothing added) is typed at its prompt as the user's message.
@@ -5299,10 +5550,31 @@ export interface DaemonMethods {
   /** Every clock's status. */
   'clock.list': { params: undefined; result: ClockStatus[] };
   /**
-   * Adds a clock (`ClockData`, filled in from defaults) at `place`: beside an agent's tile, on its left in its zone, or
-   * where asked. Fails with `invalidParams` for an unknown agent or zone, or data a clock can't have.
+   * Adds a clock (`ClockData`, filled in from `template`, by id or name, then from defaults) at `place`: beside an agent's
+   * tile, on its left in its zone, or where asked. Fails with `invalidParams` for an unknown agent, zone or template, or
+   * data a clock can't have.
    */
-  'clock.add': { params: { data: Partial<ClockData>; place: ClockPlace }; result: BoardItem };
+  'clock.add': { params: { data: Partial<ClockData>; place: ClockPlace; template?: string }; result: BoardItem };
+  /**
+   * The caller changes its own clock: the one that messages it, or whose run started it. `result` says what it does
+   * now. Fails with `invalidParams` for a caller with no clock, or more than one and none named, and for a clock that
+   * isn't its own.
+   */
+  'clock.self': { params: ClockSelfParams; result: { clock: BoardItem; said: string } };
+  /**
+   * The caller adds a clock of its own: one that messages it with `prompt` on `cron`, beside its tile, hibernating it
+   * after each run or leaving it idle. Fails with `invalidParams` for a cron or prompt a clock can't have.
+   */
+  'clock.addSelf': { params: { token?: string; cron?: string; prompt?: string; after?: 'hibernate' | 'idle'; template?: string }; result: BoardItem };
+  /** Every saved clock template, by name. */
+  'clockTemplate.list': { params: { token?: string } | undefined; result: ClockTemplate[] };
+  /**
+   * Saves a template under `name`, replacing the one of that name (whatever its case). An agent saves as itself, and
+   * can't replace another's. Fails with `invalidParams` for data a clock can't have, or an unknown `fromClock`.
+   */
+  'clockTemplate.save': { params: ClockTemplateSaveParams; result: ClockTemplate };
+  /** Removes a template, by id or name: an agent only one it saved. */
+  'clockTemplate.remove': { params: { token?: string; template: string }; result: null };
   /** Every connector. */
   'connector.list': { params: undefined; result: Connector[] };
   /** Fails with `invalidParams` for an end that doesn't exist, both ends the same, or a value that isn't allowed. */
@@ -5543,6 +5815,13 @@ export const BOARD_CALLER_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMet
   'flowEdge.list',
   'item.list',
   'clock.list',
+  // Only its own clock, which messages it or started it: its mode, or off (ADR-0017).
+  'clock.self',
+  'clock.addSelf',
+  // Templates are shared by every zone; an agent removes only those it saved.
+  'clockTemplate.list',
+  'clockTemplate.save',
+  'clockTemplate.remove',
   'connector.list',
   'board.identify',
   'board.setStatus',
@@ -5567,6 +5846,9 @@ export const BOARD_CALLER_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMet
   'board.readQueue',
   'board.changeQueue',
   'board.queueHistory',
+  'board.remind',
+  'board.readTodos',
+  'board.changeTodo',
   'board.openPullRequest',
   'orchestrator.activity',
   'usage.get',
@@ -5821,6 +6103,18 @@ export interface ClockUpdatedEvent {
   status: ClockStatus;
 }
 
+/** Sent to every client when a clock template is saved, new or replaced: only that one. */
+export interface ClockTemplateUpdatedEvent {
+  type: 'clockTemplate.updated';
+  template: ClockTemplate;
+}
+
+/** Sent to every client when a clock template is removed. */
+export interface ClockTemplateRemovedEvent {
+  type: 'clockTemplate.removed';
+  id: string;
+}
+
 
 /** Sent to every client when a connector is created or changed. */
 export interface ConnectorUpdatedEvent {
@@ -5965,6 +6259,8 @@ export type DaemonEvent =
   | ItemUpdatedEvent
   | ItemRemovedEvent
   | ClockUpdatedEvent
+  | ClockTemplateUpdatedEvent
+  | ClockTemplateRemovedEvent
   | ConnectorUpdatedEvent
   | ConnectorRemovedEvent
   | FlowEdgeUpdatedEvent

@@ -130,6 +130,12 @@ describe('restoredData', () => {
     expect(restoredData(item({ kind: 'steps', data: { title: 'Release', steps: [] } }))).toEqual({ collapsed: false });
   });
 
+  it('puts back only a to-do list’s fold: its lines and their ticks are the daemon’s, newer than any undo', () => {
+    const list = item({ kind: 'todo', data: { owner: { kind: 'user' }, lines: [{ id: 't1', text: 'Restart the app' }], folded: true } });
+    expect(restoredData(list)).toEqual({ folded: true });
+    expect(restoredData(item({ kind: 'todo', data: { owner: { kind: 'user' }, lines: [] } }))).toEqual({ folded: false });
+  });
+
   it('names a crew card’s crew and puts back its tiles alone: what it shows is the daemon’s, from the crew', () => {
     const card = item({ kind: 'crew', data: { crewId: 'c1', title: 'Add a footer', tiles: true, crew: { stopped: 'stopped' } } });
     expect(restoredData(card)).toEqual({ crewId: 'c1', tiles: true });

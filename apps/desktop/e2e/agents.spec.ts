@@ -132,7 +132,10 @@ test("a Claude agent whose session never says it is up offers its task on its ti
 
     await untyped.getByRole('button', { name: 'Send' }).click();
     await expect(untyped).toBeHidden();
-    await tile(window).dblclick();
+    // Its task typed, the tile says the board hears no hooks from it, and Open shows its terminal.
+    const silent = tile(window).getByTestId('tile-hooks-silent');
+    await expect(silent).toContainText("No hooks from this session: the board can't follow its turns");
+    await silent.getByTestId('hooks-silent-open').click();
     await expect(screen(window)).toContainText('> Pick a database', { timeout: TURN_MS });
   } finally {
     await app.close();

@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import { ipcMain, net, protocol } from 'electron';
 import { pathToFileURL } from 'node:url';
 import type { DaemonLink } from '@agent-board/daemon/client';
-import { IMAGE_EXTENSIONS, type ClockData, type ClockPlace, type CreateItemParams, type MemoryChange, type QueueChange, type UpdateItemParams } from '@agent-board/daemon/protocol';
+import { IMAGE_EXTENSIONS, type ClockData, type ClockPlace, type CreateItemParams, type MemoryChange, type QueueChange, type TodoChange, type UpdateItemParams } from '@agent-board/daemon/protocol';
 import { ITEM_IPC } from '../preload/api';
 import { IMAGE_SCHEME } from '../shared/image-url';
 import { forwardEvents } from './broadcast';
@@ -29,6 +29,7 @@ export function registerItemIpc(daemon: DaemonLink, dataDir: string): void {
   passthrough(daemon, ITEM_IPC.queueHistory, 'queue.history', (id: string, job: string) => ({ id, job }));
   passthrough(daemon, ITEM_IPC.handJob, 'queue.hand', (id: string, job: string, sessionId: string, text: string) => ({ id, job, sessionId, text }));
   passthrough(daemon, ITEM_IPC.takenJobs, 'queue.taken');
+  passthrough(daemon, ITEM_IPC.changeTodo, 'todo.change', (id: string, change: TodoChange) => ({ id, change }));
 }
 
 const IMAGE_FILE = new RegExp(`^[0-9a-f]{64}\\.(${IMAGE_EXTENSIONS.join('|')})$`);

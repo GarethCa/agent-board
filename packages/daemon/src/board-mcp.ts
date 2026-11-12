@@ -1,9 +1,10 @@
 // The board as an MCP server (ADR-0010): a few tools over the same board-ops the CLI uses, and instructions that say
 // once where the agent is and to read `agent-board --help` for the rest. One set of handlers, two transports: stdio
 // here (`agent-board mcp`), and Streamable HTTP in the daemon (`board-mcp-http.ts`).
-import { addSchedule, listSchedules, removeSchedule } from './clock-ops.ts';
+import { addSchedule, listSchedules, listTemplates, removeSchedule, removeTemplate, saveTemplate, setOwnSchedule } from './clock-ops.ts';
 import { listSteps, newSteps, readStepsCard, updateSteps, type StepsUpdate } from './steps-ops.ts';
 import { listMemories, listQueues, memoryHistory, newMemory, newQueue, queueHistory, readMemory, readQueue, updateMemory, updateQueue, type MemoryUpdate, type QueueUpdate } from './memory-ops.ts';
+import { changeTodo, readTodos, remind } from './todo-ops.ts';
 import {
   addEdge,
   BoardError,
@@ -38,6 +39,7 @@ import {
   readBoard,
   sendToAgent,
   setDefaultRole,
+  categoryAnswer,
   characterAnswer,
   setCrewStatus,
   setOwnStatus,
@@ -112,6 +114,7 @@ import {
   MAX_ASK_WAIT_MS,
   MAX_OPTION_LENGTH,
   MAX_PLAN_TITLE_LENGTH,
+  MAX_MEMORY_KEY,
   MAX_STEPS,
   MAX_STEPS_QUESTIONS,
   MAX_ROLE_NAME_LENGTH,
@@ -120,6 +123,7 @@ import {
   FLOW_EDGE_TRIGGERS,
   DEFAULT_ORCHESTRATOR_WAIT_MS,
   MAX_ORCHESTRATOR_WAIT_MS,
+  CLOCK_MODES,
   CLOCK_RESULTS,
   EFFORTS,
   HARNESSES,
@@ -133,8 +137,13 @@ import {
   type BoardCaller,
   type CrewEventKind,
   type WaitState,
+  type WorkCategoryParams,
   WAIT_STATES,
+  MAX_WAITING_ON_LENGTH,
+  MAX_WORK_LABEL_LENGTH,
+  WORK_CATEGORIES,
 } from './protocol.ts';
+import { NO_CATEGORY, parseWorkCategorySet } from './work-category.ts';
 import { handleRpcLine, RpcMethodError, type RpcHandlers } from './rpc.ts';
 
 /** The MCP revisions it speaks, newest first; it answers a client asking for another with the newest. */
@@ -145,7 +154,11 @@ export const BOARD_MCP_INSTRUCTIONS =
   'You are running on agent-board, a desktop app that shows coding agents and shells as tiles in zones on one board, ' +
   'joined by edges that hand work from one agent to the next. Run `agent-board --help` in your shell once to learn the ' +
   'board and its commands; these tools are the few you need most. A turn ending tells no one: when you are blocked, ' +
-  'your work is ready for review, or you need a decision, call `needs_you` with the reason in a line.';
+  'your work is ready for review, or you need a decision, call `needs_you` with the reason in a line. Before you start, ' +
+  'list memories with `memory_read`, then read what other agents left; before you finish or hand off, `memory_update` what the next one should know. ' +
+  'Something only the user can do, later (send a pull request for approval, restart the app), goes on their to-do list with `remind`. ' +
+  'For a long watch, `clock_add` adds a clock of your own that messages you on a schedule; `clock_set` changes what your ' +
+  'clock does with you after each run, or turns it off, with your reason; `save_clock_template` saves a clock to start new ones from.';
 
 /** What the server adds to its instructions for an agent that may orchestrate as it starts. */
 export const ORCHESTRATOR_INSTRUCTIONS =
@@ -158,7 +171,8 @@ export const ORCHESTRATOR_INSTRUCTIONS =
   'with `set_status` and `agent`: what each agent is doing now, as its work moves on. A crew member\'s `needs_you` comes ' +
   'to you, typed at your prompt, and so do its `ask` questions and plans (`show_doc` with `plan`, written in its ' +
   'worktree, for `read`): answer it with `send`, which clears its flag, or pass it on to the user with `needs_you` ' +
-  'and `via`. Only its permission prompts reach the user directly.';
+  'and `via`. Only its permission prompts reach the user directly. When your crew has room, `queue_update` take the next ' +
+  "item from your zone's queue, and mark it done when it is.";
 
 /** How long the `wait` tool waits by default, in seconds. */
 const MCP_WAIT_SECONDS = DEFAULT_ORCHESTRATOR_WAIT_MS / 1000;
@@ -323,7 +337,11 @@ export const BOARD_MCP_TOOLS: Tool[] = [
       'strikes a pose for the work you are doing (summary may then be left out): a working pose goes when your turn ends ' +
       'or 20 minutes after the set, waiting-on-review (set as your turn ends) when your next turn starts, none gives the ' +
       'board\'s back. The board\'s own states (needs you, a problem, paused, done) are drawn over it. The answer says ' +
-      'what is shown. As `agent-board status set`.',
+      'what is shown. With category, you say what kind of wait your work is in, for the overview the user reads at a ' +
+      'glance; set it when that changes, above all when your work waits on someone other than the user (category ' +
+      'waiting-on-others, waiting_on {who, ref}). label is your own word for it, shown in place of the category\'s name. ' +
+      'A set replaces all of it and stays until the next; done with no category is done; none gives the board\'s guess ' +
+      'back. As `agent-board status set`.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -337,6 +355,22 @@ export const BOARD_MCP_TOOLS: Tool[] = [
             prop: { type: 'string', enum: [...AGENT_PROPS] },
           },
           required: ['pose'],
+          additionalProperties: false,
+        },
+        category: {
+          type: 'string',
+          enum: [...WORK_CATEGORIES, NO_CATEGORY],
+          description: 'What kind of wait your work is in: on the user (needs-help, ready-for-review), blocked, on others (waiting-on-others, in-review), or on its own (working, done).',
+        },
+        label: { type: 'string', maxLength: MAX_WORK_LABEL_LENGTH, description: 'Your own word for the category ("With Legal"), with category.' },
+        waiting_on: {
+          type: 'object',
+          description: 'Who your work waits on, and their reference if it has one (a ticket, a PR): only with waiting-on-others or in-review.',
+          properties: {
+            who: { type: 'string', maxLength: MAX_WAITING_ON_LENGTH },
+            ref: { type: 'string', maxLength: MAX_WAITING_ON_LENGTH },
+          },
+          required: ['who'],
           additionalProperties: false,
         },
         progress: { type: 'integer', minimum: 0, maximum: 100, description: 'How far through you are, if you know.' },
@@ -508,9 +542,9 @@ export const BOARD_MCP_TOOLS: Tool[] = [
   {
     name: 'memory_read',
     description:
-      'Without memory, list the memories you can read (in your zone, zones your orchestrator scope reaches, and loose ones). ' +
-      'With memory, its entries, pinned first, then newest first (search: only those holding it); with entry, that one in full ' +
-      '(a file whole), or with history its versions, newest first. As `agent-board memory ls|read|history`.',
+      'Read what other agents left before you start. Without memory, list the memories you can read (in your zone, zones your orchestrator scope reaches, and loose ones). ' +
+      'With memory, its facts in full, pinned first, then newest first, and its documents by title (search: only those holding it); ' +
+      'with entry, that one in full (a document whole), or with history its versions, newest first. As `agent-board memory ls|read|history`.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -525,19 +559,21 @@ export const BOARD_MCP_TOOLS: Tool[] = [
   {
     name: 'memory_update',
     description:
-      'Change a memory: add remembers text ("key: value" with a one-word key replaces that key\'s value; else a note) or, ' +
-      'with file, a whole file (up to 1 MB) under its name; edit changes an entry\'s text, key or pin; remove removes one; ' +
-      'restore puts a version back (memory_read with history lists them). Anyone in scope may change any entry, the ' +
-      "user's too. As `agent-board memory add|edit|rm|restore`.",
+      'Change a memory: add remembers a fact ("key: value" with a one-word key replaces that key\'s value; else a note) or, ' +
+      'with document (a title) or file, text kept whole (up to 1 MB), listed by title until read; edit changes an entry\'s text, ' +
+      'key or pin; remove removes one; restore puts a version back (memory_read with history lists them); confirm says a stale ' +
+      "one is still true. Anyone in scope may change any entry, the user's too. Add what the next agent should know before you " +
+      'finish. As `agent-board memory add|edit|rm|restore|confirm`.',
     inputSchema: {
       type: 'object',
       properties: {
         memory: { type: 'string', description: 'The memory, by ref (item:3f2a) or title.' },
-        action: { type: 'string', enum: ['add', 'edit', 'remove', 'restore'], description: 'What to do.' },
-        entry: { type: 'string', description: 'For edit, remove and restore: the entry, by its key or #id.' },
+        action: { type: 'string', enum: ['add', 'edit', 'remove', 'restore', 'confirm'], description: 'What to do.' },
+        entry: { type: 'string', description: 'For edit, remove, restore and confirm: the entry, by its key, title or #id.' },
         text: { type: 'string', description: 'For add and edit: the text.' },
         key: { type: 'string', description: 'For add and edit: the key to keep it under (spaces and all).' },
         no_key: { type: 'boolean', description: 'For add: keep the text as a note, "a: b" and all; for edit, take its key off.' },
+        document: { type: 'string', maxLength: MAX_MEMORY_KEY, description: 'For add: keep text whole as a document under this title.' },
         file: { type: 'string', description: 'For add: a file to keep whole, by path (relative to where you started).' },
         pinned: { type: 'boolean', description: 'For edit: pin it to the top rows, or unpin it.' },
         version: { type: 'integer', minimum: 1, description: 'For restore: the version to put back.' },
@@ -596,6 +632,46 @@ export const BOARD_MCP_TOOLS: Tool[] = [
         most: { type: 'integer', minimum: 1, maximum: 3, description: 'For drain: the most agents at once.' },
       },
       required: ['queue', 'action'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'remind',
+    description:
+      'Add to-dos for the user to your to-do list, under your tile (made by your first): things only they can do, such as ' +
+      'sending a pull request for approval. Nothing is done for them, and nothing tells you when they tick one: ' +
+      'remind_read with mine shows which are done. For questions they answer together, use steps_new. As `agent-board remind`.',
+    inputSchema: {
+      type: 'object',
+      properties: { text: { type: 'string', description: 'The to-do, in a line: one a line for several (at most 500 characters each).' } },
+      required: ['text'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'remind_read',
+    description:
+      'The to-do lists you can read (in your zone, and zones your orchestrator scope reaches), each line numbered, with who ' +
+      'ticked it and when; with mine, only your own. As `agent-board remind ls [--mine]`.',
+    inputSchema: {
+      type: 'object',
+      properties: { mine: { type: 'boolean', description: 'Only your own list.' } },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'remind_update',
+    description:
+      'Change a line you wrote on your own to-do list, by its number in remind_read with mine, as the list is now (the user may ' +
+      'have moved lines since you read it): done ticks it, undo unticks it, remove takes it off (the user need not do it ' +
+      'now). The answer names the line it changed. A line the user wrote is theirs. As `agent-board remind done|undo|rm <n>`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['done', 'undo', 'remove'] },
+        line: { type: 'integer', minimum: 1, description: "The line's number in your list." },
+      },
+      required: ['action', 'line'],
       additionalProperties: false,
     },
   },
@@ -683,6 +759,84 @@ export const BOARD_MCP_TOOLS: Tool[] = [
         },
         clear: { type: 'boolean', description: 'Clear your page instead.' },
       },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'clock_add',
+    description:
+      'Add a clock of your own, beside your tile: at each fire time of cron (five fields, local time) it messages you with ' +
+      'prompt, and keeps your final message in its run history. after says what it does with you once each run is over: ' +
+      'hibernate pauses you until the next run, which wakes you in the same conversation; idle (the default) leaves you at ' +
+      'your prompt. With template it starts from a saved clock template, whose cron and prompt stand unless given. As ' +
+      '`agent-board schedule add --self`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        cron: { type: 'string', description: 'Five fields (minute hour day month weekday) or @daily, @hourly…: 0 9 * * 1-5.' },
+        prompt: { type: 'string', description: 'What it sends you at each run.' },
+        after: { type: 'string', enum: ['hibernate', 'idle'], description: "What it does with you after each run: the template's, else idle." },
+        template: { type: 'string', description: 'A saved clock template to start from, by name.' },
+      },
+      required: [],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'clock_set',
+    description:
+      'Change your own clock (the one that messages you, or whose run started you): what it does with you after each run ' +
+      '(hibernate pauses you until the next run, which wakes you in the same conversation; close starts a fresh agent each ' +
+      'run instead, and closes you once this run is over; idle leaves you at your prompt), or stop to turn it off. The user ' +
+      'sees why on the clock, and only they turn it on again. As `agent-board schedule set|stop`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        after: { type: 'string', enum: [...CLOCK_MODES], description: 'What it does with you after each run.' },
+        stop: { type: 'boolean', description: 'Turn it off instead.' },
+        why: { type: 'string', description: 'Why, in a line: the user sees it on the clock.' },
+        schedule: { type: 'string', description: 'The clock, by ref, if you have more than one.' },
+      },
+      required: ['why'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'save_clock_template',
+    description:
+      'Save a clock as a template, by name, for clock_add (or add_schedule) to start new clocks from in any zone: from a clock on the board, or ' +
+      "from cron, prompt and after (with close, a fresh agent's settings). Never the agent it messages. Saving under a name you " +
+      'saved replaces it. As `agent-board schedule template save`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'What it is called: Slack watch.' },
+        from: { type: 'string', description: 'The clock to save, by ref (item:31f0).' },
+        cron: { type: 'string', description: 'Five fields (minute hour day month weekday) or @daily, @hourly…' },
+        prompt: { type: 'string', description: 'What it sends, or a fresh agent its task.' },
+        after: { type: 'string', enum: [...CLOCK_MODES], description: 'What it does with its agent after each run: idle by default.' },
+        harness: { type: 'string', enum: [...HARNESSES] },
+        model: { type: 'string' },
+        role: { type: 'string' },
+        keep: { type: 'boolean', description: 'Leave a fresh agent open once its run is over.' },
+        result: { type: 'string', enum: ['history', 'note'], description: "Where a fresh agent's result goes besides the history." },
+      },
+      required: ['name'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'list_clock_templates',
+    description: 'Every saved clock template: its name, schedule, what it does, who saved it and its prompt. As `agent-board schedule template list`.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'remove_clock_template',
+    description: 'Remove a clock template you saved; only the user removes one another agent saved. As `agent-board schedule template remove`.',
+    inputSchema: {
+      type: 'object',
+      properties: { template: { type: 'string', description: 'The template, by name.' } },
+      required: ['template'],
       additionalProperties: false,
     },
   },
@@ -1184,7 +1338,9 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
     description:
       'Put a schedule on the board as a clock, marked as made by you: at each fire time of cron (five fields, local time) it either ' +
       'messages the agent `to` with prompt, or with fresh starts a fresh agent in your zone (or zone) with prompt as its task, waits ' +
-      'for its turn to end, keeps its final message in the clock\'s run history and closes it. As `agent-board schedule add`.',
+      'for its turn to end, keeps its final message in the clock\'s run history and closes it. With template it starts from a ' +
+      'saved clock template, whose cron, prompt and mode stand unless given. A clock of your own is `clock_add`. As ' +
+      '`agent-board schedule add`.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1199,8 +1355,9 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
         keep: { type: 'boolean', description: 'Leave a fresh agent open once its run is over.' },
         result: { type: 'string', enum: [...CLOCK_RESULTS], description: "Where a fresh agent's result goes besides the history: a note where its tile was, or a hand-off." },
         handoff_to: { type: 'string', description: 'The agent a fresh agent hands its result to (result handoff), by ref.' },
+        template: { type: 'string', description: 'A saved clock template to start from, by name (list_clock_templates).' },
       },
-      required: ['cron', 'prompt'],
+      required: [],
       additionalProperties: false,
     },
   },
@@ -1353,7 +1510,8 @@ function memoryUpdateArg(args: Record<string, unknown>): MemoryUpdate {
   switch (args.action) {
     case 'add': {
       const path = stringArg(args, 'file', true);
-      return { action: 'add', ...(text === undefined ? {} : { text }), ...(path === undefined ? {} : { path }), ...(key === undefined ? {} : { key }), note };
+      const document = stringArg(args, 'document', true);
+      return { action: 'add', ...(text === undefined ? {} : { text }), ...(path === undefined ? {} : { path }), ...(document === undefined ? {} : { document }), ...(key === undefined ? {} : { key }), note };
     }
     case 'edit': {
       const pinned = booleanArg(args, 'pinned');
@@ -1363,8 +1521,10 @@ function memoryUpdateArg(args: Record<string, unknown>): MemoryUpdate {
       return { action: 'remove', entry: entry() };
     case 'restore':
       return { action: 'restore', entry: entry(), version: versionArg(args) };
+    case 'confirm':
+      return { action: 'confirm', entry: entry() };
     default:
-      throw new BoardError('action must be add, edit, remove or restore');
+      throw new BoardError('action must be add, edit, remove, restore or confirm');
   }
 }
 
@@ -1522,9 +1682,9 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
     if (via !== undefined && typeof via !== 'string') throw new BoardError('via must be a string');
     return flagLine(await flagOwn(session, reason, via));
   },
-  set_status: async (session, { summary, progress, done, agent: crewMember, character: given }) => {
+  set_status: async (session, { summary, progress, done, agent: crewMember, character: given, category: kind, label, waiting_on: waitingOn }) => {
     if (summary !== undefined && typeof summary !== 'string') throw new BoardError('summary must be a string');
-    if (summary === undefined && given === undefined) throw new BoardError('give a summary, a character, or both');
+    if (summary === undefined && given === undefined && kind === undefined) throw new BoardError('give a summary, a character, a category, or more');
     if (progress !== undefined && typeof progress !== 'number') throw new BoardError('progress must be a number');
     let character: CharacterSet | undefined;
     try {
@@ -1532,14 +1692,21 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
     } catch (error) {
       throw new BoardError((error as Error).message);
     }
+    let category: WorkCategoryParams | undefined;
+    try {
+      category = parseWorkCategorySet({ category: kind, label, waitingOn }) === undefined ? undefined : ({ category: kind, label, waitingOn } as WorkCategoryParams);
+    } catch (error) {
+      throw new BoardError((error as Error).message.replace(/\bwaitingOn\b/g, 'waiting_on'));
+    }
     if (crewMember !== undefined) {
       if (typeof crewMember !== 'string') throw new BoardError('agent must be a ref or name');
       if (done === true) throw new BoardError('done is for your own status: a crew member says it is finished itself');
-      return (await setCrewStatus(session, crewMember, summary, progress, character)).text;
+      return (await setCrewStatus(session, crewMember, summary, progress, character, category)).text;
     }
-    const agent = await setOwnStatus(session, summary, progress, done === true, character);
+    const agent = await setOwnStatus(session, summary, progress, done === true, character, category);
     const lines =
       summary === undefined ? [] : [`Your tile now says: ${statusLine(agent.status!)}${agent.workFinishedAt === null ? '' : ', and that your work is finished'}`];
+    if (category !== undefined || done === true) lines.push(categoryAnswer(agent));
     if (character !== undefined) {
       const { shown, yours, expires } = characterReading(agent);
       lines.push(characterAnswer(agent), JSON.stringify({ ok: true, shown, yours, expires }));
@@ -1754,8 +1921,9 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
   add_schedule: async (session, args) =>
     (
       await addSchedule(session, {
-        cron: stringArg(args, 'cron'),
-        prompt: stringArg(args, 'prompt'),
+        cron: stringArg(args, 'cron', true) ?? '',
+        prompt: stringArg(args, 'prompt', true) ?? '',
+        template: stringArg(args, 'template', true),
         to: stringArg(args, 'to', true),
         fresh: args.fresh === true ? true : undefined,
         zone: stringArg(args, 'zone', true),
@@ -1768,6 +1936,39 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
       })
     ).text,
   list_schedules: async (session) => (await listSchedules(session)).text,
+  save_clock_template: async (session, args) =>
+    (
+      await saveTemplate(session, {
+        name: stringArg(args, 'name'),
+        from: stringArg(args, 'from', true),
+        cron: stringArg(args, 'cron', true) ?? '',
+        prompt: stringArg(args, 'prompt', true) ?? '',
+        after: stringArg(args, 'after', true),
+        harness: stringArg(args, 'harness', true),
+        model: stringArg(args, 'model', true),
+        role: stringArg(args, 'role', true),
+        keep: args.keep === true ? true : undefined,
+        result: stringArg(args, 'result', true),
+      })
+    ).text,
+  list_clock_templates: async (session) => (await listTemplates(session)).text,
+  remove_clock_template: async (session, args) => (await removeTemplate(session, stringArg(args, 'template'))).text,
+  clock_add: async (session, args) =>
+    (
+      await addSchedule(session, {
+        cron: stringArg(args, 'cron', true) ?? '',
+        prompt: stringArg(args, 'prompt', true) ?? '',
+        template: stringArg(args, 'template', true),
+        self: true,
+        after: stringArg(args, 'after', true),
+      })
+    ).text,
+  clock_set: async (session, args) => {
+    if (args.stop !== undefined && typeof args.stop !== 'boolean') throw new BoardError('stop must be true or false');
+    const after = stringArg(args, 'after', true);
+    if ((after === undefined) === (args.stop !== true)) throw new BoardError('give after, or stop: true');
+    return (await setOwnSchedule(session, { ref: stringArg(args, 'schedule', true), after, stop: args.stop === true ? true : undefined, why: stringArg(args, 'why') })).text;
+  },
   steps_new: async (session, args) => (await newSteps(session, { title: stringArg(args, 'title', true), text: stringArg(args, 'steps') })).text,
   steps_read: async (session, args) => {
     const card = stringArg(args, 'card', true);
@@ -1808,6 +2009,17 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
     return job === undefined ? (await readQueue(session, queue)).text : (await queueHistory(session, queue, job)).text;
   },
   queue_update: async (session, args) => (await updateQueue(session, stringArg(args, 'queue'), queueUpdateArg(args))).text,
+  remind: async (session, args) => (await remind(session, [stringArg(args, 'text')])).text,
+  remind_read: async (session, args) => {
+    if (args.mine !== undefined && typeof args.mine !== 'boolean') throw new BoardError('mine must be true or false');
+    return (await readTodos(session, args.mine === true)).text;
+  },
+  remind_update: async (session, args) => {
+    const action = stringArg(args, 'action');
+    if (action !== 'done' && action !== 'undo' && action !== 'remove') throw new BoardError('action must be done, undo or remove');
+    if (typeof args.line !== 'number' || !Number.isInteger(args.line)) throw new BoardError("line must be the line's number");
+    return (await changeTodo(session, action === 'remove' ? 'rm' : action, args.line)).text;
+  },
   remove_schedule: async (session, args) => (await removeSchedule(session, stringArg(args, 'schedule'))).text,
   prefabs: async (session, args) => {
     const name = stringArg(args, 'name', true);

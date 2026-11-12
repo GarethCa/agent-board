@@ -3,7 +3,7 @@
 // shells chip draw them.
 import { paneIds, type PaneLayout } from '@agent-board/daemon/pane-layout';
 import { inTabOrder, isOwnedBy, isOwnTab, pullRequestOfUrl, type Agent, type DocumentSummary, type PullRequest, type Shell, type ShellOwner, type WindowOwner } from '@agent-board/daemon/protocol';
-import { OWN_SURFACE, surfaceKey, type DocSurface, type DocumentSurface, type GateSurface, type PlanSurface, type PullRequestSurface, type Surface, type WebSurface } from '@agent-board/daemon/window-layout';
+import { OWN_SURFACE, surfaceKey, type DocSurface, type DocumentSurface, type GateSurface, type PlanSurface, type PullRequestSurface, type Surface, type TodoSurface, type WebSurface } from '@agent-board/daemon/window-layout';
 import { webTabLabel } from '@agent-board/daemon/web-url';
 import { paneLabel } from '../board/rename';
 
@@ -179,7 +179,7 @@ export interface SessionTargets {
 /**
  * What one of a window's tabs shows, named as its tab is: one of `windowTabs` (its own, or a shell
  * tab), another agent's session, a shell tile's panes, a pull request, a web page, an agent's gate
- * or its plans, or one of its hand-off docs.
+ * or its plans, one of its hand-off docs, or its to-do list.
  */
 export type WindowSurface = { key: string; surface: Surface; label: string } & (
   | { kind: 'tab'; tab: WindowTab }
@@ -189,6 +189,7 @@ export type WindowSurface = { key: string; surface: Surface; label: string } & (
   | { kind: 'web'; web: WebSurface }
   | { kind: 'gate'; gate: GateSurface; agent: Agent }
   | { kind: 'plan'; plan: PlanSurface; agent: Agent }
+  | { kind: 'todo'; todo: TodoSurface; agent: Agent }
   | { kind: 'doc'; doc: DocSurface; agent: Agent }
   | { kind: 'document'; agent: Agent; document: DocumentSummary }
 );
@@ -198,6 +199,9 @@ export const gateSurfaceOf = (sessionId: string): GateSurface => ({ kind: 'gate'
 
 /** The surface of an agent's plans. */
 export const planSurfaceOf = (sessionId: string): PlanSurface => ({ kind: 'plan', sessionId });
+
+/** The surface of an agent's own to-do list. */
+export const todoSurfaceOf = (sessionId: string): TodoSurface => ({ kind: 'todo', sessionId });
 
 /** The surface of a document an agent showed. */
 export const documentSurfaceOf = (document: Pick<DocumentSummary, 'sessionId' | 'id'>): DocumentSurface => ({ kind: 'document', sessionId: document.sessionId, documentId: document.id });
@@ -225,17 +229,18 @@ export const docSurfaceOf = (sessionId: string, path: string): DocSurface => ({ 
 export const docName = (path: string): string => path.split('/').filter(Boolean).at(-1) ?? path;
 
 /**
- * An agent's gate's, plans' or doc's surface, named as its tab is: Gate, Plan or the doc's file name, in its own window;
- * else after its agent. Undefined once its agent has gone.
+ * An agent's gate's, plans', to-do list's or doc's surface, named as its tab is: Gate, Plan, To do or the doc's file
+ * name, in its own window; else after its agent. Undefined once its agent has gone.
  */
 function agentToolSurface(owner: TabOwner, surface: Surface, agents: readonly Agent[]): WindowSurface | undefined {
-  if (surface.kind !== 'gate' && surface.kind !== 'plan' && surface.kind !== 'doc') return undefined;
+  if (surface.kind !== 'gate' && surface.kind !== 'plan' && surface.kind !== 'todo' && surface.kind !== 'doc') return undefined;
   const agent = agents.find((each) => each.sessionId === surface.sessionId);
   if (agent === undefined) return undefined;
   const own = owner.kind === 'agent' && owner.agent.sessionId === agent.sessionId;
-  const name = surface.kind === 'gate' ? 'Gate' : surface.kind === 'plan' ? 'Plan' : docName(surface.path);
+  const name = surface.kind === 'gate' ? 'Gate' : surface.kind === 'plan' ? 'Plan' : surface.kind === 'todo' ? 'To do' : docName(surface.path);
   const base = { key: surfaceKey(surface), label: own ? name : `${name} · ${agent.name}`, agent };
   if (surface.kind === 'gate') return { ...base, surface, kind: 'gate', gate: surface };
+  if (surface.kind === 'todo') return { ...base, surface, kind: 'todo', todo: surface };
   return surface.kind === 'plan' ? { ...base, surface, kind: 'plan', plan: surface } : { ...base, surface, kind: 'doc', doc: surface };
 }
 
@@ -291,6 +296,7 @@ export function tabWindowTitle(surface: Surface): string {
   if (surface.kind === 'web') return webTabLabel(surface.url);
   if (surface.kind === 'gate') return 'Gate';
   if (surface.kind === 'plan') return 'Plan';
+  if (surface.kind === 'todo') return 'To do';
   if (surface.kind === 'doc') return docName(surface.path);
   if (surface.kind === 'document') return 'Document';
   return 'Tabs';
@@ -305,6 +311,13 @@ export function pullRequestChoices(pullRequests: readonly PullRequest[], shown: 
   });
 }
 
+/** The agent's to-do list the window's + menu offers to open as a tab: only in an agent's window, and not once it is shown. */
+export function todoChoice(owner: TabOwner | undefined, shown: readonly Surface[]): TodoSurface | undefined {
+  if (owner?.kind !== 'agent') return undefined;
+  const surface = todoSurfaceOf(owner.agent.sessionId);
+  return shown.some((each) => surfaceKey(each) === surfaceKey(surface)) ? undefined : surface;
+}
+
 /** The PR tab's surface for one of an agent's pull requests: undefined for one whose URL names no GitHub pull request. */
 export function pullRequestSurfaceOf(pr: Pick<PullRequest, 'url'>): PullRequestSurface | undefined {
   const ref = pullRequestOfUrl(pr.url);
@@ -316,7 +329,7 @@ export function surfaceAgentIds(owner: TabOwner | undefined, shown: readonly Sur
   const ids = new Set<string>(owner?.kind === 'agent' ? [owner.agent.sessionId] : []);
   for (const surface of shown) {
     if (surface.kind === 'session' && surface.target.kind === 'agent') ids.add(surface.target.id);
-    else if (surface.kind === 'gate' || surface.kind === 'plan' || surface.kind === 'doc' || surface.kind === 'document') ids.add(surface.sessionId);
+    else if (surface.kind === 'gate' || surface.kind === 'plan' || surface.kind === 'todo' || surface.kind === 'doc' || surface.kind === 'document') ids.add(surface.sessionId);
   }
   return [...ids].sort();
 }

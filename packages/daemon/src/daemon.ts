@@ -27,6 +27,7 @@ import { openBoardSession } from './board-ops.ts';
 import { createCaptureHost } from './zone-captures.ts';
 import { createLayoutMeasures } from './layout-measures.ts';
 import { layoutHandlers, spotBesideAgent, type DaemonCall } from './orchestrator-layout.ts';
+import { createTodoHost } from './todos.ts';
 import { agentNoteAuthor } from './agent-notes.ts';
 import { createOrchestratorHost, type OrchestratorHost } from './orchestrators.ts';
 import { connectorHandlers } from './connectors.ts';
@@ -92,6 +93,7 @@ import { createSelectionAsks } from './selection-asks.ts';
 import { createBoardMaster } from './master.ts';
 import { handleRpcLine, type RpcHandlers } from './rpc.ts';
 import { createClockHost } from './clocks.ts';
+import { createClockTemplateHost } from './clock-templates.ts';
 import { createSettings, defaultEffort } from './settings.ts';
 import { createUsageHost } from './usage.ts';
 import { createShellHost } from './shells.ts';
@@ -318,7 +320,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     /** What hears every event the daemon sends, beside its clients: the orchestrators' waits, once they are made. */
     const listeners: ((event: DaemonEvent) => void)[] = [];
     /** The kinds an agent reads only in its scope (ADR-0010): every other item is every connection's to hear. */
-    const SCOPED_KINDS: ReadonlySet<BoardItem['kind']> = new Set(['steps', 'memory', 'queue', 'crew']);
+    const SCOPED_KINDS: ReadonlySet<BoardItem['kind']> = new Set(['steps', 'memory', 'queue', 'crew', 'todo']);
     /**
      * Whether `client` hears `event`. An item's change or removal of a scoped kind reaches it only if its `item.list`
      * would list the item; a removal whose item isn't known, or one sent before the rule is set, reaches only a
@@ -503,13 +505,14 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       onRead: (sessionId, own, first) => crew.hearsPullRequests?.(sessionId, own, first),
       log,
     });
+    const clockTemplates = createClockTemplateHost({ db, clock: options.clock ?? systemClock, broadcast });
     // `agents` and `handlers` are made below; a clock first fires from a timer, once they exist.
     const clocks = createClockHost({
       db,
       clock: options.clock ?? systemClock,
       agents: {
         get: (sessionId) => agents.get(sessionId),
-        runScheduled: (sessionId, prompt) => agents.runScheduled(sessionId, prompt),
+        runScheduled: (...args) => agents.runScheduled(...args),
         spawn: (...args) => agents.spawn(...args),
         finalMessage: (sessionId) => agents.finalMessage(sessionId),
         delete: (...args) => agents.delete(...args),
@@ -518,10 +521,12 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         announce: (sessionId) => agents.announce(sessionId),
         flag: (...args) => agents.flag(...args),
         clearFlag: (sessionId) => agents.clearFlag(sessionId),
+        pause: (...args) => agents.pause(...args),
       },
       call: async (method, params) => handlers[method](params as never, DAEMON_ITSELF) as never,
       broadcast,
       log,
+      templates: clockTemplates,
     });
     const schedules = clocks.schedules;
     // Gates and scripts an edge's conditions run, all stopped when the daemon shuts down.
@@ -642,6 +647,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         clocks.turnEnded(sessionId);
         late.memoryQueue?.turnEnded(sessionId);
       },
+      onTurnCut: (sessionId, why) => clocks.turnCut(sessionId, why),
       endTabs: (sessionId) => shells.deleteOwned(sessionId),
       onBranchChanged: (sessionId) => void pullRequests.refresh(sessionId),
       onTurnBoundary: (sessionId) => {
@@ -865,7 +871,16 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       reachesZone,
     });
     late.crewCards = crewCards;
-    late.visibleItems = (list, connection) => crewCards.visible(memoryQueue.visible(steps.visible(list, connection), connection), connection);
+    // To-do lists: lines for the user to do. A tick is saved and tells no one.
+    const todos = createTodoHost({
+      sessions,
+      agents,
+      shells,
+      call: (method, params) => call(method, params),
+      place: (sessionId, size) => spotBesideAgent(call, sessionId, size, 'below'),
+      reachesZone,
+    });
+    late.visibleItems = (list, connection) => todos.visible(crewCards.visible(memoryQueue.visible(steps.visible(list, connection), connection), connection), connection);
     const captures = createCaptureHost({ ...(options.captureTimeoutMs === undefined ? {} : { timeoutMs: options.captureTimeoutMs }) });
     const measures = createLayoutMeasures({ mayReport: captures.serves, ...(options.measureWaitMs === undefined ? {} : { waitMs: options.measureWaitMs }) });
     // A steps card an ask was put on, taken off the board, gives the ask back to its agent's tile.
@@ -1004,8 +1019,11 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       ...boardMaster.handlers<SessionSubscriber & BoardConnection>(),
       ...clocks.handlers<SessionSubscriber & BoardConnection>(),
       ...clocks.orchestratorHandlers<SessionSubscriber & BoardConnection>(orchestrators.access, () => zoneTable.list()),
+      ...clocks.agentHandlers<SessionSubscriber & BoardConnection>({ sessions, agents, shells }),
+      ...clockTemplates.handlers<SessionSubscriber & BoardConnection>({ sessions, agents, shells, logActivity: orchestrators.logActivity }),
       ...steps.handlers<SessionSubscriber & BoardConnection>(),
       ...memoryQueue.handlers<SessionSubscriber & BoardConnection>(),
+      ...todos.handlers<SessionSubscriber & BoardConnection>(),
       ...usage.handlers<SessionSubscriber & BoardConnection>(),
       // Its reviewers go first, and the rounds it reviewed say it has gone, each told to every client.
       'agent.delete': (params, context) => {
@@ -1213,7 +1231,8 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         for (const client of clients.keys()) client.destroy();
         // Kill the sessions once no client can start more: nothing would own their PTYs once we are gone. The user
         // didn't stop them, so they are stopped by restart, and the app offers to resume them.
-        await Promise.all([new Promise((resolve) => server.close(resolve)), ingress!.close(), sessions.killAll({ stoppedByRestart: true })]);
+        const closing: Promise<unknown>[] = [new Promise((resolve) => server.close(resolve)), ingress!.close(), sessions.killAll({ stoppedByRestart: true })];
+        await Promise.all(closing);
         asks.close();
         documents.close();
         agents.close();

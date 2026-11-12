@@ -22,6 +22,7 @@ export function clockData(data: Record<string, unknown>): ClockData {
     cron: typeof data.cron === 'string' ? data.cron : '0 9 * * 1-5',
     enabled: data.enabled !== false,
     does: CLOCK_ACTIONS.find((action) => action === data.does) ?? 'message',
+    hibernate: data.hibernate === true,
     agent: text(data.agent),
     prompt: typeof data.prompt === 'string' ? data.prompt : '',
     fresh: {
