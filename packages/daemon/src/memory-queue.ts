@@ -13,14 +13,16 @@ import { readsItem, type ReachesZone } from './item-scope.ts';
 import { isObject } from './json.ts';
 import { AGENT_TILE_SIZE, freeSpotFor } from './board-layout.ts';
 import { cutText } from './text-cut.ts';
-import { jobBrief } from './memory-lines.ts';
+import { jobBrief, jobTextOf } from './memory-lines.ts';
 import type { Answered } from './deliveries.ts';
 import type { DaemonCall } from './orchestrator-layout.ts';
 import { invalidParams, optionalStringParam, paramsObject, stringParam } from './params.ts';
 import {
   BOARD_ERROR,
   MAX_HISTORY_VERSIONS,
+  MAX_JOB_HEADLINE,
   MAX_JOB_LINK,
+  MAX_JOB_RESULT,
   MAX_JOB_TEXT,
   MAX_MEMORY_BYTES,
   MAX_MEMORY_ENTRIES,
@@ -32,7 +34,11 @@ import {
   MEMORY_CARD_SIZE,
   QUEUE_AUDIENCES,
   QUEUE_CARD_SIZE,
-  QUEUE_ROW_KINDS,
+  AGENT_QUEUE_KINDS,
+  defaultQueueKind,
+  isQueueWork,
+  queueKindOn,
+  queueKindsFor,
   type Agent,
   type BoardItem,
   type BoardPlace,
@@ -176,6 +182,8 @@ interface JobRow {
   drops: number;
   done_by: string | null;
   done_at: string | null;
+  result: string | null;
+  hidden_until: string | null;
   made_by: string;
   created_at: string;
   updated_at: string;
@@ -206,6 +214,9 @@ const toEntry = (row: EntryRow): MemoryEntry => ({
   updatedAt: row.updated_at,
 });
 
+/** Work an agent takes: a task, a request or a prompt. Never info, nor a kind from the user's queue. */
+const agentsWork = (kind: QueueJob['kind']): boolean => kind !== 'info' && (AGENT_QUEUE_KINDS as readonly string[]).includes(kind);
+
 const toJob = (row: JobRow): QueueJob => ({
   id: row.id,
   queueId: row.item_id,
@@ -218,6 +229,8 @@ const toJob = (row: JobRow): QueueJob => ({
   drops: row.drops,
   doneBy: row.done_by === null ? null : (JSON.parse(row.done_by) as StepsWho),
   doneAt: row.done_at,
+  result: row.result,
+  hiddenUntil: row.hidden_until,
   madeBy: JSON.parse(row.made_by) as StepsWho,
   changedBy: JSON.parse(row.changed_by ?? row.made_by) as StepsWho,
   lastChange: (row.last_change ?? 'add') as QueueJobChange,
@@ -257,7 +270,8 @@ export interface MemoryQueueHost {
   releaseGone(sessionId?: string): Promise<void>;
   /**
    * `item` with its count put right, for a memory or queue whose saved count isn't its rows' (an undo sends an older one
-   * back); `changed`, its jobs or drain were, so its drain may start an agent.
+   * back); `changed`, its jobs or drain were, so its drain may start an agent. A queue whose audience changed has its
+   * rows' kinds moved over to the kinds it now takes (`queueKindOn`), so the user's things to read are never an agent's work.
    */
   recounted(item: BoardItem, changed: boolean): Promise<BoardItem>;
   /** Keeps the agents a queue's drain started as the daemon has them, in an update that isn't the daemon's own. */
@@ -308,9 +322,14 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
     insertJob: db.prepare(
       'INSERT INTO queue_jobs (id, item_id, kind, text, link, position, drops, made_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     ),
-    updateJob: db.prepare('UPDATE queue_jobs SET text = ?, link = ?, position = ?, taken_by = ?, taken_at = ?, drops = ?, done_by = ?, done_at = ?, updated_at = ? WHERE id = ?'),
+    updateJob: db.prepare(
+      'UPDATE queue_jobs SET text = ?, link = ?, position = ?, taken_by = ?, taken_at = ?, drops = ?, done_by = ?, done_at = ?, result = ?, hidden_until = ?, updated_at = ? WHERE id = ?',
+    ),
     deleteJob: db.prepare('DELETE FROM queue_jobs WHERE id = ?'),
     placeJob: db.prepare('UPDATE queue_jobs SET position = ? WHERE id = ?'),
+    hideJob: db.prepare('UPDATE queue_jobs SET hidden_until = ?, updated_at = ? WHERE id = ?'),
+    kindsIn: db.prepare('SELECT id, kind FROM queue_jobs WHERE item_id = ?'),
+    setKind: db.prepare('UPDATE queue_jobs SET kind = ? WHERE id = ?'),
     untake: db.prepare('UPDATE queue_jobs SET taken_by = NULL, taken_at = NULL WHERE id = ?'),
     dropLastTake: db.prepare("DELETE FROM board_history WHERE seq = (SELECT MAX(seq) FROM board_history WHERE item_id = ? AND row_id = ? AND action = 'take')"),
     itemData: db.prepare('SELECT data FROM board_items WHERE id = ?'),
@@ -550,8 +569,30 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
     return row;
   };
   const jobText = (text: unknown): string => {
-    if (typeof text !== 'string' || text.trim() === '' || text.trim().length > MAX_JOB_TEXT) throw invalidParams(`a job or note is 1 to ${MAX_JOB_TEXT} characters`);
+    if (typeof text !== 'string' || text.trim() === '' || text.trim().length > MAX_JOB_TEXT) throw invalidParams(`a queue row's text is 1 to ${MAX_JOB_TEXT} characters`);
     return text.trim();
+  };
+  /** An add's text: given whole, or as a headline (one short line) and a body. */
+  const addText = (change: Extract<QueueChange, { action: 'add' }>): string => {
+    if (change.headline === undefined) {
+      if (change.body !== undefined) throw invalidParams('a body goes with a headline: give both, or the text whole');
+      return jobText(change.text);
+    }
+    if (change.text !== undefined) throw invalidParams('give the text whole, or a headline and a body: not both');
+    const { headline, body } = change;
+    if (typeof headline !== 'string' || headline.trim() === '' || headline.trim().length > MAX_JOB_HEADLINE || /[\r\n]/.test(headline)) {
+      throw invalidParams(`a headline is one line of 1 to ${MAX_JOB_HEADLINE} characters: put the rest in the body`);
+    }
+    if (body !== undefined && typeof body !== 'string') throw invalidParams('body must be a string');
+    return jobText(jobTextOf(headline, body));
+  };
+  /** The kind an add asks for, of those its queue takes: the names before kinds read as its default, or info. */
+  const kindFor = (audience: QueueData['audience'], kind: unknown): QueueJob['kind'] => {
+    const kinds = queueKindsFor(audience);
+    if (kind === undefined || kind === 'job') return defaultQueueKind(audience);
+    if (kind === 'note') return queueKindOn(audience, 'info');
+    if (!(kinds as readonly unknown[]).includes(kind)) throw invalidParams(`kind must be one of ${kinds.join(', ')}${audience === 'user' ? " on the user's queue" : ''}`);
+    return kind as QueueJob['kind'];
   };
   const linkParam = (link: unknown): string | null => {
     if (link === null || link === undefined) return null;
@@ -564,7 +605,7 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
   /** Saves the job row as it is now, a change by `by`, and records the version. */
   const putJob = (item: BoardItem, row: JobRow, by: StepsWho, action: string): QueueJob => {
     const at = now();
-    sql.updateJob.run(row.text, row.link, row.position, row.taken_by, row.taken_at, row.drops, row.done_by, row.done_at, at, row.id);
+    sql.updateJob.run(row.text, row.link, row.position, row.taken_by, row.taken_at, row.drops, row.done_by, row.done_at, row.result, row.hidden_until, at, row.id);
     const saved: QueueJob = { ...toJob(sql.job.get(row.id) as unknown as JobRow), changedBy: by, lastChange: action as QueueJobChange };
     remember(item.id, saved.id, action, saved, by, at);
     return saved;
@@ -578,6 +619,36 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
     remember(item.id, id, action, saved, by, at);
     return saved;
   };
+
+  /** A done job's result: none, or a short text. */
+  const doneResult = (result: unknown): string | null => {
+    if (result === undefined || result === null || (typeof result === 'string' && result.trim() === '')) return null;
+    if (typeof result !== 'string' || result.trim().length > MAX_JOB_RESULT) throw invalidParams(`a result is at most ${MAX_JOB_RESULT} characters`);
+    return result.trim();
+  };
+  /** Put off for later, and not back yet: the user's queue doesn't show it. */
+  const hidden = (row: JobRow, at = now()) => row.hidden_until !== null && row.hidden_until > at;
+  /** When a job put off for later comes back: a time, as ISO 8601. */
+  const laterParam = (until: unknown): string => {
+    const at = typeof until === 'string' ? Date.parse(until) : Number.NaN;
+    if (Number.isNaN(at)) throw invalidParams('until must be a time (ISO 8601), or null to show it again');
+    return new Date(at).toISOString();
+  };
+
+  /** Each row's kind as the queue's audience takes it, after a change of hands: whether any moved. Not a version. */
+  const fitKinds = (item: BoardItem): boolean =>
+    transaction(() => {
+      const { audience } = dataOf(item) as QueueData;
+      let moved = false;
+      for (const row of sql.kindsIn.all(item.id) as unknown as { id: string; kind: QueueJob['kind'] }[]) {
+        const kind = queueKindOn(audience, row.kind);
+        if (kind !== row.kind) {
+          sql.setKind.run(kind, row.id);
+          moved = true;
+        }
+      }
+      return moved;
+    });
 
   /** Back to the front of its queue, the drop counted. */
   const dropped = (row: JobRow, front_: number): JobRow => ({ ...row, taken_by: null, taken_at: null, drops: row.drops + 1, position: front_ });
@@ -596,6 +667,14 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
       const notStarting = (row: JobRow) => {
         if (starting.has(row.id)) throw invalidParams(`an agent is starting for job #${row.id.slice(0, 8)}: it is that agent's`);
       };
+      /** An open job of the user's queue, changed by the user alone: `doing` it is theirs to do. */
+      const userOnly = (queue: BoardItem, ref: string, doing: string): JobRow => {
+        if (data.audience !== 'user') throw invalidParams(`“${data.title}” is for agents: only the user's queue has later and skip`);
+        if (me !== null) throw outOfScope(`only the user ${doing} a row on their queue`);
+        const row = jobFor(queue, ref);
+        if (row.done_at !== null) throw invalidParams(`#${row.id.slice(0, 8)} is done: only an open one ${doing === 'skips' ? 'is skipped' : 'is put off'}`);
+        return row;
+      };
       // Finished, dropped or removed meanwhile, it would leave the starting agent with nothing: an edit or a move is fine.
       if (change.action === 'done' || change.action === 'drop' || change.action === 'remove') {
         const named = pick(jobRows(item.id), change.job, 'job');
@@ -603,9 +682,8 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
       }
       switch (change.action) {
         case 'add': {
-          const kind = change.kind ?? 'job';
-          if (!(QUEUE_ROW_KINDS as readonly unknown[]).includes(kind)) throw invalidParams(`kind must be one of ${QUEUE_ROW_KINDS.join(', ')}`);
-          return insertJob(item, randomUUID(), kind, jobText(change.text), linkParam(change.link), change.front === true ? front(item.id) : back(item.id), by, 'add');
+          const kind = kindFor(data.audience, change.kind);
+          return insertJob(item, randomUUID(), kind, addText(change), linkParam(change.link), change.front === true ? front(item.id) : back(item.id), by, 'add');
         }
         case 'edit': {
           const row = jobFor(item, change.job);
@@ -626,10 +704,10 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
           if (me === null) throw invalidParams('the user takes no job: hand one to an agent instead');
           if (data.audience === 'user') throw outOfScope(`“${data.title}” is the user's queue: its jobs are for them, not taken by agents`);
           const rows = jobRows(item.id);
-          const row = change.job === undefined ? rows.find((each) => each.kind === 'job' && each.taken_by === null && each.done_at === null && !starting.has(each.id)) : jobFor(item, change.job);
+          const row = change.job === undefined ? rows.find((each) => agentsWork(each.kind) && each.taken_by === null && each.done_at === null && !starting.has(each.id)) : jobFor(item, change.job);
           if (row === undefined) throw invalidParams(`“${data.title}” has no job waiting to be taken`);
           notStarting(row);
-          if (row.kind === 'note') throw invalidParams(`#${row.id.slice(0, 8)} is a note: only a job is taken`);
+          if (!agentsWork(row.kind)) throw invalidParams(`#${row.id.slice(0, 8)} is ${row.kind}: only a task, a request or a prompt is taken`);
           if (row.done_at !== null) throw invalidParams(`job #${row.id.slice(0, 8)} is done already`);
           if (row.taken_by !== null) {
             const taker = JSON.parse(row.taken_by) as StepsWho;
@@ -646,10 +724,34 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
         }
         case 'done': {
           const row = jobFor(item, change.job);
-          if (row.kind === 'note') throw invalidParams(`#${row.id.slice(0, 8)} is a note: only a job is done`);
+          if (!isQueueWork(row.kind)) throw invalidParams(`#${row.id.slice(0, 8)} is info: it is read, not done`);
           if (row.done_at !== null) throw invalidParams(`job #${row.id.slice(0, 8)} is done already`);
           notHeldByOther(row, 'finishes');
-          return putJob(item, { ...row, taken_by: null, taken_at: null, done_by: JSON.stringify(by), done_at: now() }, by, 'done');
+          const result = doneResult(change.result);
+          return putJob(item, { ...row, taken_by: null, taken_at: null, done_by: JSON.stringify(by), done_at: now(), result, hidden_until: null }, by, 'done');
+        }
+        case 'later': {
+          const row = userOnly(item, change.job, 'puts off');
+          const until = change.until === null ? null : laterParam(change.until);
+          if (until === row.hidden_until) return toJob(row);
+          // Not a version, as a move isn't: the row is as it was, and twenty put-offs would push its edits out of its history.
+          sql.hideJob.run(until, now(), row.id);
+          return toJob(sql.job.get(row.id) as unknown as JobRow);
+        }
+        case 'skip': {
+          const row = userOnly(item, change.job, 'skips');
+          const at_ = now();
+          if (hidden(row, at_)) throw invalidParams(`#${row.id.slice(0, 8)} is put off until ${row.hidden_until}: show it again to skip it`);
+          // Behind the next open one the queue shows (one put off stays where it is), or the last: the rest renumbered in
+          // order, as a move does. Not a version: the row is as it was.
+          const open = jobRows(item.id).filter((each) => each.done_at === null);
+          const at = open.findIndex((each) => each.id === row.id);
+          const past = open.findIndex((each, index) => index > at && !hidden(each, at_));
+          if (past < 0) return toJob(row);
+          open.splice(at, 1);
+          open.splice(past, 0, row);
+          open.forEach((each, index) => index + 1 !== each.position && sql.placeJob.run(index + 1, each.id));
+          return toJob(sql.job.get(row.id) as unknown as JobRow);
         }
         case 'restore': {
           const current = pick(jobRows(item.id), change.job, 'job');
@@ -657,7 +759,8 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
           if (rowId === undefined) throw invalidParams(`“${data.title}” has no job ${change.job}, nor any history of one`);
           const value = versionValue<QueueJob>(item, rowId, change.version);
           // A removed job comes back with its drops counted, as it was; a take it had is not given back.
-          if (current === undefined) return insertJob(item, rowId, value.kind, value.text, value.link, back(item.id), by, 'restore', value.drops);
+          // Its kind as this queue now takes it: the queue may have changed hands since.
+          if (current === undefined) return insertJob(item, rowId, queueKindOn(data.audience, value.kind), value.text, value.link, back(item.id), by, 'restore', value.drops);
           notHeldByOther(current, 'changes');
           return putJob(item, { ...current, text: value.text, link: value.link }, by, 'restore');
         }
@@ -684,7 +787,7 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
     return value as unknown as Change;
   };
   const memoryChange = (value: unknown) => checkedChange<MemoryChange>(value, ['add', 'edit', 'remove', 'restore', 'confirm']);
-  const queueChange = (value: unknown) => checkedChange<QueueChange>(value, ['add', 'edit', 'remove', 'take', 'drop', 'done', 'restore', 'move']);
+  const queueChange = (value: unknown) => checkedChange<QueueChange>(value, ['add', 'edit', 'remove', 'take', 'drop', 'done', 'restore', 'move', 'later', 'skip']);
 
   type ReadersRow = { n: number; name: string | null; at: string | null };
   const readersOf = (row: ReadersRow | undefined): MemoryReaders => ({ count: row?.n ?? 0, last: row?.name == null || row.at === null ? null : { name: row.name, at: row.at } });
@@ -744,7 +847,7 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
     const before = jobFor(item, ref);
     const taker = JSON.stringify(agentWho(agent));
     const taken = transaction(() => {
-      if (before.kind === 'note') throw invalidParams(`#${before.id.slice(0, 8)} is a note: only a job is handed on`);
+      if (!agentsWork(before.kind)) throw invalidParams(`#${before.id.slice(0, 8)} is ${before.kind}: only a task, a request or a prompt is handed on`);
       if (before.done_at !== null || before.taken_by !== null) throw invalidParams(`job #${before.id.slice(0, 8)} isn't waiting: only a waiting job is handed on`);
       if (starting.has(before.id)) throw invalidParams(`an agent is starting for job #${before.id.slice(0, 8)}: it is that agent's`);
       return putJob(item, { ...before, taken_by: taker, taken_at: now() }, USER, 'take');
@@ -832,7 +935,7 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
       const rows = jobRows(item.id);
       const held = rows.filter((row) => row.taken_by !== null && row.done_at === null).length;
       // A job dropped back MAX_DRAIN_DROPS times is left for a person: drain doesn't start agent after agent on it.
-      const next = rows.find((row) => row.kind === 'job' && row.taken_by === null && row.done_at === null && row.drops < MAX_DRAIN_DROPS && !starting.has(row.id));
+      const next = rows.find((row) => agentsWork(row.kind) && row.taken_by === null && row.done_at === null && row.drops < MAX_DRAIN_DROPS && !starting.has(row.id));
       if (next === undefined || held >= settings.most) return;
       starting.add(next.id);
       let agent: Agent;
@@ -921,9 +1024,10 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
 
     async recounted(item, changed) {
       if (item.kind !== 'memory' && item.kind !== 'queue') return item;
+      const moved = item.kind === 'queue' && fitKinds(item);
       // A change to its jobs (its count saved) or to its drain may let its drain start the next agent; a move doesn't.
-      if (item.kind === 'queue' && changed) void drain(item.id);
-      return dataOf(item).count === countOf(item) ? item : touch(item);
+      if (item.kind === 'queue' && (changed || moved)) void drain(item.id);
+      return dataOf(item).count === countOf(item) && !moved ? item : touch(item);
     },
 
     async sessionEnded(sessionId, keepsLease) {

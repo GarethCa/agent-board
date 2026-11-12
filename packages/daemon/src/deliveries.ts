@@ -185,6 +185,23 @@ interface DeliveryOptions<Row extends DeliveryRow> {
 export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptions<Row>) {
   const { getRow, requireAgent, whyNotReady, relaunch, announce } = options;
   const clock = options.clock ?? systemClock;
+  /** Set as the daemon closes (`close`): no timer of a delivery fires after, nor is a prompt read again. */
+  let closed = false;
+  /** What cancels each timer still pending, for `close` to cancel them all. */
+  const timers = new Set<() => void>();
+  /** `clock.setTimer`, its timer cancelled as the daemon closes, and never set once it has: nothing waiting runs on. */
+  const setTimer = (callback: () => void, ms: number): (() => void) => {
+    if (closed) return () => {};
+    const cancel = clock.setTimer(() => {
+      timers.delete(cancel);
+      callback();
+    }, ms);
+    timers.add(cancel);
+    return () => {
+      timers.delete(cancel);
+      cancel();
+    };
+  };
   const confirmMs = options.submitConfirmMs ?? DEFAULT_SUBMIT_CONFIRM_MS;
   /** Per agent handing off, how many of its deliveries are still landing: it shows `handing-off` until none are. */
   const handingOff = new Map<string, number>();
@@ -261,9 +278,9 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
       };
       const heard = () => {
         cancelQuiet();
-        cancelQuiet = clock.setTimer(done, SETTLE_QUIET_MS);
+        cancelQuiet = setTimer(done, SETTLE_QUIET_MS);
       };
-      const cancelLongest = clock.setTimer(done, SETTLE_MAX_MS);
+      const cancelLongest = setTimer(done, SETTLE_MAX_MS);
       settling.set(sessionId, heard);
       options.write(sessionId, line);
     });
@@ -282,7 +299,7 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
       const onSubmit = () => settle(true);
       // Listening before the press: a quick harness's hook may beat the write's return.
       submitting.set(sessionId, onSubmit);
-      const cancel = clock.setTimer(() => settle(false), ms);
+      const cancel = setTimer(() => settle(false), ms);
       if (press) options.write(sessionId, '\r');
     });
 
@@ -298,6 +315,8 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
    */
   const pressEnter = async (sessionId: string, gaveUp: (now: PromptNow) => boolean, queue?: () => void): Promise<boolean> => {
     for (let attempt = 0; ; attempt += 1) {
+      // The daemon closed meanwhile: its database with it.
+      if (closed) return false;
       const now = options.promptNow(sessionId);
       // Moved on after a press: its turn started though no hook said so, or its session is gone.
       if ((now === 'moved-on' || now === 'working') && attempt > 0) return true;
@@ -313,7 +332,7 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
   };
 
   /** Resolves after `ms`. */
-  const pause = (ms: number) => new Promise<void>((resolve) => void clock.setTimer(resolve, ms));
+  const pause = (ms: number) => new Promise<void>((resolve) => void setTimer(resolve, ms));
 
   /** Runs `step` after whatever is still being typed at the agent: two typed at once would run together. */
   const inTurn = async <T>(sessionId: string, step: () => Promise<T>): Promise<T> => {
@@ -579,6 +598,25 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
   /** Whether the live agent is being paused: its session is going, so nothing is typed at it. */
   const beingPaused = (row: Row) => row.ended_at === null && row.hibernated_at !== null;
 
+  /**
+   * Hands back everything still queued for agents not up yet and not being typed (`undelivered`), as the daemon
+   * closes: kept, it shows with Resend once the daemon is back, where the queue itself would go with the daemon's
+   * memory. Call before the database closes. One that can't be kept is logged, never holding up the rest.
+   */
+  const handBackQueued = () => {
+    for (const sessionId of [...afterTurn.keys()]) handBackAfterTurn(sessionId, CLOSED_IN_TURN_REASON);
+    const items = [...queuedItems];
+    queuedItems.clear();
+    for (const { sessionId, what, text, trail } of items) {
+      trail?.(`handed back: ${CLOSED_REASON}`);
+      try {
+        options.undelivered(sessionId, what, text, CLOSED_REASON);
+      } catch (error) {
+        options.log(`could not keep ${what} for ${sessionId}, never delivered: ${(error as Error).message}`);
+      }
+    }
+  };
+
   return {
     /**
      * Whether anything is being typed or sent at the agent's prompt now, its turn not yet started: a pause would lose
@@ -640,7 +678,7 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
       const kept = queued.get(sessionId);
       if (kept === undefined) return;
       if (!pressable) return cutShort(sessionId, why);
-      void inTurn(sessionId, async () => {
+      inTurn(sessionId, async () => {
         // Taken up already (`promptSubmitted`).
         if (queued.get(sessionId) !== kept) return;
         queued.delete(sessionId);
@@ -653,7 +691,7 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
           setUnsent(sessionId, kept, whyGaveUp(now));
           return false;
         });
-      });
+      }).catch((error: unknown) => options.log(`pressing Enter on ${kept.what} queued at ${sessionId} failed: ${(error as Error).message}`));
     },
 
     /**
@@ -871,23 +909,19 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
     /** Whether the agent's first prompt is being typed now (`typingFirst`). */
     isTypingFirst: (sessionId: string) => typingFirst.has(sessionId),
 
+    /** Hands back everything still queued as the daemon closes (`handBackQueued`); `close` does it first. */
+    handBackQueued,
+
     /**
-     * Hands back everything still queued for agents not up yet and not being typed (`undelivered`), as the daemon
-     * closes: kept, it shows with Resend once the daemon is back, where the queue itself would go with the daemon's
-     * memory. Call before the database closes. One that can't be kept is logged, never holding up the rest.
+     * As the daemon closes, before its database does: hands back what is queued (`handBackQueued`), then cancels every
+     * timer a delivery waits on (Enter's wait for a turn to start, typed text settling, a pause), and sets none after,
+     * so nothing pending presses Enter or reads an agent's prompt from the closed database.
      */
-    handBackQueued() {
-      for (const sessionId of [...afterTurn.keys()]) handBackAfterTurn(sessionId, CLOSED_IN_TURN_REASON);
-      const items = [...queuedItems];
-      queuedItems.clear();
-      for (const { sessionId, what, text, trail } of items) {
-        trail?.(`handed back: ${CLOSED_REASON}`);
-        try {
-          options.undelivered(sessionId, what, text, CLOSED_REASON);
-        } catch (error) {
-          options.log(`could not keep ${what} for ${sessionId}, never delivered: ${(error as Error).message}`);
-        }
-      }
+    close() {
+      handBackQueued();
+      closed = true;
+      for (const cancel of [...timers]) cancel();
+      timers.clear();
     },
 
     /** How many messages sent to the agent before its session was up still wait to be typed (`queueUntilUp`). */

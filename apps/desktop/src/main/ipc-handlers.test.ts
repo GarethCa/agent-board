@@ -32,6 +32,8 @@ const { registerShellIpc } = await import('./shells');
 const { registerTrackerIpc } = await import('./trackers');
 const { registerWebTabIpc } = await import('./web-tabs');
 const { registerSettingsWindow } = await import('./settings-window');
+const { registerZoneIpc } = await import('./zones');
+const { registerOverviewWindow } = await import('./overview-window');
 
 /** A daemon that answers every call with `{ method, params }`, so a handler's daemon call can be read back. */
 function fakeDaemon(): DaemonLink {
@@ -68,6 +70,7 @@ describe('the channels main handles', () => {
     ['shells', registerShellIpc, ['shell:closeOwnPanes', 'shell:closePane', 'shell:create', 'shell:createTab', 'shell:delete', 'shell:forgetWindow', 'shell:list', 'shell:move', 'shell:movePane', 'shell:moveSurface', 'shell:moveTab', 'shell:ownTab', 'shell:resizeSplit', 'shell:resumePane', 'shell:returnPane', 'shell:scripts', 'shell:setName', 'shell:setPaneName', 'shell:setWindowLayout', 'shell:split', 'shell:tabWindows', 'shell:unsplitTabs', 'shell:windowLayout']],
     ['web tabs', () => registerWebTabIpc({ isBoard: () => false, isSettings: () => false, keepLogins: async () => true }), ['web-tab:back', 'web-tab:cancelHandOff', 'web-tab:clearData', 'web-tab:close', 'web-tab:dismissOffered', 'web-tab:dismissPasskey', 'web-tab:find', 'web-tab:focus', 'web-tab:focusWindow', 'web-tab:forget', 'web-tab:forward', 'web-tab:handOff', 'web-tab:load', 'web-tab:open', 'web-tab:openInBrowser', 'web-tab:openOffered', 'web-tab:openPlan', 'web-tab:reload', 'web-tab:setBounds', 'web-tab:stopFind']],
     ['settings window', () => registerSettingsWindow({ open: () => { throw new Error('no window in a unit test'); }, board: () => undefined }), ['setup:openSettings', 'setup:takeSettingsPane']],
+    ['overview window', () => registerOverviewWindow({ open: () => { throw new Error('no window in a unit test'); }, board: () => undefined, view: { get: async () => undefined, set: async () => {} } }), ['overview:markSeen', 'overview:seen']],
     ['trackers', registerTrackerIpc, ['tracker:connect', 'tracker:disconnect', 'tracker:issues', 'tracker:openLink', 'tracker:projects', 'tracker:scopes', 'tracker:status']],
   ])('%s', (_name, register, channels) => {
     expect(registered(register)).toEqual(channels);
@@ -113,6 +116,12 @@ describe('what a pass-through sends the daemon', () => {
     registered(registerConnectorIpc);
     expect(await invoke('connector:delete', 'c1')).toBeUndefined();
     expect(await invoke('connector:update', { id: 'c1' })).toEqual({ method: 'connector.update', params: { id: 'c1' } });
+  });
+
+  it("passes a zone's layout rule through, and puts tiles back under it", async () => {
+    registered(registerZoneIpc);
+    expect(await invoke('zone:configure', 'z1', { layoutRule: 'lanes' })).toMatchObject({ method: 'zone.configure', params: { id: 'z1', layoutRule: 'lanes' } });
+    expect(await invoke('zone:followRule', 'z1', ['agent:a'])).toEqual({ method: 'zone.followRule', params: { id: 'z1', tiles: ['agent:a'] } });
   });
 
   it('passes the flow edge settings through the settings methods', async () => {

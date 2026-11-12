@@ -290,6 +290,46 @@ test('the switcher follows the board while it is open: an agent that starts aski
   }
 });
 
+test('before anything is typed, Needs you sits beside Recent, and ← → cross between them', async () => {
+  const { dir, repo, env } = scratch('waiting');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, env);
+  await listFinishedTurns(window);
+  try {
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await spawnAgent(window, 'monorepo', 'Pick a database');
+    await expect(tile(window)).toHaveAttribute('data-state', 'waiting', { timeout: TURN_MS });
+    // Seen, so it is Recent; the next one to ask needs you.
+    await tile(window).dblclick();
+    await closeWindow(window).click();
+    await spawnAgent(window, 'monorepo', 'Name the tables');
+    await expect(tile(window).filter({ hasText: 'Name the tables' })).toHaveAttribute('data-state', 'waiting', { timeout: TURN_MS });
+
+    await window.keyboard.press(windowKey('k'));
+    const columns = spotlight(window).getByTestId('spotlight-columns');
+    const needsYou = columns.locator('[data-column="needs-you"]');
+    const recent = columns.locator('[data-column="recent"]');
+    await expect(needsYou.locator('.spotlight-group')).toHaveText('Needs you · 1');
+    await expect(recent.locator('.spotlight-group')).toHaveText('Recent');
+    await expect(spotlight(window).locator('.spotlight-foot')).toContainText('column');
+    const picked = spotlight(window).getByRole('option', { selected: true });
+    await expect(needsYou.getByRole('option', { selected: true })).toContainText('Name the tables');
+
+    await window.keyboard.press('ArrowRight');
+    await expect(recent.getByRole('option', { selected: true })).toContainText('Pick a database');
+    await window.keyboard.press('ArrowLeft');
+    await expect(needsYou.getByRole('option', { selected: true })).toContainText('Name the tables');
+    // Down from the foot of a column goes on to the zones below them.
+    await window.keyboard.press('ArrowDown');
+    await expect(picked).toHaveAttribute('data-kind', 'zone');
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('⌘K pressed in a web tab’s page opens the switcher, which takes the keyboard; Esc gives it back to the page', async () => {
   const server = await serveWebPages();
   const dataDir = tempDataDir();

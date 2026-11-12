@@ -7,7 +7,7 @@ The Electron app. It draws the board and talks to the daemon (`packages/daemon`)
 | Folder | What runs there |
 |---|---|
 | `src/main/` | Electron's main process: windows, menus, notifications, and one module per area that passes the window's calls on to the daemon. `index.ts` starts it. |
-| `src/preload/` | The bridge into each window. `api.ts` (about 1,600 lines) types `window.agentBoard` and names every IPC channel (`*_IPC`). `index.ts` builds it. |
+| `src/preload/` | The bridge into each window. `api.ts` (about 1,700 lines) types `window.agentBoard` and names every IPC channel (`*_IPC`). `index.ts` builds it. |
 | `src/renderer/src/` | The React app in each window. `main.tsx` mounts `App.tsx`. |
 | `src/shared/` | Code both main and the renderer use: themes, design tokens, errors. |
 
@@ -36,6 +36,30 @@ A new call touches all four. Find the area's existing call and copy it.
 | `onboarding/`, `keys/`, `windows/`, `demo/` | First run, keyboard shortcuts, extra windows, the demo board. |
 
 Most `*Gallery.tsx` files are a component's states for the visual specs.
+
+## Big files: read them in parts
+
+Every source file over 300 lines, by folder. `main/`, `preload/` and `shared/` are under `src/`; the other folders are the renderer's, under `src/renderer/src/`. Find the symbol first (go to definition, or `rg -n`), then read about 80 lines around it.
+
+| Folder | Files |
+|---|---|
+| `main/` | `index.ts` (starts the main process), `web-tabs.ts` (web tab sessions) |
+| `preload/` | `api.ts` (types `window.agentBoard`, every `*_IPC`), `index.ts` (builds it) |
+| `shared/` | `theme-packs.ts` (other projects' palettes as theme packs), `theme-pack-tokens.ts` (a pack's tokens from its palette) |
+| `board/` | `Board.tsx` (puts the canvas together), `menu-model.tsx` (agent, shell and zone menus as data), `HybridTile.tsx` (an agent's tile with its character), `AddZonePopover.tsx` (a new zone, and binding it to a source), `character-figures.tsx` (how a character is drawn in each style), `displace.ts` (making room round a tile expanded in place), `TileGallery.tsx`, `EdgeRules.tsx` (a flow edge's rules), `ZoneNode.tsx`, `NewAgentDialog.tsx`, `tiles.ts`, `use-board-data.ts`, `flow-edges.ts` (flow edges as the board draws them) |
+| `board/items/` | `StepsCard.tsx`, `QueueCard.tsx`, `TodoCard.tsx`, `ShapeNode.tsx`, `crew-card.ts`, `shapes/catalogue.ts` (every shape: name, group, other words, size, drawing) |
+| `board/connectors/` | `ConnectorEdge.tsx`, `geometry.ts` (a line's path: straight, elbow or curved), `line.tsx`, `route.ts` (a line's way round the objects between its ends) |
+| `board/editing/`, `board/ask/` | `use-editing.ts` (editing the board's nodes and connectors), `AskClaude.tsx` (the ask popover) |
+| `session/` | `AgentShelves.tsx` (a session's shelves and what their rows open), `SessionBody.tsx` (what a session window or an expanded tile shows), `use-window-panes.ts` (the window's panes and their strips), `ChatStreams.tsx` (the chat's items), `SessionDetails.tsx`, `TerminalPane.tsx`, `SessionWindow.tsx`, `chat.ts`, `chat-parts.tsx`, `tabs.ts` (the tabs in a session window), `terminal-sharpness.ts` (a WebGL terminal kept sharp under zoom) |
+| `chrome/` | `SettingsWindow.tsx`, `Spotlight.tsx` and `spotlight-results.ts` (the ⌘K switcher), `CreateToolbar.tsx` |
+| `ui/` | `ComponentGallery.tsx` (every control in every state), `Menu.tsx` |
+| `inbox/` | `GroupedInbox.tsx`, `Inbox.tsx` |
+| `crews/` | `PrefabEditor.tsx`, `prefab-flow.ts` (a crew prefab as its flow editor draws it) |
+| the rest | `master/MasterPanel.tsx`, `gate/GateControls.tsx`, `plan/PlanTab.tsx`, `onboarding/ConnectStep.tsx`, `windows/SessionWindows.tsx`, `keys/registry.ts` (every key the app answers to) |
+
+## Styles
+
+The CSS is in a few big files; search them for the class name, never read one whole. All of them are under `src/renderer/src/`. `app.css` (about 16,000 lines) holds most of the renderer's styles, `theme-packs.css` (about 6,000) the theme packs, and `tokens.css` the design tokens. Areas with their own sheet: `chrome/chrome.css`, `ui/ui.css`, `onboarding/onboarding.css`. Raw colours, spacing, radii, fonts, shadows and motion belong in tokens: `tokens.test.ts` and `swatch-folding.test.ts`, beside `tokens.css`, check them.
 
 ## Tests
 

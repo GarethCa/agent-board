@@ -229,6 +229,7 @@ export function boardHandlers<Context extends BoardConnection>(
         done: optionalBooleanParam(p, 'done') ?? false,
         character: optionalCharacterParam(p),
         category: optionalWorkCategoryParam(p),
+        purpose: optionalStringParam(p, 'description'),
       });
     },
     'board.record': (params, connection) => {

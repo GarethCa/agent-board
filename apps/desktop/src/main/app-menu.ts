@@ -38,16 +38,21 @@ export interface MinimisedItem {
   restore(): void;
 }
 
+/** Window › Overview's shortcut: ⌘⇧O, or Ctrl+Shift+O, from any window. */
+const OVERVIEW_ACCELERATOR = 'CommandOrControl+Shift+O';
+
 /**
- * Electron's Window menu, with a Minimised section after its own items (when any window is minimised) so a window that
+ * Electron's Window menu: Overview (⌘⇧O) first, then its own items, with a Minimised section after its own items (when any window is minimised) so a window that
  * is not in the dock, because the Dock setting leaves it out, is still found. The section's labels are the windows' names.
  */
-export function windowMenu(mac: boolean, minimised: readonly MinimisedItem[]): MenuItemConstructorOptions {
+export function windowMenu(mac: boolean, overview: () => void, minimised: readonly MinimisedItem[]): MenuItemConstructorOptions {
   const items = minimised.map((item): MenuItemConstructorOptions => ({ label: item.title, click: item.restore }));
   const section: MenuItemConstructorOptions[] = items.length === 0 ? [] : [{ type: 'separator' }, { label: 'Minimised', enabled: false }, ...items];
   return {
     role: 'windowMenu',
     submenu: [
+      { label: 'Overview', accelerator: OVERVIEW_ACCELERATOR, click: overview },
+      { type: 'separator' },
       { role: 'minimize' },
       { role: 'zoom' },
       ...(mac ? [{ type: 'separator' as const }, { role: 'front' as const }] : [{ role: 'close' as const }]),
@@ -59,6 +64,8 @@ export function windowMenu(mac: boolean, minimised: readonly MinimisedItem[]): M
 /** What the menu bar's items do. */
 export interface MenuActions extends AppMenuActions {
   gettingStarted(): void;
+  /** Opens the Overview window, or brings it forward. */
+  overview(): void;
 }
 
 /**
@@ -77,7 +84,7 @@ export function menuTemplate(
     { role: 'editMenu' },
     // No zoom items: ⌘+ ⌘- ⌘0 size the terminal text, and the board has its own zoom.
     viewMenu(options.packaged, technical),
-    windowMenu(options.mac, minimised),
+    windowMenu(options.mac, actions.overview, minimised),
     { role: 'help', submenu: [{ label: 'Getting started', click: actions.gettingStarted }] },
   ];
 }

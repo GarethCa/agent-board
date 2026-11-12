@@ -29,6 +29,7 @@ import {
   Pencil,
   Pin,
   PinOff,
+  Rows3,
   RotateCcw,
   Sparkles,
   SquareDashedMousePointer,
@@ -88,6 +89,8 @@ export interface ContextActions {
   crewLibrary(): void;
   /** With one lead tile selected in a shelved zone: whether it is pinned top-left, and how to free or pin it. */
   leadPin?: { pinned: boolean; toggle(): void };
+  /** With one tile selected that was placed by hand in a zone with a layout rule: puts it back under the rule. */
+  backUnderRule?: () => void;
 }
 
 /**
@@ -137,6 +140,7 @@ export function selectionEntries(selection: SelectionSummary, selectedConnectors
             : { label: 'Pin top-left', icon: <Pin />, hint: "Back in the zone's head row, above the shelves", onSelect: actions.leadPin.toggle },
           'separator' as const,
         ]),
+    ...(actions.backUnderRule === undefined ? [] : [{ label: 'Put back under the rule', icon: <Rows3 />, hint: "The zone's rule lays it out again", onSelect: actions.backUnderRule }, 'separator' as const]),
     { label: 'Duplicate', icon: <CopyPlus />, shortcut: keyText('edit.duplicate'), disabled: !hasItems, onSelect: actions.duplicate },
     { label: 'Copy', icon: <Copy />, shortcut: keyText('edit.copy'), disabled: !hasItems, onSelect: actions.copy },
     ...(selection.kinds.has('shape') ? [{ label: 'Copy as Mermaid', icon: <Workflow />, hint: 'The shapes and their connectors, as diagram text', onSelect: actions.copyMermaid }] : []),

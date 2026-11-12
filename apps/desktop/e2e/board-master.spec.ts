@@ -30,7 +30,9 @@ test('⌘⇧M opens the Captain’s panel: Start the Captain puts its tile on th
     // Watching lists the zone, which has no orchestrator yet; the chat shows the master's brief.
     await expect(panel.getByTestId('master-watch-row')).toHaveText([/monorepo.*no orchestrator/]);
     await expect(panel.getByTestId('chat-user').first()).toContainText('You are the Captain');
-    // ⌘⇧M again puts the caret in its message box.
+    // ⌘⇧M in the panel, where Start left the focus, shuts it; again, from the board, it opens it with the caret in its message box.
+    await window.keyboard.press(MASTER_KEY);
+    await expect(panel).toBeHidden();
     await window.keyboard.press(MASTER_KEY);
     await expect(panel.getByRole('textbox', { name: 'Message to the agent' })).toBeFocused();
 

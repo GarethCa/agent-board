@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { TEST_SHELL } from './test-shell.ts';
 
 export interface Scratch {
   dir: string;
@@ -35,7 +36,7 @@ export function scratch(scenario: FakeScenario): Scratch {
     // Start claude directly, not through the developer's login shell (which would reorder PATH past the fakes).
     AGENT_BOARD_LOGIN_SHELL: '0',
     // The shell an ended agent's pane drops into: never the developer's own, with its rc files.
-    SHELL: '/bin/sh',
+    SHELL: TEST_SHELL,
   };
   return { dir, repo, env };
 }

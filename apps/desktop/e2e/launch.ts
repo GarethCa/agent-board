@@ -147,7 +147,8 @@ export function launchApp(dataDir: string, env: Record<string, string> = {}, arg
   if (technical !== undefined) writeFileSync(join(dataDir, 'technical.json'), JSON.stringify({ technical }));
   if (dock !== undefined) writeFileSync(join(dataDir, 'dock.json'), JSON.stringify({ dock }));
   const launched = electron.launch({
-    args: [...args, appEntry],
+    // Linux test machines draw with no GPU: Chromium gives WebGL its software renderer only when asked.
+    args: [...(process.platform === 'linux' ? ['--enable-unsafe-swiftshader'] : []), ...args, appEntry],
     env: {
       // global-setup.ts scrubbed the run's env; this keeps a board's session variables out even if a spec set them.
       ...scrubBoardSessionEnv({ ...process.env }),

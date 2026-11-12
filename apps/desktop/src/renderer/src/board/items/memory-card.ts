@@ -1,8 +1,13 @@
 // What a memory card shows, worked out from its data and entries: kept apart from React, so it is tested on its own.
-import { MEMORY_OLD_DAYS, type MemoryData, type MemoryEntry, type StepsWho } from '@agent-board/daemon/protocol';
+import { MEMORY_OLD_DAYS, type MemoryData, type MemoryEntry, type MemoryReaders, type StepsWho } from '@agent-board/daemon/protocol';
 
-/** How many entries the open card lists; the peek lists every one. */
-export const CARD_ROWS = 4;
+/**
+ * How many entries fit whole on the open card, under one section's head; a second head takes a row's room. The card is
+ * one size, so this is fixed. The peek lists every one.
+ */
+const CARD_ROWS = 3;
+/** How many rows its documents take at least, when it has facts too. */
+const CARD_DOCS = 1;
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -44,12 +49,15 @@ export function filePreview(text: string): string {
   return lines.length < text.length ? `${lines}\n…` : lines;
 }
 
-/** Those of `entries` whose key or text (a file's start) holds every word of `search`, any case. */
-export function matching(entries: readonly MemoryEntry[], search: string): MemoryEntry[] {
+/**
+ * Those of `entries` whose key or text holds every word of `search`, any case: a document's start, or with `whole` all of
+ * it.
+ */
+export function matching(entries: readonly MemoryEntry[], search: string, whole = false): MemoryEntry[] {
   const words = search.toLowerCase().split(/\s+/).filter((word) => word !== '');
   if (words.length === 0) return [...entries];
   return entries.filter((entry) => {
-    const text = `${entry.key ?? ''} ${entry.file ? entry.text.slice(0, FILE_SHOWN) : entry.text}`.toLowerCase();
+    const text = `${entry.key ?? ''} ${entry.file && !whole ? entry.text.slice(0, FILE_SHOWN) : entry.text}`.toLowerCase();
     return words.every((word) => text.includes(word));
   });
 }
@@ -79,9 +87,78 @@ export function whenText(iso: string, now: Date): string {
   return at.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 }
 
-/** Whether an entry has gone untouched long enough to read as old. */
-export function isOld(entry: MemoryEntry, now: Date): boolean {
+/** Whether an entry has gone untouched (neither changed nor confirmed) long enough to read as stale. */
+export function isStale(entry: MemoryEntry, now: Date): boolean {
   return now.getTime() - new Date(entry.updatedAt).getTime() > MEMORY_OLD_DAYS * DAY;
+}
+
+/** How many of `entries` are stale. */
+export function staleCount(entries: readonly MemoryEntry[], now: Date): number {
+  return entries.filter((entry) => isStale(entry, now)).length;
+}
+
+/**
+ * What the open card lists, from entries in list order: its documents, then its facts, `rows` in all, or one fewer when
+ * both show, as the second section's head takes a row's room. Documents take `CARD_DOCS` of them while there are facts to
+ * show; with fewer facts, they take the rest.
+ */
+export function cardRows(entries: readonly MemoryEntry[], rows = CARD_ROWS): { docs: MemoryEntry[]; facts: MemoryEntry[]; docCount: number; factCount: number } {
+  const docs = entries.filter((entry) => entry.file);
+  const facts = entries.filter((entry) => !entry.file);
+  const room = docs.length > 0 && facts.length > 0 ? rows - 1 : rows;
+  const shownDocs = docs.slice(0, Math.min(room, Math.max(CARD_DOCS, room - facts.length)));
+  return { docs: shownDocs, facts: facts.slice(0, room - shownDocs.length), docCount: docs.length, factCount: facts.length };
+}
+
+const MINUTE = 60 * 1000;
+const HOUR = 60 * MINUTE;
+
+/** How long ago, short, as a row's corner says: "now", "5 min", "2 h", "3 d", else the day and month. */
+export function ageText(iso: string, now: Date): string {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return '';
+  const ago = now.getTime() - at.getTime();
+  if (ago < MINUTE) return 'now';
+  if (ago < HOUR) return `${Math.floor(ago / MINUTE)} min`;
+  if (ago < DAY) return `${Math.floor(ago / HOUR)} h`;
+  if (ago < MEMORY_OLD_DAYS * DAY) return `${Math.floor(ago / DAY)} d`;
+  return at.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+}
+
+/** "just now", "5 min ago", or a date: for a sentence. */
+export function agoText(iso: string, now: Date): string {
+  const age = ageText(iso, now);
+  return age === 'now' ? 'just now' : /\d (min|h|d)$/.test(age) ? `${age} ago` : age;
+}
+
+/** An entry's text in bytes of UTF-8: what an agent's listing says of a document's size. */
+export function entryBytes(entry: MemoryEntry): number {
+  return entry.listed?.bytes ?? new TextEncoder().encode(entry.text).length;
+}
+
+/** A size as a document's row says it: "640 B", "2.1 KB", "1.2 MB". */
+export function sizeText(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+const NO_READERS: MemoryReaders = { count: 0, last: null };
+
+/** An entry's readers, from a memory's view: none if it has no row there. */
+export function readersOf(readers: Record<string, MemoryReaders> | undefined, id: string): MemoryReaders {
+  return readers?.[id] ?? NO_READERS;
+}
+
+/** Who read it, as a sentence: "Read by 9 agents", or "No agent has read it yet". */
+export function readersText(readers: MemoryReaders): string {
+  if (readers.count === 0) return 'No agent has read it yet';
+  return `Read by ${readers.count} ${readers.count === 1 ? 'agent' : 'agents'}`;
+}
+
+/** Who read it last, and when: "last: impl-634, 3 min ago"; nothing if no one has. */
+export function lastReaderText(readers: MemoryReaders, now: Date): string | undefined {
+  return readers.last === null ? undefined : `last: ${readers.last.name}, ${agoText(readers.last.at, now)}`;
 }
 
 /** The foot's count: "No entries yet", "1 entry", "14 entries · 2 pinned". */

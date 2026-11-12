@@ -1081,6 +1081,7 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
                 progress: p.progress === undefined ? null : (p.progress as number),
                 character: optionalCharacterParam(p),
                 category: optionalWorkCategoryParam(p),
+                purpose: optionalStringParam(p, 'description'),
               },
               me.agent === null ? null : me.name,
             );

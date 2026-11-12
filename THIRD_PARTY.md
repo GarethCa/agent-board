@@ -62,13 +62,14 @@ authors as the guide asks. Its neutrals and terminal colours are agent-board's o
 
 ## Fonts
 
-The app bundles three typefaces through [Fontsource](https://fontsource.org) packages, all under the SIL Open Font
+The app bundles four typefaces through [Fontsource](https://fontsource.org) packages, all under the SIL Open Font
 License, Version 1.1, whose full text is in [`licenses/OFL-1.1.txt`](licenses/OFL-1.1.txt). The copyright lines are the
 ones in each package's `LICENSE` file.
 
 | Typeface | Package | Copyright |
 | --- | --- | --- |
 | Bricolage Grotesque | `@fontsource-variable/bricolage-grotesque` | Copyright 2022 The Bricolage Grotesque Project Authors (<https://github.com/ateliertriay/bricolage>) |
+| Inter | `@fontsource-variable/inter` | Copyright 2016 The Inter Project Authors (<https://github.com/rsms/inter>) |
 | JetBrains Mono | `@fontsource-variable/jetbrains-mono` | Copyright 2020 The JetBrains Mono Project Authors (<https://github.com/JetBrains/JetBrainsMono>) |
 | Caveat | `@fontsource/caveat` | Copyright 2014 The Caveat Project Authors (<https://github.com/googlefonts/caveat>) |
 

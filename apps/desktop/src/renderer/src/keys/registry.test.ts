@@ -29,11 +29,13 @@ describe('the key registry', () => {
     }
   });
 
-  it('marks only the cheat sheet, master, document editing, find, arrow-swapping, board-arranging and way-out keys new so far: the rest were in the app before it', () => {
+  it('marks only the cheat sheet, master, memory full screen, document editing, find, arrow-swapping, board-arranging and way-out keys new so far: the rest were in the app before it', () => {
     expect(KEYS.filter((entry) => entry.status === 'new').map((entry) => entry.id)).toEqual([
+      'tile.full',
       'move.cheatSheet',
       'move.master',
       'move.cheatSheetAnywhere',
+      'move.parkThought',
       'edit.swapDirection',
       'edit.arrangeBoard',
       'window.saveDoc',
@@ -45,6 +47,23 @@ describe('the key registry', () => {
       'window.escape',
       'window.leave',
     ]);
+  });
+
+  it('parks a thought on ⌘⇧P, Ctrl+Shift+P elsewhere, never plain ⌘P or Ctrl+P', () => {
+    const p = { key: 'p', code: 'KeyP', metaKey: false, ctrlKey: false, shiftKey: false, altKey: false };
+    expect(pressed('move.parkThought', { ...p, key: 'P', metaKey: true, shiftKey: true }, MAC)).toBe(true);
+    expect(pressed('move.parkThought', { ...p, metaKey: true }, MAC)).toBe(false);
+    expect(pressed('move.parkThought', { ...p, key: 'P', ctrlKey: true, shiftKey: true }, OTHER)).toBe(true);
+    expect(pressed('move.parkThought', { ...p, ctrlKey: true }, OTHER)).toBe(false);
+    expect([keyText('move.parkThought', true), keyText('move.parkThought', false)]).toEqual(['⌘⇧P', 'Ctrl+Shift+P']);
+  });
+
+  it('gives ⌘⇧P (Ctrl+Shift+P) to parking a thought alone', () => {
+    const p = { key: 'P', code: 'KeyP', metaKey: false, ctrlKey: false, shiftKey: true, altKey: false };
+    for (const [platform, held] of [[MAC, { metaKey: true }], [OTHER, { ctrlKey: true }]] as const) {
+      const takers = KEYS.filter((entry) => pressed(entry.id as never, { ...p, ...held }, platform)).map((entry) => entry.id);
+      expect(takers).toEqual(['move.parkThought']);
+    }
   });
 
   it('takes ⌘J out of a terminal, Ctrl+Shift+J elsewhere, never plain Ctrl+J, which is a newline', () => {
@@ -209,7 +228,8 @@ describe('the cheat sheet', () => {
     expect(off).not.toContain('window.saveDoc');
     expect(off).not.toContain('edit.swapDirection');
     expect(off).not.toContain('edit.arrangeBoard');
-    expect(off).toHaveLength(on.length - 13);
+    expect(off).not.toContain('tile.full');
+    expect(off).toHaveLength(on.length - 15);
   });
 
   it('puts the sections for where it opened first, marked here', () => {
@@ -226,7 +246,7 @@ describe('the cheat sheet', () => {
       ['Split beside', ['⌘D']],
       ['Split below', ['⌘⇧D']],
     ]);
-    expect(ids(cheatSheet('board', { extended: true, filter: '⌘⇧', isMac: true }))).toEqual(['move.master', 'make.askClaude', 'edit.redo', 'window.splitBelow', 'window.runGate', 'window.openLinkBrowser']);
+    expect(ids(cheatSheet('board', { extended: true, filter: '⌘⇧', isMac: true }))).toEqual(['move.master', 'move.parkThought', 'make.askClaude', 'edit.redo', 'window.splitBelow', 'window.runGate', 'window.overview', 'window.openLinkBrowser']);
     expect(cheatSheet('board', { extended: true, filter: 'nothing like this' })).toEqual([]);
   });
 });

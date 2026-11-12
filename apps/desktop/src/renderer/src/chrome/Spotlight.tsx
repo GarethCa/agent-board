@@ -1,13 +1,14 @@
 import { Fragment, useEffect, useId, useImperativeHandle, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type Ref } from 'react';
 import * as RadixDialog from '@radix-ui/react-dialog';
 import type { Agent, Shell, Zone } from '@agent-board/daemon/protocol';
-import { Plus, Search, Settings, LibraryBig } from 'lucide-react';
+import { MessageCircleDashed, Plus, Search, Settings, LibraryBig, ListFilter } from 'lucide-react';
 import { CrewFaces } from '../crews/icons';
 import { usePrefabs } from '../crews/prefab-store';
 import { SESSION_SURFACES } from '../board/board-shortcuts';
 import { HarnessMark } from '../board/HarnessMark';
 import { agentTitle, shellTitle } from '../board/use-board-windows';
 import { inOverlay } from '../keys';
+import { openParkThought } from '../keys/park-thought';
 import { keysText, keyText, pressed } from '../keys/registry';
 import { agentPill, STATE_LABELS, TILE_STATE_LABELS } from '../states';
 import { useNeedsYouShows } from '../needs-you-setting';
@@ -17,7 +18,22 @@ import { Kbd, StatusPill, Tag, useToast } from '../ui';
 import type { WindowTarget } from '../../../preload/api';
 import { errorMessage } from '../../../shared/errors';
 import { outOfDock, type SessionWindows } from '../windows/session-windows';
-import { ACTIONS_GROUP, CREWS_GROUP, newAgentLeads, SETTINGS_GROUP, spotlightGroups, type BoardSubject, type SpotlightRow, type SpotlightSubject } from './spotlight-results';
+import {
+  ACTIONS_GROUP,
+  CREWS_GROUP,
+  NEEDS_YOU_GROUP,
+  newAgentLeads,
+  RECENT_GROUP,
+  SETTINGS_GROUP,
+  sideBySide,
+  spotlightGroups,
+  spotlightStep,
+  type BoardSubject,
+  type SpotlightGroup,
+  type SpotlightRow,
+  type SpotlightStep,
+  type SpotlightSubject,
+} from './spotlight-results';
 
 /**
  * Where ⌘K was pressed, as the window it opens in reads it: what ↵ does there, and the session that view shows already.
@@ -83,7 +99,7 @@ export const windowTargetOf = (subject: SpotlightSubject): WindowTarget | undefi
  * How to give the focus back to what had it at `at`. A web tab's (or a plan's) page is another web contents, so the
  * window's own focus is on its body: the page is asked to take the keyboard again.
  */
-function focusKeeper(at: Element | null): () => void {
+export function focusKeeper(at: Element | null): () => void {
   const page = at?.closest('[data-web-tab]')?.getAttribute('data-web-tab');
   if (page != null) return () => void window.agentBoard.webTabs.focus(page).catch(() => {});
   const element = at instanceof HTMLElement ? at : null;
@@ -157,7 +173,17 @@ export function Spotlight<C>({ ref, agents, shells, zones, windows, placeOf, onP
   // Kept by key as the rows change under it; the first once it has gone.
   const activeKeyNow = activeKey !== undefined && keys.includes(activeKey) ? activeKey : keys[0];
   const active = rows.find((row) => row.key === activeKeyNow);
+  const columns = sideBySide(groups);
   const toasts = useToast();
+  const columnsRef = useRef<HTMLDivElement>(null);
+  // The Needs you column scrolls on its own: the row the keys reach is brought into its view. Not one the pointer
+  // reaches, or the list would slide under it.
+  const movedByKeys = useRef(false);
+  useEffect(() => {
+    if (!movedByKeys.current) return;
+    movedByKeys.current = false;
+    if (activeKeyNow !== undefined) document.getElementById(`${listId}-${activeKeyNow}`)?.scrollIntoView?.({ block: 'nearest' });
+  }, [activeKeyNow, listId]);
 
   /** Closes it, the focus back where it was. */
   function dismiss(from: Opened<C>) {
@@ -168,12 +194,20 @@ export function Spotlight<C>({ ref, agents, shells, zones, windows, placeOf, onP
   function pick(row: SpotlightRow, open: boolean) {
     if (opened === undefined) return;
     const { subject } = row;
+    // A filter is taken into the field, in place of the colon typed, for its value to follow.
+    if (subject.kind === 'filter') {
+      setQuery(subject.prefix);
+      setActiveKey(undefined);
+      return;
+    }
     const target = windowTargetOf(subject);
     const sessionKey = (target && rowKeyOf(target)) ?? row.key;
     if (sessionKey === opened.place.current) return dismiss(opened);
     setOpened(undefined);
     // The Settings window comes forward with the focus; if it can't, it says so and the focus goes back here.
     if (subject.kind === 'action' && subject.action === 'newAgent') return onNewAgent(opened.place.context, '');
+    // The field opens over where ⌘K was pressed, and gives the focus back there.
+    if (subject.kind === 'action' && subject.action === 'parkThought') return openParkThought(opened.restore);
     if (subject.kind === 'crew') return onCrew(opened.place.context, subject.prefab);
     const shown =
       subject.kind === 'setting' || subject.kind === 'action'
@@ -196,10 +230,20 @@ export function Spotlight<C>({ ref, agents, shells, zones, windows, placeOf, onP
 
   const onKeyDown = (event: ReactKeyboardEvent) => {
     const index = activeKeyNow === undefined ? -1 : keys.indexOf(activeKeyNow);
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    const step = ARROW_STEPS[event.key];
+    if (columns && step !== undefined) {
+      // Nothing is typed while the columns show, so ← → have no caret to move.
+      event.preventDefault();
+      movedByKeys.current = true;
+      setActiveKey(spotlightStep(groups, activeKeyNow, step, columnsStacked(columnsRef.current)));
+    } else if (event.key === 'Tab' && !event.shiftKey && active?.subject.kind === 'filter') {
+      event.preventDefault();
+      pick(active, false);
+    } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
       if (keys.length === 0) return;
       const step = event.key === 'ArrowDown' ? 1 : -1;
+      movedByKeys.current = true;
       setActiveKey(keys[(index + step + keys.length) % keys.length]!);
     } else if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
       event.preventDefault();
@@ -211,7 +255,8 @@ export function Spotlight<C>({ ref, agents, shells, zones, windows, placeOf, onP
   const showing = place?.mode === 'show';
   // A crew's row opens its prompt box, wherever ⌘K was pressed.
   const opensCrew = active?.subject.kind === 'crew';
-  const where = opensCrew ? 'open' : showing ? 'show on board' : 'switch here';
+  const filtering = active?.subject.kind === 'filter';
+  const where = filtering ? 'filter' : opensCrew ? 'open' : showing ? 'show on board' : 'switch here';
   const newAgentRow = offerNew && (
     <div
       id={`${listId}-${NEW_AGENT_KEY}`}
@@ -277,19 +322,36 @@ export function Spotlight<C>({ ref, agents, shells, zones, windows, placeOf, onP
           </div>
           <div className="spotlight-list" id={listId} role="listbox" aria-label="Sessions, zones and settings">
             {newLeads && newAgentRow}
-            {groups.map((group, index) => (
-              <Fragment key={group.label ?? index}>
-                {group.label !== undefined && (
-                  <div className="spotlight-group" role="presentation">
-                    {group.label}
-                    {group.label === 'Needs you' && ` · ${group.rows.length}`}
+            {groups.map((group, index) => {
+              // In a column a row is compact: no pill or action beside it, for its name to have the room.
+              const rowsOf = (shown: SpotlightGroup, compact = false) => (
+                <Fragment key={shown.label ?? index}>
+                  {shown.label !== undefined && (
+                    <div className="spotlight-group" role="presentation" data-group={shown.label}>
+                      {shown.label}
+                      {shown.label === NEEDS_YOU_GROUP && ` · ${shown.rows.length}`}
+                    </div>
+                  )}
+                  {shown.rows.map((row) => (
+                    <Row key={row.key} id={`${listId}-${row.key}`} row={row} active={row.key === activeKeyNow} compact={compact} onHover={() => setActiveKey(row.key)} onPick={() => pick(row, false)} />
+                  ))}
+                </Fragment>
+              );
+              // Side by side, Recent is drawn in the Needs you group's place, beside it.
+              if (columns && group.label === RECENT_GROUP) return null;
+              if (!columns || group.label !== NEEDS_YOU_GROUP) return rowsOf(group);
+              const recent = groups.find((other) => other.label === RECENT_GROUP)!;
+              return (
+                <div key="columns" ref={columnsRef} className="spotlight-columns" role="presentation" data-testid="spotlight-columns">
+                  <div className="spotlight-column" role="presentation" data-column="needs-you">
+                    {rowsOf(group, true)}
                   </div>
-                )}
-                {group.rows.map((row) => (
-                  <Row key={row.key} id={`${listId}-${row.key}`} row={row} active={row.key === activeKeyNow} onHover={() => setActiveKey(row.key)} onPick={() => pick(row, false)} />
-                ))}
-              </Fragment>
-            ))}
+                  <div className="spotlight-column" role="presentation" data-column="recent">
+                    {rowsOf(recent, true)}
+                  </div>
+                </div>
+              );
+            })}
             {!newLeads && newAgentRow}
             {rows.length === 0 && !offerNew && <p className="spotlight-empty">{newName === '' ? 'Nothing on the board yet' : 'Nothing matches'}</p>}
           </div>
@@ -300,16 +362,26 @@ export function Spotlight<C>({ ref, agents, shells, zones, windows, placeOf, onP
               ))}{' '}
               move
             </span>
+            {columns && (
+              <span>
+                {keysText('dialog.column').map((key) => (
+                  <Kbd key={key}>{key}</Kbd>
+                ))}{' '}
+                column
+              </span>
+            )}
             <span>
-              <Kbd>{keyText('dialog.pick')}</Kbd> {opensCrew ? 'open' : showing ? 'show' : 'switch'}
+              {/* ↵ or ⇥ takes a filter into the field. */}
+              <Kbd>{keyText('dialog.pick')}</Kbd>
+              {filtering && <Kbd>⇥</Kbd>} {filtering ? 'take' : opensCrew ? 'open' : showing ? 'show' : 'switch'}
             </span>
-            {showing && !opensCrew && (
+            {showing && !opensCrew && !filtering && (
               <span>
                 <Kbd>{keyText('dialog.openFromSwitcher')}</Kbd> open
               </span>
             )}
             <span>
-              <Kbd>{keyText('dialog.close')}</Kbd> back to where you were
+              <Kbd>{keyText('dialog.close')}</Kbd> {columns ? 'back' : 'back to where you were'}
             </span>
           </div>
         </RadixDialog.Content>
@@ -318,7 +390,16 @@ export function Spotlight<C>({ ref, agents, shells, zones, windows, placeOf, onP
   );
 }
 
-function Row({ id, row, active, onHover, onPick }: { id: string; row: SpotlightRow; active: boolean; onHover(): void; onPick(): void }) {
+/** Whether the two columns sit one above the other, as a narrow window lays them out. */
+function columnsStacked(columns: HTMLElement | null): boolean {
+  const [left, right] = columns?.children ?? [];
+  return left !== undefined && right !== undefined && right.getBoundingClientRect().top > left.getBoundingClientRect().top;
+}
+
+/** The arrow keys, as the moves `spotlightStep` makes. */
+const ARROW_STEPS: Partial<Record<string, SpotlightStep>> = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' };
+
+function Row({ id, row, active, compact = false, onHover, onPick }: { id: string; row: SpotlightRow; active: boolean; compact?: boolean; onHover(): void; onPick(): void }) {
   const { subject } = row;
   const shows = useNeedsYouShows();
   const prefabs = usePrefabs();
@@ -338,14 +419,16 @@ function Row({ id, row, active, onHover, onPick }: { id: string; row: SpotlightR
       onClick={onPick}
     >
       <span className="spotlight-mark" aria-hidden>
-        {subject.kind === 'crew' ? (
+        {subject.kind === 'filter' ? (
+          <ListFilter />
+        ) : subject.kind === 'crew' ? (
           crewMembers === undefined ? (
             <LibraryBig />
           ) : (
             <CrewFaces members={crewMembers} most={3} />
           )
         ) : subject.kind === 'setting' || subject.kind === 'action' ? (
-          subject.kind === 'action' && subject.action === 'newAgent' ? <Plus /> : <Settings />
+          subject.kind === 'action' && subject.action === 'newAgent' ? <Plus /> : subject.kind === 'action' && subject.action === 'parkThought' ? <MessageCircleDashed /> : <Settings />
         ) : subject.kind === 'zone' ? (
           // A zone's colour is its data, not a theme token.
           <span className="spotlight-zone-ring" style={{ '--zone-color': subject.zone.color } as CSSProperties} />
@@ -357,9 +440,20 @@ function Row({ id, row, active, onHover, onPick }: { id: string; row: SpotlightR
         <span className="spotlight-name">
           <Marked text={row.name} marks={row.marks} />
         </span>
-        <span className="spotlight-sub">{row.sub}</span>
+        {row.snippet === undefined ? (
+          <span className="spotlight-sub" data-purpose={row.purpose || undefined}>
+            {row.sub}
+          </span>
+        ) : (
+          <span className="spotlight-sub" data-testid="spotlight-snippet">
+            <span className="spotlight-field-label" data-field={row.snippet.label}>
+              {row.snippet.label}
+            </span>
+            <Marked text={row.snippet.text} marks={row.snippet.marks} />
+          </span>
+        )}
       </span>
-      {subject.kind === 'agent' ? (
+      {compact ? null : subject.kind === 'agent' ? (
         <StatusPill {...agentPill(subject.agent, shows, TILE_STATE_LABELS)} title={STATE_LABELS[subject.agent.state]} />
       ) : subject.kind === 'shell' ? (
         <Tag>shell</Tag>
@@ -367,6 +461,8 @@ function Row({ id, row, active, onHover, onPick }: { id: string; row: SpotlightR
         <span className="spotlight-act">show zone</span>
       ) : subject.kind === 'action' ? (
         <span className="spotlight-act">run</span>
+      ) : subject.kind === 'filter' ? (
+        <span className="spotlight-act">filter</span>
       ) : (
         <span className="spotlight-act">{subject.kind === 'crew' ? 'open' : 'open setting'}</span>
       )}

@@ -11,7 +11,7 @@ export interface MasterPanelState {
   open: boolean;
   /** What the pane shows while it is open; the side it last opened on while it is shut. */
   side: PaneSide;
-  /** Grows with each ⌘⇧M, which puts the focus in the panel. */
+  /** Grows with each ⌘⇧M from outside the panel, which puts the focus in it. */
   focusRequest: number;
   /** A button's click: opens the pane on `side`, or closes it if it is open on that side already. */
   toggle(side: PaneSide): void;
@@ -20,7 +20,7 @@ export interface MasterPanelState {
 
 /**
  * Whether the Captain's panel is open, and under the Simplified design which side of it. ⌘⇧M opens it from the board window, a focused expanded tile's terminal
- * included, and puts the focus in its message box; pressed with it open, it gives the focus to the box again. Not while
+ * included, and puts the focus in its message box; pressed with it open, it gives the focus to the box again, and pressed in it, it shuts it. Not while
  * a dialog, menu or session window is over the board.
  */
 export function useMasterPanel(): MasterPanelState {
@@ -38,6 +38,11 @@ export function useMasterPanel(): MasterPanelState {
       if (inOverlay() || document.querySelector(KEY_BLOCKERS) !== null) return;
       event.preventDefault();
       event.stopPropagation();
+      // Pressed in the pane, it shuts it, as Esc does: the key goes to and from the pane.
+      if (document.activeElement?.closest('.master-panel')) {
+        setPane((current) => ({ ...current, open: false }));
+        return;
+      }
       setPane({ open: true, side: 'captain' });
       setFocusRequest((count) => count + 1);
     };

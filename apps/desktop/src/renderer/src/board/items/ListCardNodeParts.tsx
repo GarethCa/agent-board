@@ -35,8 +35,8 @@ export function useLift(folded: boolean): number {
  * What it holds, read again whenever it is written: every write moves the card's `updatedAt`, as its count is saved with
  * it. Undefined until first read. A read that fails says so, and the next write reads again.
  */
-export function useRows<Row>(id: string, updatedAt: string, read: (id: string) => Promise<Row[]>, failed: (error: unknown) => void): Row[] | undefined {
-  const [rows, setRows] = useState<Row[]>();
+export function useRows<Rows>(id: string, updatedAt: string, read: (id: string) => Promise<Rows>, failed: (error: unknown) => void): Rows | undefined {
+  const [rows, setRows] = useState<Rows>();
   const calls = useRef({ read, failed });
   calls.current = { read, failed };
   useEffect(() => {

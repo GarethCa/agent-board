@@ -8,7 +8,7 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { LibraryPrefab } from '@agent-board/daemon/protocol';
 import { run } from './board-helpers.ts';
-import { agents, launch, screen, sessionWindow, SHELL_ENV, TURN_MS, zoneNamed, zones } from './agent-helpers.ts';
+import { agents, launch, screen, sessionWindow, SHELL_ENV, TURN_MS, windowKey, zoneNamed, zones } from './agent-helpers.ts';
 import { test, browseForZone, pickFolderNext, removeDataDir, tempDataDir } from './launch.ts';
 import { scratch } from './scratch.ts';
 
@@ -206,7 +206,7 @@ test('a crew starts in the right zone from every entry point, through one prompt
 
     // ⌘K: ↵ opens the crew, and no agent starts named for what was typed. Its guess at the zone can be changed.
     const before = (await agents(window)).length;
-    await window.keyboard.press(process.platform === 'darwin' ? 'Meta+k' : 'Control+k');
+    await window.keyboard.press(windowKey('k'));
     await window.getByRole('dialog', { name: 'Jump to a session, zone or setting' }).getByRole('combobox', { name: 'Jump to a session, zone or setting' }).fill('spike');
     await window.keyboard.press('Enter');
     await expect(box).toContainText('Spike + reviewer');

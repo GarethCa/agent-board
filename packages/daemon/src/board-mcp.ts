@@ -43,6 +43,7 @@ import {
   characterAnswer,
   setCrewStatus,
   setOwnStatus,
+  purposeAnswer,
   flagLine,
   flagOwn,
   openOwnPullRequest,
@@ -82,6 +83,10 @@ import {
 } from './layout-ops.ts';
 import {
   MAX_FIGURE_VALUE,
+  MAX_JOB_HEADLINE,
+  QUEUE_ADD_KINDS,
+  QUEUE_ROW_KINDS,
+  type QueueAddKind,
   MAX_PAGE_BLOCKS,
   MAX_PAGE_FIGURES,
   MAX_PAGE_ITEM,
@@ -98,7 +103,7 @@ import {
   CAPTURE_STYLES,
   CREW_EVENT_KINDS,
   ARRANGE_LAYOUTS,
-  ZONE_LAYOUT_MODES,
+  ZONE_LAYOUT_CHOICES,
   NOTE_KINDS,
   CONNECTOR_STYLES,
   RELATIONS,
@@ -131,6 +136,7 @@ import {
   isWaitState,
   lineSplitter,
   MAX_FLAG_LENGTH,
+  MAX_PURPOSE_LENGTH,
   MAX_STATUS_LENGTH,
   RPC_ERROR,
   statusLine,
@@ -341,11 +347,13 @@ export const BOARD_MCP_TOOLS: Tool[] = [
       'glance; set it when that changes, above all when your work waits on someone other than the user (category ' +
       'waiting-on-others, waiting_on {who, ref}). label is your own word for it, shown in place of the category\'s name. ' +
       'A set replaces all of it and stays until the next; done with no category is done; none gives the board\'s guess ' +
-      'back. As `agent-board status set`.',
+      'back. With description, you say what you are for, in a few words; it stays until you set another, and \'\' clears ' +
+      'it. As `agent-board status set`.',
     inputSchema: {
       type: 'object',
       properties: {
         summary: { type: 'string', maxLength: MAX_STATUS_LENGTH, description: 'What you are doing now, in a line.' },
+        description: { type: 'string', maxLength: MAX_PURPOSE_LENGTH, description: 'What you are for, kept until you change it ("Builds the morning overview window").' },
         character: {
           type: 'object',
           description: 'Your character\'s pose, with a face and a prop of its own if you like.',
@@ -584,7 +592,7 @@ export const BOARD_MCP_TOOLS: Tool[] = [
   },
   {
     name: 'queue_new',
-    description: 'Put a new queue beside your tile: jobs for agents in its scope to take one at a time, and notes; with for_user, a queue of things for the user to look at, which no agent takes from. As `agent-board queue new`.',
+    description: 'Put a new queue beside your tile: jobs for agents in its scope to take one at a time, and info to read; with for_user, a queue of things for the user to look at, which no agent takes from. As `agent-board queue new`.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -597,7 +605,7 @@ export const BOARD_MCP_TOOLS: Tool[] = [
   },
   {
     name: 'queue_read',
-    description: 'Without queue, list the queues you can read; with queue, its jobs and notes in order, then those done; with job, that job\'s versions, newest first. As `agent-board queue ls|read|history`.',
+    description: 'Without queue, list the queues you can read; with queue, its rows in order, then those done; with job, that job\'s versions, newest first. As `agent-board queue ls|read|history`.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -610,10 +618,10 @@ export const BOARD_MCP_TOOLS: Tool[] = [
   {
     name: 'queue_update',
     description:
-      'Change a queue: add queues jobs, one a line (" -> link" at its end; front puts them at the front; kind note adds ' +
-      'notes); take takes the next job, or job: it is yours until done or drop, and goes back to the front if your session ' +
-      'ends first; drop puts a job you took back at the front, counted; done finishes it; edit, remove and restore (a ' +
-      'version from queue_read) change a job or note; move puts one before another open job (to: its #id), at the top or last. ' +
+      'Change a queue: add queues jobs, one a line (" -> link" at its end; front puts them at the front; kind sets their ' +
+      'kind; or one job as a headline and a body); take takes the next job, or job: it is yours until done or drop, and goes back to the front if your session ' +
+      'ends first; drop puts a job you took back at the front, counted; done finishes it (result: what was done); edit, remove and restore (a ' +
+      'version from queue_read) change a row; move puts one before another open job (to: its #id), at the top or last. ' +
       'drain (on a queue you made) has the board start fresh agents for its waiting jobs. ' +
       'As `agent-board queue add|take|drop|done|edit|move|rm|restore|drain`.',
     inputSchema: {
@@ -621,9 +629,17 @@ export const BOARD_MCP_TOOLS: Tool[] = [
       properties: {
         queue: { type: 'string', description: 'The queue, by ref (item:3f2a) or title.' },
         action: { type: 'string', enum: ['add', 'take', 'drop', 'done', 'edit', 'move', 'remove', 'restore', 'drain'], description: 'What to do.' },
-        job: { type: 'string', description: "The job or note, by #id (its start will do). For take, leave it out for the next one." },
+        job: { type: 'string', description: "The row, by #id (its start will do). For take, leave it out for the next one." },
         text: { type: 'string', description: 'For add: the jobs, one a line; for edit, the new text.' },
-        kind: { type: 'string', enum: ['job', 'note'], description: 'For add: jobs (the default) or notes.' },
+        headline: { type: 'string', description: `For add, instead of text: one job's headline, a line of at most ${MAX_JOB_HEADLINE} characters. Its detail goes in body.` },
+        body: { type: 'string', description: 'For add, with headline: the detail, in Markdown.' },
+        kind: {
+          type: 'string',
+          enum: [...QUEUE_ADD_KINDS],
+          description:
+            "For add. An agents' queue: task (the default), request, prompt, or info (read, never taken). The user's queue: backlog (the default), review, questions or read. job is the default kind, note is info.",
+        },
+        result: { type: 'string', description: 'For done: what was done, for whoever reads the queue next.' },
         front: { type: 'boolean', description: 'For add: at the front, in the order given.' },
         link: { type: 'string', description: 'For add (one job) and edit: its link; "" clears it.' },
         version: { type: 'integer', minimum: 1, description: 'For restore: the version to put back.' },
@@ -1144,16 +1160,17 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
     name: 'zone_layout',
     description:
       'Set how your zone (or one in your scope) draws what it holds, as its Layout menu does in the app: free, each tile ' +
-      'where it was put (every zone starts free); shelves, one stack per ticket on To do, Doing, Waiting and Done shelves ' +
+      'where it was put (every zone starts free); lanes, a rule the zone keeps: a lane per ticket, laid out again whenever ' +
+      'its work changes, a tile the user drags leaving the rule where it is put; shelves, one stack per ticket on To do, Doing, Waiting and Done shelves ' +
       "under a head row of the zone's leads and shells, a click on a stack fanning its tiles out below the shelves; clusters, " +
-      "each ticket's tiles drawn together, what needs the user first. Moves no tile's own place, so free again shows the " +
-      'zone as it was. A zone is never laid out so by itself: choose shelves when its work is easier to follow by status, ' +
-      'clusters when by ticket. As ' +
+      "each ticket's tiles drawn together, what needs the user first. Shelves and clusters move no tile's own place, so " +
+      'free again shows the zone as it was; lanes moves them. Choose shelves when its work is easier to follow by status, ' +
+      'clusters or lanes when by ticket. As ' +
       '`agent-board zone layout`.',
     inputSchema: {
       type: 'object',
       properties: {
-        layout: { type: 'string', enum: [...ZONE_LAYOUT_MODES], description: 'free, shelves or clusters.' },
+        layout: { type: 'string', enum: [...ZONE_LAYOUT_CHOICES], description: 'free, lanes, shelves or clusters.' },
         zone: { type: 'string', description: 'The zone, by ref; yours by default.' },
       },
       required: ['layout'],
@@ -1535,8 +1552,19 @@ function queueUpdateArg(args: Record<string, unknown>): QueueUpdate {
   const link = stringArg(args, 'link', true);
   switch (args.action) {
     case 'add': {
-      if (args.kind !== undefined && args.kind !== 'job' && args.kind !== 'note') throw new BoardError('kind must be job or note');
-      return { action: 'add', text: stringArg(args, 'text'), kind: (args.kind as 'job' | 'note' | undefined) ?? 'job', front: booleanArg(args, 'front') === true, ...(link === undefined ? {} : { link }) };
+      if (args.kind !== undefined && !(QUEUE_ADD_KINDS as readonly unknown[]).includes(args.kind)) throw new BoardError(`kind must be one of ${QUEUE_ROW_KINDS.join(', ')} (or job, note)`);
+      const headline = stringArg(args, 'headline', true);
+      const body = stringArg(args, 'body', true);
+      if (headline === undefined && body !== undefined) throw new BoardError('body goes with headline');
+      if (headline !== undefined && text !== undefined) throw new BoardError('give text, or headline and body: not both');
+      return {
+        action: 'add',
+        text: headline ?? stringArg(args, 'text'),
+        ...(headline === undefined ? {} : { body: body ?? '' }),
+        ...(args.kind === undefined ? {} : { kind: args.kind as QueueAddKind }),
+        front: booleanArg(args, 'front') === true,
+        ...(link === undefined ? {} : { link }),
+      };
     }
     case 'take': {
       const which = stringArg(args, 'job', true);
@@ -1545,8 +1573,11 @@ function queueUpdateArg(args: Record<string, unknown>): QueueUpdate {
     case 'edit':
       if (text === undefined && link === undefined) throw new BoardError('edit needs text or link');
       return { action: 'edit', job: job(), ...(text === undefined ? {} : { text }), ...(link === undefined ? {} : { link }) };
+    case 'done': {
+      const result = stringArg(args, 'result', true);
+      return { action: 'done', job: job(), ...(result === undefined ? {} : { result }) };
+    }
     case 'drop':
-    case 'done':
     case 'remove':
       return { action: args.action, job: job() };
     case 'restore':
@@ -1682,9 +1713,10 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
     if (via !== undefined && typeof via !== 'string') throw new BoardError('via must be a string');
     return flagLine(await flagOwn(session, reason, via));
   },
-  set_status: async (session, { summary, progress, done, agent: crewMember, character: given, category: kind, label, waiting_on: waitingOn }) => {
+  set_status: async (session, { summary, progress, done, agent: crewMember, character: given, category: kind, label, waiting_on: waitingOn, description }) => {
     if (summary !== undefined && typeof summary !== 'string') throw new BoardError('summary must be a string');
-    if (summary === undefined && given === undefined && kind === undefined) throw new BoardError('give a summary, a character, a category, or more');
+    if (description !== undefined && typeof description !== 'string') throw new BoardError('description must be a string');
+    if (summary === undefined && given === undefined && kind === undefined && description === undefined) throw new BoardError('give a summary, a character, a category, a description, or more');
     if (progress !== undefined && typeof progress !== 'number') throw new BoardError('progress must be a number');
     let character: CharacterSet | undefined;
     try {
@@ -1701,12 +1733,13 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
     if (crewMember !== undefined) {
       if (typeof crewMember !== 'string') throw new BoardError('agent must be a ref or name');
       if (done === true) throw new BoardError('done is for your own status: a crew member says it is finished itself');
-      return (await setCrewStatus(session, crewMember, summary, progress, character, category)).text;
+      return (await setCrewStatus(session, crewMember, summary, progress, character, category, description)).text;
     }
-    const agent = await setOwnStatus(session, summary, progress, done === true, character, category);
+    const agent = await setOwnStatus(session, summary, progress, done === true, character, category, description);
     const lines =
       summary === undefined ? [] : [`Your tile now says: ${statusLine(agent.status!)}${agent.workFinishedAt === null ? '' : ', and that your work is finished'}`];
     if (category !== undefined || done === true) lines.push(categoryAnswer(agent));
+    if (description !== undefined) lines.push(purposeAnswer(agent));
     if (character !== undefined) {
       const { shown, yours, expires } = characterReading(agent);
       lines.push(characterAnswer(agent), JSON.stringify({ ok: true, shown, yours, expires }));

@@ -356,13 +356,13 @@ for (const { theme, suffix } of THEMES) {
   });
 }
 
-/** A memory's looks (board/items/MemoryGallery.tsx): open with entries and empty, folded to its icon, and its peek. */
-const MEMORY_SHOTS = ['card', 'empty', 'icons', 'peek'];
+/** A memory's looks (board/items/MemoryGallery.tsx): open with entries and empty, folded to its icon, its peek, and full screen. */
+const MEMORY_SHOTS = ['card', 'empty', 'icons', 'peek', 'full-doc', 'full-fact'];
 
 for (const design of ['classic', 'simplified'] as const) {
   for (const { theme, suffix } of THEMES) {
     const named = (shot: string) => `memory-${shot}${design === 'simplified' ? '-simplified' : ''}${suffix}`;
-    test(`a memory open as a card, empty, folded to its brain icon, and its peek: the memory gallery, ${design}, ${theme}`, async () => {
+    test(`a memory open as a card, empty, folded to its brain icon, its peek and full screen: the memory gallery, ${design}, ${theme}`, async () => {
       needsBaselines(...MEMORY_SHOTS.map(named));
       const dataDir = tempDataDir();
       const { app, window } = await launchGallery(dataDir, theme, undefined, { design });
@@ -432,4 +432,23 @@ for (const design of ['classic', 'simplified'] as const) {
       }
     });
   }
+}
+
+for (const { theme, suffix } of THEMES) {
+  test(`the Overview at eight in the morning: three projects and a loose agent, every work category among them: its gallery page, ${theme}`, async () => {
+    needsBaselines(`overview${suffix}`);
+    const dataDir = tempDataDir();
+    const { app, window } = await launchGallery(dataDir, theme, undefined, {}, '#gallery-overview');
+    try {
+      const gallery = window.getByTestId('overview-gallery');
+      await expect(gallery.getByTestId('overview-column')).toHaveCount(4);
+      await pinFonts(window);
+      await ignorePointer(window);
+      await settle(window);
+      await expect(gallery).toHaveScreenshot(`overview${suffix}.png`, SHOT);
+    } finally {
+      await app.close();
+      await removeDataDir(dataDir);
+    }
+  });
 }

@@ -162,7 +162,7 @@ test('a chip stays exactly where it was through a zone delete and its undo, twic
       await window.getByRole('menuitem', { name: simplified ? 'Delete project…' : 'Delete zone…' }).click();
       await window.getByRole('alertdialog').getByRole('button', { name: 'Delete', exact: true }).click();
       await expect(zoneNamed(window, 'monorepo')).toHaveCount(0);
-      await window.keyboard.press('Meta+Z');
+      await window.keyboard.press('ControlOrMeta+Z');
       await expect(zoneNamed(window, 'monorepo')).toHaveCount(1);
       await expect.poll(saved).toMatchObject({ x: before!.x, y: before!.y });
       const now = await chip(window).boundingBox();

@@ -5,6 +5,8 @@ import { launch, sessionWindow, SHELL_ENV } from './agent-helpers.ts';
 import { newShell, test, tempDataDir } from './launch.ts';
 import { openSettings, settingsSection } from './settings-helpers.ts';
 
+const OS = process.platform === 'darwin' ? 'macOS' : 'your system';
+
 // Settings › Appearance: the mode, System, Light or Dark, and a theme family in the Theme popover. Tests launch with
 // AGENT_BOARD_APPEARANCE=light, the default when nothing was picked, so the developer's own macOS setting never shows
 // through.
@@ -73,7 +75,7 @@ test('picks Dark, Light or System in Settings, the window follows at once, and t
     await expect.poll(() => theme(window)).toBe('dark');
     expect(await desk(window)).toBe('rgb(27, 26, 25)');
     expect(await themeSource(app)).toBe('dark');
-    await expect(settings.getByText('Dark whatever macOS is set to.')).toBeVisible();
+    await expect(settings.getByText(`Dark whatever ${OS} is set to.`)).toBeVisible();
 
     // System follows macOS, live: here the window's own light or dark mode, emulated.
     await mode.getByRole('button', { name: 'System' }).click();
@@ -81,11 +83,11 @@ test('picks Dark, Light or System in Settings, the window follows at once, and t
     await window.emulateMedia({ colorScheme: 'dark' });
     await settings.emulateMedia({ colorScheme: 'dark' });
     await expect.poll(() => theme(window)).toBe('dark');
-    await expect(settings.getByText('System follows macOS, which is dark right now.')).toBeVisible();
+    await expect(settings.getByText(`System follows ${OS}, which is dark right now.`)).toBeVisible();
     await window.emulateMedia({ colorScheme: 'light' });
     await settings.emulateMedia({ colorScheme: 'light' });
     await expect.poll(() => theme(window)).toBe('light');
-    await expect(settings.getByText('System follows macOS, which is light right now.')).toBeVisible();
+    await expect(settings.getByText(`System follows ${OS}, which is light right now.`)).toBeVisible();
     await window.emulateMedia({ colorScheme: null });
     await settings.emulateMedia({ colorScheme: null });
 

@@ -26,6 +26,7 @@ import { lastMessageCard, nameClass, stopPropagation, TileButton, TileMenu, Trus
 import { useFittedLines } from './use-fitted-lines';
 import { quickAskOf } from './quick-ask';
 import { TileQuickAsk } from './TileQuickAsk';
+import { HandPlacedMark } from './HandPlacedMark';
 
 type CalmTileProps = { id: string; selected: boolean; agent: Agent } & Pick<TileData, 'repo' | 'from' | 'crew' | 'crewFlags' | 'implementer'>;
 
@@ -71,6 +72,7 @@ export function CalmTile({ id, selected, agent, repo, from, crew, crewFlags, imp
         className="hybrid-tile hybrid-tile-agent calm-tile"
         data-testid="agent-tile"
         data-representation="hybrid"
+        data-corner="hover"
         data-harness={agent.harness}
         data-state={agent.state}
         data-status={face.status}
@@ -96,8 +98,9 @@ export function CalmTile({ id, selected, agent, repo, from, crew, crewFlags, imp
         <div className="hybrid-tile-head calm-tile-head">
           {startup !== null && !startup.failed && <Spinner />}
           <EditableName className={nameClass(agent.name)} value={agent.name} title={agent.name} renaming={renaming} clicks={nameClicks} label="Agent name" />
-          <RenameButton renaming={renaming} />
+          <HandPlacedMark nodeId={id} />
           <span className="calm-tile-controls" data-testid="tile-controls">
+            <RenameButton renaming={renaming} />
             <TileButton
               icon={<FoldVertical />}
               aria-label="Fold to a chip"

@@ -35,9 +35,10 @@ function useLiveList<T, C>(list: () => Promise<T[]>, subscribe: (listener: (chan
 
 /**
  * The agents, shells and zones, kept live from the daemon's changes: for a window without the board's own lists, such
- * as a popped-out session window's ⌘K switcher. Each is undefined until listed.
+ * as a popped-out session window's ⌘K switcher. The shells are undefined until listed; the agents and zones are empty
+ * until then, and `listed` says when both have been.
  */
-export function useLiveLists(): { agents: readonly Agent[]; shells: readonly Shell[] | undefined; zones: readonly Zone[] } {
+export function useLiveLists(): { agents: readonly Agent[]; shells: readonly Shell[] | undefined; zones: readonly Zone[]; listed: boolean } {
   const { agents, shells, zones } = window.agentBoard;
   const liveAgents = useLiveList(agents.list, agents.onChanged, (current, change) =>
     change.type === 'agent.removed' ? current.filter((agent) => agent.sessionId !== change.sessionId) : upsert(current, change.agent, (agent) => agent.sessionId),
@@ -48,5 +49,5 @@ export function useLiveLists(): { agents: readonly Agent[]; shells: readonly She
   const liveZones = useLiveList(zones.list, zones.onChanged, (current, change) =>
     change.type === 'zone.removed' ? current.filter((zone) => zone.id !== change.id) : upsert(current, change.zone, (zone) => zone.id),
   );
-  return { agents: liveAgents ?? [], shells: liveShells, zones: liveZones ?? [] };
+  return { agents: liveAgents ?? [], shells: liveShells, zones: liveZones ?? [], listed: liveAgents !== undefined && liveZones !== undefined };
 }

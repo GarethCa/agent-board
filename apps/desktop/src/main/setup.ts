@@ -33,14 +33,14 @@ export function registerSetupIpc(daemon: DaemonLink, notify: Notifier): void {
 
 /**
  * The app menu bar: Electron's default menus, with Help › Getting started, which reopens onboarding on the board
- * (`window`, opening it if need be), and on macOS an app menu with About, Settings… (`settings`, the Settings window)
- * and Check for Updates…. A request made while the board loads is kept until it asks (`takeGettingStarted`), as opening
+ * (`window`, opening it if need be), Window › Overview (`overview`, the Overview window), and on macOS an app menu
+ * with About, Settings… (`settings`, the Settings window) and Check for Updates…. A request made while the board loads is kept until it asks (`takeGettingStarted`), as opening
  * an agent is. Under the Simplified design, View › Show Technical Details turns `technical` on or off; the menu bar is
  * built again whenever it or the `design` changes, so the item follows a pick made in any window.
  */
 export function setAppMenu(
   window: () => BrowserWindow,
-  settings: () => void,
+  { settings, overview }: { settings: () => void; overview: () => void },
   { design, technical }: { design: FileSetting<Design>; technical: FileSetting<boolean> },
   { liveBoard, openBoard }: { liveBoard: () => BrowserWindow | undefined; openBoard: (showing: WindowTarget) => BrowserWindow },
 ): void {
@@ -69,6 +69,7 @@ export function setAppMenu(
   const actions = {
     about: () => app.showAboutPanel(),
     settings,
+    overview,
     checkForUpdates: () => void openWebLink(RELEASES_URL).catch(() => {}),
     gettingStarted: asks(SETUP_IPC.gettingStarted, SETUP_IPC.takeGettingStarted),
   };

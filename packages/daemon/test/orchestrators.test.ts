@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -221,9 +222,12 @@ describe('letting an agent orchestrate', () => {
 /** Connects as the shell session `pane`, with the board token it holds, as a CLI run in it by hand does. */
 async function shellSide(setup: Setup, pane: string) {
   await setup.client.call('session.attach', { sessionId: pane });
-  await setup.client.call('session.write', { sessionId: pane, data: 'echo "identity:$AGENT_BOARD_IDENTITY:end"\r' });
-  await setup.recorder.waitForText(pane, ':end\r\n');
-  const token = /identity:(.*):end\r\n/.exec(setup.recorder.screenText(pane))![1]!;
+  // A marker of its own, so an ended agent's pane, which still shows the agent printing its identity, never answers.
+  // Its halves are quoted apart, so the joined form is only in the echo's output, never in the typed command.
+  const marker = `shell-${randomUUID()}`;
+  await setup.client.call('session.write', { sessionId: pane, data: `echo "${marker}""-id:$AGENT_BOARD_IDENTITY:${marker}""-end"\r` });
+  await setup.recorder.waitForText(pane, `${marker}-end`);
+  const token = new RegExp(`${marker}-id:(.*):${marker}-end`).exec(setup.recorder.screenText(pane))![1]!;
   return { token, connection: await connectTestClient(setup.daemon) };
 }
 
@@ -2258,7 +2262,7 @@ describe('agents setting their characters’ poses', () => {
     await expect(connection.call('board.setStatus', { token, character: { pose: 'testing', prop: 'hammer' } } as never)).rejects.toMatchObject({
       message: expect.stringMatching(/unknown prop 'hammer'; props: dots/),
     });
-    await expect(connection.call('board.setStatus', { token })).rejects.toMatchObject({ message: expect.stringMatching(/a status summary, a character pose, a category, or more/) });
+    await expect(connection.call('board.setStatus', { token })).rejects.toMatchObject({ message: expect.stringMatching(/a status summary, a character pose, a category, a description, or more/) });
     await expect(connection.call('board.setStatus', { token, progress: 40, character: { pose: 'testing' } })).rejects.toMatchObject({
       message: expect.stringMatching(/progress goes with a status summary/),
     });
@@ -2472,7 +2476,49 @@ describe('agents setting their characters’ poses', () => {
     expect(answer).toMatchObject({ isError: false });
     expect(answer.text.split('\n').at(-1)).toBe(JSON.stringify({ ok: true, shown: 'reading', yours: 'reading', expires: 'at turn end, or 20 minutes after this set' }));
     expect(await mcp.callTool('set_status', { character: { pose: 'dancing' } })).toMatchObject({ isError: true, text: expect.stringMatching(/unknown pose 'dancing'/) });
-    expect(await mcp.callTool('set_status', {})).toMatchObject({ isError: true, text: expect.stringMatching(/a summary, a character, a category, or more/) });
+    expect(await mcp.callTool('set_status', {})).toMatchObject({ isError: true, text: expect.stringMatching(/a summary, a character, a category, a description, or more/) });
+  });
+});
+
+describe('agents saying what they are for', () => {
+  const listed = async (setup: Setup, sessionId: string) => (await setup.client.call('agent.list')).find((agent) => agent.sessionId === sessionId)!;
+
+  it('sets its own over MCP, keeps it as its line changes, refuses a long one, and clears it with an empty one', async () => {
+    const setup = await orchestrateDaemon();
+    const { agent, token, connection } = await agentSide(setup, setup.zone.id);
+    const mcp = mcpAs(setup, token);
+
+    expect(await mcp.callTool('set_status', { description: '  Builds the morning\noverview window ' })).toEqual({
+      text: 'Your description: "Builds the morning overview window". It stays until another is set.',
+      isError: false,
+    });
+    expect(await listed(setup, agent.sessionId)).toMatchObject({ purpose: 'Builds the morning overview window', status: null });
+    expect(await connection.call('board.setStatus', { token, summary: 'Wiring the columns' })).toMatchObject({ purpose: 'Builds the morning overview window' });
+
+    await expect(connection.call('board.setStatus', { token, description: 'x'.repeat(81) })).rejects.toThrow('the description is 81 characters; at most 80');
+    expect(await mcp.callTool('set_status', { description: '' })).toMatchObject({ text: 'Your description is cleared.' });
+    expect((await listed(setup, agent.sessionId)).purpose).toBeNull();
+  });
+
+  it('is set by its orchestrator for an agent it started', async () => {
+    const setup = await orchestrateDaemon();
+    const lead = await agentSide(setup, setup.zone.id, 'zone');
+    const worker = await lead.connection.call('orchestrator.spawn', { token: lead.token, name: 'worker', prompt: 'Print your board identity' });
+
+    const set = await lead.connection.call('orchestrator.setStatus', { token: lead.token, sessionId: worker.sessionId, description: 'Reviews the pairing screen' });
+    expect(set).toMatchObject({ purpose: 'Reviews the pairing screen', status: null });
+  });
+
+  it('keeps it across a restart of the daemon', async () => {
+    const dataDir = tempDataDir();
+    const setup = await orchestrateDaemon({ dataDir });
+    const { agent, token, connection } = await agentSide(setup, setup.zone.id);
+    await connection.call('board.setStatus', { token, description: 'Turns remind-me into calendar events' });
+    await setup.daemon.stop();
+
+    const again = await startOrchestrateDaemon({ dataDir });
+    const client = await connectTestClient(again);
+    expect((await client.call('agent.list')).find((each) => each.sessionId === agent.sessionId)?.purpose).toBe('Turns remind-me into calendar events');
   });
 });
 
@@ -2557,7 +2603,7 @@ describe('agents setting their work categories', () => {
     await refused({ category: 'blocked', waitingOn: { who: 'Legal' } }, /waitingOn is only for waiting-on-others and in-review/);
     await refused({ category: 'in-review', waitingOn: { ref: '#1' } }, /waitingOn needs a who/);
     await refused({ category: 'in-review', waitingOn: { who: 'y'.repeat(81) } }, /who is 81 characters; at most 80/);
-    await refused({}, /a status summary, a character pose, a category, or more/);
+    await refused({}, /a status summary, a character pose, a category, a description, or more/);
   });
 
   it('sets the category of an agent in its crew, saying who set it, and refuses one outside it', async () => {
@@ -2621,7 +2667,7 @@ describe('agents setting their work categories', () => {
       isError: true,
       text: expect.stringMatching(/waiting_on is only for waiting-on-others and in-review/),
     });
-    expect(await mcp.callTool('set_status', {})).toMatchObject({ isError: true, text: expect.stringMatching(/a summary, a character, a category, or more/) });
+    expect(await mcp.callTool('set_status', {})).toMatchObject({ isError: true, text: expect.stringMatching(/a summary, a character, a category, a description, or more/) });
     const json = JSON.parse((await run('show', ['--json', `agent:${lead.agent.sessionId.slice(0, 4)}`])).out) as { workCategory: unknown };
     expect(json.workCategory).toMatchObject({ category: 'in-review', waitingOn: { who: 'Ada', ref: 'PR #12' }, setBy: null });
   });

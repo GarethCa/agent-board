@@ -285,6 +285,7 @@ describe('subagents on a Hybrid tile', () => {
       status: null,
       character: null,
       workCategory: null,
+      purpose: null,
       workFinishedAt: null,
       flag: null,
       ...fields,

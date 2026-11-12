@@ -26,6 +26,8 @@ const zone = (id: string, folded: boolean): Zone => ({
   gateCommand: null,
   spacing: 'normal',
   layoutMode: 'free',
+  layoutRule: 'off',
+  handPlaced: [],
   folded,
   tracker: null,
   clone: null,

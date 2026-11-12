@@ -2,7 +2,7 @@ import { expect, type Page } from '@playwright/test';
 import { createFakeGitHub, FAKE_GITHUB_STATE, type FakeGitHubPullRequest } from '@agent-board/tracker/testing';
 import { execFileSync } from 'node:child_process';
 import type { Agent } from '@agent-board/daemon/protocol';
-import { closeAgent, launch } from '../agent-helpers.ts';
+import { closeAgent, launch, windowKey } from '../agent-helpers.ts';
 import { makeRepo, pinPaths, pinRandomLooks, scenarioPicker, stillBoard } from '../demo-board.ts';
 import { removeDataDir, tempDataDir, test } from '../launch.ts';
 import { RENDER_ARGS, RENDER_ENV, VIEWPORT, settle } from '../render.ts';
@@ -146,7 +146,7 @@ test('a zone of about 30 agents on status shelves (at a glance, a stack fanned o
       await expect.soft(page.locator('.board')).toHaveScreenshot(`${name}-overview.png`, SHOT);
 
       // A jump to an agent that needs you fans its stack out, and comes to it.
-      await page.keyboard.press(process.platform === 'darwin' ? 'Meta+k' : 'Control+k');
+      await page.keyboard.press(windowKey('k'));
       await page.getByTestId('spotlight').getByRole('combobox').fill(NEEDS_YOU[1]!);
       await page.keyboard.press('Enter');
       // Its stack of three, open: the three tiles fanned out below the shelves, the rest of the zone stepped back.

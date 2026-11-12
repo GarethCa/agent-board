@@ -56,6 +56,7 @@ Its final message is not handed on, as no hook carried it. A hook or output whil
 
 - Fake `claude`/`codex` binaries in the test suite must emit the same hook calls and transcript lines as the real CLIs, driven by scripted scenarios. Real Codex payloads and ordered scenarios live in `fixtures/codex/` (its README lists per-event field sets and what is not covered).
 - "Thinking" vs "running" is a heuristic (between a prompt/tool result and the next tool call); it is cosmetic and allowed to be wrong.
+- A Claude agent's own tools can read its hook token, and this is accepted. The token is in Claude's env (`AGENT_BOARD_HOOK_TOKEN`, set where `agent-spawns.ts` starts it) because three things Claude runs read it there: its `http` hook header, its `SessionStart` command hook (`CLAUDE_SESSION_START_COMMAND`) and its status line command (`claudeStatusLineCommand`). Claude Code can't hide one variable from its Bash tool. Each session has its own token, so a process that reads it can forge hook events only for that agent's own tile. It can also post a plan usage reading to `/usage`, and that reading is the board's one (ADR-0025): the toolbar, `agent-board usage` and the MCP `usage` tool would show what it posted. That is accepted too, because the app only shows the reading and never acts on it, and the process runs as the user, who could write the same data directly. Codex agents have the token removed from their tool shell (`shell_environment_policy.exclude` on `AGENT_BOARD_HOOK_*`, ADR-0010).
 
 ## Amendments
 

@@ -71,7 +71,8 @@ import {
   ZONE_COLORS,
   ZONE_FILL_OPACITY,
   HARNESS_EFFORTS,
-  ZONE_LAYOUT_MODES,
+  ZONE_LAYOUT_CHOICES,
+  zoneLayoutChoiceOf,
   type Agent,
   type Effort,
   type ArrangeSpacing,
@@ -81,7 +82,7 @@ import {
   type Shell,
   type Zone,
   type ZoneBinding,
-  type ZoneLayoutMode,
+  type ZoneLayoutChoice,
   waitsOnUser,
 } from '@agent-board/daemon/protocol';
 import { isClosed, SPACING_GAPS } from '@agent-board/daemon/board-layout';
@@ -246,6 +247,8 @@ export interface TileBoardActions {
   connect?: () => void;
   /** For a lead tile in a shelved zone: whether it is pinned top-left, and how to free or pin it. */
   leadPin?: { pinned: boolean; toggle(): void };
+  /** For a tile placed by hand in a zone with a layout rule: puts it back under the rule. */
+  backUnderRule?: () => void;
   /** Puts the text on the clipboard, saying what it was. */
   copy(text: string, what: string): void;
   /** Selects the tile of the session and flies to it. */
@@ -331,6 +334,7 @@ function arrangeEntries({ nodeId, agent, board, actions }: AgentTileMenuInput): 
             ? { id: 'lead-pin', label: 'Free from top-left', icon: <PinOff />, hint: 'It goes on the shelves as a stack of its own', onSelect: board.leadPin.toggle }
             : { id: 'lead-pin', label: 'Pin top-left', icon: <Pin />, hint: "Back in the zone's head row, above the shelves", onSelect: board.leadPin.toggle },
         ]),
+    ...(board.backUnderRule === undefined ? [] : [{ id: 'follow-rule', label: 'Put back under the rule', icon: <Rows3 />, hint: "The zone's rule lays it out again", onSelect: board.backUnderRule }]),
     ...(board.connect === undefined ? [] : [{ id: 'connect', label: 'Connect to…', icon: <Spline />, hint: 'Then click what to join it to', onSelect: board.connect }]),
   ];
   return [
@@ -476,8 +480,11 @@ export interface ZoneBindingActions {
   setSpacing(zone: Zone, spacing: ArrangeSpacing): void;
   /** Opens Settings, where the spacing new zones take is. */
   openSettings(): void;
-  /** Draws the zone's work as `mode` lays it out: free, on shelves, or in clusters. Moves no tile's saved place. */
-  setLayoutMode(zone: Zone, mode: ZoneLayoutMode): void;
+  /**
+   * Lays the zone out as `choice`: free, by a rule it keeps (lanes, which moves its tiles), or drawn on shelves or in
+   * clusters (which moves no tile's saved place).
+   */
+  setLayoutMode(zone: Zone, choice: ZoneLayoutChoice): void;
   /** Folds it to a chip: its agents that can pause are paused and its terminals let go. */
   fold(zone: Zone): void;
   /** Unfolds it. Its paused agents stay paused unless `wake` is asked for. */
@@ -569,28 +576,32 @@ function spacingEntries(zone: Zone, actions: Pick<ZoneMenuActions, 'setSpacing'>
 }
 
 /**
- * A Tidy row's state in a zone on shelves or in clusters: disabled, saying why, since the zone lays itself out and a tidy
- * would move the places its tiles are not drawn at. Nothing for a free zone.
+ * A Tidy row's state in a zone with a layout rule, on shelves or in clusters: disabled, saying why, since the zone lays
+ * itself out (and on shelves or in clusters, a tidy would move the places its tiles are not drawn at). Nothing for a
+ * free zone.
  */
-export function tidyBlocked(zone: Pick<Zone, 'layoutMode'>): { disabled: true; hint: string } | Record<string, never> {
+export function tidyBlocked(zone: Pick<Zone, 'layoutMode' | 'layoutRule'>): { disabled: true; hint: string } | Record<string, never> {
+  if (zone.layoutRule !== 'off') return { disabled: true, hint: 'The zone lays its tiles out by its rule' };
   if (zone.layoutMode === 'shelves') return { disabled: true, hint: 'Not on status shelves: it would move the tiles folded into stacks' };
   if (zone.layoutMode === 'clusters') return { disabled: true, hint: 'Not in clusters: the zone lays its tiles out itself' };
   return {};
 }
 
 /** Each zone layout's name and what it draws, as the zone's Layout menu offers them. */
-const LAYOUT_MODE_LABELS: Record<ZoneLayoutMode, { label: string; hint: string }> = {
+const LAYOUT_MODE_LABELS: Record<ZoneLayoutChoice, { label: string; hint: string }> = {
   free: { label: 'Free', hint: 'Each tile where you put it' },
+  lanes: { label: 'Lanes by ticket', hint: 'A lane per ticket, kept as work comes and goes' },
   shelves: { label: 'Status shelves', hint: 'Shelves by status, a stack per ticket' },
   clusters: { label: 'Clusters', hint: "Each ticket's tiles together, what needs you first" },
 };
 
 function layoutModeEntries(zone: Zone, actions: Pick<ZoneMenuActions, 'setLayoutMode'>): ModelEntry[] {
-  return ZONE_LAYOUT_MODES.map((mode) => ({
+  const current = zoneLayoutChoiceOf(zone);
+  return ZONE_LAYOUT_CHOICES.map((mode) => ({
     id: `layout-${mode}`,
     label: LAYOUT_MODE_LABELS[mode].label,
     hint: LAYOUT_MODE_LABELS[mode].hint,
-    checked: zone.layoutMode === mode,
+    checked: current === mode,
     onSelect: () => actions.setLayoutMode(zone, mode),
   }));
 }

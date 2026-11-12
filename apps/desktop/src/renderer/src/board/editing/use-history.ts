@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef } from 'react';
-import type { ArrangeSpacing, BoardItem, Connector, FlowEdge, PaneLayout, ShellPlace, TileMove, UpdateItemParams, WindowOwner, Zone, ZoneLayout, ZoneSnapshot } from '@agent-board/daemon/protocol';
+import type { ArrangeSpacing, BoardItem, Connector, FlowEdge, PaneLayout, ShellPlace, TileMove, UpdateItemParams, WindowOwner, Zone, ZoneLayout, ZoneLayoutChoice, ZoneSnapshot } from '@agent-board/daemon/protocol';
 import type { Placement, Surface } from '@agent-board/daemon/window-layout';
 import type { RenameTarget } from '../rename';
 import { emptyHistory, merged, record, redo, undo, withoutLastCreation, type History, type States, type Step } from './history';
@@ -19,8 +19,11 @@ export type BoardState =
   | { type: 'zone'; layout: ZoneLayout }
   | { type: 'zoneLook'; look: ZoneLook }
   | { type: 'zoneSpacing'; spacing: ArrangeSpacing }
+  | { type: 'zoneLayoutChoice'; choice: ZoneLayoutChoice }
   | { type: 'zoneGroup'; group: DissolvedGroup }
-  | { type: 'tile'; move: TileMove }
+  // `handPlaced`: for the place a drag left, whether the tile was placed by hand there (undone, a tile that was not is
+  // put back under its zone's layout rule).
+  | { type: 'tile'; move: TileMove; handPlaced?: boolean }
   | { type: 'tileSize'; size: { width: number; height: number } }
   | { type: 'unfolded'; open: boolean }
   | { type: 'name'; target: RenameTarget; name: string }
@@ -53,6 +56,7 @@ export const historyKey = {
   zone: (id: string) => `zone:${id}`,
   zoneLook: (id: string) => `zone-look:${id}`,
   zoneSpacing: (id: string) => `zone-spacing:${id}`,
+  zoneLayoutChoice: (id: string) => `zone-layout-choice:${id}`,
   zoneGroup: (id: string) => `zone-group:${id}`,
   tile: (nodeId: string) => `tile:${nodeId}`,
   tileSize: (nodeId: string) => `tile-size:${nodeId}`,

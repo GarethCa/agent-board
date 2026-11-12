@@ -14,7 +14,8 @@ import {
   RELATIONS,
   SHAPE_TYPES,
   TILE_SIDES,
-  ZONE_LAYOUT_MODES,
+  ZONE_LAYOUT_CHOICES,
+  zoneLayoutChoiceOf,
   type BoardCaller,
   type BoardItem,
   type CaptureStyle,
@@ -27,7 +28,7 @@ import {
   type ShapeData,
   type ShapeType,
   type TileSide,
-  type ZoneLayoutMode,
+  type ZoneLayoutChoice,
   type ZoneMap,
   type ZoneScreenshot,
   MAX_AGENT_NOTE_SIZE,
@@ -329,22 +330,25 @@ export async function changeGroup(session: BoardSession, ref: string, options: G
 }
 
 /** What each zone layout draws, as `zone layout` says it. */
-const LAYOUT_WORDS: Record<ZoneLayoutMode, string> = {
+const LAYOUT_WORDS: Record<ZoneLayoutChoice, string> = {
   free: 'each tile where it was put',
+  lanes: 'a lane per ticket, laid out again whenever its work changes',
   shelves: 'its work as stacks on To do, Doing, Waiting and Done shelves, under a head row of its leads and shells',
   clusters: "each unit of work's tiles drawn together, what needs the user first, under a head row of its leads and shells",
 };
 
-/** `zone layout`: sets how a zone (the caller's by default) lays out what it holds. No tile's saved place changes. */
+/** `zone layout`: sets how a zone (the caller's by default) lays out what it holds. Only a rule (lanes) moves tiles. */
 export async function setZoneLayout(session: BoardSession, mode: string, zone: string | undefined): Promise<BoardView> {
-  if (!(ZONE_LAYOUT_MODES as readonly string[]).includes(mode)) throw new BoardError(`the layout must be ${ZONE_LAYOUT_MODES.join(', ')}`);
+  if (!(ZONE_LAYOUT_CHOICES as readonly string[]).includes(mode)) throw new BoardError(`the layout must be ${ZONE_LAYOUT_CHOICES.join(', ')}`);
   const refs = new BoardRefs(await readBoard(session.client));
   const changed = await session.client.call('orchestrator.zoneLayout', {
     token: session.token,
-    mode: mode as ZoneLayoutMode,
+    mode: mode as ZoneLayoutChoice,
     ...(zone === undefined ? {} : { zoneId: zoneId(refs, zone, session.caller) }),
   });
-  return { text: `${refs.of('zone', changed.id)} ${changed.name} is laid out as ${changed.layoutMode}: ${LAYOUT_WORDS[changed.layoutMode]}. No tile's place changed.`, json: changed };
+  const choice = zoneLayoutChoiceOf(changed);
+  const moved = choice === 'lanes' ? 'Its tiles move into their lanes in a moment.' : "No tile's place changed.";
+  return { text: `${refs.of('zone', changed.id)} ${changed.name} is laid out as ${choice}: ${LAYOUT_WORDS[choice]}. ${moved}`, json: changed };
 }
 
 /** `zone remove`: deletes a group the caller (or its crew) made, leaving its tiles and notes loose. */

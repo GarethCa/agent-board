@@ -269,7 +269,7 @@ const isAppSource = (file: string): boolean =>
 /**
  * Blast radius of a change to `apps/desktop`: it cannot reach the daemon, fake or tracker tests (no test in a package's `test` directory
  * imports anything from the desktop), so only the daemon-side core, the gate and shared config run the full gate. Desktop core,
- * which any desktop journey goes through, runs the whole `unit` project, all e2e specs and visual (docs/agents/testing-speed-spike.md, section 3).
+ * which any desktop journey goes through, runs the whole `unit` project, all e2e specs and visual.
  */
 const isDesktopCore = (file: string): boolean => matches(file, DESKTOP_CORE_GLOBS) && !isTest(file);
 

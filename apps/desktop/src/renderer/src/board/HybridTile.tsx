@@ -45,6 +45,7 @@ import { useFooterFold } from './use-footer-fold';
 import { agentPill, STATE_LABELS, TILE_STATE_LABELS } from '../states';
 import { useNeedsYouShows } from '../needs-you-setting';
 import { SubagentPerch } from './SubagentPerch';
+import { HandPlacedMark } from './HandPlacedMark';
 import { ShellsChip } from './ShellsChip';
 import { windowShells } from '../session/tabs';
 import { useRenameRequest } from './rename';
@@ -337,9 +338,12 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
       <div className="hybrid-tile-head">
         {startup !== null && !startup.failed ? <Spinner /> : <HarnessMark className="hybrid-tile-icon" harness={agent.harness} />}
         <EditableName className={nameClass(shownName.name)} value={agent.name} title={agent.name} shown={shownName.name} renaming={renaming} clicks={nameClicks} label="Agent name" />
-        <RenameButton renaming={renaming} />
+        {/* With the corner shown only on hover, the pencil goes in it, so the name takes the whole head at rest. */}
+        {look.cornerAlways && <RenameButton renaming={renaming} />}
         {!look.mutedInFooter && agent.muted && <MutedBell />}
+        <HandPlacedMark nodeId={id} />
         <TileCorner>
+          {!look.cornerAlways && <RenameButton renaming={renaming} />}
           <TileButton icon={<Expand />} aria-label="Expand" title="Expand it here, with its terminal" onClick={() => expand(id)} />
           <TileButton className="hybrid-tile-minor" icon={<SquareArrowOutUpRight />} aria-label="Pop out" title="Open its session in its own window" onClick={() => popOutAgent(agent)} />
           {canRestart(agent) && (
@@ -662,6 +666,7 @@ function ShellTile({ id, shell, selected }: { id: string; shell: Shell; selected
         <HarnessMark className="hybrid-tile-icon" harness="shell" />
         <EditableName className={nameClass(shell.name)} value={shell.name} title={shell.name} renaming={renaming} clicks={nameClicks} label="Shell name" />
         <RenameButton renaming={renaming} />
+        <HandPlacedMark nodeId={id} />
         <TileCorner>
           <TileButton icon={<Expand />} aria-label="Expand" title="Expand it here, with its panes" onClick={() => expand(id)} />
           <TileButton className="hybrid-tile-minor" icon={<SquareArrowOutUpRight />} aria-label="Pop out" title="Open its terminal in its own window" onClick={() => popOutShell(shell)} />
@@ -812,9 +817,9 @@ function ExternalTile({ id, session }: { id: string; session: ExternalSession })
 }
 
 /**
- * The corner of a tile's head: its actions, softer at rest and full when the tile is hovered or holds the focus,
- * but never hidden. Only their opacity changes, so nothing on the tile moves
- *; the state lives in the footer.
+ * The corner of a tile's head: its actions. On the quiet tile they are laid over the end of its head and hidden at
+ * rest, shown when the tile is hovered or holds the focus; with the corner always shown they sit beside the name.
+ * Only their opacity changes, so nothing on the tile moves; the state lives in the footer.
  */
 function TileCorner({ children }: { children: ReactNode }) {
   return (

@@ -1,5 +1,5 @@
 // What a queue card shows, worked out from its data and jobs: kept apart from React, so it is tested on its own.
-import type { QueueAudience, QueueData, QueueJob, QueueJobChange } from '@agent-board/daemon/protocol';
+import { isQueueWork, type QueueAudience, type QueueData, type QueueJob, type QueueJobChange } from '@agent-board/daemon/protocol';
 import { whoText } from './memory-card';
 
 /** How many rows the open card lists; the peek lists every one. */
@@ -41,9 +41,9 @@ export function openInCardOrder(jobs: readonly QueueJob[]): QueueJob[] {
 /** The done jobs, newest first, as the daemon lists them. */
 export const doneJobs = (jobs: readonly QueueJob[]): QueueJob[] => jobs.filter((job) => job.state === 'done');
 
-/** The job an agent's `queue take` takes next: the first waiting job (not a note) in the queue's order. */
+/** The job an agent's `queue take` takes next: the first waiting job (not info) in the queue's order. */
 export function nextJob(jobs: readonly QueueJob[]): QueueJob | undefined {
-  return jobs.find((job) => job.kind === 'job' && job.state === 'queued');
+  return jobs.find((job) => isQueueWork(job.kind) && job.state === 'queued');
 }
 
 /** 1st, 2nd, 3rd, 4th … 11th, 12th, 13th … 21st, 22nd. */
@@ -61,7 +61,7 @@ export type JobTone = 'queued' | 'next' | 'taken' | 'back' | 'done' | 'note';
  * taker, or as its taker's session ended) has the dashed "back" look, and its corner says which try comes next.
  */
 export function jobState(job: QueueJob, next: QueueJob | undefined): { text: string; tone: JobTone } {
-  if (job.kind === 'note') return { text: 'note', tone: 'note' };
+  if (!isQueueWork(job.kind)) return { text: 'note', tone: 'note' };
   if (job.state === 'done') return { text: 'done', tone: 'done' };
   if (job.state === 'taken') return { text: 'taken', tone: 'taken' };
   const tone = job.id === next?.id ? 'next' : 'queued';
@@ -96,9 +96,9 @@ export const jobLine = (job: Pick<QueueJob, 'text'>): string => job.text.replace
 export function countsText(jobs: readonly QueueJob[], audience: QueueAudience = 'agents'): string {
   const of = (match: (job: QueueJob) => boolean) => jobs.filter(match).length;
   const parts = [
-    [of((job) => job.kind === 'job' && job.state === 'queued'), audience === 'user' ? 'to look at' : 'queued'],
+    [of((job) => isQueueWork(job.kind) && job.state === 'queued'), audience === 'user' ? 'to look at' : 'queued'],
     [of((job) => job.state === 'taken'), 'taken'],
-    [of((job) => job.kind === 'note'), 'note'],
+    [of((job) => !isQueueWork(job.kind)), 'note'],
     [of((job) => job.state === 'done'), 'done'],
   ] as const;
   const said = parts.filter(([count]) => count > 0).map(([count, what]) => (what === 'note' ? `${count} note${count === 1 ? '' : 's'}` : `${count} ${what}`));

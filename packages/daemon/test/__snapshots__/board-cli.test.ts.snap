@@ -806,28 +806,38 @@ orchestrator of the whole board, and are logged (\`agent-board activity\`).
 `;
 
 exports[`agent-board --help > has help for queue 1`] = `
-"usage: agent-board queue ls | queue read <queue> | queue add <queue> [--kind job|note] [--front] [--link <url>] [--file <path>|-] [--] <line>... | queue take <queue> [<job>] | queue drop <queue> <job> | queue done <queue> <job> | queue edit <queue> <job> [--link <url>] [--] [<text>...] | queue move <queue> <job> <before>|top|last | queue drain <queue> on|off [--most 1-3] | queue rm <queue> <job> | queue history <queue> <job> | queue restore <queue> <job> <version> | queue new [--for-user] <title>...
+"usage: agent-board queue ls | queue read <queue> | queue add <queue> [--kind <kind>] [--front] [--link <url>] [--body <text>] [--file <path>|-] [--] <line>... | queue take <queue> [<job>] | queue drop <queue> <job> | queue done <queue> <job> [--result <text>] | queue edit <queue> <job> [--link <url>] [--] [<text>...] | queue move <queue> <job> <before>|top|last | queue drain <queue> on|off [--most 1-3] | queue rm <queue> <job> | queue history <queue> <job> | queue restore <queue> <job> <version> | queue new [--for-user] <title>...
 
-A queue holds jobs in order, for agents to take one at a time, and plain notes. Its scope is
+A queue holds jobs in order, for agents to take one at a time, and info to read. Its scope is
 a memory's: where it sits. What goes in and comes out is for agents in scope and the user to
 decide. A queue for the user (--for-user) holds what is ready for them to look at: agents add to
 it, and only the user takes from it.
 
+Kinds. An agents' queue: task (the default), request (asked of whoever takes it), prompt (a
+prompt to run as it stands), and info (read, never taken). The user's queue: backlog (the
+default), review (a change to look over), questions, and read. job and note still work: a job
+is the queue's default kind, a note is info (read, on the user's queue). A queue that changes
+hands takes its rows' kinds with it: task and backlog swap, info and read swap, and the rest
+become a request or backlog.
+
   queue ls                      The queues you can read.
-  queue read <queue>            Its jobs and notes in order (the next job first), then those done.
+  queue read <queue>            Its rows in order (the next job first), then those done.
   queue add <queue> <line>...   Queue a job a line, at the end (--front: at the front, in the
                                 order given). " -> <link>" at a line's end is its link (or
-                                --link for one). --kind note adds notes instead.
+                                --link for one). --kind sets their kind (above). With
+                                --body <text>, the line is one job's headline (at most
+                                80 characters) and the body its detail.
   queue take <queue> [<job>]    Take the next job, or that one: it is yours until you finish or
                                 drop it. If your session ends first, it goes back to the front.
-  queue done <queue> <job>      It is done.
+  queue done <queue> <job>      It is done. --result <text> says what was done, for whoever
+                                reads the queue next.
   queue drop <queue> <job>      Put it back at the front, for someone else. Each drop is counted.
   queue edit <queue> <job> [<text>]
                                 Change its text, or --link ("" clears it).
   queue move <queue> <job> <before>|top|last
                                 Put it just before another open job, at the top, or last:
                                 the next \`take\` takes them in this order.
-  queue rm <queue> <job>        Remove a job or note.
+  queue rm <queue> <job>        Remove a row.
   queue history <queue> <job>   Its versions, newest first.
   queue restore <queue> <job> <version>
                                 Put a version's text and link back (or the job, once removed).
@@ -1205,7 +1215,7 @@ Everything about one zone, agent, shell, edge or item. \`agent-board show me\` s
 `;
 
 exports[`agent-board --help > has help for status 1`] = `
-"usage: agent-board status set [<summary>] [--agent <ref>] [--progress <0-100>] [--done] [--pose <pose> [--face <face>] [--prop <prop>]] [--category <category> [--label <text>] [--on "<who> · <ref>"]] | status poses
+"usage: agent-board status set [<summary>] [--agent <ref>] [--progress <0-100>] [--done] [--pose <pose> [--face <face>] [--prop <prop>]] [--category <category> [--label <text>] [--on "<who> · <ref>"]] [--description <text>] | status poses
 
 Sets your own tile's status: one line, at most 200 characters, saying what you are doing
 now, as the change you are making ("Moving session ids to the daemon"), not the task you were
@@ -1254,6 +1264,9 @@ permission prompt of yours waits on the user, the overview shows needs-help over
   --category <c>   Your work's category, or none.
   --label <text>   Your own word for it, with --category.
   --on <who · ref> Who it waits on, with --category waiting-on-others or in-review.
+  --description <text>
+                   What you are for, in up to 80 characters; it stays until you set another,
+                   and "" clears it. ⌘K shows it under your name.
   --json           Print the agent as JSON (with --agent, as \`show --json\` prints it).
 "
 `;
@@ -1412,7 +1425,7 @@ Exits 0, or 3 when --timeout came before --count lines.
 `;
 
 exports[`agent-board --help > has help for zone 1`] = `
-"usage: agent-board zone add --group --name <name> [--color <#rrggbb>] [--at <x>,<y>] [--size <w>,<h>] | zone rename <ref> <name> [--color <c>] | zone resize <ref> --size <w>,<h> [--at <x>,<y>] | zone remove <ref> | zone map [<ref>] [--boxes] [--sections] | zone screenshot [<ref>] [--out <file.png>] [--style board|lofi] | zone layout free|shelves|clusters [<ref>]
+"usage: agent-board zone add --group --name <name> [--color <#rrggbb>] [--at <x>,<y>] [--size <w>,<h>] | zone rename <ref> <name> [--color <c>] | zone resize <ref> --size <w>,<h> [--at <x>,<y>] | zone remove <ref> | zone map [<ref>] [--boxes] [--sections] | zone screenshot [<ref>] [--out <file.png>] [--style board|lofi] | zone layout free|lanes|shelves|clusters [<ref>]
 
 Groups (zones bound to no repo) for an orchestrator to sort its crew into
 (\`agent-board help orchestrate\`). \`agent-board zones\` lists every zone.
@@ -1453,12 +1466,14 @@ first: a picture costs a model far more to read.
 
 \`zone layout\` sets how your zone (or <ref>, in your scope) draws what it holds, as the zone's
 Layout menu does in the app. free: each tile where it was put (every zone starts free).
+lanes: a rule the zone keeps, a lane per ticket, laid out again whenever its work changes; a
+tile the user drags leaves the rule where it is put, and \`arrange\` there follows the rule.
 shelves: its work as one stack per ticket on To do, Doing, Waiting and Done shelves, under a
 head row of the zone's leads and shells; a click on a stack fans its tiles out below the shelves.
 clusters: each ticket's tiles drawn together under its label, what needs the user first, under
-the same head row. No tile's own place changes, so going back to free shows the zone as it was.
-A zone is never laid out so by itself: choose shelves when its work is easier to follow by
-status, clusters when by ticket.
+the same head row. Shelves and clusters change no tile's own place, so going back to free shows
+the zone as it was; lanes moves them, so free after it leaves them in their lanes. Choose
+shelves when its work is easier to follow by status, clusters or lanes when by ticket.
 
   --group          Make a group (an orchestrator makes no other zone).
   --name <name>    Its name.
@@ -1639,9 +1654,10 @@ ORCHESTRATING
                         layout; --boxes draws it in characters.
   zone screenshot [<zone ref>] [--out <file>] [--style board|lofi]
                         A PNG of your zone as the app draws it, terminals hidden.
-  zone layout free|shelves|clusters [<zone ref>]
-                        How your zone draws what it holds: free (as placed), shelves
-                        (To do, Doing, Waiting, Done) or clusters. Moves no tile.
+  zone layout free|lanes|shelves|clusters [<zone ref>]
+                        How your zone lays out what it holds: free (as placed), lanes (a
+                        lane per ticket, kept), shelves (To do, Doing, Waiting, Done) or
+                        clusters. Only lanes moves tiles.
   zone add --group --name <name> [--color <c>] [--at <x>,<y>] [--size <w>,<h>]
                         Make a group beside your zone. \`zone rename|resize|remove\` change
                         the groups you, or an agent you started, made.

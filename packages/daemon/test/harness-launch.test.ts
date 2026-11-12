@@ -6,7 +6,7 @@ import { RPC_ERROR, type DaemonEvent, type HookEvent } from '../src/protocol.ts'
 import { connectTestClient, recordEvents, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
 
 const SIZE = { cols: 100, rows: 30 };
-const NOT_FOUND = 'claude not found on this Mac: install it, or set its path in Settings';
+const NOT_FOUND = 'claude not found on this computer: install it, or set its path in Settings';
 
 /**
  * A daemon whose PATH has `node` (the fakes need it) and nothing else: no `claude`, however it is installed.

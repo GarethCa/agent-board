@@ -1,5 +1,5 @@
 import { expect, type Page } from '@playwright/test';
-import { launch, sessionWindow, SHELL_ENV } from './agent-helpers.ts';
+import { launch, sessionWindow, SHELL_ENV, windowKey } from './agent-helpers.ts';
 import { openSettings } from './settings-helpers.ts';
 import { classicOnly, newShell, removeDataDir, tempDataDir, test } from './launch.ts';
 
@@ -8,7 +8,7 @@ import { classicOnly, newShell, removeDataDir, tempDataDir, test } from './launc
 
 const dockItems = (page: Page) => page.getByTestId('dock-item');
 const spotlight = (page: Page) => page.getByRole('dialog', { name: 'Jump to a session, zone or setting' });
-const SPOTLIGHT_KEY = process.platform === 'darwin' ? 'Meta+k' : 'Control+k';
+const SPOTLIGHT_KEY = windowKey('k');
 
 /** Opens a shell's window and minimises it; resolves with the shell's id. */
 async function minimisedShell(page: Page): Promise<string> {

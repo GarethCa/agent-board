@@ -97,8 +97,8 @@ test('Ask Claude about a selection: the agent gets its picture and diagram, and 
     const yellow = await app.evaluate(({ nativeImage }, path) => {
       const bitmap = nativeImage.createFromPath(path).toBitmap();
       let count = 0;
-      // BGRA: the sticky's yellow is near white in red and green, well under in blue.
-      for (let i = 0; i < bitmap.length; i += 4) if (bitmap[i + 2]! > 235 && bitmap[i + 1]! > 225 && bitmap[i]! < 200) count++;
+      // BGRA: the sticky's yellow is near white in red and green, well under in blue (163; subpixel text fringes stop near 190).
+      for (let i = 0; i < bitmap.length; i += 4) if (bitmap[i + 2]! > 235 && bitmap[i + 1]! > 225 && bitmap[i]! < 180) count++;
       return count;
     }, join(dataDir, 'selection-asks', folder!, 'selection.png'));
     expect(yellow).toBe(0);

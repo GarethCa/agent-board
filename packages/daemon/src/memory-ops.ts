@@ -14,13 +14,14 @@ import {
   type MemoryEntry,
   type MemoryReaders,
   type MemoryView,
+  type QueueAddKind,
   type QueueChange,
   type QueueData,
   type QueueJob,
-  type QueueRowKind,
   type StepsWho,
+  isQueueWork,
 } from './protocol.ts';
-import { entryFrom, jobsFrom } from './memory-lines.ts';
+import { entryFrom, jobParts, jobsFrom } from './memory-lines.ts';
 
 /** How many done jobs `queue read` shows, newest first. */
 const DONE_SHOWN = 10;
@@ -36,6 +37,17 @@ const indent = (text: string, by: string) => text.replace(/\n/g, `\n${by}`);
 const sizeOf = (bytes: number) => (bytes < 1024 ? `${bytes} B` : `${Math.round(bytes / 1024)} KB`);
 const size = (text: string) => sizeOf(Buffer.byteLength(text));
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+/** A queue row of each kind, as an answer counts it: "2 tasks", "1 thing to read". */
+const ROW_NOUNS: Record<QueueJob['kind'], [string, string]> = {
+  task: ['task', 'tasks'],
+  request: ['request', 'requests'],
+  prompt: ['prompt', 'prompts'],
+  info: ['info row', 'info rows'],
+  review: ['review', 'reviews'],
+  questions: ['set of questions', 'sets of questions'],
+  backlog: ['backlog item', 'backlog items'],
+  read: ['thing to read', 'things to read'],
+};
 
 /** A memory or queue in a line: its ref, title, what it holds, who made it and where it is. */
 function cardLine(refs: BoardRefs, item: BoardItem): string {
@@ -80,17 +92,18 @@ function memoryText(refs: BoardRefs, view: MemoryView, search: string | undefine
 }
 
 function jobLine(refs: BoardRefs, job: QueueJob, place: number | null): string {
-  const lead = place === null ? '  ✓ ' : job.kind === 'note' ? '  - ' : `  ${place}. `;
-  const state =
-    job.kind === 'note'
-      ? 'note'
-      : job.state === 'taken'
-        ? `taken by ${whoText(refs, job.takenBy!)}`
-        : job.state === 'done'
-          ? `done by ${whoText(refs, job.doneBy!)} ${day(job.doneAt!)}`
-          : 'queued';
+  const lead = place === null ? '  ✓ ' : isQueueWork(job.kind) ? `  ${place}. ` : '  - ';
+  const state = !isQueueWork(job.kind)
+    ? 'to read, not to take'
+    : job.state === 'taken'
+      ? `taken by ${whoText(refs, job.takenBy!)}`
+      : job.state === 'done'
+        ? `done by ${whoText(refs, job.doneBy!)} ${day(job.doneAt!)}`
+        : 'queued';
   const drops = job.drops === 0 ? '' : `  dropped ${job.drops === 1 ? 'once' : `${job.drops} times`}`;
-  return `${lead}${shortId(job.id)}  ${state}${drops}\n     ${indent(job.text, '     ')}${job.link === null ? '' : `\n     -> ${job.link}`}`;
+  const link = job.link === null ? '' : `\n     -> ${job.link}`;
+  const result = job.result === null ? '' : `\n     result: ${indent(job.result, '     ')}`;
+  return `${lead}${shortId(job.id)}  ${job.kind}  ${state}${drops}\n     ${indent(job.text, '     ')}${link}${result}`;
 }
 
 function queueText(refs: BoardRefs, item: BoardItem, jobs: QueueJob[]): string {
@@ -99,7 +112,7 @@ function queueText(refs: BoardRefs, item: BoardItem, jobs: QueueJob[]): string {
   const done = jobs.filter((job) => job.state === 'done');
   if (jobs.length === 0) return `${head}\n  No jobs yet.`;
   let place = 0;
-  const lines = open.map((job) => jobLine(refs, job, job.kind === 'job' ? ++place : 0));
+  const lines = open.map((job) => jobLine(refs, job, isQueueWork(job.kind) ? ++place : 0));
   if (done.length > 0) {
     const more = done.length - DONE_SHOWN;
     lines.push(`  Done${more > 0 ? `, the last ${DONE_SHOWN} of ${done.length}` : ''}:`, ...done.slice(0, DONE_SHOWN).map((job) => jobLine(refs, job, null)));
@@ -273,9 +286,12 @@ export async function readQueue(session: BoardSession, ref: string): Promise<Boa
 
 /** What `queue add|edit|rm|restore|take|drop|done` does, as typed. */
 export type QueueUpdate =
-  | { action: 'add'; text: string; kind?: QueueRowKind; front?: boolean; link?: string }
+  /** With `body`, `text` is one job's headline (a " -> link" at its end its link); without, each line of it is a job. */
+  | { action: 'add'; text: string; body?: string; kind?: QueueAddKind; front?: boolean; link?: string }
   | { action: 'edit'; job: string; text?: string; link?: string }
-  | { action: 'remove' | 'drop' | 'done'; job: string }
+  | { action: 'remove' | 'drop'; job: string }
+  /** `result`: what was done, for whoever reads the queue next. */
+  | { action: 'done'; job: string; result?: string }
   | { action: 'take'; job?: string }
   | { action: 'restore'; job: string; version: number }
   /** `to`: the open job to put it just before, `top` or `last`. */
@@ -288,6 +304,21 @@ export async function updateQueue(session: BoardSession, ref: string, update: Qu
   const { refs, item } = await cardFor(session, 'queue', ref);
   const call = (change: QueueChange) => session.client.call('board.changeQueue', { token, id: item.id, change });
   const title = () => `“${(item.data as unknown as QueueData).title}” (${refs.of('item', item.id)})`;
+  if (update.action === 'add' && update.body !== undefined) {
+    // The headline is read as a line is: its " -> link" is its link, unless --link gives one.
+    const lines = jobsFrom(update.text);
+    if (lines.length !== 1) throw new BoardError('with a body, give one headline: the body holds the rest');
+    const link = update.link ?? lines[0]!.link;
+    const { item: changed, job } = await call({
+      action: 'add',
+      ...(update.kind === undefined ? {} : { kind: update.kind }),
+      headline: lines[0]!.text,
+      body: update.body,
+      ...(link === null ? {} : { link }),
+      front: update.front === true,
+    });
+    return { text: `Queued ${shortId(job!.id)} ${update.front === true ? 'at the front of' : 'on'} ${title()}.\n${jobLine(refs, job!, 1)}`, json: { item: changed, jobs: [job!] } };
+  }
   if (update.action === 'add') {
     const lines = jobsFrom(update.text);
     if (lines.length === 0) throw new BoardError('give the jobs to queue, one a line');
@@ -298,16 +329,16 @@ export async function updateQueue(session: BoardSession, ref: string, update: Qu
     let changed = item;
     for (const line of ordered) {
       try {
-        const result = await call({ action: 'add', kind: update.kind ?? 'job', text: line.text, link: update.link ?? line.link, front: update.front === true });
+        const result = await call({ action: 'add', ...(update.kind === undefined ? {} : { kind: update.kind }), text: line.text, link: update.link ?? line.link, front: update.front === true });
         changed = result.item;
         added.push(result.job!);
       } catch (error) {
         if (added.length === 0) throw error;
-        const went = added.map((job) => `${shortId(job.id)} ${job.text.split('\n')[0]!.slice(0, 60)}`).join('; ');
+        const went = added.map((job) => `${shortId(job.id)} ${jobParts(job.text).headline}`).join('; ');
         throw new BoardError(`queued ${plural(added.length, 'line')} on ${title()} (${went}), then: ${(error as Error).message}`);
       }
     }
-    const what = plural(added.length, update.kind === 'note' ? 'note' : 'job');
+    const what = plural(added.length, ...ROW_NOUNS[added[0]!.kind]);
     return { text: `Queued ${what} ${update.front === true ? 'at the front of' : 'on'} ${title()}: ${added.map((job) => shortId(job.id)).join(', ')}.`, json: { item: changed, jobs: added } };
   }
   if (update.action === 'move') return moveJob(session, token, refs, item, title(), update);
@@ -334,7 +365,7 @@ export async function updateQueue(session: BoardSession, ref: string, update: Qu
 }
 
 /**
- * After a job is done: how many jobs wait (notes aside), and the next one's first line. The job is done already, so a
+ * After a job is done: how many jobs wait (info aside), and the next one's headline. The job is done already, so a
  * read that fails says nothing rather than an error the agent could take for a failed `done` and retry.
  */
 async function waiting(session: BoardSession, token: string, item: BoardItem): Promise<string> {
@@ -344,10 +375,10 @@ async function waiting(session: BoardSession, token: string, item: BoardItem): P
   } catch {
     return '';
   }
-  const queued = jobs.filter((job) => job.kind === 'job' && job.state === 'queued');
+  const queued = jobs.filter((job) => isQueueWork(job.kind) && job.state === 'queued');
   if (queued.length === 0) return 'No job waiting.';
   const next = queued[0]!;
-  return `${plural(queued.length, 'job')} waiting; next: “${next.text.split('\n')[0]!.slice(0, 80)}” (${shortId(next.id)}).`;
+  return `${plural(queued.length, 'job')} waiting; next: “${jobParts(next.text).headline}” (${shortId(next.id)}).`;
 }
 
 /** `queue move`: a job (or note) put just before another open one, at the top, or last. */

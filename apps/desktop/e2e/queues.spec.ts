@@ -44,9 +44,9 @@ test('Q puts a queue at the pointer ready to type; it queues jobs and notes, sho
     await expect(card.locator('.queue-counts')).toHaveText('2 queued · 1 note');
     const queue = await storedQueue(dataDir);
     expect(queue.jobs.map(({ kind, text, link }) => ({ kind, text, link }))).toEqual([
-      { kind: 'job', text: 'Fix the login', link: 'https://example.test/issues/12' },
-      { kind: 'job', text: 'Write the docs', link: null },
-      { kind: 'note', text: 'Ask before touching billing', link: null },
+      { kind: 'task', text: 'Fix the login', link: 'https://example.test/issues/12' },
+      { kind: 'task', text: 'Write the docs', link: null },
+      { kind: 'info', text: 'Ask before touching billing', link: null },
     ]);
 
     // A change made elsewhere (an agent's, or the CLI's) shows on the card as it lands.
@@ -90,7 +90,7 @@ test('Q puts a queue at the pointer ready to type; it queues jobs and notes, sho
     await edit.fill('Ask first -> docs/billing.md');
     await edit.press('Enter');
     await expect
-      .poll(async () => (await storedQueue(dataDir)).jobs.find((job) => job.kind === 'note'))
+      .poll(async () => (await storedQueue(dataDir)).jobs.find((job) => job.kind === 'info'))
       .toMatchObject({ text: 'Ask first', link: 'docs/billing.md' });
     await window.keyboard.press('Escape');
     await expect(peek).toBeHidden();

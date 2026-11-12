@@ -50,6 +50,8 @@ export const VIEW_KEYS = {
   usageOnBoard: 'usageOnBoard',
   /** Whether the keys added since the key registry work, the "Extended keyboard shortcuts" setting: on unless turned off. */
   extendedShortcuts: 'keyboard.extendedShortcuts',
+  /** When the user last looked at the Overview window, as an ISO time: its "since HH:MM", which Mark all seen moves. */
+  overviewSeenAt: 'overview.seenAt',
 } as const;
 
 /**

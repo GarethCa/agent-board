@@ -65,6 +65,7 @@ const bare = (key: string, text = key.toUpperCase()): Chord => ({ key, text, shi
 export const KEYS = [
   // The tile selected on the board.
   { id: 'tile.open', label: 'Open it, or type in a shape', section: 'tile', scope: 'tile', status: 'today', keys: [{ key: 'Enter', text: '↵' }] },
+  { id: 'tile.full', label: 'Open a memory full screen', section: 'tile', scope: 'tile', status: 'new', keys: [{ mod: 'command', key: 'Enter', text: '↵' }] },
   { id: 'tile.rename', label: 'Rename (or click its name, then pause)', section: 'tile', scope: 'tile', status: 'today', keys: [{ key: 'F2', shift: 'any' }] },
   { id: 'tile.delete', label: 'Delete or close (asks first)', section: 'tile', scope: 'tile', status: 'today', keys: [{ text: '⌫' }] },
 
@@ -77,8 +78,9 @@ export const KEYS = [
   { id: 'move.connections', label: 'Cycle which connections are drawn', section: 'move', scope: 'board', status: 'today', keys: [{ key: 'e', text: 'E', shift: true }] },
   { id: 'move.crews', label: 'Cycle how an orchestrator’s crew is shown', section: 'move', scope: 'board', status: 'today', keys: [{ key: 'c', text: 'C', shift: true }] },
   { id: 'move.cheatSheet', label: 'Keyboard shortcuts', section: 'move', scope: 'board', status: 'new', keys: [{ key: '?', shift: 'any' }] },
-  { id: 'move.master', label: 'Open the Captain, its message box focused', section: 'move', scope: 'terminal-safe', status: 'new', keys: [{ mod: 'window', shift: true, code: 'KeyM', text: 'M' }], otherKeys: [{ mod: 'window', code: 'KeyM', text: 'M' }] },
+  { id: 'move.master', label: 'Open the Captain, its message box focused; in it, shut it', section: 'move', scope: 'terminal-safe', status: 'new', keys: [{ mod: 'window', shift: true, code: 'KeyM', text: 'M' }], otherKeys: [{ mod: 'window', code: 'KeyM', text: 'M' }] },
   { id: 'move.cheatSheetAnywhere', label: 'Keyboard shortcuts, from anywhere', section: 'move', scope: 'terminal-safe', status: 'new', keys: [{ mod: 'window', code: 'Slash', text: '/' }] },
+  { id: 'move.parkThought', label: 'Park a thought: a line at the back of your queue, from anywhere', section: 'move', scope: 'terminal-safe', status: 'new', keys: [{ mod: 'window', shift: true, code: 'KeyP', text: 'P' }], otherKeys: [{ mod: 'window', code: 'KeyP', text: 'P' }] },
 
   // Putting things on the board.
   { id: 'make.agent', label: 'Agent: then click', section: 'make', scope: 'board', status: 'today', keys: [bare('a')] },
@@ -181,6 +183,8 @@ export const KEYS = [
     // Ctrl+Shift off macOS, as plain Ctrl+- is undo in Claude Code and readline.
     otherKeys: [{ mod: 'window', text: '+' }, { mod: 'window', text: '-' }, { mod: 'window', text: '0' }],
   },
+  // The app menu's Window › Overview has it, so it works from any window, with the extended keys on or off.
+  { id: 'window.overview', label: 'Open the Overview: every agent by project and what it waits on', section: 'window', scope: 'terminal-safe', status: 'today', keys: [{ mod: 'command', shift: true, key: 'o', text: 'O' }] },
   { id: 'window.newLine', label: 'New line to the agent, in its terminal or message box', section: 'window', scope: 'terminal-safe', status: 'today', keys: [{ shift: true, text: '↵' }] },
   { id: 'window.openLink', label: 'Open a link in the terminal in a web tab', section: 'window', scope: 'window', status: 'today', keys: [{ mod: 'command', text: 'click' }] },
   { id: 'window.openLinkBrowser', label: 'Open an https link in the terminal in the browser', section: 'window', scope: 'window', status: 'today', keys: [{ mod: 'command', shift: true, text: 'click' }] },
@@ -204,6 +208,7 @@ export const KEYS = [
 
   // The dialog, menu or popover with the focus: its own keys, matched where it is drawn.
   { id: 'dialog.move', label: 'Move between the rows', section: 'dialog', scope: 'dialog', status: 'today', keys: [{ text: '↑' }, { text: '↓' }] },
+  { id: 'dialog.column', label: 'Move between the columns, in the switcher', section: 'dialog', scope: 'dialog', status: 'today', keys: [{ text: '←' }, { text: '→' }] },
   { id: 'dialog.pick', label: 'Pick the row, or confirm', section: 'dialog', scope: 'dialog', status: 'today', keys: [{ text: '↵' }] },
   { id: 'dialog.close', label: 'Close, the focus back where it was', section: 'dialog', scope: 'dialog', status: 'today', keys: [{ text: 'esc' }] },
   { id: 'dialog.submit', label: 'Start it, in New agent', section: 'dialog', scope: 'dialog', status: 'today', keys: [{ mod: 'command', text: '↵' }] },

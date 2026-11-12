@@ -1,6 +1,6 @@
 {
   "name": "@agent-board/desktop",
-  "version": "0.6.21",
+  "version": "0.6.22",
   "private": true,
   "type": "module",
   "main": "out/main/index.js",
@@ -32,6 +32,7 @@
   },
   "dependencies": {
     "@fontsource-variable/bricolage-grotesque": "5.2.10",
+    "@fontsource-variable/inter": "5.3.0",
     "@fontsource-variable/jetbrains-mono": "5.2.8",
     "@fontsource/caveat": "5.2.8",
     "@radix-ui/react-dialog": "1.1.23",

@@ -5,6 +5,7 @@ import { isItemNode, type ItemNodeType } from './items/items';
 import type { TileData, TileNodeType } from './tile';
 import { isSessionTile, savedMove, subjectOf, type BoardNode } from './tiles';
 import { laidOutTile } from './shelves';
+import { nudgeMove } from './hand-moves';
 import { isTyping } from '../keys/typing';
 
 /** How far a pointer must move before a press on a node drags it, rather than clicks it, px. */
@@ -167,7 +168,7 @@ export function useTileMoves({
       event.stopPropagation();
       const step = event.shiftKey ? NUDGE.shifted : NUDGE.step;
       for (const tile of tiles) {
-        const move = savedMove(tile.data, { zoneId: tile.parentId ?? null, x: tile.position.x + direction.x * step, y: tile.position.y + direction.y * step });
+        const move = savedMove(tile.data, nudgeMove(tile.parentId ?? null, { x: tile.position.x + direction.x * step, y: tile.position.y + direction.y * step }));
         nudgers.current.recordNudge(tile.id, tile.data, move);
         moveTile(tile.id, tile.data, move, NUDGE_SAVE_PAUSE_MS);
       }

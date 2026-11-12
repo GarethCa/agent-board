@@ -21,6 +21,7 @@ const agent = (patch: Partial<Agent>): Agent =>
     hibernated: null,
     workFinishedAt: null,
     workCategory: null,
+    purpose: null,
     ...patch,
   }) as Agent;
 

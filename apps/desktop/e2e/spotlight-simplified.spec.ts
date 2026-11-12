@@ -1,13 +1,13 @@
 import { expect } from '@playwright/test';
 import { rmSync } from 'node:fs';
-import { launch, sessionWindow, spawnAgent, tile } from './agent-helpers.ts';
+import { launch, sessionWindow, spawnAgent, tile, windowKey } from './agent-helpers.ts';
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
 import { isSettingsWindow } from './settings-helpers.ts';
 import { scratch } from './scratch.ts';
 
 // ⌘K under the Simplified design: the open and minimised session windows lead, and ↵ on a minimised one restores it.
 
-const FIND = process.platform === 'darwin' ? 'Meta+k' : 'Control+k';
+const FIND = windowKey('k');
 
 test('⌘K lists the windows first, restores a minimised one, and opens a setting at its section', async () => {
   const { dir, repo, env } = scratch('waiting');

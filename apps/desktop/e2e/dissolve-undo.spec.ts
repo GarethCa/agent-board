@@ -30,7 +30,7 @@ test('Delete zone asks, ⌘Z brings the group back as it was with its tiles in i
     // Cancelled, nothing happens.
     await dissolve();
     const confirm = page.getByRole('alertdialog', { name: 'Delete zone G1?' });
-    await expect(confirm).toContainText('⌘Z brings it back');
+    await expect(confirm).toContainText(`${process.platform === 'darwin' ? '⌘Z' : 'Ctrl+Z'} brings it back`);
     await confirm.getByRole('button', { name: 'Cancel' }).click();
     expect(await zones(page)).toEqual([before]);
 
@@ -42,7 +42,7 @@ test('Delete zone asks, ⌘Z brings the group back as it was with its tiles in i
     await expect(shell).toHaveCount(1);
 
     // ⌘Z: the same group, with its id, colour and fill, and the tile back in it where it was.
-    await page.keyboard.press('Meta+Z');
+    await page.keyboard.press('ControlOrMeta+Z');
     await expect(zoneNamed(page, 'G1')).toHaveCount(1);
     const [after] = await zones(page);
     expect(after).toMatchObject({ id: before!.id, name: 'G1', color: before!.color, fillOpacity: 12, x: before!.x, y: before!.y, width: before!.width, height: before!.height });
@@ -55,7 +55,7 @@ test('Delete zone asks, ⌘Z brings the group back as it was with its tiles in i
       .toMatchObject({ zoneId: before!.id, x: 300, y: 200 });
 
     // ⇧⌘Z: deleted again.
-    await page.keyboard.press('Meta+Shift+Z');
+    await page.keyboard.press('ControlOrMeta+Shift+Z');
     await expect(zoneNamed(page, 'G1')).toHaveCount(0);
     expect((await page.evaluate(() => window.agentBoard.shells.list()))[0]!.zoneId).toBeNull();
   } finally {
@@ -75,7 +75,7 @@ test('an empty group asks too, and ⌘Z brings it back', async () => {
     await page.getByRole('alertdialog', { name: 'Delete zone G1?' }).getByRole('button', { name: 'Delete' }).click();
     await expect(zoneNamed(page, 'G1')).toHaveCount(0);
 
-    await page.keyboard.press('Meta+Z');
+    await page.keyboard.press('ControlOrMeta+Z');
     await expect(zoneNamed(page, 'G1')).toHaveCount(1);
     // Made again, so its createdAt is new; everything the user set is as it was.
     expect(await zones(page)).toEqual([{ ...before, createdAt: expect.any(String) }]);
@@ -114,7 +114,7 @@ test('undoing a delete brings back an agent tile, the default repo and the conne
     await expect(zoneNamed(page, 'G1')).toHaveCount(0);
     await expect.poll(() => page.evaluate(() => window.agentBoard.connectors.list())).toEqual([]);
 
-    await page.keyboard.press('Meta+Z');
+    await page.keyboard.press('ControlOrMeta+Z');
     await expect(zoneNamed(page, 'G1')).toHaveCount(1);
     const [after] = await zones(page);
     expect(after).toMatchObject({ id: before!.id, defaultRepo: before!.defaultRepo });
@@ -123,10 +123,10 @@ test('undoing a delete brings back an agent tile, the default repo and the conne
     await expect.poll(async () => (await page.evaluate(() => window.agentBoard.connectors.list())).map((known) => known.id)).toEqual([connector.id]);
 
     // Redone, the connector goes again; and undone once more it is back.
-    await page.keyboard.press('Meta+Shift+Z');
+    await page.keyboard.press('ControlOrMeta+Shift+Z');
     await expect(zoneNamed(page, 'G1')).toHaveCount(0);
     await expect.poll(() => page.evaluate(() => window.agentBoard.connectors.list())).toEqual([]);
-    await page.keyboard.press('Meta+Z');
+    await page.keyboard.press('ControlOrMeta+Z');
     await expect.poll(async () => (await page.evaluate(() => window.agentBoard.connectors.list())).length).toBe(1);
   } finally {
     await app.close();

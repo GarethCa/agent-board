@@ -61,6 +61,19 @@ holds now. It has no foreign key either, so a removed entry put back as it was k
 takes the rows of memories that are gone. A confirm is a `board_history` row with no value, the newest replacing one
 just before it, and the per-row trim counts only the others.
 
+A queue row's `kind` depends on who its queue is for. An agents' queue holds `task`, `request` and `prompt`, which an
+agent takes and finishes, and `info`, which it reads and never takes. The user's queue holds `review`, `questions`,
+`backlog` and `read`, all of which the user finishes. A row's `text` is its headline (the first line) and its body. A
+done row keeps its finisher's `result`. A row of the user's queue that they put off for later holds the time it comes
+back in `hidden_until`, which is no version in its history, and a skip only moves it, behind the next row not put off. Migration 0089 renamed the old kinds: a `job` became a `task` (or `backlog` on the user's
+queue), and a `note` became `info` (or `read`), in the rows and in their `board_history` values alike, so a restore
+puts back a kind the table takes. It isn't backward-safe, as an older daemon knows only `job` and `note`. A queue that
+changes its audience swaps its rows' kinds for the other's in the same update (`task` and `backlog`, `info` and `read`;
+`review` and `questions` become `request`, and `request` and `prompt` become `backlog`), so a thing to read on the
+user's queue never becomes work an agent takes, and info on an agents' queue becomes something the user can finish.
+A restore of a removed row does the same with the kind its version held. Take, drain and hand-on check the kind too,
+taking only an agents' `task`, `request` or `prompt`.
+
 Removing a zone still moves its items loose, but `board_items_leave_removed_zone` now also sets a memory's or queue's
 `noAgents`: loose, it would otherwise widen from its zone's agents to every agent on the board. The user chooses its
 scope again from there. The trigger was dropped and made again for this, as the rule above asks.

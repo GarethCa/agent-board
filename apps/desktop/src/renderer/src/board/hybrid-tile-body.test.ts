@@ -2,6 +2,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Agent } from '@agent-board/daemon/protocol';
+import { CalmTile } from './CalmTile';
 import { HybridTile } from './HybridTile';
 import { lastMessageCard } from './tile-parts';
 import { galleryAgent } from './TileGallery';
@@ -144,5 +145,31 @@ describe('the card of its last message', () => {
     expect(lastMessageCard({ ...idle, ask: { question: 'Postgres?', options: [] } as unknown as Agent['ask'] })).toBeUndefined();
     expect(lastMessageCard({ ...idle, notice: 'Its process crashed.' })).toBeUndefined();
     expect(lastMessageCard({ ...idle, lastMessage: null })).toBeUndefined();
+  });
+});
+
+describe("a tile's head gives its name the room its buttons leave", () => {
+  afterEach(() => restoreViewSettings({ tileShows: QUIET_TILE }));
+  /** The markup of the head's buttons: the corner Classic overlays, or the calm tile's controls. */
+  const buttons = (html: string, from: string) => html.slice(html.indexOf(from));
+
+  it('puts the rename pencil with the other buttons in the corner laid over the head, in Classic', () => {
+    const html = render(idle);
+    expect(html).toContain('data-corner="hover"');
+    expect(buttons(html, 'hybrid-tile-corner')).toContain('aria-label="Rename"');
+  });
+
+  it('keeps the pencil beside the name when Settings shows the corner always, as it takes its own room', () => {
+    restoreViewSettings({ tileShows: { cornerAlways: true } });
+    const html = render(idle);
+    expect(buttons(html, 'hybrid-tile-corner')).not.toContain('aria-label="Rename"');
+    expect(html).toContain('aria-label="Rename"');
+  });
+
+  it('puts the pencil first in the calm tile’s controls, in Simplified', () => {
+    const html = renderToStaticMarkup(createElement(CalmTile, { id: 't1', agent: idle } as never));
+    const controls = buttons(html, 'data-testid="tile-controls"');
+    expect(controls.indexOf('aria-label="Rename"')).toBeGreaterThan(-1);
+    expect(controls.indexOf('aria-label="Rename"')).toBeLessThan(controls.indexOf('aria-label="Fold to a chip"'));
   });
 });

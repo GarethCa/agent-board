@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.6.22 (2026-11-12)
+
+**Rolling back:** this release changes the database in a way older versions can't read (`0089_queue_kinds`). It backs the database up first. To go back to an older version afterwards, restore that backup: see [Rolling back](https://github.com/GarethCa/agent-board/blob/main/docs/rolling-back.md).
+
+- maximised-window spec turns on reduced motion before its first step
+- A zone keeps a layout rule (Lanes by ticket), and a tile placed by hand stays put
+- ⌘K: Needs you and Recent side by side, agent descriptions, labelled match snippets and prefix filters
+- Park a thought: ⌘⇧P puts a line at the back of your queue
+- Queue model: kinds by audience, headline and body, done notes, later and skip
+- Memory card redrawn, with a full-screen view for documents, facts, history and readers
+- Closing the daemon cancels pending delivery timers, so no late Enter reads the closed database
+- Agent tile title gets the room: buttons show only on hover or focus, in Classic and Simplified
+- Overview window: a column per project, agents by work category, search, filter and sort
+- Code maps name every big file, the usage ADR is 0025, and the domain doc matches the repo
+- Unit and end-to-end tests pass on Linux again
+- The Captain's pane pushes in from the side instead of covering the board
+
 ## v0.6.21 (2026-11-12)
 
 - Zone to-do popover, the To do tab, and the clipboard look

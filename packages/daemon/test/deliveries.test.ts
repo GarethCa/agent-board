@@ -47,13 +47,27 @@ function setup(rows: Row[], notReady?: string) {
   const ready: { why: string | undefined } = { why: notReady };
   /** What writing to an agent's terminal throws, if it fails. */
   const failing: { write: Error | undefined } = { write: undefined };
+  /**
+   * Whether the agents' database has closed, as the daemon's does, and how many reads of it came after: each then
+   * throws, as a finalized statement does.
+   */
+  const database = { closed: false, readsAfterClose: 0 };
+  const read = () => {
+    if (!database.closed) return;
+    database.readsAfterClose += 1;
+    throw new Error('statement has been finalized');
+  };
   const deliveries = createDeliveries<Row>({
     write(sessionId, data) {
       if (failing.write !== undefined) throw failing.write;
       writes.push([sessionId, data]);
     },
-    getRow: (sessionId) => byId.get(sessionId),
+    getRow(sessionId) {
+      read();
+      return byId.get(sessionId);
+    },
     requireAgent(sessionId) {
+      read();
       const found = byId.get(sessionId);
       if (found === undefined) throw invalidParams(`no agent ${sessionId}`);
       return { name: found.name, endedAt: found.ended_at, state: shown.state, lastMessage: shown.lastMessage ?? null, permissions: shown.permissions ?? [] };
@@ -64,7 +78,10 @@ function setup(rows: Row[], notReady?: string) {
       relaunches.push({ sessionId: target.session_id, prompt, why, codexSessionId });
       return { started: true };
     },
-    promptNow: () => prompt.now,
+    promptNow() {
+      read();
+      return prompt.now;
+    },
     announce: (sessionId) => void announced.push({ sessionId, handingOff: deliveries.isHandingOff(sessionId) }),
     undelivered: (sessionId, what, text, reason) => void undelivered.push(`${sessionId} ${what}: ${text} (${reason})`),
     notSent: (...args) => void notSent.push(args),
@@ -91,12 +108,32 @@ function setup(rows: Row[], notReady?: string) {
     await flush();
   };
 
-  return { deliveries, writes, relaunches, announced, undelivered, notSent, prompt, shown, ready, failing, advance, land };
+  /** Closes the deliveries, then their database, as the daemon closes. */
+  const closeDaemon = () => {
+    deliveries.close();
+    database.closed = true;
+  };
+
+  return { deliveries, writes, relaunches, announced, undelivered, notSent, prompt, shown, ready, failing, database, clock, advance, land, closeDaemon };
 }
 
 describe('a long message at a Claude prompt', () => {
   const text = Array.from({ length: 12 }, (_, index) => `Line ${index} of the plan.`).join('\n');
   const pieces = (data: string) => data.split('\x1b[200~').length - 1;
+
+  it('is never pressed once the daemon closes while it settles, its terminal drawing on: nothing reads the closed database', async () => {
+    const run = setup([row('a')]);
+    const answered = run.deliveries.answer('a', text).catch((error: unknown) => error);
+    await flush();
+    expect(run.writes).toHaveLength(1);
+    run.closeDaemon();
+    // Its terminal draws on after the close: no settle starts on it, and the longest wait is cancelled.
+    run.deliveries.outputSeen('a');
+    await run.advance(20_000);
+    expect(run.database.readsAfterClose).toBe(0);
+    expect(run.writes).toHaveLength(1);
+    void answered;
+  });
 
   it('goes as small pastes in one write, and Enter after it lands', async () => {
     const run = setup([row('a')]);
@@ -758,6 +795,40 @@ describe('an answer queued mid-turn', () => {
     await answered;
     return each;
   };
+
+  it('is not pressed once the daemon has closed with its Enter pending: nothing reads the closed database', async () => {
+    const { deliveries, writes, advance, prompt, database, closeDaemon } = await queuedAnswer();
+    deliveries.turnEnded('a', true);
+    prompt.now = 'at-prompt';
+    await advance(10);
+    closeDaemon();
+    await advance(20_000);
+    expect(database.readsAfterClose).toBe(0);
+    expect(writes.map(([, data]) => data)).toEqual(['and the tests', '\r']);
+  });
+
+  it('is not pressed when its wait for a turn runs out just as the daemon closes', async () => {
+    const { deliveries, writes, advance, clock, prompt, database, closeDaemon } = await queuedAnswer();
+    deliveries.turnEnded('a', true);
+    prompt.now = 'at-prompt';
+    // The wait for its turn to start runs out, and the daemon closes before what waited on it runs.
+    await advance(999);
+    clock.advance(1);
+    closeDaemon();
+    await advance(20_000);
+    expect(database.readsAfterClose).toBe(0);
+    expect(writes.map(([, data]) => data)).toEqual(['and the tests', '\r']);
+  });
+
+  it('presses nothing for a turn that ends after the daemon has closed', async () => {
+    const { deliveries, writes, advance, prompt, database, closeDaemon } = await queuedAnswer();
+    closeDaemon();
+    deliveries.turnEnded('a', true);
+    prompt.now = 'at-prompt';
+    await advance(20_000);
+    expect(database.readsAfterClose).toBe(0);
+    expect(writes.map(([, data]) => data)).toEqual(['and the tests', '\r']);
+  });
 
   it('is taken up when its harness submits it after the turn: nothing more is pressed', async () => {
     const { deliveries, writes, advance, prompt } = await queuedAnswer();

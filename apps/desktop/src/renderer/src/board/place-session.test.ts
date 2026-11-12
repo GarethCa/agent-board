@@ -61,6 +61,8 @@ const zoneOf = (id: string, fields: Partial<Zone> = {}): Zone => ({
   gateCommand: null,
   spacing: 'normal',
   layoutMode: 'free',
+  layoutRule: 'off',
+  handPlaced: [],
   folded: false,
   tracker: null,
   clone: null,

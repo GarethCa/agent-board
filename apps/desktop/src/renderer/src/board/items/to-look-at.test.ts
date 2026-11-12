@@ -3,7 +3,7 @@ import type { Agent, QueueJob } from '@agent-board/daemon/protocol';
 import type { NeedsYouEntry } from '../../../../shared/needs-you';
 import { itemKind, lookCount, lookItems, lookKey, needsInScope, needsLine } from './to-look-at';
 
-const job = (id: string, fields: Partial<QueueJob> = {}) => ({ id, text: `item ${id}`, link: null, state: 'queued', kind: 'job', ...fields }) as QueueJob;
+const job = (id: string, fields: Partial<QueueJob> = {}) => ({ id, text: `item ${id}`, link: null, state: 'queued', kind: 'backlog', ...fields }) as QueueJob;
 const asking = (sessionId: string, zoneId: string | null) =>
   ({ agent: { sessionId, name: sessionId, zoneId, ask: { question: 'Keep the old cursor param?' } } as unknown as Agent, kind: 'asks', since: '2026-11-05T09:00:00Z' }) as NeedsYouEntry;
 

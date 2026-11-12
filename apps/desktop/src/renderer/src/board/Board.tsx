@@ -46,6 +46,8 @@ import {
   type ZoneBinding,
   type TileMove,
   type ZoneLayout,
+  zoneLayoutChoiceFields,
+  zoneLayoutChoiceOf,
   zoneSnapshot,
 } from '@agent-board/daemon/protocol';
 import { EFFORT_LABELS } from './AgentSetup';
@@ -53,6 +55,7 @@ import { paneIds } from '@agent-board/daemon/pane-layout';
 import { repoZoneOf } from '@agent-board/daemon/repo-zone';
 import { isLead } from '@agent-board/daemon/work-units';
 import { BoardChrome } from '../chrome/BoardChrome';
+import { useChromeFolds } from '../chrome/chrome-folds';
 import type { PointerMode } from '../chrome/CreateToolbar';
 import type { ZoneSource } from '../chrome/zones';
 import { errorMessage } from '../../../shared/errors';
@@ -155,6 +158,7 @@ import { useEditing } from './editing/use-editing';
 import { renameDirect, renameKey, paneLabel, RenameRequestContext, type RenameTarget } from './rename';
 import { zoneDeleteText, type ZoneToDelete } from './editing/delete-zones';
 import { historyKey, itemChange, patched, useHistory, type BoardState, type Change, type DissolvedGroup } from './editing/use-history';
+import { layoutChoiceStep, resizeMove, tileMoveStep, tileStepAction } from './hand-moves';
 import { useSnapping } from './editing/use-snapping';
 import { tidySize, VIEW_FOLLOW_DELAY_MS } from './expanded';
 import { tileOpenAction } from './click-opens';
@@ -216,6 +220,7 @@ import { useExpandedTiles } from './use-expanded-tiles';
 import { DEFAULT_REPRESENTATION, RepresentationProvider } from './representations';
 import { TileNode } from './TileNode';
 import { TileMenuBoardContext } from './agent-tile-menu';
+import { HandPlacedContext } from './HandPlacedMark';
 import { ClickOpensContext, ShellFoldersContext, TileActionsContext, type ShellFolders, type TileActions, type TileData, type TileNodeType } from './tile';
 import {
   DRAGGED_TILE_Z_INDEX,
@@ -682,6 +687,7 @@ function BoardView() {
   restoreTiles.current = restoreExpanded;
   const clockStatuses = useClockStatuses(report, loaded);
   useCaptureReady(loaded);
+  useChromeFolds(container, loaded);
   useMeasuredBoxes(nodes, shown, expandedRef.current, agentNoteLook);
   // The shelved zones' work on their shelves, as drawn only: what the user dragged and saved stays as it was.
   const shelves = useShelves();
@@ -883,13 +889,13 @@ function BoardView() {
         const next = withTileSize(tileSizesRef.current, nodeId, size);
         const after = tileSizeOf(next, nodeId);
         const saved = pendingPlaces.current.get(nodeId) ?? subjectOf(node.data).position;
-        const moved = place !== undefined && (saved === null || saved.x !== place.x || saved.y !== place.y);
+        const moved = resizeMove(saved, node.parentId ?? null, place);
         // One drag, one step: the size, and the place when resizing from the left or top moved it.
         if (before.width !== after.width || before.height !== after.height) {
           history.record([[historyKey.tileSize(nodeId), { type: 'tileSize', size: before }, { type: 'tileSize', size: after }]]);
         }
         sizeTile(nodeId, size);
-        if (moved) moveTileRef.current(nodeId, node.data, { zoneId: node.parentId ?? null, ...place });
+        if (moved !== undefined) moveTileRef.current(nodeId, node.data, moved);
       },
       resizeExpanded(nodeId, size, place) {
         resizeExpandedTile(nodeId, size);
@@ -898,10 +904,8 @@ function BoardView() {
         // otherwise be laid out again from its saved place once the resize is over.
         const node = nodesRef.current.find((known) => known.id === nodeId);
         if (node === undefined || !isSessionTile(node)) return;
-        const saved = pendingPlaces.current.get(nodeId) ?? subjectOf(node.data).position;
-        if (saved === null || saved.x !== place.x || saved.y !== place.y) {
-          moveTileRef.current(nodeId, node.data, { zoneId: node.parentId ?? null, ...place });
-        }
+        const moved = resizeMove(pendingPlaces.current.get(nodeId) ?? subjectOf(node.data).position, node.parentId ?? null, place);
+        if (moved !== undefined) moveTileRef.current(nodeId, node.data, moved);
       },
       openAgent,
       openShell,
@@ -1186,14 +1190,32 @@ function BoardView() {
     onMove: (nodeId) => freeOverlaps([nodeId]),
   });
 
+  /** The zone with a layout rule that the tile `nodeId` was placed by hand in, which the rule skips; undefined if none. */
+  const handPlacedIn = useCallback((nodeId: string) => nodesRef.current.filter(isZone).find((node) => node.data.zone.handPlaced.includes(nodeId))?.id, []);
+  /** Where the tile `nodeId` (standing for `tile`'s session) is saved now, as a move there; undefined if it has no place. */
+  const tilePlace = useCallback((nodeId: string, tile: TileData): TileMove | undefined => {
+    const { zoneId, position } = subjectOf(tile);
+    return pendingPlaces.current.get(nodeId) ?? (position === null ? undefined : { zoneId, x: position.x, y: position.y, ...(position.z === null ? {} : { z: position.z }) });
+  }, []);
+  /** Each session tile in the zone `zoneId`, with where it is saved now. */
+  const zoneTilePlaces = useCallback(
+    (zoneId: string): [string, TileMove][] =>
+      nodesRef.current
+        .filter((node): node is TileNodeType => node.parentId === zoneId && isSessionTile(node))
+        .flatMap((node): [string, TileMove][] => {
+          const place = tilePlace(node.id, node.data);
+          return place === undefined ? [] : [[node.id, place]];
+        }),
+    [tilePlace],
+  );
   /** Records the move of the tile `nodeId` (standing for `tile`'s session) to `move`, from where it is now. */
   const recordTileMove = useCallback(
     (nodeId: string, tile: TileData, move: TileMove, coalesce?: string) => {
-      const { zoneId, position } = subjectOf(tile);
-      const before = pendingPlaces.current.get(nodeId) ?? (position === null ? undefined : { zoneId, x: position.x, y: position.y, ...(position.z === null ? {} : { z: position.z }) });
-      if (before !== undefined) history.record([[historyKey.tile(nodeId), { type: 'tile', move: before }, { type: 'tile', move }]], coalesce);
+      const before = tilePlace(nodeId, tile);
+      // A move by hand marks it placed by hand in a zone with a rule: undone, the mark goes back to what it was.
+      if (before !== undefined) history.record([tileMoveStep(nodeId, before, move, handPlacedIn(nodeId))], coalesce);
     },
-    [history],
+    [history, tilePlace, handPlacedIn],
   );
   /** Moves a tile as the user asked, which can be undone. */
   const moveTile = useCallback(
@@ -1216,7 +1238,8 @@ function BoardView() {
     // Dropped onto another tile, one of the two expanded, the two may overlap: after the move, which ends any pair before.
     const shown = getNodes();
     const onto = droppedOnto(shown, node.id, expandedRef.current);
-    const move = { ...placeOnBoard(at, compactSizeOf(node), zoneLayouts()), toFront: true };
+    // Put down by the user: in a zone with a layout rule, it leaves the rule, placed by hand.
+    const move = { ...placeOnBoard(at, compactSizeOf(node), zoneLayouts()), toFront: true, byHand: true };
     // Its crew comes along under crew frames, each where it was beside it, undone with it as one step.
     // Measured from where it is drawn, as its crew is.
     const drawn = shown.find((known): known is TileNodeType => known.id === node.id && isSessionTile(known)) ?? node;
@@ -1226,7 +1249,7 @@ function BoardView() {
     if (crew.length > 0) {
       const following = new Set(crew.map((member) => member.node.id));
       setNodes((current) => current.map((known) => (following.has(known.id) ? { ...known, dragging: false } : known)));
-      for (const member of crew) moveTile(member.node.id, member.node.data, member.move, step);
+      for (const member of crew) moveTile(member.node.id, member.node.data, { ...member.move, byHand: true }, step);
     }
     // The one it was dropped onto stays where it was seen, even if only drawn there, moved clear of something.
     const target = shown.find((known): known is TileNodeType => known.id === onto && isSessionTile(known));
@@ -1536,8 +1559,9 @@ function BoardView() {
   );
 
   /** The board's own box on the screen. */
+  // The canvas, not its container: the Captain's pane, docked beside it, takes the container's right side.
   const boardOnScreen = useCallback((): Rect => {
-    const { left, top, width, height } = container.current!.getBoundingClientRect();
+    const { left, top, width, height } = (container.current!.querySelector('.react-flow') ?? container.current!).getBoundingClientRect();
     return { x: left, y: top, width, height };
   }, []);
   /** The board position in the middle of the window. */
@@ -1865,14 +1889,14 @@ function BoardView() {
   const dropTool = useCallback(
     (dropped: 'agent' | 'shell', at: { x: number; y: number }) => {
       setTool(undefined);
-      const board = container.current?.getBoundingClientRect();
-      const inside = board !== undefined && at.x >= board.left && at.x <= board.right && at.y >= board.top && at.y <= board.bottom;
+      const board = container.current === null ? undefined : boardOnScreen();
+      const inside = board !== undefined && at.x >= board.x && at.x <= board.x + board.width && at.y >= board.y && at.y <= board.y + board.height;
       if (!inside || document.elementFromPoint(at.x, at.y)?.closest('.ui-island') != null) return;
       const point = screenToFlowPosition(at);
       if (dropped === 'agent') placeSession.placeAgent(point);
       else placeSession.placeShell(point);
     },
-    [screenToFlowPosition, placeSession],
+    [screenToFlowPosition, placeSession, boardOnScreen],
   );
 
   /** Moves a dragged item into the zone it was dropped on, or out onto the board, and saves where it is. */
@@ -1968,7 +1992,8 @@ function BoardView() {
       const zone = nodesRef.current.filter(isZone).find((node) => node.id === zoneId);
       // On shelves or in clusters the zone lays itself out: a tidy would move the places its tiles aren't drawn at, and
       // Free would no longer be as it was.
-      if (zone === undefined || zone.data.zone.layoutMode !== 'free') return;
+      // With a layout rule, the rule lays it out.
+      if (zone === undefined || zone.data.zone.layoutMode !== 'free' || zone.data.zone.layoutRule !== 'off') return;
       const children = nodesRef.current.filter((node) => node.parentId === zoneId);
       const tiles = children.filter(isSessionTile);
       const items = children.filter(isItemNode).map((node) => node.data.item);
@@ -2218,10 +2243,17 @@ function BoardView() {
         const id = key.slice(historyKey.zoneSpacing('').length);
         if (!nodeIds.has(id)) continue;
         window.agentBoard.zones.configure(id, { spacing: state.spacing }).then((saved) => setNodes((current) => withZone(current, saved)), report('undo the zone’s spacing'));
+      } else if (state?.type === 'zoneLayoutChoice') {
+        const id = key.slice(historyKey.zoneLayoutChoice('').length);
+        if (!nodeIds.has(id)) continue;
+        window.agentBoard.zones.configure(id, zoneLayoutChoiceFields(state.choice)).then((saved) => setNodes((current) => withZone(current, saved)), report('undo the zone’s layout'));
       } else if (state?.type === 'tile') {
         const nodeId = key.slice(historyKey.tile('').length);
         const node = nodesRef.current.find((known): known is TileNodeType => known.id === nodeId && isSessionTile(known));
-        if (node !== undefined) tileMoves.moveTile(nodeId, node.data, state.move);
+        const action = tileStepAction(state, handPlacedIn(nodeId));
+        if (action.kind === 'followRule') {
+          window.agentBoard.zones.followRule(action.zoneId, [nodeId]).then((saved) => setNodes((current) => withZone(current, saved)), report('put it back under the rule'));
+        } else if (node !== undefined) tileMoves.moveTile(nodeId, node.data, action.move);
       } else if (state?.type === 'tileSize') {
         const nodeId = key.slice(historyKey.tileSize('').length);
         if (nodeIds.has(nodeId)) sizeTile(nodeId, state.size);
@@ -2478,6 +2510,11 @@ function BoardView() {
       const subject = tileSubject(nodeId);
       if (subject?.kind === 'agent') shelves.setPinned(subject.id, pinned, new Set(agents.map((agent) => agent.sessionId)));
     },
+    handPlaced: (nodeId) => handPlacedIn(nodeId) !== undefined,
+    followRule: (nodeId) => {
+      const zoneId = handPlacedIn(nodeId);
+      if (zoneId !== undefined) window.agentBoard.zones.followRule(zoneId, [nodeId]).then((saved) => setNodes((current) => withZone(current, saved)), report('put it back under the rule'));
+    },
   });
 
   const { onFilesDropped } = useIncoming({ loaded, createItem, report, pasteItems: editing.paste, pasteDiagram: editing.pasteDiagram, pointer, boardCentre, screenToFlowPosition });
@@ -2577,7 +2614,8 @@ function BoardView() {
 
   /** Where Add zone sits by the outline of `layout`, as the view is now. */
   const addZonePlacement = (layout: ZoneLayout) => {
-    const view = container.current!.getBoundingClientRect();
+    const board = boardOnScreen();
+    const view = { left: board.x, right: board.x + board.width };
     const left = flowToScreenPosition({ x: layout.x, y: layout.y }).x;
     const right = flowToScreenPosition({ x: layout.x + layout.width, y: layout.y }).x;
     return popoverPlacement({ left, right }, view, tokenNumber('--size-add-zone'));
@@ -2670,9 +2708,17 @@ function BoardView() {
         }, report('change the zone’s spacing'));
       },
       openSettings: () => void window.agentBoard.setup.openSettings('board.tidying').catch(report('open Settings')),
-      setLayoutMode(zone, layoutMode) {
-        // Only how the zone is drawn: no tile's saved place changes, so Free again shows it as it was.
-        window.agentBoard.zones.configure(zone.id, { layoutMode }).then((saved) => setNodes((current) => withZone(current, saved)), report('change the zone’s layout'));
+      setLayoutMode(zone, choice) {
+        const was = zoneLayoutChoiceOf(zone);
+        // Shelves and clusters only draw the zone: no tile's saved place changes, so Free again shows it as it was. A rule
+        // (lanes) moves its tiles, so picking one, or leaving one, is a step to undo: the layout, and each tile's place.
+        const ruledBefore = zone.layoutRule !== 'off';
+        const places = choice === 'lanes' || ruledBefore ? zoneTilePlaces(zone.id) : [];
+        window.agentBoard.zones.configure(zone.id, zoneLayoutChoiceFields(choice)).then((saved) => {
+          setNodes((current) => withZone(current, saved));
+          const step = layoutChoiceStep(zone.id, was, choice, ruledBefore, places);
+          if (step.length > 0) history.record(step);
+        }, report('change the zone’s layout'));
       },
       fold(zone) {
         window.agentBoard.zones.fold(zone.id).then((result) => {
@@ -2775,7 +2821,7 @@ function BoardView() {
         );
       },
     }),
-    [setNodes, reloadExternals, toasts, report, tidyZone, deleteZones, history, makeRoomToUnfold],
+    [setNodes, reloadExternals, toasts, report, tidyZone, deleteZones, history, makeRoomToUnfold, zoneTilePlaces],
   );
   /**
    * Starts a shell tile loose on the board and opens its window, typing `command` into it if given (the PTY holds it
@@ -3096,6 +3142,10 @@ function BoardView() {
     const kept = nodesInZone(drawn, CAPTURE_FRAME.zoneId);
     return { nodes: kept, edges: edgesAmong(edges, kept) };
   }, [drawn, edges]);
+  // The tiles placed by hand in a zone with a layout rule, for their pin mark: one set while the marks stay the same, so
+  // the tiles draw again only when one changes.
+  const handPlacedKey = nodes.flatMap((node) => (isZone(node) ? node.data.zone.handPlaced : [])).join('\n');
+  const handPlaced = useMemo<ReadonlySet<string>>(() => new Set(handPlacedKey === '' ? [] : handPlacedKey.split('\n')), [handPlacedKey]);
   const hiddenCounts = useMemo(() => {
     if (connections === 'all') return new Map<string, number>();
     const drawn = new Set(shownEdges(allEdges, connections, new Set()).map((edge) => edge.id));
@@ -3281,6 +3331,7 @@ function BoardView() {
                       <TileActionsContext value={tileActions}>
                       <ClickOpensContext value={clickOpens}>
                       <TileMenuBoardContext value={tileBoard}>
+                      <HandPlacedContext value={handPlaced}>
                       <ConnectionCountsContext value={hiddenCounts}>
                       <CrewViewContext value={crewView}>
                       <AgentNoteLookContext value={agentNoteLook}>
@@ -3517,6 +3568,7 @@ function BoardView() {
                       </AgentNoteLookContext>
                       </CrewViewContext>
                       </ConnectionCountsContext>
+                      </HandPlacedContext>
                       </TileMenuBoardContext>
                       </ClickOpensContext>
                       </TileActionsContext>

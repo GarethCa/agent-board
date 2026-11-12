@@ -169,6 +169,10 @@ describe('the hover card’s details', () => {
     ]);
   });
 
+  it('leads with what the agent says it is for, whatever the look', () => {
+    expect(tileDetails(agent({ purpose: 'Hooks go quiet outside work hours' }), FULL_TILE, true)).toEqual(['For: Hooks go quiet outside work hours']);
+  });
+
   it('holds nothing the tile already shows', () => {
     expect(tileDetails(agent({ trustedByZone: true, status: setBy }), FULL_TILE, true)).toEqual([]);
     expect(tileDetails(agent({ branch: '' }), QUIET_TILE, false)).toEqual([]);

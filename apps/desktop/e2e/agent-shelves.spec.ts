@@ -3,7 +3,7 @@ import { createFakeGitHub, FAKE_GITHUB_STATE } from '@agent-board/tracker/testin
 import { execFileSync } from 'node:child_process';
 import { rmSync } from 'node:fs';
 import { settledBox, viewTransform } from './board-helpers.ts';
-import { agents, launch, sessionWindow, setClickOpens, spawnAgent, tile, TURN_MS } from './agent-helpers.ts';
+import { agents, launch, sessionWindow, setClickOpens, spawnAgent, tile, TURN_MS, windowKey } from './agent-helpers.ts';
 import { browseForZone, classicOnly, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
 import { scratch } from './scratch.ts';
 import { openSettings, settingsSection } from './settings-helpers.ts';
@@ -82,7 +82,7 @@ test("an agent's shelves open at the window's leading edge, resize on their hand
     await expect(shelves(window)).toHaveCount(0);
     await expect(rail(window)).toBeVisible();
     await expect(toggle(window)).toHaveAttribute('aria-pressed', 'false');
-    await window.keyboard.press('ControlOrMeta+i');
+    await window.keyboard.press(windowKey('i'));
     await expect(shelves(window)).toBeVisible();
     await expect.poll(() => width(window)).toBe(316);
 
@@ -217,7 +217,7 @@ test("an agent's pins are a block of its page, deleted with Undo, and what it sh
 
     // On the rail: an icon for each shelf with something in it, none for Setup with the technical layer off, and Made's
     // count; and a window open beside the one that collapsed it follows.
-    await window.keyboard.press('ControlOrMeta+i');
+    await window.keyboard.press(windowKey('i'));
     await expect(rail(window).getByRole('button', { name: /^Made/ }).locator('.agent-shelves-rail-badge')).toHaveText('1');
     await expect(rail(window).getByRole('button', { name: 'Setup' })).toHaveCount(0);
     await expect(rail(window).locator('.agent-shelves-rail-item')).toHaveCount(2);
@@ -447,7 +447,7 @@ test("an expanded tile shows the shelves under Simplified: icons only when narro
     await expect(expanded(window).getByTestId('agent-shelves-peek')).toHaveCount(0);
 
     // ⌘I opens the shelves again, and the tile's header still drags it with the board.
-    await window.keyboard.press('ControlOrMeta+i');
+    await window.keyboard.press(windowKey('i'));
     await expect(tileShelves(window)).toBeVisible();
     await expect.poll(() => tileWidth(window)).toBe(200);
     const head = await settledBox(expanded(window).locator('.expanded-tile-head'));
@@ -488,9 +488,9 @@ test("Classic's expanded tile follows the Agent sidebar setting: the shelves by 
     await tileRail(window).getByRole('button', { name: 'Show the shelves' }).click();
     await expect(tileShelves(window)).toBeVisible();
     await expanded(window).getByTestId('session-terminal').click();
-    await window.keyboard.press('ControlOrMeta+i');
+    await window.keyboard.press(windowKey('i'));
     await expect(tileRail(window)).toBeVisible();
-    await window.keyboard.press('ControlOrMeta+i');
+    await window.keyboard.press(windowKey('i'));
     await expect(tileShelves(window)).toBeVisible();
 
     // Full, picked in Settings while it is expanded: the strip is there at once.
@@ -533,7 +533,7 @@ test("a section of the shelves folds to its heading by mouse or keyboard, and st
     await expect(where).toHaveAttribute('data-folded', 'true');
 
     // Through the rail and back, and through the tile collapsing and expanding again, it is as it was left.
-    await window.keyboard.press('ControlOrMeta+i');
+    await window.keyboard.press(windowKey('i'));
     await expect(tileRail(window)).toBeVisible();
     await tileRail(window).getByRole('button', { name: 'Show the shelves' }).click();
     await tileShelves(window).getByRole('tab', { name: 'Setup' }).click();

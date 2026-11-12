@@ -14,6 +14,10 @@ test('with a session window maximised, a click on a zone button only minimises i
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env);
   try {
+    // Reduced motion from the start: a jump is instant, so a click that did take the view somewhere has moved it by the
+    // time it is read, and nothing fades. Turned on later, it cancels a popover's fade still in flight, and Radix then
+    // never unmounts that popover: a board menu closed a moment before stayed on screen and caught the double-click.
+    await window.emulateMedia({ reducedMotion: 'reduce' });
     await pickFolderNext(app, repo);
     await browseForZone(window);
     await expect(window.getByTestId('zone')).toHaveCount(1);
@@ -21,8 +25,7 @@ test('with a session window maximised, a click on a zone button only minimises i
     await spawnAgent(window, 'monorepo', 'Second');
     await addEmptyZone(window, 'Elsewhere');
     await window.getByRole('button', { name: 'Fit View' }).click();
-    // Reduced motion makes a jump instant, so a click that did take the view somewhere has moved it by the time it is read.
-    await window.emulateMedia({ reducedMotion: 'reduce' });
+    await expect(window.getByRole('dialog', { name: 'Board menu' })).toBeHidden();
 
     // The second session is docked; the first is maximised.
     await tileNamed(window, 'Second').dblclick();

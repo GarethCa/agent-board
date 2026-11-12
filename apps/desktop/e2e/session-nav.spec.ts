@@ -1,5 +1,5 @@
 import { expect, type Page } from '@playwright/test';
-import { launch, sessionWindow, setClickOpens, SHELL_ENV, tileAction, zones } from './agent-helpers.ts';
+import { launch, sessionWindow, setClickOpens, SHELL_ENV, tileAction, zones, windowKey } from './agent-helpers.ts';
 import { test, addEmptyZone, removeDataDir, tempDataDir } from './launch.ts';
 import { clickClosing } from './windows.ts';
 
@@ -50,15 +50,15 @@ test('a click opens a tile’s session window, which steps through its zone’s 
     await expect(count(window)).toHaveText('2 of 4 ·Frontend');
     // ⌘] and ⌘[ do the same, wherever the focus is: the terminal too.
     await sessionWindow(window).getByTestId('shell-pane').first().click();
-    await window.keyboard.press('ControlOrMeta+BracketRight');
+    await window.keyboard.press(windowKey('BracketRight'));
     await expect(shownName(window)).toHaveText('charlie');
-    await window.keyboard.press('ControlOrMeta+BracketRight');
+    await window.keyboard.press(windowKey('BracketRight'));
     await expect(shownName(window)).toHaveText('delta');
     // Past the last it wraps to the first, and says so.
-    await window.keyboard.press('ControlOrMeta+BracketRight');
+    await window.keyboard.press(windowKey('BracketRight'));
     await expect(shownName(window)).toHaveText('alpha');
     await expect(window.getByText('Back to the first')).toBeVisible();
-    await window.keyboard.press('ControlOrMeta+BracketLeft');
+    await window.keyboard.press(windowKey('BracketLeft'));
     await expect(shownName(window)).toHaveText('delta');
     await expect(count(window)).toHaveText('4 of 4 ·Frontend');
     // Stepping swaps what the window shows: nothing went to the dock.
@@ -80,7 +80,7 @@ test('a click opens a tile’s session window, which steps through its zone’s 
     await expect(count(window)).toHaveText('1 of 3 ·Frontend');
     await next.click();
     await expect(shownName(window)).toHaveText('charlie');
-    await window.keyboard.press('ControlOrMeta+BracketLeft');
+    await window.keyboard.press(windowKey('BracketLeft'));
     await expect(shownName(window)).toHaveText('alpha');
     await clickClosing(popped, popped.getByRole('button', { name: 'Back to board' }));
     await expect(shownName(window)).toHaveText('bravo');

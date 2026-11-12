@@ -21,6 +21,7 @@ import {
   ITEM_IPC,
   SESSION_IPC,
   SETUP_IPC,
+  OVERVIEW_IPC,
   SHELL_IPC,
   TAB_DRAG_IPC,
   TRACKER_IPC,
@@ -95,6 +96,10 @@ const api: AgentBoardApi = {
     revealFile: (path) => invoke(SESSION_IPC.revealFile, path),
     onExited: (listener) => subscribe(SESSION_IPC.exited, listener),
   },
+  overview: {
+    seen: () => invoke(OVERVIEW_IPC.seen),
+    markSeen: () => invoke(OVERVIEW_IPC.markSeen),
+  },
   zones: {
     list: () => invoke(ZONE_IPC.list),
     add: (params) => invoke(ZONE_IPC.add, params),
@@ -110,6 +115,7 @@ const api: AgentBoardApi = {
     bind: (id, as) => invoke(ZONE_IPC.bind, id, as),
     update: (id, layout) => invoke(ZONE_IPC.update, id, layout),
     configure: (id, settings) => invoke(ZONE_IPC.configure, id, settings),
+    followRule: (id, tiles) => invoke(ZONE_IPC.followRule, id, tiles),
     fold: (id) => invoke(ZONE_IPC.fold, id),
     unfold: (id, wake) => invoke(ZONE_IPC.unfold, id, wake),
     setTracker: (id, tracker) => invoke(ZONE_IPC.setTracker, id, tracker),

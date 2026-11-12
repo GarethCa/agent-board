@@ -10,9 +10,12 @@ import { scratch } from './scratch.ts';
 const expandedTile = (page: Page) => page.getByTestId('expanded-tile');
 const expandedScreen = (page: Page) => expandedTile(page).getByTestId('session-terminal').locator('.xterm-rows');
 
+/** The platform's default login shell, and the rc file only its interactive shells read. */
+const [LOGIN_SHELL, RC] = process.platform === 'darwin' ? ['/bin/zsh', '.zshrc'] : ['/bin/bash', '.bashrc'];
+
 /**
- * An app on a Mac where `claude` is reachable only through the user's `.zshrc`: its PATH is launchd's bare one plus
- * git and gh, its shell is a real zsh reading a temp home, and the places an installer would put
+ * An app where `claude` is reachable only through the user's rc file: its PATH is a bare one plus
+ * git and gh, its shell is a real login shell reading a temp home, and the places an installer would put
  * `claude` are that home's. `setUp` makes `claude` reachable the way the case under test does.
  */
 async function startsAndRestarts(setUp: (home: string, fake: string) => void) {
@@ -29,18 +32,20 @@ async function startsAndRestarts(setUp: (home: string, fake: string) => void) {
   const fake = join(dir, 'installed', 'claude');
   mkdirSync(join(dir, 'installed'));
   symlinkSync(join(fakeBinDir, 'claude'), fake);
-  // `node`, which the fake runs on, is reachable only through .zshrc too, as under nvm or fnm.
+  // `node`, which the fake runs on, is reachable only through the rc file too, as under nvm or fnm.
   const nodeBin = join(dir, 'node-bin');
   mkdirSync(nodeBin);
   symlinkSync(process.execPath, join(nodeBin, 'node'));
-  writeFileSync(join(home, '.zshrc'), `export PATH="${nodeBin}:/usr/bin:/bin:/usr/sbin:/sbin"\n`);
+  // As a new Ubuntu user's: .profile sources .bashrc, which only goes on in an interactive shell.
+  if (RC === '.bashrc') writeFileSync(join(home, '.profile'), '. "$HOME/.bashrc"\n');
+  writeFileSync(join(home, RC), `${RC === '.bashrc' ? 'case $- in *i*) ;; *) return ;; esac\n' : ''}export PATH="${nodeBin}:/usr/bin:/bin:/usr/sbin:/sbin"\n`);
   setUp(home, fake);
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, {
     ...env,
     PATH: `${tools}:/usr/bin:/bin:/usr/sbin:/sbin`,
     ZDOTDIR: home,
-    SHELL: '/bin/zsh',
+    SHELL: LOGIN_SHELL,
     // A login shell, as the app has by default.
     AGENT_BOARD_LOGIN_SHELL: '',
     // Only the home's own places, never a harness the developer has installed.
@@ -76,20 +81,20 @@ async function startsAndRestarts(setUp: (home: string, fake: string) => void) {
   }
 }
 
-test('an agent starts and restarts when claude is on a PATH that only .zshrc sets', async () => {
+test('an agent starts and restarts when claude is on a PATH that only the rc file sets', async () => {
   await startsAndRestarts((home, fake) => {
     const bin = join(home, 'rc-bin');
     mkdirSync(bin);
     symlinkSync(fake, join(bin, 'claude'));
-    appendFileSync(join(home, '.zshrc'), `export PATH="${bin}:$PATH"\n`);
+    appendFileSync(join(home, RC), `export PATH="${bin}:$PATH"\n`);
   });
 });
 
-test('an agent starts and restarts when claude is only an alias in .zshrc, installed where the installer puts it', async () => {
+test('an agent starts and restarts when claude is only an alias in the rc file, installed where the installer puts it', async () => {
   await startsAndRestarts((home, fake) => {
     const local = join(home, '.claude', 'local');
     mkdirSync(local, { recursive: true });
     symlinkSync(fake, join(local, 'claude'));
-    appendFileSync(join(home, '.zshrc'), `alias claude=${join(local, 'claude')}\n`);
+    appendFileSync(join(home, RC), `alias claude=${join(local, 'claude')}\n`);
   });
 });

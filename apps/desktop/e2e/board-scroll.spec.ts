@@ -125,7 +125,7 @@ test('the wheel pans the board in any direction, a pinch or the command key with
     const rowHeight = () => terminal.locator('.xterm-rows > div').first().evaluate((row) => (row as HTMLElement).offsetHeight);
     await terminal.click();
     // Start from the theme's size, once the row height has stopped changing.
-    await window.keyboard.press(`${key}+0`);
+    await window.keyboard.press(key === 'Meta' ? 'Meta+0' : 'Control+Shift+Digit0');
     let lastHeight = 0;
     await expect
       .poll(async () => {
@@ -136,13 +136,13 @@ test('the wheel pans the board in any direction, a pinch or the command key with
       })
       .toBe(true);
     const start = { font: await rowHeight(), rows: await rows() };
-    await window.keyboard.press(`${key}+=`);
+    await window.keyboard.press(key === 'Meta' ? 'Meta+=' : 'Control+Shift+Equal');
     await expect.poll(rowHeight).toBeGreaterThan(start.font);
     await expect.poll(rows).toBeLessThan(start.rows);
-    await window.keyboard.press(`${key}+-`);
-    await window.keyboard.press(`${key}+-`);
+    await window.keyboard.press(key === 'Meta' ? 'Meta+-' : 'Control+Shift+Minus');
+    await window.keyboard.press(key === 'Meta' ? 'Meta+-' : 'Control+Shift+Minus');
     await expect.poll(rowHeight).toBeLessThan(start.font);
-    await window.keyboard.press(`${key}+0`);
+    await window.keyboard.press(key === 'Meta' ? 'Meta+0' : 'Control+Shift+Digit0');
     await expect.poll(rowHeight).toBe(start.font);
     await expect.poll(rows).toBe(start.rows);
 

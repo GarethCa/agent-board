@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { webKey } from './web-keys';
+import { takesKeyboard, webKey } from './web-keys';
 
 const press = (code: string, held: { meta?: boolean; control?: boolean; shift?: boolean; alt?: boolean } = {}) => ({
   type: 'keyDown' as const,
@@ -27,6 +27,14 @@ describe("a key pressed in a web tab's page", () => {
     expect(webKey(press('KeyJ', { meta: true }), true, false, false)).toBeUndefined();
     expect(webKey(press('KeyJ', { control: true, shift: true }), false, false, false)).toBeUndefined();
     expect(webKey(press('KeyK', { meta: true }), true, false, false)).toBe('window');
+  });
+
+  it('hands ⌘⇧P, park a thought, to the window on macOS and Ctrl+Shift+P elsewhere; plain ⌘P and Ctrl+P stay the page’s', () => {
+    expect(webKey(press('KeyP', { meta: true, shift: true }), true)).toBe('window');
+    expect(webKey(press('KeyP', { control: true, shift: true }), false)).toBe('window');
+    expect(webKey(press('KeyP', { meta: true }), true)).toBeUndefined();
+    expect(webKey(press('KeyP', { control: true }), false)).toBeUndefined();
+    expect(webKey(press('KeyP', { meta: true, shift: true }), true, false, false)).toBeUndefined();
   });
 
   it('hands ⌘I to the window on macOS and Ctrl+Shift+I elsewhere, never plain Ctrl+I or ⇧⌘I', () => {
@@ -68,5 +76,12 @@ describe("a key pressed in a web tab's page", () => {
     expect(webKey(press('ArrowUp', { control: true, shift: true, alt: true }), false)).toBe('window');
     expect(webKey(press('KeyW', { control: true }), false)).toBeUndefined();
     expect(webKey(press('KeyC', { control: true, shift: true }), false)).toBeUndefined();
+  });
+});
+
+describe('the keys that take the keyboard from the page', () => {
+  it('are ⌘K, ⌘J and ⌘⇧P, whose field over the window is typed in next; the rest leave it with the page', () => {
+    for (const code of ['KeyK', 'KeyJ', 'KeyP']) expect(takesKeyboard(code)).toBe(true);
+    for (const code of ['KeyT', 'KeyW', 'KeyD', 'KeyF', 'Digit1', 'BracketLeft', 'KeyI']) expect(takesKeyboard(code)).toBe(false);
   });
 });

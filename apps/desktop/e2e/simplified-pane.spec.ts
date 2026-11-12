@@ -1,6 +1,7 @@
 import { expect, type Locator, type Page } from '@playwright/test';
 import { launch, listFinishedTurns, MASTER_KEY, spawnAgent, SHELL_ENV, TURN_MS, tile } from './agent-helpers.ts';
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
+import { topRowMeets } from './master-helpers.ts';
 import { scratch } from './scratch.ts';
 
 // The Simplified design's Needs you and Captain buttons open one docked pane, each on its own side; a second click on
@@ -114,22 +115,22 @@ test('the pane resizes on its edge from either side, keeps its width across a sw
     await expect.poll(width).toBe(360);
 
     // Dragged on the list side: wider, with the handle clear of the header and the zoom bar making room for it.
-    await drag(window, handle, -100);
-    await expect.poll(width).toBe(460);
-    await expect(handle).toHaveAttribute('aria-valuenow', '460');
+    await drag(window, handle, -30);
+    await expect.poll(width).toBe(390);
+    await expect(handle).toHaveAttribute('aria-valuenow', '390');
     await expect(handle).toHaveAccessibleName('Resize the pane');
 
     // The Captain's side is the same pane, as wide; a close and a reopen keep it.
     await window.getByTestId('master-button').click();
     await expect(pane).toHaveAttribute('data-side', 'captain');
-    await expect.poll(width).toBe(460);
+    await expect.poll(width).toBe(390);
     await expect(handle).toHaveAccessibleName('Resize the Captain’s panel');
     await drag(window, handle, 80);
-    await expect.poll(width).toBe(380);
+    await expect.poll(width).toBe(310);
     await window.getByTestId('master-button').click();
     await expect(pane).toHaveCount(0);
     await window.getByTestId('inbox-count').click();
-    await expect.poll(width).toBe(380);
+    await expect.poll(width).toBe(310);
     await handle.dblclick();
     await expect.poll(width).toBe(360);
   } finally {
@@ -164,7 +165,7 @@ const controlsOf = async (window: Page) => {
 
 for (const design of ['classic', 'simplified'] as const) {
   for (const minimap of [true, false]) {
-    test(`${design}, minimap ${minimap ? 'on' : 'off'}: the docked pane runs full height over the zoom bar and the minimap, drags up to end a gap above them, and they stay exactly where they were`, async () => {
+    test(`${design}, minimap ${minimap ? 'on' : 'off'}: the docked pane pushes the zoom bar and the minimap left of it, and in a narrow window covers them, drags up to end a gap above them, and leaves them where they were`, async () => {
       const dataDir = tempDataDir();
       const { app, window } = await launch(dataDir, SHELL_ENV, [], { design });
       try {
@@ -180,52 +181,75 @@ for (const design of ['classic', 'simplified'] as const) {
           }
         }
         await expect(window.locator('.board-minimap')).toHaveCount(minimap ? 1 : 0);
-        const before = await controlsOf(window);
-        expect(before.zoom).not.toBeNull();
         const gap = await window.evaluate(() => Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--size-dock-gap')));
-        const inset = await window.evaluate(() => Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--island-inset')));
-        const top = Math.min(...[before.zoom, before.minimap].flatMap((box) => (box ? [box.y] : [])));
         const pane = window.getByTestId('master-panel');
         const bottomHandle = window.getByTestId('master-panel-bottom-handle');
+        const boxOf = async () => (await pane.boundingBox())!;
         const bottomOf = async () => {
-          const box = (await pane.boundingBox())!;
+          const box = await boxOf();
           return box.y + box.height;
         };
         const buttons = design === 'simplified' ? ['inbox-count', 'master-button'] : ['master-button'];
+
+        // In a wide window it is flush and full height, and the board's edge comes in by its width: the controls ride it, a pane's width to the left, and come back when it closes.
+        const wide = await controlsOf(window);
+        expect(wide.zoom).not.toBeNull();
+        const shifted = (box: { x: number; y: number; width: number; height: number } | null, by: number) => (box ? { ...box, x: box.x - by } : null);
         for (const id of buttons) {
           await window.getByTestId(id).click();
-          await expect(pane).toBeVisible();
-          // By default it runs the window's full height, over the zoom bar, and they stay where they were.
-          const windowBottom = await window.evaluate(() => document.documentElement.clientHeight);
-          expect(Math.abs((await bottomOf()) - (windowBottom - inset))).toBeLessThanOrEqual(2);
-          expect(await bottomOf()).toBeGreaterThan(before.zoom!.y);
-          expect(await controlsOf(window)).toEqual(before);
-          await expect(bottomHandle).toHaveAttribute('role', 'separator');
-          // Its bottom edge drags up to end above the controls.
-          await dragDown(window, bottomHandle, -(windowBottom - top + 40));
-          await expect.poll(async () => top - (await bottomOf())).toBeGreaterThanOrEqual(gap - 1);
-          expect(await controlsOf(window)).toEqual(before);
-          // Closed and reopened, it is where it was left; a double-click goes back to full height, and again to just above the controls.
-          const left = await bottomOf();
+          await expect(pane).toHaveAttribute('data-mode', 'push');
+          const size = await window.evaluate(() => ({ width: document.documentElement.clientWidth, height: document.documentElement.clientHeight }));
+          const box = await boxOf();
+          expect([box.x + box.width, box.y, box.y + box.height]).toEqual([size.width, 0, size.height]);
+          await expect(bottomHandle).toHaveCount(0);
+          await expect.poll(() => controlsOf(window)).toEqual({ zoom: shifted(wide.zoom, box.width), minimap: shifted(wide.minimap, box.width) });
+          await expect.poll(() => topRowMeets(window)).toEqual([]);
           await window.getByTestId(id).click();
           await expect(pane).toHaveCount(0);
-          await window.getByTestId(id).click();
-          expect(await bottomOf()).toBe(left);
-          await bottomHandle.dblclick();
-          await expect.poll(async () => Math.abs((await bottomOf()) - (windowBottom - inset))).toBeLessThanOrEqual(2);
-          await bottomHandle.dblclick();
-          await expect.poll(async () => top - (await bottomOf())).toBeGreaterThanOrEqual(gap - 1);
-          // The arrow keys resize it: Down gives the height back.
-          const before2 = await bottomOf();
-          await bottomHandle.focus();
-          await window.keyboard.press('ArrowDown');
-          await expect.poll(bottomOf).toBeGreaterThan(before2);
-          // Back to full height for the next button, and closing moves nothing.
-          await bottomHandle.dblclick();
-          await window.getByTestId(id).click();
-          await expect(pane).toHaveCount(0);
-          expect(await controlsOf(window)).toEqual(before);
+          await expect.poll(() => controlsOf(window)).toEqual(wide);
         }
+
+        // In a narrow window it covers them instead, flush and full height, and its bottom edge drags up to end above them. It lies
+        // over the top-right island too, so ⌘⇧M opens it and its own Close shuts it.
+        await window.setViewportSize({ width: 860, height: 760 });
+        await expect.poll(async () => (await controlsOf(window)).zoom?.x).not.toBe(wide.zoom!.x);
+        const before = await controlsOf(window);
+        const top = Math.min(...[before.zoom, before.minimap].flatMap((box) => (box ? [box.y] : [])));
+        const open = async () => {
+          await window.keyboard.press('ControlOrMeta+Shift+M');
+          await expect(pane).toHaveAttribute('data-mode', 'cover');
+        };
+        const close = async () => {
+          await pane.getByRole('button', { name: 'Close', exact: true }).click();
+          await expect(pane).toHaveCount(0);
+        };
+        await open();
+        const windowBottom = await window.evaluate(() => document.documentElement.clientHeight);
+        expect(Math.abs((await bottomOf()) - windowBottom)).toBeLessThanOrEqual(1);
+        expect(await bottomOf()).toBeGreaterThan(before.zoom!.y);
+        expect(await controlsOf(window)).toEqual(before);
+        await expect(bottomHandle).toHaveAttribute('role', 'separator');
+        // Its bottom edge drags up to end above the controls.
+        await dragDown(window, bottomHandle, -(windowBottom - top + 40));
+        await expect.poll(async () => top - (await bottomOf())).toBeGreaterThanOrEqual(gap - 1);
+        expect(await controlsOf(window)).toEqual(before);
+        // Closed and reopened, it is where it was left; a double-click goes back to full height, and again to just above the controls.
+        const left = await bottomOf();
+        await close();
+        await open();
+        expect(await bottomOf()).toBe(left);
+        await bottomHandle.dblclick();
+        await expect.poll(async () => Math.abs((await bottomOf()) - windowBottom)).toBeLessThanOrEqual(1);
+        await bottomHandle.dblclick();
+        await expect.poll(async () => top - (await bottomOf())).toBeGreaterThanOrEqual(gap - 1);
+        // The arrow keys resize it: Down gives the height back.
+        const before2 = await bottomOf();
+        await bottomHandle.focus();
+        await window.keyboard.press('ArrowDown');
+        await expect.poll(bottomOf).toBeGreaterThan(before2);
+        // Closing moves nothing.
+        await close();
+        expect(await controlsOf(window)).toEqual(before);
       } finally {
         await app.close();
         await removeDataDir(dataDir);

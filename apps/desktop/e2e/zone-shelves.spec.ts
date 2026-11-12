@@ -1,5 +1,5 @@
 import { expect, type Page } from '@playwright/test';
-import { closeAgent, launch, listFinishedTurns, openSubmenu, tile } from './agent-helpers.ts';
+import { closeAgent, launch, listFinishedTurns, openSubmenu, tile, windowKey } from './agent-helpers.ts';
 import { demoReady, scenarioPicker, seedBoard, stillBoard } from './demo-board.ts';
 import { removeDataDir, tempDataDir, test } from './launch.ts';
 import { RENDER_ARGS, RENDER_ENV, settle, VIEWPORT } from './render.ts';
@@ -64,7 +64,7 @@ test('a zone on status shelves: a stack per unit of work on its shelf, the lead 
     await expect(named(page, 'Pick a cache')).toBeHidden();
 
     // Found with ⌘K, an agent folded into a stack is shown fanned out, not at its hidden tile's place.
-    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+k' : 'Control+k');
+    await page.keyboard.press(windowKey('k'));
     await page.getByTestId('spotlight').getByRole('combobox').fill('Clear build output');
     await page.keyboard.press('Enter');
     await expect(stack(page, 'Clear build output')).toHaveAttribute('aria-expanded', 'true');
