@@ -57,6 +57,10 @@ interface HookStateOptions<Row extends HookStateRow> {
   upByScreen?(sessionId: string): boolean;
   /** The agent left `starting` without a hook: its output came, or it gave up waiting. */
   startingEnded(sessionId: string): void;
+  /** Agents the board heard no hook from when it last ran (`hooksSilent`), until each one's first hook. */
+  silent?: Iterable<string>;
+  /** The agent's `hooksSilent` changed: keeps it, and tells every client (a stale hook after an interrupt saves nothing). */
+  silentChanged?(sessionId: string, silent: boolean): void;
   /** The agent's own turn ended with `finalMessage`. */
   /** Keeps the final message of the agent's own turn that just ended, before the state that says so is saved. */
   recordFinal(sessionId: string, finalMessage: string): void;
@@ -125,6 +129,29 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
   const starting = new Map<string, { since: number; cancel: () => void; up?: boolean }>();
   /** Agents whose process exited while they were `starting`: their start failed, until they are relaunched. */
   const startFailed = new Set<string>();
+  /**
+   * Agents started with a first prompt whose session has sent no hook yet, from when they were started. One still
+   * unheard `STARTING_MAX_MS` after that, and no longer `starting`, goes silent.
+   */
+  const unheard = new Map<string, { since: number; cancel: () => void }>();
+  /**
+   * Agents whose session sent no hook in their first `STARTING_MAX_MS`, until it sends one, through restarts, wakes and
+   * resumes: the board can't follow their turns. Only a hook clears it.
+   */
+  const silent = new Set<string>(options.silent);
+  const stopUnheard = (sessionId: string) => {
+    unheard.get(sessionId)?.cancel();
+    unheard.delete(sessionId);
+  };
+  /** Sets the unheard agent silent once its time is up, unless it is still `starting` (its give-up checks again). */
+  const silenceIfUnheard = (sessionId: string) => {
+    const entry = unheard.get(sessionId);
+    if (entry === undefined || starting.has(sessionId) || clock.now() - entry.since < startingMaxMs) return;
+    stopUnheard(sessionId);
+    if (silent.has(sessionId)) return;
+    silent.add(sessionId);
+    options.silentChanged?.(sessionId, true);
+  };
   const stopStarting = (sessionId: string): boolean => {
     const entry = starting.get(sessionId);
     if (entry === undefined) return false;
@@ -133,7 +160,9 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
     return true;
   };
   const giveUpStarting = (sessionId: string) => {
-    if (stopStarting(sessionId)) options.startingEnded(sessionId);
+    if (!stopStarting(sessionId)) return;
+    options.startingEnded(sessionId);
+    silenceIfUnheard(sessionId);
   };
   /**
    * The starting agent's session is up, its first prompt still to be typed: its output from now (the prompt drawn as
@@ -175,7 +204,11 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
     promptQueued(sessionId: string) {
       stopStarting(sessionId);
       startFailed.delete(sessionId);
+      stopUnheard(sessionId);
       starting.set(sessionId, { since: clock.now(), cancel: clock.setTimer(() => giveUpStarting(sessionId), startingMaxMs) });
+      if (!silent.has(sessionId)) {
+        unheard.set(sessionId, { since: clock.now(), cancel: clock.setTimer(() => silenceIfUnheard(sessionId), startingMaxMs) });
+      }
     },
 
     /** The agent's session printed something: past the grace, an agent still `starting` with no hook at all stops. */
@@ -202,6 +235,9 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
 
     /** Whether the agent's process exited while it was `starting`, before its session's first hook. */
     startFailed: (sessionId: string) => startFailed.has(sessionId),
+
+    /** Whether the agent's session sent no hook in its first `STARTING_MAX_MS`, and has sent none since. */
+    hooksSilent: (sessionId: string) => silent.has(sessionId),
 
     /** What the agent last said to the user, if anything. */
     lastMessage: (sessionId: string) => lastMessages.get(sessionId),
@@ -270,6 +306,10 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
      */
     onHook(row: Row, payload: Record<string, unknown>, signal: AbortSignal): Promise<HookReply> | undefined {
       const sessionId = row.session_id;
+      stopUnheard(sessionId);
+      // Its first hook after it went silent: what is saved is told, so its tile drops the warning.
+      const unsilenced = silent.delete(sessionId);
+      if (unsilenced) options.silentChanged?.(sessionId, false);
       // Claude's session is up, its first prompt still to be typed: it stays `starting` until that prompt's own hook.
       // (Codex fires `SessionStart` only with a prompt: one while its first is still due is of a turn begun by hand.)
       const typingFirst =
@@ -347,7 +387,7 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
       const finalMessage = payload.last_assistant_message;
       const ended = payload.hook_event_name === 'Stop' && payload.agent_id === undefined && typeof finalMessage === 'string';
       if (ended) options.recordFinal(sessionId, finalMessage);
-      save(row, state, next, ended || settled || reply !== undefined || lastMessage !== previousMessage || compactingSince !== wasCompacting);
+      save(row, state, next, unsilenced || ended || settled || reply !== undefined || lastMessage !== previousMessage || compactingSince !== wasCompacting);
       if (ended) options.finished(sessionId, finalMessage);
       return reply;
     },
@@ -373,7 +413,7 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
       permissionSettled.add(sessionId);
     },
 
-    /** The agent was relaunched: what it last said and any draft at its old prompt are gone. */
+    /** The agent was relaunched: what it last said and any draft at its old prompt are gone. Silent, it stays so. */
     relaunched(sessionId: string) {
       startFailed.delete(sessionId);
       lastMessages.delete(sessionId);
@@ -384,6 +424,7 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
     ended(sessionId: string) {
       if (starting.has(sessionId)) startFailed.add(sessionId);
       stopStarting(sessionId);
+      stopUnheard(sessionId);
       idleAfterFailure.delete(sessionId);
       permissionSettled.delete(sessionId);
       interrupted.delete(sessionId);
@@ -396,6 +437,8 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
     deleted(sessionId: string) {
       stopStarting(sessionId);
       startFailed.delete(sessionId);
+      stopUnheard(sessionId);
+      silent.delete(sessionId);
       idleAfterFailure.delete(sessionId);
       noMessage.delete(sessionId);
       waitsAtPrompt.delete(sessionId);

@@ -53,6 +53,8 @@ describe('the Settings window’s groups', () => {
       // Added since: whether terminals draw with the GPU.
       'gpuTerminals',
       'keepTerminals',
+      // Added since: how an open to-do list looks.
+      'todoLook',
     ];
     const ids = SETTINGS_CONTROLS.map((control) => control.id);
     expect(new Set(ids).size).toBe(ids.length);
@@ -75,6 +77,7 @@ describe('the Settings window’s groups', () => {
     expect(home('technicalDetails')).toBe('general.design');
     expect(home('characters')).toBe('general.design');
     expect(home('characterMotion')).toBe('general.design');
+    expect(home('todoLook')).toBe('general.design');
     expect(home('conversationAs')).toBe('agents.chat');
     expect(home('agentSidebar')).toBe('agents.sidebar');
   });

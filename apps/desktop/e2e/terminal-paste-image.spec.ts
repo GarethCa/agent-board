@@ -66,6 +66,12 @@ test("an image pasted into an agent's terminal or chat view goes to the agent as
 
     // Split beside the agent's chat: the image goes to the pane the user is in, the shell's or the agent's.
     await sessionWindow(window).locator('[data-testid="session-tab-view"][data-focused] [data-testid="session-terminal"]').click();
+    // The shell's line cleared, its screen reset and `cat` reading: the next paste's path is then all its screen shows,
+    // echoed as it comes. The shell's line editor would draw its line again when the split narrows the pane, and a
+    // paste echoed meanwhile comes out garbled.
+    await window.keyboard.press('Control+U');
+    await window.keyboard.type("printf '\\033c'; cat\n");
+    await expect(shellScreen).not.toContainText('pasted-images');
     await window.keyboard.press(windowKey('1'));
     // ⌘D splits the tab showing, so it waits for the agent's tab to be it.
     await expect(sessionWindow(window).getByTestId('session-tab').first()).toHaveAttribute('data-active', 'true');

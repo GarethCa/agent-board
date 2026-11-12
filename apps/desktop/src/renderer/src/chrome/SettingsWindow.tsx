@@ -31,6 +31,7 @@ import { SETTINGS_GROUPS, settingsPaneFrom, settingsPaneText, type SettingsGroup
 import { drawnPane, drawnSections, searchable, searchSettings, type SettingsHit } from './settings-search';
 import { SimplifiedDesignSetting } from './SimplifiedDesignSetting';
 import { CharactersSetting } from './CharactersSetting';
+import { TodoLookSetting } from './TodoLookSetting';
 import { UsagePlanSetting } from './UsageSetting';
 import { WebTabsSetting } from './WebTabsSetting';
 
@@ -83,6 +84,7 @@ function sectionBody(home: SettingsHome, onError: OnError): ReactNode {
         <>
           <SimplifiedDesignSetting onError={onError} />
           <CharactersSetting />
+          <TodoLookSetting />
         </>
       );
     case 'general.appearance':

@@ -250,6 +250,16 @@ describe('pinnedLead', () => {
     expect(pinnedLead(agent('planner', { roleName: 'orchestrator' }), [], new Set())).toBe(true);
     expect(pinnedLead(agent('captain', { master: true }), [], new Set())).toBe(true);
     expect(pinnedLead(agent('solo', { orchestrate: 'zone' }), crew, new Set())).toBe(false);
+    // An implementer that started a helper and its own reviewer is no lead: they are in its stack, not over it.
+    const own = [agent('impl', { role: 'implementer' }), agent('helper', { role: 'implementer', spawnedBy: 'impl' })];
+    expect(pinnedLead(own[0]!, own, new Set())).toBe(false);
+    const reviewed = [agent('solo'), agent('rev', { role: 'reviewer', reviewOf: 'solo', spawnedBy: 'solo' })];
+    expect(pinnedLead(reviewed[0]!, reviewed, new Set())).toBe(false);
+    // With no role, starting any agent but its own reviewer leads; with a custom role, the helper is in its stack.
+    const helped = [agent('fix'), agent('helper', { spawnedBy: 'fix' })];
+    expect(pinnedLead(helped[0]!, helped, new Set())).toBe(true);
+    const custom = [agent('des', { role: 'custom', roleName: 'designer' }), agent('helper', { spawnedBy: 'des', branch: 'acme-7-login' })];
+    expect(pinnedLead(custom[0]!, custom, new Set())).toBe(false);
   });
 });
 

@@ -19,7 +19,13 @@ let holds: PermissionHolds | undefined;
 afterEach(() => holds?.close());
 
 /** Hook states over the agent `start`, recording what is saved, unseen and finished. */
-function setup(start: HookStateRow, firstPromptDue = false, onCommand = false) {
+function setup(
+  start: HookStateRow,
+  firstPromptDue = false,
+  onCommand = false,
+  silentChanged?: (sessionId: string, silent: boolean) => void,
+  silent?: string[],
+) {
   let current = start;
   const clock = createFakeClock(new Date('2026-01-01T00:00:00Z'));
   const startingEnded: string[] = [];
@@ -45,6 +51,8 @@ function setup(start: HookStateRow, firstPromptDue = false, onCommand = false) {
     recordFinal: (_sessionId, finalMessage) => void order.push(`record ${finalMessage}`),
     finished: (sessionId, finalMessage) => void finished.push([sessionId, finalMessage]),
     log: (message) => void logged.push(message),
+    silentChanged,
+    silent,
   });
   const hook = (payload: Record<string, unknown>) => states.onHook(current, payload, new AbortController().signal);
   return { states, hook, saved, unseen, finished, order, clock, startingEnded, logged, row: () => current };
@@ -133,6 +141,121 @@ describe('a starting agent', () => {
     clock.advance(1);
     expect(states.isStarting('a')).toBe(false);
     expect(startingEnded).toEqual(['a']);
+    expect(clock.pending()).toBe(0);
+  });
+
+  it('heard from by no hook a minute after it started, is flagged as silent until its first hook, which is saved and told', () => {
+    const changed: [string, boolean][] = [];
+    const { states, hook, clock, saved } = setup(row('a'), false, false, (sessionId, silent) => void changed.push([sessionId, silent]));
+    states.promptQueued('a');
+    clock.advance(59_999);
+    expect(states.hooksSilent('a')).toBe(false);
+    clock.advance(1);
+    expect(states.hooksSilent('a')).toBe(true);
+    expect(changed).toEqual([['a', true]]);
+    hook({ hook_event_name: 'Notification', notification_type: 'idle_prompt', message: 'Claude is waiting for your input' });
+    expect(states.hooksSilent('a')).toBe(false);
+    expect(changed).toEqual([['a', true], ['a', false]]);
+    expect(saved.at(-1)?.always).toBe(true);
+  });
+
+  it('given up on by its output after 5 s, is not flagged as silent until a minute has gone by with no hook', () => {
+    const { states, clock } = setup(row('a'));
+    states.promptQueued('a');
+    clock.advance(5_000);
+    states.outputSeen('a');
+    expect(states.isStarting('a')).toBe(false);
+    expect(states.hooksSilent('a')).toBe(false);
+    clock.advance(54_999);
+    expect(states.hooksSilent('a')).toBe(false);
+    clock.advance(1);
+    expect(states.hooksSilent('a')).toBe(true);
+
+    // A slow start whose hook lands late, after its output gave it up: never flagged.
+    const slow = setup(row('b'));
+    slow.states.promptQueued('b');
+    slow.clock.advance(5_000);
+    slow.states.outputSeen('b');
+    slow.clock.advance(20_000);
+    slow.hook({ hook_event_name: 'SessionStart' });
+    slow.clock.advance(60_000);
+    expect(slow.states.hooksSilent('b')).toBe(false);
+    expect(slow.clock.pending()).toBe(0);
+  });
+
+  it('up by its screen and still starting at a minute, is flagged only when it is given up on with no hook', () => {
+    const { states, clock } = setup(row('a', { harness: 'codex' }));
+    states.promptQueued('a');
+    clock.advance(30_000);
+    states.composerUp('a');
+    clock.advance(30_000);
+    expect(states.isStarting('a')).toBe(true);
+    expect(states.hooksSilent('a')).toBe(false);
+    clock.advance(30_000);
+    expect(states.isStarting('a')).toBe(false);
+    expect(states.hooksSilent('a')).toBe(true);
+  });
+
+  it('is not flagged as silent when a hook came before the minute was up, or after it came up', () => {
+    const { states, hook, clock } = setup(row('a'), true);
+    states.promptQueued('a');
+    hook({ hook_event_name: 'SessionStart', source: 'startup' });
+    clock.advance(60_000);
+    expect(states.isStarting('a')).toBe(false);
+    expect(states.hooksSilent('a')).toBe(false);
+
+    const quick = setup(row('b'));
+    quick.states.promptQueued('b');
+    quick.hook({ hook_event_name: 'SessionStart' });
+    quick.clock.advance(60_000);
+    expect(quick.states.hooksSilent('b')).toBe(false);
+  });
+
+  it('stays silent when it ends, is relaunched or started again, and drops it only on its first hook or its delete', () => {
+    const { states, hook, clock } = setup(row('a'));
+    states.promptQueued('a');
+    clock.advance(60_000);
+    expect(states.hooksSilent('a')).toBe(true);
+    states.ended('a');
+    states.relaunched('a');
+    expect(states.hooksSilent('a')).toBe(true);
+    states.promptQueued('a');
+    clock.advance(60_000);
+    expect(states.hooksSilent('a')).toBe(true);
+    hook({ hook_event_name: 'SessionStart' });
+    expect(states.hooksSilent('a')).toBe(false);
+
+    states.promptQueued('a');
+    clock.advance(60_000);
+    expect(states.hooksSilent('a')).toBe(true);
+    states.deleted('a');
+    expect(states.hooksSilent('a')).toBe(false);
+  });
+
+  it('starts with the agents kept as silent, until each one sends a hook', () => {
+    const { states, hook } = setup(row('a'), false, false, undefined, ['a']);
+    expect(states.hooksSilent('a')).toBe(true);
+    hook({ hook_event_name: 'SessionStart' });
+    expect(states.hooksSilent('a')).toBe(false);
+  });
+
+  it('drops it on a stale hook of an interrupted turn too, and says so though that hook saves nothing', () => {
+    const changed: [string, boolean][] = [];
+    const { states, hook, saved } = setup(row('a'), false, false, (id, silent) => changed.push([id, silent]), ['a']);
+    states.interrupted('a');
+    hook({ hook_event_name: 'PostToolUse', tool_name: 'Bash' });
+    expect(saved).toEqual([]);
+    expect(states.hooksSilent('a')).toBe(false);
+    expect(changed).toEqual([['a', false]]);
+  });
+
+  it('is not flagged when its process exits before the minute is up', () => {
+    const { states, clock } = setup(row('a'));
+    states.promptQueued('a');
+    clock.advance(10_000);
+    states.ended('a');
+    clock.advance(60_000);
+    expect(states.hooksSilent('a')).toBe(false);
     expect(clock.pending()).toBe(0);
   });
 

@@ -280,6 +280,7 @@
   --agent-note-fill-mix: 0%;
   --agent-note-code: var(--hover);
   --agent-note-rule: var(--separator);
+  --todo-board: color-mix(in srgb, var(--paint-teal) 28%, var(--surface));
   --sticky-other-ink: #292c3c;
   --sticky-link: #315bb9;
   --sticky-yellow: #d9cbb6;
@@ -478,6 +479,7 @@
   --agent-note-fill-mix: 0%;
   --agent-note-code: var(--hover);
   --agent-note-rule: var(--separator);
+  --todo-board: color-mix(in srgb, var(--paint-teal) 28%, var(--surface));
   --sticky-other-ink: #1e2030;
   --sticky-link: #285bc2;
   --sticky-yellow: #e0d4c0;
@@ -676,6 +678,7 @@
   --agent-note-fill-mix: 0%;
   --agent-note-code: var(--hover);
   --agent-note-rule: var(--separator);
+  --todo-board: color-mix(in srgb, var(--paint-teal) 28%, var(--surface));
   --sticky-other-ink: #181825;
   --sticky-link: #145bce;
   --sticky-yellow: #e8ddc9;
@@ -1063,6 +1066,7 @@
   --agent-note-fill-mix: 0%;
   --agent-note-code: var(--hover);
   --agent-note-rule: var(--separator);
+  --todo-board: color-mix(in srgb, var(--paint-teal) 28%, var(--surface));
   --sticky-other-ink: #191724;
   --sticky-link: #5a3882;
   --sticky-yellow: #eecca7;
@@ -1446,6 +1450,7 @@
   --agent-note-fill-mix: 0%;
   --agent-note-code: var(--hover);
   --agent-note-rule: var(--separator);
+  --todo-board: color-mix(in srgb, var(--paint-teal) 28%, var(--surface));
   --sticky-other-ink: #21222c;
   --sticky-link: #6836b0;
   --sticky-yellow: #fcd09f;
@@ -1644,6 +1649,7 @@
   --agent-note-fill-mix: 0%;
   --agent-note-code: var(--hover);
   --agent-note-rule: var(--separator);
+  --todo-board: color-mix(in srgb, var(--paint-teal) 28%, var(--surface));
   --sticky-other-ink: #2e3440;
   --sticky-link: #2b5f6d;
   --sticky-yellow: #ebd9b3;
@@ -2027,6 +2033,7 @@
   --agent-note-fill-mix: 0%;
   --agent-note-code: var(--hover);
   --agent-note-rule: var(--separator);
+  --todo-board: color-mix(in srgb, var(--paint-teal) 28%, var(--surface));
   --sticky-other-ink: #1d2021;
   --sticky-link: #4a665b;
   --sticky-yellow: #f4c861;
@@ -2414,6 +2421,7 @@
   --agent-note-fill-mix: 0%;
   --agent-note-code: var(--hover);
   --agent-note-rule: var(--separator);
+  --todo-board: color-mix(in srgb, var(--paint-teal) 28%, var(--surface));
   --sticky-other-ink: #00171d;
   --sticky-link: #0f3651;
   --sticky-yellow: #a8923d;
@@ -2798,6 +2806,7 @@
   --agent-note-fill-mix: 0%;
   --agent-note-code: var(--hover);
   --agent-note-rule: var(--separator);
+  --todo-board: color-mix(in srgb, var(--paint-teal) 28%, var(--surface));
   --sticky-other-ink: #16161e;
   --sticky-link: #2354bd;
   --sticky-yellow: #d4b99e;
@@ -3183,6 +3192,7 @@
   --agent-note-fill-mix: 0%;
   --agent-note-code: var(--hover);
   --agent-note-rule: var(--separator);
+  --todo-board: color-mix(in srgb, var(--paint-teal) 28%, var(--surface));
   --sticky-other-ink: #21252b;
   --sticky-link: #0d4d82;
   --sticky-yellow: #cfbb95;
@@ -3570,6 +3580,7 @@
   --agent-note-fill-mix: 0%;
   --agent-note-code: var(--hover);
   --agent-note-rule: var(--separator);
+  --todo-board: color-mix(in srgb, var(--paint-teal) 28%, var(--surface));
   --sticky-other-ink: #232a2e;
   --sticky-link: #34615b;
   --sticky-yellow: #d8c08f;
@@ -3957,6 +3968,7 @@
   --agent-note-fill-mix: 0%;
   --agent-note-code: var(--hover);
   --agent-note-rule: var(--separator);
+  --todo-board: color-mix(in srgb, var(--paint-teal) 28%, var(--surface));
   --sticky-other-ink: #16161d;
   --sticky-link: #355493;
   --sticky-yellow: #e2cb99;
@@ -4339,6 +4351,7 @@
   --agent-note-fill-mix: 0%;
   --agent-note-code: var(--hover);
   --agent-note-rule: var(--separator);
+  --todo-board: color-mix(in srgb, var(--paint-teal) 28%, var(--surface));
   --sticky-other-ink: #141414;
   --sticky-link: #125f8b;
   --sticky-yellow: #e9bd5a;
@@ -4721,6 +4734,7 @@
   --agent-note-fill-mix: 0%;
   --agent-note-code: var(--hover);
   --agent-note-rule: var(--separator);
+  --todo-board: color-mix(in srgb, var(--paint-teal) 28%, var(--surface));
   --sticky-other-ink: #111110;
   --sticky-link: #2b459b;
   --sticky-yellow: #f9d580;
@@ -5103,6 +5117,7 @@
   --agent-note-fill-mix: 0%;
   --agent-note-code: var(--hover);
   --agent-note-rule: var(--separator);
+  --todo-board: color-mix(in srgb, var(--paint-teal) 28%, var(--surface));
   --sticky-other-ink: #161616;
   --sticky-link: #0c50d0;
   --sticky-yellow: #f2d56d;

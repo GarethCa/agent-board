@@ -1,7 +1,7 @@
 import { memo, type ReactNode } from 'react';
 import { HUMAN_STATUS_LABELS, type HumanStatus } from '@agent-board/daemon/human-status';
 import type { Harness } from '@agent-board/daemon/protocol';
-import type { CharacterPose } from './character-figures';
+import type { CharacterLook } from '@agent-board/daemon/character';
 import { useCharacterStyle } from './characters';
 import { TileCharacter } from './TileCharacter';
 
@@ -57,13 +57,13 @@ const GLYPHS: Record<HumanStatus, ReactNode> = {
 };
 
 /** The height of an agent's character in its status mark, in px. */
-const MARK_CHARACTER_HEIGHT = 22;
+export const MARK_CHARACTER_HEIGHT = 22;
 
 /**
  * An agent's status as the Simplified design draws it: its glyph, or with `character` given and a style picked the
  * agent's character acting it out, and always its word, so the status never rests on a shape or a colour alone.
  */
-export const StatusMark = memo(function StatusMark({ status, character }: { status: HumanStatus; character?: { harness: Harness; pose: CharacterPose } }) {
+export const StatusMark = memo(function StatusMark({ status, character }: { status: HumanStatus; character?: CharacterLook & { harness: Harness } }) {
   const style = useCharacterStyle();
   const drawn = character !== undefined && style !== 'off' ? style : undefined;
   return (

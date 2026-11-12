@@ -4,7 +4,8 @@
 // nodes as drawn change: no tile's saved place is touched, so a zone set back to free shows as it was. Pure, so it is
 // unit-tested.
 import { layoutClusters, layoutShelves, tileStep, type ClusterLayout, type ShelfCluster, type ShelfLayout, type ShelfStack } from '@agent-board/daemon/shelf-layout';
-import { isOrchestratorRole, type Agent, type NeedsYouShows } from '@agent-board/daemon/protocol';
+import type { Agent, NeedsYouShows } from '@agent-board/daemon/protocol';
+import { isLead } from '@agent-board/daemon/work-units';
 import { agentNoteData } from './items/agent-note';
 import { isItemNode } from './items/items';
 import type { TileNodeType } from './tile';
@@ -49,15 +50,8 @@ export interface ShelvesChoice {
 /** A fanned tile draws over the board, and over a tile expanded in place. */
 const FAN_Z_INDEX = 6;
 
-/**
- * Whether `agent` leads: an orchestrator by its role, the Captain, or an agent that started a crew of its own among
- * `agents`. Every agent the user starts may orchestrate; only these do.
- */
-export const isLead = (agent: Pick<Agent, 'sessionId' | 'roleName' | 'master'>, agents: readonly Pick<Agent, 'spawnedBy'>[]): boolean =>
-  isOrchestratorRole(agent.roleName) || agent.master || agents.some((each) => each.spawnedBy === agent.sessionId);
-
 /** Whether `agent` is pinned in its shelved zone's head row: a lead (`isLead`) the user hasn't freed. */
-export const pinnedLead = (agent: Pick<Agent, 'sessionId' | 'roleName' | 'master'>, agents: readonly Pick<Agent, 'spawnedBy'>[], freed: ReadonlySet<string>): boolean =>
+export const pinnedLead = (agent: Agent, agents: readonly Agent[], freed: ReadonlySet<string>): boolean =>
   isLead(agent, agents) && !freed.has(agent.sessionId);
 
 /**

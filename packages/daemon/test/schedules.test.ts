@@ -106,7 +106,7 @@ describe('schedules', () => {
     const { clock, schedules, set, answer } = scheduler();
     set('c', { cron: '0 9 * * 1-5', prompt: 'Triage' });
 
-    expect(schedules.status('c')).toEqual({ id: 'c', nextRunAt: at(2026, 10, 12, 9).toISOString(), runs: [], skips: null });
+    expect(schedules.status('c')).toEqual({ id: 'c', nextRunAt: at(2026, 10, 12, 9).toISOString(), runs: [], skips: null, changes: [] });
     answer.next = { started: true, sessionId: 'a', agentName: 'Triager' };
     clock.advanceTo(at(2026, 10, 12, 9));
     answer.next = { started: false, reason: 'it was still running' };
@@ -119,6 +119,7 @@ describe('schedules', () => {
         expect.objectContaining({ dueAt: at(2026, 10, 12, 9).toISOString(), firedAt: at(2026, 10, 12, 9).toISOString(), outcome: 'started', reason: null, sessionId: 'a', agentName: 'Triager' }),
       ],
       skips: { count: 1, since: at(2026, 10, 13, 9).toISOString(), reasons: ['it was still running'] },
+      changes: [],
     });
   });
 
@@ -205,6 +206,7 @@ describe('schedules', () => {
       enabled: true,
       nextRunAt: at(2026, 10, 10, 8).toISOString(),
       lastRun: null,
+      hibernates: false,
     });
     clock.advanceTo(at(2026, 10, 10, 8));
     expect(schedules.forAgent('a')).toMatchObject({ clockId: 'later', nextRunAt: at(2026, 10, 10, 12).toISOString() });
@@ -262,9 +264,10 @@ describe('schedules', () => {
     const [running] = schedules.status('c')!.runs;
     expect(running).toMatchObject({ outcome: 'running' });
     expect(started).toBe(running!.id);
-    expect(schedules.running()).toEqual([{ runId: running!.id, clockId: 'c', sessionId: null, result: null }]);
+    const firedAt = at(2026, 10, 10, 8).toISOString();
+    expect(schedules.running()).toEqual([{ runId: running!.id, clockId: 'c', fresh: true, firedAt, sessionId: null, result: null, flag: null, joins: false }]);
     schedules.updateRun(running!.id, { sessionId: 'fresh-1', agentName: 'Sweep #1' });
-    expect(schedules.runOf('fresh-1')).toEqual({ runId: running!.id, clockId: 'c' });
+    expect(schedules.runOf('fresh-1')).toEqual({ runId: running!.id, clockId: 'c', fresh: true, firedAt, flag: null, joins: false });
 
     clock.advanceTo(at(2026, 10, 10, 9));
     expect(runs).toHaveLength(1);
@@ -276,6 +279,34 @@ describe('schedules', () => {
     expect(runs).toHaveLength(2);
     expect(schedules.status('c')!.runs.map((run) => run.outcome)).toEqual(['running', 'skipped', 'done']);
     expect(schedules.status('c')!.runs[2]).toMatchObject({ result: 'All swept', agentName: 'Sweep #1' });
+  });
+
+  it("keeps a message's run open until its turn ends, as started, and fails one whose turn never ended once the next fires", () => {
+    const { clock, schedules, set, answer } = scheduler();
+    set('c', { cron: '0 * * * *', hibernate: true });
+    expect(schedules.forAgent('a')).toMatchObject({ hibernates: true });
+    answer.next = { started: true, sessionId: 'a', agentName: 'Sweeper', awaitsTurn: true };
+    clock.advanceTo(at(2026, 10, 10, 8));
+    const [first] = schedules.status('c')!.runs;
+    // Started, not running: a daemon from before this would close the agent of a running one as it starts up.
+    expect(first).toMatchObject({ outcome: 'started', awaitsTurn: true, finishedAt: null, flag: null });
+    expect(schedules.runOf('a')).toEqual({ runId: first!.id, clockId: 'c', fresh: false, firedAt: at(2026, 10, 10, 8).toISOString(), flag: null, joins: false });
+
+    clock.advanceTo(at(2026, 10, 10, 9));
+    const [second, earlier] = schedules.status('c')!.runs;
+    expect(second).toMatchObject({ outcome: 'started', awaitsTurn: true });
+    expect(earlier).toMatchObject({ outcome: 'failed', reason: 'its turn never ended before the next run', finishedAt: expect.any(String) });
+    expect(schedules.runOf('a')?.runId).toBe(second!.id);
+
+    schedules.updateRun(second!.id, { outcome: 'done', result: 'Nothing new', finishedAt: at(2026, 10, 10, 9, 2).toISOString(), flag: 'Sam asked about the release' });
+    expect(schedules.runOf('a')).toBeUndefined();
+    expect(schedules.status('c')!.runs[0]).toMatchObject({ outcome: 'done', result: 'Nothing new', flag: 'Sam asked about the release' });
+
+    // One left unsent, or a turn not waited for, is over as it fires.
+    answer.next = { started: true, sessionId: 'a', agentName: 'Sweeper' };
+    clock.advanceTo(at(2026, 10, 10, 10));
+    expect(schedules.status('c')!.runs[0]).toMatchObject({ outcome: 'started', awaitsTurn: false });
+    expect(schedules.runOf('a')).toBeUndefined();
   });
 
   it('says whether any clock is planned, which keeps the daemon up', () => {

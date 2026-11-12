@@ -33,7 +33,7 @@ import { ArrowUpRight, BellOff, Brain, Check, ClipboardList, Clock, Coins, Dot, 
 import { Button, Chip, EditableName, FlowPill, HoverCard, RenameButton, Spinner, StatusPill, Tag, useRenaming, useSlowClickRename } from '../ui';
 import { useCharacterStyle } from './characters';
 import { TileCharacter } from './TileCharacter';
-import { poseShown } from '@agent-board/daemon/character';
+import { lookShown } from '@agent-board/daemon/character';
 import { poseOfPill } from './tile-pose';
 import { TileRobot } from './CommandFigure';
 import { JobTicket, useHeldJobs } from './items/taken-jobs';
@@ -53,7 +53,7 @@ import { splitReviewerName } from './tile-name';
 import { ClickOpensContext, TileActionsContext, type TileData, type TileProps } from './tile';
 import { CrewViewContext, lightCrew } from './crew-view';
 import { panesLabel } from '../session/panes';
-import { canRestart, endedShellLabel } from '../session/RestartAgent';
+import { canRestart, canRestartLive, endedShellLabel } from '../session/RestartAgent';
 import { useReviews } from '../review/ReviewsProvider';
 import { roundsOf } from '../review/reviews';
 import { dropKey, dropOver as dropOverValue } from '../session/shell-moves';
@@ -69,7 +69,7 @@ import { quickAskOf } from './quick-ask';
 import { TileQuickAsk } from './TileQuickAsk';
 import { branchSaysMore, pillShowsAge, sinceLabel, stateAge, tileDetails, tileProgress, timeToGo, type TileShows } from './tile-shows';
 import { useTileShows } from './view-settings';
-import { askOf, lastMessageCard, nameClass, stopPropagation, TileButton, TileMenu, TrustRow, UndeliveredRow, UnsentRow, UntypedRow } from './tile-parts';
+import { askOf, HooksSilentRow, lastMessageCard, nameClass, stopPropagation, TileButton, TileMenu, TrustRow, UndeliveredRow, UnsentRow, UntypedRow } from './tile-parts';
 
 /** How tall an agent's character stands at the leading edge of its tile's body, in px. */
 const TILE_CHARACTER_HEIGHT = 34;
@@ -158,7 +158,7 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
   const age = look.stateTime && !sending && pillShowsAge(pillFace.state) ? stateAge(agent.stateSince, stateNow) : undefined;
   const pickedStyle = useCharacterStyle();
   // A row with a button of its own needs the tile's width more than the tile needs its character: its pill still says.
-  const rowWithButton = agent.undelivered.length > 0 || agent.trustFolder !== null || agent.untypedPrompt !== null || agent.unsent !== null;
+  const rowWithButton = agent.undelivered.length > 0 || agent.trustFolder !== null || agent.untypedPrompt !== null || agent.unsent !== null || agent.hooksSilent;
   const characterStyle = rowWithButton ? 'off' : pickedStyle;
   const pill = receiving ? (
     <FlowPill title="Receiving a hand-off">receiving…</FlowPill>
@@ -404,7 +404,7 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
         </span>
       )}
       <div className="hybrid-tile-said" data-character={characterStyle === 'off' ? undefined : characterStyle}>
-        {characterStyle !== 'off' && <TileCharacter harness={agent.harness} pose={poseShown(poseOfPill(pillFace.state), agent)} style={characterStyle} height={TILE_CHARACTER_HEIGHT} />}
+        {characterStyle !== 'off' && <TileCharacter harness={agent.harness} {...lookShown(poseOfPill(pillFace.state), agent)} style={characterStyle} height={TILE_CHARACTER_HEIGHT} />}
         <div className="hybrid-tile-said-text">
           {agent.undelivered.length > 0 ? (
             // Before all else: its sender heard it was queued, and nothing else says it never went.
@@ -424,7 +424,15 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
               <StartOutput output={startup.output} failed={startup.failed} />
             </>
           ) : agent.untypedPrompt !== null ? (
+            // Before the no-hooks warning: a task never typed is what to act on first, and hooks off is often why.
             <UntypedRow fitted={fitted} prompt={agent.untypedPrompt} onSend={() => typeFirstPrompt(agent.sessionId)} />
+          ) : agent.hooksSilent ? (
+            // Once its task is typed: before what it asks, its flag and notice: with no hooks, none of them can be trusted.
+            <HooksSilentRow
+              fitted={fitted}
+              onOpen={() => openAgent(agent)}
+              onRestart={canRestartLive(agent) ? () => restartAgent(agent.sessionId) : undefined}
+            />
           ) : // Before what it asks: the answer is what sits unsent at its prompt.
           agent.unsent !== null ? (
             <UnsentRow

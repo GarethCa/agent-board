@@ -14129,6 +14129,26 @@ button.steps-link-open:focus-visible {
   font-size: var(--font-size-2xs);
 }
 
+/* The to-do gallery (#gallery-todo): each look of a to-do list, open and folded. */
+.gallery-todo {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-5);
+  align-items: flex-start;
+  padding: var(--space-6);
+}
+
+.gallery-todo-cell {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.gallery-todo-cell figcaption {
+  color: var(--muted);
+  font-size: var(--font-size-2xs);
+}
+
 /* The quick ask: the chip on an asking tile, and the ask it opens beside the tile, in the waiting orange. */
 .quick-ask-row {
   display: flex;
@@ -15661,4 +15681,713 @@ button.tile-folded-row:is(:hover, :focus-visible) {
 
 ::highlight(find-active) {
   background-color: var(--find-match-active);
+}
+
+/* A to-do list (TodoCard.tsx): a checklist card under a teal head, or folded to a pill of what is left. Teal is the
+   object's own; it only reminds, so nothing on it is the needs-you orange. */
+.todo-node {
+  width: 100%;
+  height: 100%;
+}
+
+.todo-card {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border: 1px solid var(--todo-edge);
+  border-radius: var(--radius-lg);
+  background: var(--raised);
+  box-shadow: var(--shadow-tile);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-sm);
+  line-height: var(--leading-snug);
+}
+
+/* The card look draws its head, lines and foot straight on the card; the clipboard look puts them on a sheet. */
+.todo-sheet {
+  display: contents;
+}
+
+.react-flow__node.selected .todo-card,
+.react-flow__node.selected .todo-pill {
+  box-shadow: var(--shadow-tile), var(--shadow-picked);
+}
+
+.todo-card:focus-visible,
+.todo-card[data-stepped-in] {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.todo-head {
+  display: flex;
+  flex: none;
+  gap: var(--space-2);
+  align-items: center;
+  min-width: 0;
+  padding: var(--space-1-75) var(--space-2-5);
+  border-bottom: 1px solid var(--todo-edge);
+  background: var(--todo-band);
+}
+
+.todo-icon,
+.todo-pill-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-md);
+  background: var(--todo-solid);
+  color: var(--todo-on);
+}
+
+.todo-icon svg,
+.todo-pill-icon svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+}
+
+.todo-title {
+  flex: none;
+  font-size: var(--font-size-md);
+  font-weight: var(--weight-bold);
+}
+
+.todo-zone {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--todo-ink);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.todo-count {
+  flex: none;
+  margin-left: auto;
+  padding: 0 var(--space-1-5);
+  border-radius: var(--radius-pill);
+  background: var(--raised);
+  color: var(--todo-ink);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-bold);
+  font-variant-numeric: tabular-nums;
+}
+
+.todo-lines {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: var(--space-1) 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.todo-line {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1-5);
+  align-items: center;
+  min-width: 0;
+  padding: var(--space-1) var(--space-2-5) var(--space-1) var(--space-4);
+}
+
+.todo-line:hover,
+.todo-line[data-hot],
+.todo-line[data-cursor] {
+  background: var(--hover);
+}
+
+.todo-line[data-cursor] {
+  box-shadow: var(--todo-cursor);
+}
+
+.todo-line[data-dragged] {
+  opacity: 0.5;
+}
+
+.todo-grip {
+  position: absolute;
+  top: 50%;
+  left: var(--space-0-5);
+  display: grid;
+  color: var(--muted);
+  cursor: grab;
+  opacity: 0;
+  transform: translateY(-50%);
+}
+
+.todo-grip svg {
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+}
+
+.todo-line:hover .todo-grip,
+.todo-line[data-hot] .todo-grip {
+  opacity: 1;
+}
+
+.todo-tick {
+  display: grid;
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+
+.todo-box {
+  display: grid;
+  box-sizing: border-box;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--todo-box-edge);
+  border-radius: var(--radius-xs);
+  background: var(--raised);
+}
+
+.todo-box[data-done] {
+  border-color: var(--todo-solid);
+  background: var(--todo-solid);
+  color: var(--todo-on);
+}
+
+.todo-box svg {
+  width: 10px;
+  height: 10px;
+  stroke-width: 3;
+}
+
+.todo-text {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.todo-line[data-done] .todo-text {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.todo-writer {
+  display: inline-flex;
+  flex: none;
+  gap: var(--space-1);
+  align-items: center;
+  max-width: 96px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-3xs);
+}
+
+.todo-writer > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.todo-writer-mark {
+  flex: none;
+  width: 10px;
+  height: 10px;
+}
+
+.todo-writer-you,
+.todo-writer-agent {
+  flex: none;
+  box-sizing: border-box;
+  width: 9px;
+  height: 9px;
+  border: 1.5px solid var(--muted);
+  border-radius: var(--radius-pill);
+}
+
+.todo-writer-agent {
+  border-color: var(--todo);
+  background: var(--todo);
+}
+
+.todo-remove {
+  display: none;
+  flex: none;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.todo-remove svg {
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+}
+
+.todo-line:hover .todo-remove,
+.todo-line[data-hot] .todo-remove {
+  display: grid;
+}
+
+.todo-remove:hover,
+.todo-remove:focus-visible {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.todo-field {
+  display: flex;
+  flex: 1 1 100%;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  min-width: 0;
+}
+
+.todo-line-new {
+  flex: 1 1 100%;
+}
+
+.todo-input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: var(--space-1) var(--space-1-5);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--raised);
+  color: var(--text);
+  font: inherit;
+}
+
+.todo-input:focus {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+.todo-field-hint {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-3xs);
+}
+
+.todo-foot {
+  display: flex;
+  flex: none;
+  gap: var(--space-2);
+  align-items: center;
+  padding: var(--space-1) var(--space-2-5) var(--space-1-5);
+  border-top: 1px solid var(--separator);
+}
+
+.todo-add,
+.todo-clear,
+.todo-pill-clear {
+  display: inline-flex;
+  gap: var(--space-1);
+  align-items: center;
+  padding: var(--space-0-5) var(--space-1);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--todo-ink);
+  font: inherit;
+  font-weight: var(--weight-semibold);
+  cursor: pointer;
+}
+
+.todo-add svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+}
+
+.todo-clear {
+  margin-left: auto;
+  color: var(--muted);
+  font-weight: var(--weight-medium);
+}
+
+.todo-add:hover,
+.todo-clear:hover,
+.todo-pill-clear:hover {
+  background: var(--hover);
+}
+
+.todo-empty {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--space-1);
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-2) var(--space-4);
+  color: var(--muted);
+  text-align: center;
+}
+
+.todo-empty b {
+  color: var(--text);
+}
+
+.todo-empty-icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-lg);
+  background: var(--todo-soft);
+  color: var(--todo-ink);
+}
+
+.todo-empty-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+/* Folded: a pill of what is left and who wrote it; all done, quiet; empty, dashed. */
+.todo-pill {
+  display: inline-flex;
+  gap: var(--space-1-5);
+  align-items: center;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  padding: 0 var(--space-1) 0 var(--space-1);
+  border: 1.5px solid var(--todo);
+  border-radius: var(--radius-pill);
+  background: var(--raised);
+  box-shadow: var(--shadow-tile);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-sm);
+}
+
+.todo-pill .todo-pill-icon {
+  border-radius: var(--radius-pill);
+}
+
+.todo-pill-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.todo-pill-writers {
+  display: inline-flex;
+  gap: var(--space-0-5);
+  align-items: center;
+}
+
+.todo-pill-open {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.todo-pill-open svg {
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+}
+
+.todo-pill[data-state='done'] {
+  border-color: var(--todo-edge);
+  color: var(--muted);
+}
+
+.todo-pill[data-state='done'] .todo-pill-icon {
+  background: var(--todo-soft);
+  color: var(--todo-ink);
+}
+
+.todo-pill[data-state='empty'] {
+  border-style: dashed;
+  border-color: var(--todo-edge);
+}
+
+.todo-pill[data-state='empty'] .todo-pill-icon {
+  background: none;
+  color: var(--todo-ink);
+}
+
+/* On a zone's tab: how many to-dos are left in its lists, in teal. */
+.zone-todo-badge {
+  display: inline-flex;
+  flex: none;
+  gap: var(--space-0-5);
+  align-items: center;
+  padding: var(--space-px) var(--space-2) var(--space-px) var(--space-1-25);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--todo-solid);
+  box-shadow: var(--todo-badge-ring);
+  color: var(--todo-on);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-bold);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.zone-todo-badge svg {
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+}
+
+/* The clipboard look: a teal board with a metal clip at its top and a white sheet, the list written on the sheet. */
+.todo-card[data-look='clipboard'] {
+  position: relative;
+  overflow: visible;
+  padding: var(--space-4) var(--space-2-25) var(--space-2-5);
+  border: 0;
+  border-radius: var(--radius-xl);
+  background: var(--todo-board);
+}
+
+.todo-clip {
+  position: absolute;
+  top: -10px;
+  left: 50%;
+  width: 76px;
+  height: 22px;
+  border-radius: var(--radius-md) var(--radius-md) var(--radius-sm) var(--radius-sm);
+  background: linear-gradient(var(--todo-clip), var(--todo-clip-dark));
+  box-shadow: var(--shadow-control);
+  transform: translateX(-50%);
+}
+
+.todo-clip::before {
+  position: absolute;
+  top: 4px;
+  left: 50%;
+  width: 22px;
+  height: 6px;
+  border-radius: var(--radius-xs);
+  background: var(--todo-board);
+  content: '';
+  transform: translateX(-50%);
+}
+
+.todo-card[data-look='clipboard'] .todo-sheet {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background: var(--raised);
+  box-shadow: var(--shadow-control);
+}
+
+.todo-card[data-look='clipboard'] .todo-head {
+  align-items: baseline;
+  gap: var(--space-1-75);
+  padding: var(--space-2-25) var(--space-2-5) var(--space-1-25);
+  border-bottom: 0;
+  background: none;
+}
+
+.todo-card[data-look='clipboard'] .todo-icon {
+  display: none;
+}
+
+.todo-card[data-look='clipboard'] .todo-title {
+  font-size: var(--font-size-lg);
+}
+
+.todo-card[data-look='clipboard'] .todo-zone {
+  color: var(--muted);
+}
+
+.todo-card[data-look='clipboard'] .todo-count {
+  padding: 0;
+  background: none;
+  font-size: var(--font-size-badge);
+}
+
+.todo-card[data-look='clipboard'] .todo-lines {
+  padding: 0;
+}
+
+.todo-card[data-look='clipboard'] .todo-line {
+  padding-top: var(--space-1-5);
+  padding-bottom: var(--space-1-5);
+  border-top: 1px solid var(--separator);
+}
+
+.todo-card[data-look='clipboard'] .todo-foot {
+  padding: var(--space-1-5) var(--space-2-5) var(--space-2);
+  font-size: var(--font-size-badge);
+}
+
+/* All done on the clipboard: a stamp under the ticked lines. */
+.todo-stamp {
+  display: grid;
+  flex: none;
+  gap: var(--space-0-5);
+  justify-items: center;
+  padding: var(--space-1-5) var(--space-2-5) var(--space-2-5);
+  color: var(--todo-ink);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-bold);
+}
+
+.todo-stamp-ring {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border: 2px solid var(--todo);
+  border-radius: var(--radius-pill);
+  color: var(--todo);
+}
+
+.todo-stamp-ring svg {
+  width: 22px;
+  height: 22px;
+}
+
+/* Empty on the clipboard: a blank sheet, its first line the way to add one. */
+.todo-blank-add {
+  display: flex;
+  flex: 1 1 auto;
+  gap: var(--space-1-5);
+  align-items: center;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.todo-blank .todo-line:nth-child(2) {
+  opacity: 0.35;
+}
+
+.todo-blank .todo-line:nth-child(3) {
+  opacity: 0.2;
+}
+
+/* The To do tab of an agent's window: its list, as wide as reads well, on the window's desk. */
+.todo-tab {
+  display: flex;
+  box-sizing: border-box;
+  flex-direction: column;
+  height: 100%;
+  padding: var(--space-5) var(--space-4) var(--space-4);
+  overflow-y: auto;
+  background: var(--surface);
+}
+
+.todo-tab > .todo-card {
+  flex: 0 1 auto;
+  width: 100%;
+  max-width: 520px;
+  height: auto;
+  min-height: 0;
+  margin: 0 auto;
+}
+
+.todo-tab-note {
+  margin: 0;
+  color: var(--muted);
+}
+
+/* The zone tab's count, opened: the zone's lists, each under whose it is and how many are left. */
+.ui-popover.todo-popover {
+  box-sizing: border-box;
+  width: 300px;
+  max-height: min(420px, var(--radix-popover-content-available-height));
+  padding: var(--space-1-5);
+  overflow-y: auto;
+  border-radius: var(--radius-card);
+}
+
+.todo-pop-group + .todo-pop-group {
+  margin-top: var(--space-1);
+}
+
+.todo-pop-head {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-1-5) var(--space-1-5) var(--space-1) var(--space-2);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+}
+
+.todo-pop-show {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.todo-pop-show:hover,
+.todo-pop-show:focus-visible {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.todo-pop-show svg {
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+}
+
+.todo-pop-lines {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.todo-pop-line {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+}
+
+.todo-pop-line:hover {
+  background: var(--hover);
+}
+
+.todo-pop-line[data-done] .todo-text {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.todo-pop-none {
+  margin: 0;
+  padding: var(--space-2);
+  color: var(--muted);
 }

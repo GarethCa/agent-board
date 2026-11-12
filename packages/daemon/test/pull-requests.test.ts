@@ -265,11 +265,22 @@ describe("an agent's pull requests", () => {
     const searches = (sha: string) => github.calls().filter((call) => call.args.includes('--search') && call.args.includes(sha)).length;
     expect(searches(notes)).toBe(0);
 
-    // Found merged, it is trusted for a while, though its own branch is asked about every round.
-    const searched = searches(pushed);
+    // The merged state may first be seen by a round that began before the prune (through the branch it pushed to), so
+    // the search for the pushed commit can still be to come: wait until it has run and no more land.
     const own = () => github.calls().filter((call) => call.args.includes(agent.branch)).length;
-    const before = own();
-    await expect.poll(own, { timeout: 10_000 }).toBeGreaterThan(before + 2);
+    const rounds = async (count: number) => {
+      const from = own();
+      await expect.poll(own, { timeout: 10_000 }).toBeGreaterThanOrEqual(from + count);
+    };
+    await expect.poll(() => searches(pushed), { timeout: 10_000 }).toBeGreaterThan(0);
+    let searched = -1;
+    while (searched !== searches(pushed)) {
+      searched = searches(pushed);
+      await rounds(3);
+    }
+
+    // Found merged, it is trusted for a while, though its own branch is asked about every round.
+    await rounds(3);
     expect(searches(pushed)).toBe(searched);
   });
 

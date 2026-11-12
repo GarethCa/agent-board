@@ -286,12 +286,15 @@ describe('deliveries', () => {
     const { promise: up, resolve: comeUp } = Promise.withResolvers<boolean>();
     deliveries.firstPrompt('a', 'Fix the tests', up);
     expect(await deliveries.answer('a', 'Also lint')).toEqual({ queued: true });
-    expect(deliveries.runScheduled('a', 'Nightly')).toEqual({ started: true, queued: true });
+    const notTyped: string[] = [];
+    expect(deliveries.runScheduled('a', 'Nightly', (reason) => notTyped.push(reason))).toEqual({ started: true, queued: true });
     a.ended_at = '2026-10-22T10:00:01Z';
     comeUp(false);
     await land('a');
     expect(writes).toEqual([]);
     expect(undelivered).toEqual(['a A message: Also lint (a has ended)', 'a A scheduled run: Nightly (a has ended)']);
+    // Its clock hears it too: no turn of it will end.
+    expect(notTyped).toEqual(['a has ended']);
     expect(deliveries.queuedUntilUp('a')).toBe(0);
   });
 

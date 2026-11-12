@@ -42,6 +42,7 @@ import {
   setDefaultRole,
   setOrchestrate,
   handOver,
+  categoryAnswer,
   characterAnswer,
   setCrewStatus,
   setOwnStatus,
@@ -65,11 +66,13 @@ import {
   type BoardView,
 } from './board-ops.ts';
 import { AGENT_FACES, AGENT_POSES, AGENT_PROPS, characterChoices, NO_POSE, parseCharacter, type CharacterSet } from './character.ts';
+import { parseWorkCategorySet } from './work-category.ts';
 import { DaemonRpcError } from './client.ts';
 import { documentTitle } from './document-names.ts';
-import { addSchedule, checkSchedule, listSchedules, removeSchedule } from './clock-ops.ts';
+import { addSchedule, checkOwnSchedule, checkSchedule, checkTemplate, listSchedules, listTemplates, removeSchedule, removeTemplate, saveTemplate, setOwnSchedule } from './clock-ops.ts';
 import { listSteps, newSteps, readStepsCard, updateSteps } from './steps-ops.ts';
 import { listMemories, listQueues, memoryHistory, newMemory, newQueue, queueHistory, readMemory, readQueue, updateMemory, updateQueue, type QueueUpdate } from './memory-ops.ts';
+import { changeTodo, readTodos, remind } from './todo-ops.ts';
 import {
   addDiagram,
   addGroup,
@@ -136,6 +139,7 @@ import {
   type PageParams,
   type RecordParams,
   type WaitState,
+  type WorkCategoryParams,
 } from './protocol.ts';
 
 export const BOARD_HELP = `agent-board: the board you are on. agent-board is a desktop app that shows coding agents
@@ -197,6 +201,10 @@ COMMANDS
   memory ls|read|add|edit|rm|history|restore|new ...
                         Shared context: keyed values, notes and whole files that agents in
                         scope read and write, and people on the board. See \`memory --help\`.
+  remind "<text>"... | remind ls [--mine] | remind done|undo|rm <n>
+                        Add a to-do for the user to your to-do list, under your tile (agents
+                        only): something only they can do. A tick tells you nothing; \`remind
+                        ls --mine\` shows which are done. See \`remind --help\`.
   queue ls|read|add|take|drop|done|edit|rm|history|restore|new ...
                         Jobs to take one at a time, and notes, for agents or for the user.
                         A job you take goes back if your session ends. See \`queue --help\`.
@@ -213,6 +221,13 @@ COMMANDS
   handoff [--to <ref>] [--message <text>] [--handover <path>] [--data <json>]
                         Hand your finished work to the next agent over your own outgoing
                         edges, once it is ready, and say it is finished. See \`handoff --help\`.
+  schedule add '<cron>' --self [--after hibernate|idle] [--] <prompt>
+                        Add a clock of your own beside your tile, for a long watch: it
+                        messages you at each fire time (agents only). \`schedule set|stop\`
+                        change what it does with you after each run, or turn it off, saying
+                        why. See \`schedule --help\`.
+  schedule template save <name> --from <clock> | schedule template list | schedule template remove <name>
+                        Save a clock to start new ones from: \`schedule add --template <name>\`.
   mcp                   Serve these as MCP tools on stdio, for a harness. Two are MCP tools
                         alone, as they wait on the user longer than a shell command runs:
                         ask (a question in the user's Needs you inbox) and show_doc with plan
@@ -444,7 +459,8 @@ decision instead, use the MCP tool \`show_doc\` with plan.
   --json           Print the document as JSON.`,
   },
   status: {
-    usage: 'agent-board status set [<summary>] [--agent <ref>] [--progress <0-100>] [--done] [--pose <pose> [--face <face>] [--prop <prop>]] | status poses',
+    usage:
+      'agent-board status set [<summary>] [--agent <ref>] [--progress <0-100>] [--done] [--pose <pose> [--face <face>] [--prop <prop>]] [--category <category> [--label <text>] [--on "<who> · <ref>"]] | status poses',
     text: `Sets your own tile's status: one line, at most ${MAX_STATUS_LENGTH} characters, saying what you are doing
 now, as the change you are making ("Moving session ids to the daemon"), not the task you were
 given. Your tile shows it in place of your task. Set it once you understand the work, and again
@@ -473,12 +489,25 @@ waiting-on-review when your next turn starts; \`--pose none\` gives the board's 
 board's own states (needs you, a problem, a usage limit, paused, done) are drawn over yours,
 which shows again after. Setting a pose often is fine: the tile draws the last one.
 
-  --agent <ref>    Set this crew member's line or pose, not your own.
+--category says what kind of wait your work is in, for the overview the user reads at a glance:
+needs-help, ready-for-review, blocked, waiting-on-others, in-review, working or done. Set it
+when that changes, above all when your work waits on someone other than the user: \`--category
+waiting-on-others --on "Northwind Pay support · #48213"\`. --on names who it waits on, with their
+reference after " · ", and is only for waiting-on-others and in-review. --label is your own word
+for it, at most 40 characters ("With Legal"), shown in place of the category's name. A category
+stays until you set another, and a set replaces all of it; --done with no category is done, which
+your next prompt clears; \`--category none\` gives the board's guess back. While a question or a
+permission prompt of yours waits on the user, the overview shows needs-help over yours.
+
+  --agent <ref>    Set this crew member's line, pose or category, not your own.
   --progress <n>   0 to 100.
   --done           Your work is finished (not with --agent).
   --pose <pose>    Your character's pose, or none (\`status poses\`).
   --face <face>    Its face, with --pose.
   --prop <prop>    Its prop, with --pose.
+  --category <c>   Your work's category, or none.
+  --label <text>   Your own word for it, with --category.
+  --on <who · ref> Who it waits on, with --category waiting-on-others or in-review.
   --json           Print the agent as JSON (with --agent, as \`show --json\` prints it).`,
   },
   record: {
@@ -1427,26 +1456,28 @@ instead, and is told. Naming an agent on a to-do sends it nothing: it finds its 
   },
   memory: {
     usage:
-      'agent-board memory ls | memory read <memory> [<entry>] [--search <text>] | memory add <memory> [--key <key>|--no-key] [--file <path>] [--] <text>... | ' +
+      'agent-board memory ls | memory read <memory> [<entry>] [--search <text>] | memory add <memory> [--key <key>|--no-key] [--file <path>|--doc <title>] [--] <text>... | ' +
       'memory edit <memory> <entry> [--key <key>|--no-key] [--pin|--unpin] [--] [<text>...] | memory rm <memory> <entry> | ' +
-      'memory history <memory> <entry> | memory restore <memory> <entry> <version> | memory new <title>...',
+      'memory history <memory> <entry> | memory restore <memory> <entry> <version> | memory confirm <memory> <entry> | memory new <title>...',
     text: `A memory is shared context on the board: what agents and people want kept, read and changed
 by anyone in its scope. In a zone, its scope is that zone's agents (and orchestrators whose scope
 reaches it); loose on the board, every agent's; set to No agents, only the user's. Read the
 memories you can at the start of work, and keep what the next agent needs in one.
 
-It holds three kinds of entry:
-  key: value       A value under a key (one word). Setting a key again replaces its value.
-  a note           Text with no key, kept as written.
-  a file           A whole file (up to 1 MB), kept under its name, with its first lines shown.
+It holds facts and documents:
+  key: value       A fact under a key (one word). Setting a key again replaces its value.
+  a note           A fact with no key, kept as written.
+  a document       Text kept whole (up to 1 MB) under its title: listed by its title and size,
+                   read only when named.
 
   memory ls                     The memories you can read.
-  memory read <memory>          Every entry, pinned first, then newest first; --search <text>
-                                only those holding it. With <entry> (a key, or its #id), that
-                                one in full: a file whole.
+  memory read <memory>          Its facts in full, pinned first, then newest first, then its
+                                documents by title; --search <text> only those holding it. With
+                                <entry> (a key, a document's title, or its #id), that one in full.
   memory add <memory> <text>    Remember something: "key: value", or a note. --key <key> names it
-                                (spaces and all), --no-key keeps "a: b" as a note, --file <path>
-                                keeps that file under its name (or --key).
+                                (spaces and all), --no-key keeps "a: b" as a note. --doc <title>
+                                keeps the text as a document; --file <path> keeps that file as
+                                one, under its name (or --key).
   memory edit <memory> <entry> [<text>]
                                 Change its text, key (--key, or --no-key), or pin (--pin keeps
                                 it in the top rows, --unpin).
@@ -1455,11 +1486,39 @@ It holds three kinds of entry:
                                 Its versions, newest first: every change anyone made, removes too.
   memory restore <memory> <entry> <version>
                                 Put a version back, undoing the changes after it.
+  memory confirm <memory> <entry>
+                                Say it is still true: it no longer reads as stale.
   memory new <title>            Put a new memory beside your tile.
 
-<memory> is its ref (item:3f2a) or its title. An entry left 30 days reads as old. Anyone in scope
+<memory> is its ref (item:3f2a) or its title. An entry left 30 days reads as stale. Reading a fact,
+or a document by name, counts you among its readers. Anyone in scope
 may change any entry, the user's too: history takes a change back. At most 500 entries and 8 MB a
-memory, and 4,000 characters a value (keep longer text as a file).
+memory, and 4,000 characters a value (keep longer text as a document).
+
+  --json                        Print it as JSON.`,
+  },
+  remind: {
+    usage: 'agent-board remind [add] [--] <text>... | remind ls [--mine] | remind done <n> | remind undo <n> | remind rm <n>',
+    text: `A to-do list holds reminders for the user: things only they can do, such as sending a pull
+request for approval, answering a question on it, or restarting the app. Each agent has one
+list, under its tile, made by its first to-do; the user keeps lists of their own too. The user
+ticks, edits, moves and takes off any line. Nothing is done for them, and nothing tells you when
+they tick one: read your list when you need to know.
+
+  remind <text>...              Add each <text> as a to-do (a line break in one makes two). Start
+                                with \`remind add\` when the to-do's first word is ls, done, undo
+                                or rm.
+  remind ls                     The to-do lists you can read, each line numbered, with who ticked
+                                it and when: \`[x] Send the PR for approval · you, 14:06\`.
+  remind ls --mine              Only your own list.
+  remind done <n>               Tick line <n> of your list, one you wrote: it is done after all.
+  remind undo <n>               Untick it.
+  remind rm <n>                 Take it off: the user need not do it now.
+
+<n> is the line's number in \`remind ls --mine\` as the list is now: the user may have moved
+lines since you read it, and the answer names the line it changed. A line the user wrote is
+theirs to tick or take off. At most 100 lines a list, and 500 characters a line. For questions the user answers
+together, use a steps card (\`steps --help\`).
 
   --json                        Print it as JSON.`,
   },
@@ -1504,25 +1563,50 @@ holds is its, or the user's, to change. At most 200 open jobs a queue.
   schedule: {
     usage:
       "agent-board schedule add '<cron>' (--to <ref> | --fresh [--zone <ref>] [--harness claude|codex] [--model <m>] [--role <r>] [--keep] " +
-      '[--result history|note|handoff [--handoff-to <ref>]]) [--file <path> | [--] <prompt>] | schedule list | schedule remove <ref>',
-    text: `Schedules for an orchestrator (\`agent-board help orchestrate\`): each is a clock on the board,
-marked as made by you, that fires on a five-field cron expression (minute hour day month
-weekday, or @daily, @hourly…) in the machine's local time. Quote the expression.
+      '[--result history|note|handoff [--handoff-to <ref>]] | --self [--after hibernate|idle]) [--file <path> | [--] <prompt>] | schedule list | schedule remove <ref> | ' +
+      'schedule set [--self | <ref>] --after hibernate|close|idle --why "…" | schedule stop [--self | <ref>] --why "…" | ' +
+      "schedule add --template <name> [<cron> [<prompt>]] [--to <ref> | --self | --fresh …] | schedule template save <name> (--from <ref> | '<cron>' [--after <mode>] [--harness, --model, --role, --keep, --result] [--] <prompt>) | " +
+      'schedule template list | schedule template remove <name>',
+    text: `Schedules, each a clock on the board that fires on a five-field cron expression (minute
+hour day month weekday, or @daily, @hourly…) in the machine's local time. Quote the expression.
 
-With --to, it sends <prompt> to that agent at each fire time, as its next message (relaunching
-it if its session has ended; a time at which it is busy is skipped, and three skipped in a
-row while it was still working flag it: its turn looks stuck). The clock goes on the agent's
-tile's left. With --fresh, it starts a fresh agent each time, in --zone (your zone by
-default) with <prompt> as its task, waits for its turn to end, keeps its final message in the
-clock's run history, and closes it (--keep leaves it open); a time at which the last run is
-still going is skipped. --result note also leaves the result as a note where its tile was;
+Any agent has a clock of its own: one that messages it, or whose run started it.
+\`schedule add --self\` adds one beside your tile, for a long watch, hibernating you after each
+run (--after hibernate: you are paused, and the next run wakes you in the same conversation)
+or leaving you idle (the default). \`schedule set --after hibernate|close|idle\` changes what it
+does with you after each run: close starts a fresh agent each run instead, and closes you once
+this run is over. \`schedule stop\` turns it off; only the user turns it on again. Both need
+--why, which the user sees on the clock, and act on your own clock: name it with <ref> if you
+have more than one.
+
+An orchestrator (\`agent-board help orchestrate\`) also adds clocks for its crew, marked as
+made by it. With --to, it sends <prompt> to that agent at each fire time, as its next message
+(relaunching it if its session has ended; a time at which it is busy is skipped, and three
+skipped in a row while it was still working flag it: its turn looks stuck). The clock goes on
+the agent's tile's left. With --fresh, it starts a fresh agent each time, in --zone (your zone
+by default) with <prompt> as its task, waits for its turn to end, keeps its final message in
+the clock's run history, and closes it (--keep leaves it open); a time at which the last run
+is still going is skipped. --result note also leaves the result as a note where its tile was;
 --result handoff hands it to --handoff-to's agent.
 
 \`schedule list\` prints each clock's ref, its schedule, what it does, when it next runs and how
 its last run went: for a run of skips, how many, since when and why. \`schedule remove\` removes only a clock you, or an agent you started, made;
 in a shell, or outside agent-board, any.
 
+A template is a clock saved under a name, for any zone, to start new ones from: its schedule,
+prompt and mode, and a fresh agent's settings, never the agent it messages. \`schedule template
+save <name> --from <clock>\` saves a clock, or give its cron, prompt and --after (with --after
+close, a fresh agent's options); saving under a name you saved replaces it. \`schedule add
+--template <name>\` starts a clock from it: a cron, a prompt, --to, --self or --fresh given
+override its own. \`schedule template remove\` removes only a template you saved; in a shell, or
+outside agent-board, any.
+
   --to <ref>         The agent it messages, in your scope.
+  --self             Message you: a clock of your own.
+  --after <mode>     What your own clock does with you after each run: hibernate, close or idle.
+  --why <text>       Why you are changing your own clock.
+  --template <name>  Start from a saved template.
+  --from <ref>       The clock \`schedule template save\` saves.
   --fresh            Start a fresh agent each run instead.
   --zone <ref>       A fresh agent's zone, in your scope.
   --harness, --model, --role
@@ -1651,6 +1735,21 @@ export async function runBoardCommand(
   }
 }
 
+/**
+ * `status set --category`, as `board.setStatus` takes it: `--on "who · ref"` names who it waits on, and their reference
+ * after a " · " if it has one. Refuses what the daemon would, naming the options.
+ */
+function categoryOption(category: string, label: string | undefined, on: string | undefined): WorkCategoryParams {
+  const split = on?.indexOf(' · ') ?? -1;
+  const waitingOn = on === undefined ? undefined : split < 0 ? { who: on } : { who: on.slice(0, split), ref: on.slice(split + 3) };
+  try {
+    parseWorkCategorySet({ category, label, waitingOn });
+  } catch (error) {
+    throw new UsageError((error as Error).message.replace(/\bwaitingOn\b/g, '--on').replace(/\bthe (who|ref)\b/, 'the --on $1'));
+  }
+  return { category: category as WorkCategoryParams['category'], ...(label === undefined ? {} : { label }), ...(waitingOn === undefined ? {} : { waitingOn }) };
+}
+
 /** Exit code of a `wait` that gave up before the agents were there. */
 const WAIT_TIMED_OUT = 3;
 
@@ -1659,6 +1758,8 @@ const OPTIONS = {
   progress: { type: 'string' },
   pose: { type: 'string' },
   face: { type: 'string' },
+  category: { type: 'string' },
+  on: { type: 'string' },
   prop: { type: 'string' },
   title: { type: 'string' },
   for: { type: 'string' },
@@ -1719,6 +1820,11 @@ const OPTIONS = {
   keep: { type: 'boolean' },
   result: { type: 'string' },
   'handoff-to': { type: 'string' },
+  self: { type: 'boolean' },
+  after: { type: 'string' },
+  why: { type: 'string' },
+  template: { type: 'string' },
+  from: { type: 'string' },
   attribute: { type: 'string', multiple: true },
   method: { type: 'string', multiple: true },
   fill: { type: 'string' },
@@ -1734,6 +1840,7 @@ const OPTIONS = {
   send: { type: 'boolean' },
   key: { type: 'string' },
   'no-key': { type: 'boolean' },
+  doc: { type: 'string' },
   search: { type: 'string' },
   pin: { type: 'boolean' },
   unpin: { type: 'boolean' },
@@ -1749,11 +1856,11 @@ const OPTIONS = {
 type Option = keyof typeof OPTIONS;
 
 /** The options only `status set` takes, which other commands refuse by naming it. */
-const STATUS_ONLY: ReadonlySet<Option> = new Set<Option>(['progress', 'done', 'agent', 'pose', 'face', 'prop']);
+const STATUS_ONLY: ReadonlySet<Option> = new Set<Option>(['progress', 'done', 'agent', 'pose', 'face', 'prop', 'category', 'on']);
 
 /** The options each command takes beyond `--json` (which every one but `status`'s set, `rpc` and `mcp` takes too). */
 export const COMMAND_OPTIONS: Record<string, readonly Option[]> = {
-  status: ['progress', 'done', 'agent', 'pose', 'face', 'prop'],
+  status: ['progress', 'done', 'agent', 'pose', 'face', 'prop', 'category', 'label', 'on'],
   record: ['title', 'for'],
   pin: ['note', 'label', 'for'],
   unpin: ['label', 'for'],
@@ -1781,9 +1888,10 @@ export const COMMAND_OPTIONS: Record<string, readonly Option[]> = {
   connect: ['relation', 'style', 'label', 'from-label', 'to-label'],
   connector: ['relation', 'style', 'label', 'from-label', 'to-label'],
   diagram: ['file', 'to', 'at', 'near', 'side'],
-  schedule: ['to', 'fresh', 'zone', 'harness', 'model', 'role', 'keep', 'result', 'handoff-to', 'file'],
+  schedule: ['to', 'fresh', 'self', 'after', 'why', 'template', 'from', 'zone', 'harness', 'model', 'role', 'keep', 'result', 'handoff-to', 'file'],
   steps: ['title', 'file', 'mine', 'undo', 'send'],
-  memory: ['key', 'no-key', 'file', 'search', 'pin', 'unpin'],
+  memory: ['key', 'no-key', 'file', 'doc', 'search', 'pin', 'unpin'],
+  remind: ['mine'],
   queue: ['kind', 'front', 'link', 'file', 'for-user', 'most'],
 };
 
@@ -1935,7 +2043,9 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
       const summary = words.trim() === '' ? undefined : words;
       const pose = string('pose');
       if (pose === undefined && (string('face') !== undefined || string('prop') !== undefined)) throw new UsageError('--face and --prop go with a --pose');
-      if (summary === undefined && pose === undefined) throw new UsageError('give a summary, a --pose, or both');
+      const kind = string('category');
+      if (kind === undefined && (string('label') !== undefined || string('on') !== undefined)) throw new UsageError('--label and --on go with a --category');
+      if (summary === undefined && pose === undefined && kind === undefined) throw new UsageError('give a summary, a --pose, a --category, or more');
       const progress = string('progress') === undefined ? undefined : Number(string('progress'));
       if (progress !== undefined && !isStatusProgress(progress)) {
         throw new UsageError('--progress must be a whole number from 0 to 100');
@@ -1947,17 +2057,19 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
       } catch (error) {
         throw new UsageError((error as Error).message);
       }
+      const category = kind === undefined ? undefined : categoryOption(kind, string('label'), string('on'));
       const crewMember = string('agent');
       if (crewMember !== undefined && values.done === true) throw new UsageError('--done is for your own status: a crew member says it is finished itself');
       return async (session) => {
         if (crewMember !== undefined) {
-          const view = await setCrewStatus(session, crewMember, summary, progress, character);
+          const view = await setCrewStatus(session, crewMember, summary, progress, character, category);
           return values.json ? JSON.stringify(view.json, null, 2) : view.text;
         }
-        const agent = await setOwnStatus(session, summary, progress, values.done === true, character);
+        const agent = await setOwnStatus(session, summary, progress, values.done === true, character, category);
         if (values.json) return JSON.stringify(agent, null, 2);
         const lines = summary === undefined ? [] : [`status set: ${statusLine(agent.status!)}${agent.workFinishedAt === null ? '' : ' (finished)'}`];
         if (character !== undefined) lines.push(characterAnswer(agent));
+        if (category !== undefined || values.done === true) lines.push(categoryAnswer(agent));
         return lines.join('\n');
       };
     }
@@ -2359,14 +2471,54 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
     }
     case 'schedule': {
       const [sub, ...rest] = positionals;
+      if (values.from !== undefined && !(sub === 'template' && rest[0] === 'save')) throw new UsageError('--from is only for `schedule template save`');
+      if (sub === 'template') {
+        const [action, name, ...words] = rest;
+        const stray = (['to', 'fresh', 'self', 'why', 'template', 'zone', 'handoff-to'] as const).find((option) => values[option] !== undefined);
+        if (stray !== undefined) throw new UsageError(`--${stray} is not for \`schedule template\``);
+        if (action === 'save') {
+          if (name === undefined) throw new UsageError('give the template a name');
+          const [cron = '', ...prompt] = words;
+          positionals = prompt;
+          const options = {
+            name,
+            from: string('from'),
+            cron,
+            prompt: text(0),
+            after: string('after'),
+            harness: string('harness'),
+            model: string('model'),
+            role: string('role'),
+            keep: values.keep === true ? true : undefined,
+            result: string('result'),
+          };
+          checked(() => checkTemplate(options));
+          return async (session) => print(await saveTemplate(session, options));
+        }
+        const option = (['after', 'harness', 'model', 'role', 'keep', 'result', 'file'] as const).find((each) => values[each] !== undefined);
+        if (option !== undefined) throw new UsageError(`--${option} is only for \`schedule template save\``);
+        if (action === 'list') {
+          if (name !== undefined) throw new UsageError(`unexpected ${rest.slice(1).join(' ')}`);
+          return async (session) => print(await listTemplates(session));
+        }
+        if (action === 'remove') {
+          if (name === undefined || words.length > 0) throw new UsageError('give one template name');
+          return async (session) => print(await removeTemplate(session, name));
+        }
+        throw new UsageError('the template commands are `schedule template save`, `schedule template list` and `schedule template remove`');
+      }
       if (sub === 'add') {
         const [cron, ...words] = rest;
-        if (cron === undefined) throw new UsageError("give the schedule's cron expression, quoted: '0 9 * * 1-5'");
+        const template = string('template');
+        if (cron === undefined && template === undefined) throw new UsageError("give the schedule's cron expression, quoted: '0 9 * * 1-5'");
         positionals = words;
         const options = {
-          cron,
+          cron: cron ?? '',
+          template,
           prompt: text(0),
           to: string('to'),
+          self: values.self === true ? true : undefined,
+          after: string('after'),
           fresh: values.fresh === true ? true : undefined,
           zone: string('zone'),
           harness: string('harness'),
@@ -2379,7 +2531,16 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
         checked(() => checkSchedule(options));
         return async (session) => print(await addSchedule(session, options));
       }
-      const added = (['to', 'fresh', 'zone', 'harness', 'model', 'role', 'keep', 'result', 'handoff-to', 'file'] as const).find((option) => values[option] !== undefined);
+      if (values.why !== undefined && sub !== 'set' && sub !== 'stop') throw new UsageError('--why is only for `schedule set` and `schedule stop`');
+      if (sub === 'set' || sub === 'stop') {
+        const stray = (['to', 'fresh', 'template', 'zone', 'harness', 'model', 'role', 'keep', 'result', 'handoff-to', 'file'] as const).find((option) => values[option] !== undefined);
+        if (stray !== undefined) throw new UsageError(`--${stray} is only for \`schedule add\``);
+        if (rest.length > 1 || (rest.length === 1 && values.self === true)) throw new UsageError('give one schedule ref, or --self (the default) for your own');
+        const options = { ref: rest[0], after: string('after'), stop: sub === 'stop' ? true : undefined, why: string('why') ?? '' };
+        checked(() => checkOwnSchedule(options));
+        return async (session) => print(await setOwnSchedule(session, options));
+      }
+      const added = (['to', 'fresh', 'self', 'after', 'template', 'zone', 'harness', 'model', 'role', 'keep', 'result', 'handoff-to', 'file'] as const).find((option) => values[option] !== undefined);
       if (added !== undefined) throw new UsageError(`--${added} is only for \`schedule add\``);
       if (sub === 'list') {
         if (rest.length > 0) throw new UsageError(`unexpected ${rest.join(' ')}`);
@@ -2389,7 +2550,7 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
         if (rest.length !== 1) throw new UsageError('give one schedule ref');
         return async (session) => print(await removeSchedule(session, rest[0]!));
       }
-      throw new UsageError('the schedule commands are `schedule add`, `schedule list` and `schedule remove`');
+      throw new UsageError('the schedule commands are `schedule add`, `schedule list`, `schedule remove`, `schedule set`, `schedule stop` and `schedule template`');
     }
     case 'steps': {
       const [sub, ...rest] = positionals;
@@ -2460,8 +2621,8 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
     }
     case 'memory': {
       const [sub, ref, ...after] = positionals;
-      const allowed: Record<string, readonly Option[]> = { read: ['search'], add: ['key', 'no-key', 'file'], edit: ['key', 'no-key', 'pin', 'unpin'] };
-      for (const option of ['key', 'no-key', 'file', 'search', 'pin', 'unpin'] as const) {
+      const allowed: Record<string, readonly Option[]> = { read: ['search'], add: ['key', 'no-key', 'file', 'doc'], edit: ['key', 'no-key', 'pin', 'unpin'] };
+      for (const option of ['key', 'no-key', 'file', 'doc', 'search', 'pin', 'unpin'] as const) {
         if (values[option] !== undefined && !(allowed[sub ?? ''] ?? []).includes(option)) throw new UsageError(`--${option} is not for \`memory ${sub ?? ''}\``);
       }
       if (values.key !== undefined && values['no-key'] === true) throw new UsageError('give --key or --no-key, not both');
@@ -2492,9 +2653,16 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
         case 'add': {
           const memory = needRef();
           const path = string('file');
+          const document = string('doc');
           const body = after.join(' ');
-          if (path === undefined && body.trim() === '') throw new UsageError('give the text to remember, after the memory, or --file');
-          const update = { action: 'add' as const, ...(path === undefined ? { text: body } : { path, ...(body.trim() === '' ? {} : { text: body }) }), ...(string('key') === undefined ? {} : { key: string('key') }), note: values['no-key'] === true };
+          if (path === undefined && body.trim() === '') throw new UsageError(document === undefined ? 'give the text to remember, after the memory, or --file' : 'give the document its text, after the memory');
+          const update = {
+            action: 'add' as const,
+            ...(path === undefined ? { text: body } : { path, ...(body.trim() === '' ? {} : { text: body }) }),
+            ...(document === undefined ? {} : { document }),
+            ...(string('key') === undefined ? {} : { key: string('key') }),
+            note: values['no-key'] === true,
+          };
           return async (session) => print(await updateMemory(session, memory, update, cwd));
         }
         case 'edit': {
@@ -2522,13 +2690,43 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
           const version = versionAt(after[1]);
           return async (session) => print(await updateMemory(session, memory, { action: 'restore', entry: needEntry(), version }, cwd));
         }
+        case 'confirm': {
+          if (after.length !== 1) throw new UsageError('give the memory and one entry');
+          const memory = needRef();
+          return async (session) => print(await updateMemory(session, memory, { action: 'confirm', entry: needEntry() }, cwd));
+        }
         case 'new': {
           const title = positionals.slice(1).join(' ');
           if (title.trim() === '') throw new UsageError('give the memory a title');
           return async (session) => print(await newMemory(session, title));
         }
         default:
-          throw new UsageError('the memory commands are `memory ls`, `read`, `add`, `edit`, `rm`, `history`, `restore` and `new`');
+          throw new UsageError('the memory commands are `memory ls`, `read`, `add`, `edit`, `rm`, `history`, `restore`, `confirm` and `new`');
+      }
+    }
+    case 'remind': {
+      const [sub, ...rest] = positionals;
+      if (values.mine !== undefined && sub !== 'ls' && sub !== 'list') throw new UsageError('--mine is only for `remind ls`');
+      const place = () => {
+        if (rest.length !== 1 || !/^\d+$/.test(rest[0]!)) throw new UsageError(`give one line's number, as \`agent-board remind ls --mine\` numbers them`);
+        return Number(rest[0]);
+      };
+      switch (sub) {
+        case 'ls':
+        case 'list':
+          if (rest.length > 0) throw new UsageError(`unexpected ${rest.join(' ')}`);
+          return async (session) => print(await readTodos(session, values.mine === true));
+        case 'done':
+        case 'undo':
+        case 'rm': {
+          const n = place();
+          return async (session) => print(await changeTodo(session, sub, n));
+        }
+        default: {
+          const texts = sub === 'add' ? rest : positionals;
+          if (texts.join('').trim() === '') throw new UsageError('give the to-do: `agent-board remind "<what the user must do>"`');
+          return async (session) => print(await remind(session, texts));
+        }
       }
     }
     case 'queue': {

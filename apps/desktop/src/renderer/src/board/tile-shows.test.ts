@@ -61,7 +61,7 @@ describe('the time in its state', () => {
 
 describe("the Simplified tile's times", () => {
   const schedule = (fields: Partial<NonNullable<Agent['schedule']>> = {}) =>
-    ({ clockId: 'c', cron: '0 9 * * *', prompt: 'go', enabled: true, nextRunAt: new Date(NOW + 130 * MIN).toISOString(), lastRun: null, ...fields }) as Agent['schedule'];
+    ({ clockId: 'c', cron: '0 9 * * *', prompt: 'go', enabled: true, nextRunAt: new Date(NOW + 130 * MIN).toISOString(), lastRun: null, hibernates: false, ...fields }) as Agent['schedule'];
   const calm = (fields: Partial<Agent>) => ({ state: 'running', stateSince: ago(12 * MIN), schedule: null, ...fields }) as Agent;
 
   it('says how long it has been in its state, in words', () => {

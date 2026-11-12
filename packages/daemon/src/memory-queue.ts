@@ -41,6 +41,8 @@ import {
   type MemoryChange,
   type MemoryData,
   type MemoryEntry,
+  type MemoryReaders,
+  type MemoryView,
   type QueueAudience,
   type QueueChange,
   type QueueData,
@@ -276,6 +278,7 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
     DELETE FROM memory_entries WHERE item_id NOT IN (SELECT id FROM board_items);
     DELETE FROM queue_jobs WHERE item_id NOT IN (SELECT id FROM board_items);
     DELETE FROM board_history WHERE item_id NOT IN (SELECT id FROM board_items);
+    DELETE FROM memory_reads WHERE item_id NOT IN (SELECT id FROM board_items);
   `);
 
   const sql = {
@@ -287,6 +290,16 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
     ),
     updateEntry: db.prepare('UPDATE memory_entries SET key = ?, is_file = ?, text = ?, pinned = ?, changed_by = ?, updated_at = ? WHERE id = ?'),
     deleteEntry: db.prepare('DELETE FROM memory_entries WHERE id = ?'),
+    addRead: db.prepare(
+      'INSERT INTO memory_reads (entry_id, item_id, session_id, name, at) VALUES (?, ?, ?, ?, ?) ON CONFLICT (entry_id, session_id) DO UPDATE SET name = excluded.name, at = excluded.at',
+    ),
+    // A bare column beside one MAX() is SQLite's: `name` comes from the row holding the newest `at`.
+    entryReaders: db.prepare('SELECT entry_id, COUNT(*) AS n, name, MAX(at) AS at FROM memory_reads WHERE item_id = ? GROUP BY entry_id'),
+    // The memory's readers are those of the entries it holds now.
+    memoryReaders: db.prepare(
+      'SELECT COUNT(DISTINCT session_id) AS n, name, MAX(at) AS at FROM memory_reads WHERE item_id = ? AND entry_id IN (SELECT id FROM memory_entries WHERE item_id = ?)',
+    ),
+    clearReads: db.prepare('DELETE FROM memory_reads WHERE entry_id = ?'),
     jobs: db.prepare(`SELECT ${JOB_COLUMNS} FROM queue_jobs WHERE item_id = ? ORDER BY done_at IS NOT NULL, CASE WHEN done_at IS NULL THEN position END, done_at DESC, id`),
     job: db.prepare(`SELECT ${JOB_COLUMNS} FROM queue_jobs WHERE id = ?`),
     heldIn: db.prepare('SELECT COUNT(*) AS n FROM queue_jobs WHERE item_id = ? AND taken_by IS NOT NULL AND done_at IS NULL'),
@@ -314,7 +327,13 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
     ),
     deleteHistory: db.prepare('DELETE FROM board_history WHERE seq = ?'),
     takenJobs: db.prepare('SELECT * FROM queue_jobs WHERE taken_by IS NOT NULL AND done_at IS NULL'),
-    trimHistory: db.prepare('DELETE FROM board_history WHERE item_id = ? AND row_id = ? AND seq NOT IN (SELECT seq FROM board_history WHERE item_id = ? AND row_id = ? ORDER BY seq DESC LIMIT ?)'),
+    // A row keeps its newest `keep` versions, and whatever confirms came since the oldest of them: a confirm is no version.
+    trimHistory: db.prepare(
+      "DELETE FROM board_history WHERE item_id = ? AND row_id = ? AND seq < (SELECT MIN(seq) FROM (SELECT seq FROM board_history WHERE item_id = ? AND row_id = ? AND action <> 'confirm' ORDER BY seq DESC LIMIT ?))",
+    ),
+    dropNewestConfirm: db.prepare(
+      "DELETE FROM board_history WHERE seq = (SELECT MAX(seq) FROM board_history WHERE item_id = ? AND row_id = ?) AND action = 'confirm'",
+    ),
   };
 
   const entriesOf = (itemId: string) => (sql.entries.all(itemId) as unknown as EntryRow[]).map(toEntry);
@@ -443,6 +462,11 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
     return row;
   };
 
+  /** An entry's readers read the text it had: a new text has none yet. */
+  const readsOf = (entryId: string, was: string, text: string) => {
+    if (was !== text) sql.clearReads.run(entryId);
+  };
+
   /** Saves `entry` as a change by `by`, recording the version. */
   const putEntry = (item: BoardItem, before: EntryRow | undefined, next: Omit<MemoryEntry, 'createdAt' | 'updatedAt' | 'madeBy' | 'changedBy'>, by: StepsWho, action: string): MemoryEntry => {
     const at = now();
@@ -451,6 +475,7 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
     roomFor(item, bytes(next.text) - (before === undefined ? 0 : bytes(before.text)), before === undefined);
     if (before === undefined) sql.insertEntry.run(next.id, item.id, next.key, next.file ? 1 : 0, next.text, next.pinned ? 1 : 0, JSON.stringify(by), JSON.stringify(by), at, at);
     else sql.updateEntry.run(next.key, next.file ? 1 : 0, next.text, next.pinned ? 1 : 0, JSON.stringify(by), at, next.id);
+    if (before !== undefined) readsOf(next.id, before.text, next.text);
     const saved = toEntry(sql.entry.get(next.id) as unknown as EntryRow);
     remember(item.id, saved.id, action, saved, by, at);
     return saved;
@@ -485,11 +510,23 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
           remember(item.id, before.id, 'remove', null, by, now());
           return null;
         }
+        case 'confirm': {
+          // Still true costs no version: the entry's date and who changed it move on, and its history gets a row with no
+          // value, the newest standing for a run of them, which no trim counts. Its readers read this text, so they stay.
+          const before = entryFor(item, change.entry);
+          const at = now();
+          sql.updateEntry.run(before.key, before.is_file, before.text, before.pinned, JSON.stringify(by), at, before.id);
+          sql.dropNewestConfirm.run(item.id, before.id);
+          sql.addHistory.run(item.id, before.id, 'confirm', null, JSON.stringify(by), at);
+          return toEntry(sql.entry.get(before.id) as unknown as EntryRow);
+        }
         case 'restore': {
           const current = pick(entryRows(item.id), change.entry, 'entry');
           const rowId = current?.id ?? pastRow<MemoryEntry>(item.id, change.entry, 'entry')?.id;
           if (rowId === undefined) throw invalidParams(`“${titleOf(item)}” has no entry ${change.entry}, nor any history of one`);
           const value = versionValue<MemoryEntry>(item, rowId, change.version);
+          // One put back after a remove had the readers of the text it was removed with.
+          if (current === undefined) readsOf(rowId, pastRow<MemoryEntry>(item.id, rowId, 'entry')?.text ?? '', value.text);
           return putEntry(item, current, { id: rowId, memoryId: item.id, key: value.key, file: value.file, text: value.text, pinned: value.pinned }, by, 'restore');
         }
       }
@@ -500,7 +537,7 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
     if (!Number.isInteger(version)) throw invalidParams('version must be a version number, as history lists them');
     const row = sql.version.get(item.id, rowId, version as number) as HistoryRow | undefined;
     if (row === undefined) throw invalidParams(`there is no version ${String(version)} of that in “${titleOf(item)}”: history lists them`);
-    if (row.value === null) throw invalidParams(`version ${String(version)} removed it: restore one before`);
+    if (row.value === null) throw invalidParams(row.action === 'confirm' ? `version ${String(version)} only confirmed it: restore one with a value` : `version ${String(version)} removed it: restore one before`);
     return JSON.parse(row.value) as Row;
   };
 
@@ -646,14 +683,39 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
     if (!known.includes(value.action)) throw invalidParams(`change.action must be one of ${known.join(', ')}`);
     return value as unknown as Change;
   };
-  const memoryChange = (value: unknown) => checkedChange<MemoryChange>(value, ['add', 'edit', 'remove', 'restore']);
+  const memoryChange = (value: unknown) => checkedChange<MemoryChange>(value, ['add', 'edit', 'remove', 'restore', 'confirm']);
   const queueChange = (value: unknown) => checkedChange<QueueChange>(value, ['add', 'edit', 'remove', 'take', 'drop', 'done', 'restore', 'move']);
 
-  const memoryView = (item: BoardItem, search: string | undefined, entry: string | undefined) => {
-    if (entry !== undefined) return { item, entries: [toEntry(entryFor(item, entry))] };
+  type ReadersRow = { n: number; name: string | null; at: string | null };
+  const readersOf = (row: ReadersRow | undefined): MemoryReaders => ({ count: row?.n ?? 0, last: row?.name == null || row.at === null ? null : { name: row.name, at: row.at } });
+
+  /**
+   * A memory's entries, or the one `entry` names, as `reader` (an agent; null for the user) reads them. An agent reads
+   * what comes back whole: the one named, or, as it reads the memory, its facts and notes. A document it lists by its
+   * title and size alone, its text left out, so a long one costs it nothing until it names it. The user gets every
+   * text, and reads nothing.
+   */
+  const memoryView = (item: BoardItem, search: string | undefined, entry: string | undefined, reader: Agent | null): MemoryView => {
     const wanted = search?.trim().toLowerCase();
-    const entries = entriesOf(item.id);
-    return { item, entries: wanted === undefined || wanted === '' ? entries : entries.filter((entry) => (entry.key ?? '').toLowerCase().includes(wanted) || entry.text.toLowerCase().includes(wanted)) };
+    const all = entry !== undefined ? [toEntry(entryFor(item, entry))] : entriesOf(item.id);
+    const found = entry !== undefined || wanted === undefined || wanted === '' ? all : all.filter((row) => (row.key ?? '').toLowerCase().includes(wanted) || row.text.toLowerCase().includes(wanted));
+    const listed = reader !== null && entry === undefined;
+    const entries = found.map((row) => (listed && row.file ? { ...row, text: '', listed: { bytes: bytes(row.text), lines: row.text.split('\n').length } } : row));
+    if (reader !== null) {
+      const at = now();
+      transaction(() => {
+        for (const read of entries) if (read.listed === undefined) sql.addRead.run(read.id, item.id, reader.sessionId, reader.name, at);
+      });
+    }
+    const byEntry = new Map((sql.entryReaders.all(item.id) as unknown as (ReadersRow & { entry_id: string })[]).map((row) => [row.entry_id, row]));
+    return {
+      item,
+      entries,
+      readers: {
+        memory: readersOf(sql.memoryReaders.get(item.id, item.id) as unknown as ReadersRow),
+        entries: Object.fromEntries(entries.map((read) => [read.id, readersOf(byEntry.get(read.id))])),
+      },
+    };
   };
   const memoryHistory = (item: BoardItem, ref: string) => {
     const rowId = pick(entryRows(item.id), ref, 'entry')?.id ?? pastRow<MemoryEntry>(item.id, ref, 'entry')?.id;
@@ -884,8 +946,9 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
         'board.listMemories': async (params, connection) => listFor('memory', agentCaller(paramsObject(params), connection, false)),
         'board.readMemory': async (params, connection) => {
           const p = paramsObject(params);
-          const item = await reached('memory', stringParam(p, 'id'), agentCaller(p, connection, false));
-          return memoryView(item, optionalStringParam(p, 'search'), optionalStringParam(p, 'entry'));
+          const me = agentCaller(p, connection, false);
+          const item = await reached('memory', stringParam(p, 'id'), me);
+          return memoryView(item, optionalStringParam(p, 'search'), optionalStringParam(p, 'entry'), me);
         },
         'board.changeMemory': async (params, connection) => {
           const p = paramsObject(params);
@@ -940,7 +1003,7 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
         },
         'memory.read': async (params) => {
           const p = paramsObject(params);
-          return memoryView(await itemOf('memory', stringParam(p, 'id')), optionalStringParam(p, 'search'), optionalStringParam(p, 'entry'));
+          return memoryView(await itemOf('memory', stringParam(p, 'id')), optionalStringParam(p, 'search'), optionalStringParam(p, 'entry'), null);
         },
         'memory.change': async (params) => {
           const p = paramsObject(params);

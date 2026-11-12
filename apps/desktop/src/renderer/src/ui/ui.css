@@ -1007,6 +1007,12 @@
   color: var(--on-inverse-soft);
 }
 
+/* The box Radix places a hover card in takes the pointer unless told not to: a card open under a resting pointer
+   would then catch a click meant for what lies below it. */
+[data-radix-popper-content-wrapper]:has(> .ui-hover-card) {
+  pointer-events: none;
+}
+
 /* Text under a small caps label, in a raised card below the object it is about (`HoverCard`). */
 .ui-hover-card {
   z-index: var(--layer-tooltip);

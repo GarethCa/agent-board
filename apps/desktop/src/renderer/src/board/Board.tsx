@@ -51,6 +51,7 @@ import {
 import { EFFORT_LABELS } from './AgentSetup';
 import { paneIds } from '@agent-board/daemon/pane-layout';
 import { repoZoneOf } from '@agent-board/daemon/repo-zone';
+import { isLead } from '@agent-board/daemon/work-units';
 import { BoardChrome } from '../chrome/BoardChrome';
 import type { PointerMode } from '../chrome/CreateToolbar';
 import type { ZoneSource } from '../chrome/zones';
@@ -59,6 +60,7 @@ import { ZOOM_KEY } from '../keys';
 import { motionDuration, tokenNumber } from '../theme';
 import { Button, Checkbox, Dialog, useToast } from '../ui';
 import { markSeen } from '../session/mark-seen';
+import { canRestartLive } from '../session/RestartAgent';
 import { boardSettled } from '../session/terminal-sharpness';
 import { handOffWebTabs, SessionWindowsLayer } from '../windows/SessionWindows';
 import type { NavSession } from '../windows/session-nav';
@@ -121,7 +123,7 @@ import { FLOW_EDGE_TYPE, flowEdgeIdOf, flowEdgeIdsOf, flowEdges, type FlowRailDa
 import { useFlowEdges } from './use-flow-edges';
 import { foldedSessionIds, foldedToast, roomOf, unfoldedToast, unfoldMoves, withFoldedExternals, withFoldedZones } from './fold-zone';
 import { letGoFoldedTerminals } from '../session/TerminalPane';
-import { foldedStack, isLead, laidOutTile, pinnedLead, withShelves } from './shelves';
+import { foldedStack, laidOutTile, pinnedLead, withShelves } from './shelves';
 import { ShelvesContext } from './ShelvesView';
 import { useShelves } from './use-shelves';
 import { useIncoming } from './use-incoming';
@@ -144,6 +146,8 @@ import { SuggestionActionsContext, SuggestionGhosts, useSuggestionCommands } fro
 import { DocumentCardsContext, type DocumentCards } from './items/DocumentNode';
 import { PlanCardsContext, type PlanCards } from './items/PlanNode';
 import { StepsLookupContext } from './items/StepsNode';
+import { TodoLookupContext } from './items/TodoNode';
+import type { TodoLookup } from './items/todo-view';
 import type { StepsLookup } from './items/steps-view';
 import { useShownDocuments } from '../doc/use-shown-documents';
 import { CREW_STOP_LINE, agentLine, externalEnded, externalLine, sameDelete, type PendingDelete } from './editing/delete-plan';
@@ -780,14 +784,18 @@ function BoardView() {
   const restartAgent = useCallback(
     (sessionId: string, force: boolean) => {
       setPendingRestart(undefined);
+      // One still running (its no-hooks row's Stop and restart) is stopped first, as only an ended agent restarts: never
+      // one whose restart the daemon refuses (a reviewer, one run in its shell), which that would only end.
+      const agent = agentsRef.current.find((known) => known.sessionId === sessionId);
+      const running = agent !== undefined && agent.state !== 'hibernated' && canRestartLive(agent);
       void lifecycleOnce(sessionId, () =>
-        window.agentBoard.agents.restart(sessionId, force).then((result) => {
+        (running ? window.agentBoard.agents.stop(sessionId) : Promise.resolve()).then(() => window.agentBoard.agents.restart(sessionId, force)).then((result) => {
           if (result.status === 'busy') return setPendingRestart({ sessionId, message: `${result.message}. Restarting the agent ends it.` });
           agentHeard(result.agent);
         }, report('restart the agent')),
       );
     },
-    [report, agentHeard, lifecycleOnce],
+    [report, agentHeard, lifecycleOnce, agentsRef],
   );
   /** Deletes the shell tile and ends its panes. */
   const deleteShell = useCallback(
@@ -1085,6 +1093,14 @@ function BoardView() {
     () => ({
       live: (sessionId) => agents.some((each) => each.sessionId === sessionId && each.endedAt === null),
       name: (sessionId) => agents.find((each) => each.sessionId === sessionId)?.name,
+    }),
+    [agents],
+  );
+  // A to-do list names the agents that wrote its lines, by their names and harnesses now.
+  const todoLookup = useMemo<TodoLookup>(
+    () => ({
+      name: (sessionId) => agents.find((each) => each.sessionId === sessionId)?.name,
+      harness: (sessionId) => agents.find((each) => each.sessionId === sessionId)?.harness,
     }),
     [agents],
   );
@@ -2445,6 +2461,7 @@ function BoardView() {
     addSteps: (at) => void createItem('steps', screenToFlowPosition(at)),
     addMemory: (at) => void createItem('memory', screenToFlowPosition(at)),
     addQueue: (at) => void createItem('queue', screenToFlowPosition(at)),
+    addTodo: (at) => void createItem('todo', screenToFlowPosition(at)),
     startCrew: (name, at) => {
       const prefab = prefabNamed(name);
       if (prefab !== undefined) setCrewFlow({ kind: 'prompt', prefab, suggested: zoneNearest(screenToFlowPosition(at)) });
@@ -3277,6 +3294,7 @@ function BoardView() {
                           <DocumentCardsContext value={documentCards}>
                           <PlanCardsContext value={planCards}>
                           <StepsLookupContext value={stepsLookup}>
+                          <TodoLookupContext value={todoLookup}>
                           <ClockBoardContext value={clockBoard}>
                           <QueueBoardContext value={queueBoard}>
                           <CrewCardBoardContext value={crewCardBoard}>
@@ -3485,6 +3503,7 @@ function BoardView() {
                           </CrewCardBoardContext>
                           </QueueBoardContext>
                           </ClockBoardContext>
+                          </TodoLookupContext>
                           </StepsLookupContext>
                           </PlanCardsContext>
                           </DocumentCardsContext>
@@ -3557,6 +3576,7 @@ function BoardView() {
             onSteps={() => createItem('steps', boardCentre())}
             onMemory={() => createItem('memory', boardCentre())}
             onQueue={() => createItem('queue', boardCentre())}
+            onTodo={() => createItem('todo', boardCentre())}
             onRunInShell={startLooseShell}
             onCloseWindow={closeWindow}
           />

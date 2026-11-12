@@ -45,6 +45,9 @@ import {
   MAX_STATUS_LENGTH,
   type Agent,
   type AgentCharacter,
+  type AgentWorkCategory,
+  type WorkCategory,
+  type WorkCategorySet,
   type AgentStepsWait,
   type AgentRepo,
   type AgentStart,
@@ -130,6 +133,20 @@ const TURN_ENDS: ReadonlySet<unknown> = new Set(['Stop', 'StopFailure', 'Interru
 const RESTING_SQL = AGENT_POSES.filter(isRestingPose)
   .map((pose) => `'${pose}'`)
   .join(', ');
+
+/** The work category it set, from its row: null while it has none. */
+function workCategoryOf(
+  row: Pick<AgentRow, 'work_category' | 'work_category_label' | 'waiting_on_who' | 'waiting_on_ref' | 'work_category_set_at' | 'work_category_set_by'>,
+): AgentWorkCategory | null {
+  if (row.work_category === null || row.work_category_set_at === null) return null;
+  return {
+    category: row.work_category as WorkCategory,
+    label: row.work_category_label,
+    waitingOn: row.waiting_on_who === null ? null : { who: row.waiting_on_who, ref: row.waiting_on_ref },
+    setAt: row.work_category_set_at,
+    setBy: row.work_category_set_by,
+  };
+}
 
 /** The agent's pose from its row, while it lasts at `now`: a working pose lapses with no new set (`characterLive`). */
 function characterOf(
@@ -226,6 +243,11 @@ export interface AgentHostOptions {
    * `SessionEnd`): what it handed off explicitly belongs to the turn it did it in.
    */
   onTurnBoundary?(sessionId: string): void;
+  /**
+   * Hears an agent's own turn end with no `Stop`: interrupted (from the board, or Codex's `Interrupt`), failed or rate
+   * limited (`StopFailure`), or found over with no hook at all. `why` says which, as a run's reason.
+   */
+  onTurnCut?(sessionId: string, why: string): void;
   /** An agent's branch changed in its worktree: the pull requests of the new one are wanted. */
   onBranchChanged?(sessionId: string): void;
   /** Hears an agent about to be deleted, so what goes with it can say so first: its flow edges. */
@@ -267,6 +289,15 @@ export interface AdoptSpec {
     | { kind: 'in-place'; cwd: string; worktree: string; repoRoot: string; branch: string }
     | { kind: 'new-worktree'; repoRoot: string; base: { branch: string } | { commit: string }; folder: string };
   size: TerminalSize;
+}
+
+/** What `setStatus` sets: any of the line, the pose and the category, and whether its work is finished. */
+export interface StatusUpdate {
+  summary?: string | null;
+  progress?: number | null;
+  done?: boolean;
+  character?: CharacterSet;
+  category?: WorkCategorySet;
 }
 
 export interface AgentHost {
@@ -341,13 +372,14 @@ export interface AgentHost {
   setName(sessionId: string, name: string): Agent;
   /**
    * Sets what the agent says it is doing now (ADR-0010), replacing what was there: a summary, trimmed and at most
-   * `MAX_STATUS_LENGTH`, and a progress 0-100 or null; and its character's pose. Either may be left out
-   * (`summary` null, `character` undefined), keeping what it had, but not both.
+   * `MAX_STATUS_LENGTH`, and a progress 0-100 or null; its character's pose; and its work category (ADR-0024), whole:
+   * a label or who it waits on left out goes. Each left out keeps what it had, but one must be given. `done` says its
+   * work is finished, and is the category Done unless it gave one. `setBy` is the orchestrator setting it for its crew.
    */
-  setStatus(sessionId: string, summary: string | null, progress: number | null, done?: boolean, setBy?: string | null, character?: CharacterSet): Agent;
+  setStatus(sessionId: string, update: StatusUpdate, setBy?: string | null): Agent;
   /** Whether the live agent went waiting after its turn ended, so sits at its prompt asking nothing (`createHookStates`'s). */
   waitsAtPrompt(sessionId: string): boolean;
-  /** Notes that the agent says its work is finished (`Agent.workFinishedAt`), until its next prompt. */
+  /** Notes that the agent says its work is finished (`Agent.workFinishedAt`) and is Done, as `done` does, until its next prompt. */
   markFinished(sessionId: string): Agent;
   /** Lets the agent orchestrate in `scope`, or stops it with null. */
   setOrchestrate(sessionId: string, scope: OrchestrateScope | null): Agent;
@@ -425,7 +457,7 @@ export interface AgentHost {
    * a new one unless it was paused (a hand-off resumes it). The run is skipped, saying why, while the agent is still working, rate-limited, waiting for you (on a
    * permission prompt, or its last message asks you something) or you are typing at its prompt.
    */
-  runScheduled(sessionId: string, prompt: string): RunStart;
+  runScheduled(sessionId: string, prompt: string, notTyped?: (reason: string) => void): RunStart;
   /**
    * Delivers `text`, the payload `name` (`final message`, `plan.md`, `review, round 1`), from agent `from` to agent
    * `to` as `to`'s next message, headed with both, as a scheduled run does (relaunching an ended `to`, resuming its
@@ -575,6 +607,13 @@ export interface AgentRow extends PositionColumns {
   status_progress: number | null;
   status_updated_at: string | null;
   status_set_by: string | null;
+  /** The work category it set (`setStatus` with a category): all null while it has none. */
+  work_category: string | null;
+  work_category_label: string | null;
+  waiting_on_who: string | null;
+  waiting_on_ref: string | null;
+  work_category_set_at: string | null;
+  work_category_set_by: string | null;
   /** The pose it set for its character (`setStatus` with a character): all null while it has none. */
   character_pose: string | null;
   character_face: string | null;
@@ -649,6 +688,8 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   const update = db.prepare('UPDATE agents SET state = ? WHERE session_id = ?');
   const updateNotice = db.prepare('UPDATE agents SET notice = ? WHERE session_id = ?');
   const updateHadTurn = db.prepare('UPDATE agents SET had_turn = 1 WHERE session_id = ? AND had_turn = 0');
+  const updateHooksSilent = db.prepare('UPDATE agents SET hooks_silent = ? WHERE session_id = ?');
+  const selectHooksSilent = db.prepare('SELECT session_id FROM agents WHERE hooks_silent = 1');
   const updateCutOff = db.prepare('UPDATE agents SET turn_cut_off = 0 WHERE session_id = ?');
   const updateTrustedByZone = db.prepare('UPDATE agents SET trusted_by_zone = 1 WHERE session_id = ?');
   const updateMuted = db.prepare('UPDATE agents SET muted = ? WHERE session_id = ?');
@@ -704,6 +745,13 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     'UPDATE agents SET status_summary = ?, status_progress = ?, status_updated_at = ?, status_set_by = ? WHERE session_id = ?',
   );
   const updateFinished = db.prepare('UPDATE agents SET work_finished_at = ? WHERE session_id = ?');
+  const updateWorkCategory = db.prepare(
+    'UPDATE agents SET work_category = ?, work_category_label = ?, waiting_on_who = ?, waiting_on_ref = ?, work_category_set_at = ?, work_category_set_by = ? WHERE session_id = ?',
+  );
+  /** A Done it set goes with its next prompt, as its work's finish does: new work is not done. */
+  const clearDoneCategory = db.prepare(
+    "UPDATE agents SET work_category = NULL, work_category_label = NULL, waiting_on_who = NULL, waiting_on_ref = NULL, work_category_set_at = NULL, work_category_set_by = NULL WHERE session_id = ? AND work_category = 'done'",
+  );
   const updateCharacter = db.prepare(
     'UPDATE agents SET character_pose = ?, character_face = ?, character_prop = ?, character_set_at = ?, character_set_by = ? WHERE session_id = ?',
   );
@@ -1197,6 +1245,11 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       announce(sessionId);
       stallSoon(sessionId);
     },
+    silent: (selectHooksSilent.all() as { session_id: string }[]).map((silent) => silent.session_id),
+    silentChanged(sessionId, silent) {
+      updateHooksSilent.run(silent ? 1 : 0, sessionId);
+      announce(sessionId);
+    },
     recordFinal: (sessionId, finalMessage) => void updateFinalMessage.run(finalMessage, sessionId),
     finished(sessionId) {
       options.onHandoff(sessionId);
@@ -1269,6 +1322,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     const as = AT_WORK.has(row.state) ? 'as the Stop it never sent would have' : 'nothing of its own up';
     options.log(`${quiet}, its transcript says its turn ended and its screen shows Claude's prompt: moved to idle, ${as}`);
     deliveries.turnEnded(sessionId, true);
+    options.onTurnCut?.(sessionId, 'its turn ended with no word from its harness');
     save(now, 'idle', subagentsAfterExit(subagents.of(sessionId), 'idle', new Date()), true);
   };
   const startupLines = createStartupLines(options.sessions, (sessionId) => hookStates.isStarting(sessionId), (sessionId) => announce(sessionId));
@@ -1432,6 +1486,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       })),
       // An ended session strikes no pose of its own: the board draws how it ended.
       character: row.ended_at === null ? characterOf(row, clock.now()) : null,
+      workCategory: workCategoryOf(row),
       status: statusAfterTurn(
         row.status_summary === null || row.status_updated_at === null
           ? null
@@ -1490,6 +1545,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       page: pages.of(row.session_id) ?? null,
       guessedDoc: guessedDocOf(row.worktree),
       startup,
+      hooksSilent: live && hookStates.hooksSilent(row.session_id),
       flag: flagOf(row),
       unsent: live ? (deliveries.unsent(row.session_id) ?? null) : null,
       untypedPrompt: untypedPromptOf(row.session_id),
@@ -1548,6 +1604,21 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   };
 
   const requireAgent = (sessionId: string): Agent => toAgent(requireRow(sessionId));
+
+  /** Sets its work category whole (a label or who left out goes), or clears it with a null category. */
+  const setWorkCategory = (sessionId: string, set: WorkCategorySet, at: string, setBy: string | null): void => {
+    const cleared = set.category === null;
+    updateWorkCategory.run(set.category, set.label ?? null, set.waitingOn?.who ?? null, set.waitingOn?.ref ?? null, cleared ? null : at, cleared ? null : setBy, sessionId);
+  };
+
+  /**
+   * Its work is finished, whether it said `done` or handed off: Done, unless it gave a category with it, and when it
+   * finished, kept from the first time. Its next prompt clears both.
+   */
+  const finishWork = (sessionId: string, at: string, setBy: string | null, category: WorkCategorySet = { category: 'done' }): void => {
+    setWorkCategory(sessionId, category, at, setBy);
+    if (requireRow(sessionId).work_finished_at === null) updateFinished.run(at, sessionId);
+  };
 
   /**
    * Sets the agent's pose (`none` takes it off), its face and prop with it. A working pose lapses with no new set, and
@@ -1889,6 +1960,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       options.asks?.drop(sessionId);
       hookStates.interrupted(sessionId);
       deliveries.turnEnded(sessionId, false);
+      options.onTurnCut?.(sessionId, 'its turn was interrupted');
       save(getRow(sessionId)!, 'idle', subagentsAfterExit(subagents.of(sessionId), 'idle', new Date()), true);
       return get(sessionId)!;
     },
@@ -2066,9 +2138,11 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       return agent;
     },
 
-    setStatus(sessionId, summary, progress, done = false, setBy = null, character) {
+    setStatus(sessionId, { summary = null, progress = null, done = false, character, category }, setBy = null) {
       requireAgent(sessionId);
-      if (summary === null && character === undefined) throw invalidParams('give a status summary, a character pose, or both');
+      if (summary === null && character === undefined && category === undefined) {
+        throw invalidParams('give a status summary, a character pose, a category, or more');
+      }
       const text = summary === null ? null : oneLine(summary);
       if (text === '') throw invalidParams('the status summary must not be blank');
       if (text !== null && text.length > MAX_STATUS_LENGTH) {
@@ -2082,7 +2156,8 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       if (text !== null) updateStatus.run(text, progress, at, setBy, sessionId);
       // By the clock its lapse is timed and read by.
       if (character !== undefined) setCharacter(sessionId, character, new Date(clock.now()).toISOString(), setBy);
-      if (done && requireRow(sessionId).work_finished_at === null) updateFinished.run(at, sessionId);
+      if (done) finishWork(sessionId, at, setBy, category);
+      else if (category !== undefined) setWorkCategory(sessionId, category, at, setBy);
       const agent = get(sessionId)!;
       options.broadcast({ type: 'agent.updated', agent });
       return agent;
@@ -2091,7 +2166,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     waitsAtPrompt: (sessionId) => hookStates.waitsAtPrompt(sessionId),
 
     markFinished(sessionId) {
-      if (requireRow(sessionId).work_finished_at === null) updateFinished.run(new Date().toISOString(), sessionId);
+      finishWork(sessionId, new Date().toISOString(), null);
       const agent = get(sessionId)!;
       options.broadcast({ type: 'agent.updated', agent });
       return agent;
@@ -2160,10 +2235,14 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       if (payload.agent_id === undefined && TURN_ENDS.has(payload.hook_event_name) && !hookStates.isStale(sessionId, payload)) {
         const limited = payload.hook_event_name === 'StopFailure' && payload.error === 'rate_limit';
         deliveries.turnEnded(sessionId, payload.hook_event_name !== 'Interrupt' && !limited, limited ? 'rate-limited' : 'interrupted');
+        if (payload.hook_event_name !== 'Stop') {
+          options.onTurnCut?.(sessionId, payload.hook_event_name === 'Interrupt' ? 'its turn was interrupted' : limited ? 'its turn was rate-limited' : 'its turn failed');
+        }
       }
       // A new prompt is new work: it is no longer finished.
-      if (payload.agent_id === undefined && payload.hook_event_name === 'UserPromptSubmit' && row.work_finished_at !== null) {
+      if (payload.agent_id === undefined && payload.hook_event_name === 'UserPromptSubmit' && (row.work_finished_at !== null || row.work_category === 'done')) {
         updateFinished.run(null, sessionId);
+        clearDoneCategory.run(sessionId);
         announce(sessionId);
       }
       // Its own turn ended, so no call of it still waits on the user: one its harness gave up on (timed out) goes too.

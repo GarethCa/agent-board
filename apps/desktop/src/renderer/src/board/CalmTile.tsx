@@ -18,7 +18,7 @@ import { useNowForSince, useNowToward } from '../inbox/use-now';
 import { calmTimes, QUIET_TILE, tileProgress, type TileShows } from './tile-shows';
 import { useRenameRequest } from './rename';
 import { StatusMark } from './StatusMark';
-import { poseShown } from '@agent-board/daemon/character';
+import { lookShown } from '@agent-board/daemon/character';
 import { poseOfStatus } from './tile-pose';
 import { SubagentPerch } from './SubagentPerch';
 import { ClickOpensContext, TileActionsContext, type TileActions, type TileData } from './tile';
@@ -148,7 +148,7 @@ export function CalmTile({ id, selected, agent, repo, from, crew, crewFlags, imp
           )
         )}
         <span className="calm-tile-foot">
-          <StatusMark status={face.status} character={{ harness: agent.harness, pose: sending ? 'handing-off' : poseShown(poseOfStatus(face.status, agent), agent) }} />
+          <StatusMark status={face.status} character={{ harness: agent.harness, ...(sending ? { pose: 'handing-off' } : lookShown(poseOfStatus(face.status, agent), agent)) }} />
           {repo !== undefined && (
             // Outside every zone of its repo, the tile says which repo it works in.
             <span className="calm-tile-repo" data-testid="tile-repo" title={`Works in ${agent.repoRoot}`}>

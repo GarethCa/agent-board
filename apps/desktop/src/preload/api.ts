@@ -21,6 +21,7 @@ import type {
   ClockStatus,
   HistoryVersion,
   MemoryChange,
+  TodoChange,
   MemoryEntry,
   MemoryView,
   QueueChange,
@@ -773,6 +774,7 @@ export const ITEM_IPC = {
   queueHistory: 'item:queue-history',
   handJob: 'item:hand-job',
   takenJobs: 'item:taken-jobs',
+  changeTodo: 'item:change-todo',
   /** main → renderer: `(ItemChange)` for every board item change. */
   changed: 'item:changed',
   /** main → renderer: `(ClockUpdatedEvent)` whenever a clock is planned again, fires or a run of it ends. */
@@ -810,6 +812,8 @@ export interface ItemsApi {
   readQueue(id: string): Promise<QueueView>;
   /** Adds, edits, moves, finishes, drops back, removes or restores one of a queue's jobs or notes, as the user. */
   changeQueue(id: string, change: QueueChange): Promise<{ item: BoardItem; job: QueueJob | null }>;
+  /** Adds, edits, ticks, moves, removes or puts back one of a to-do list's lines, or clears its ticked ones, as the user. */
+  changeTodo(id: string, change: TodoChange): Promise<BoardItem>;
   /** A job's past versions, newest first. */
   queueHistory(id: string, job: string): Promise<HistoryVersion<QueueJob>[]>;
   /** Hands a waiting job to an idle agent: taken for it, and `text`, as the user wrote it, typed at its prompt. */

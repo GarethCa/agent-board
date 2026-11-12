@@ -2,7 +2,7 @@
 // kept: a tile that redraws hands React the same elements, which it skips, however many agents are on the board.
 
 import type { ReactNode } from 'react';
-import type { CharacterPose } from '@agent-board/daemon/character';
+import type { AgentFace, AgentProp, CharacterPose } from '@agent-board/daemon/character';
 import type { DrawnStyle } from './characters';
 
 // Every pose a character can strike: the board's, and the ones an agent sets for its work.
@@ -11,9 +11,27 @@ export { CHARACTER_POSES, type CharacterPose } from '@agent-board/daemon/charact
 /** A character's body: round for Claude, square for Codex. */
 export type CharacterBody = 'bean' | 'block';
 
-type Face = 'blank' | 'up' | 'ahead' | 'down' | 'focus' | 'open' | 'side' | 'wide' | 'happy' | 'half' | 'closed' | 'crossed';
+type Face = 'blank' | 'up' | 'ahead' | 'down' | 'focus' | 'open' | 'side' | 'wide' | 'happy' | 'half' | 'closed' | 'crossed' | 'puzzled';
 type Stance = 'stand' | 'tilt' | 'busy' | 'hold' | 'carry' | 'wave' | 'hop' | 'sit' | 'sleep' | 'topple';
-type Prop = 'boot' | 'dots' | 'gear' | 'book' | 'pencil' | 'flask' | 'stopwatch' | 'docclock' | 'doc' | 'bubble' | 'hourglass' | 'tick' | 'mug' | 'zz' | 'alert' | 'plug';
+type Prop =
+  | 'boot'
+  | 'dots'
+  | 'gear'
+  | 'book'
+  | 'pencil'
+  | 'flask'
+  | 'magnifier'
+  | 'wrench'
+  | 'stopwatch'
+  | 'docclock'
+  | 'doc'
+  | 'bubble'
+  | 'hourglass'
+  | 'tick'
+  | 'mug'
+  | 'zz'
+  | 'alert'
+  | 'plug';
 
 // Paint comes from theme tokens, set through `style` because presentation attributes can't hold var().
 const INK = 'var(--figure-ink)';
@@ -59,6 +77,23 @@ const FIGURES: Record<CharacterPose, Figure> = {
   failed: { face: 'crossed', stance: 'topple', prop: 'alert', tone: FAILED },
   'stopped-by-restart': { face: 'blank', stance: 'stand', prop: 'plug', tone: RESTING },
 };
+
+/** The face drawn for each face an agent may give its pose. */
+const AGENT_FACE_DRAWN: Record<AgentFace, Face> = { neutral: 'open', focused: 'focus', happy: 'happy', puzzled: 'puzzled', surprised: 'wide', sleepy: 'half' };
+
+/**
+ * A pose's figure, with the face and prop the agent gave it, if any. A prop of the agent's is drawn in the working
+ * colour, never in the board's orange or red; its pose's own prop keeps the pose's colour.
+ */
+function figureOf(pose: CharacterPose, face: AgentFace | undefined, prop: AgentProp | undefined): Figure {
+  const figure = FIGURES[pose];
+  return {
+    face: face === undefined ? figure.face : AGENT_FACE_DRAWN[face],
+    stance: figure.stance,
+    prop: prop ?? figure.prop,
+    tone: prop === undefined || prop === figure.prop ? figure.tone : WORK,
+  };
+}
 
 /** A prop in its 12 by 12 box: outlines in ink, fills in paper and the board's colour for the pose. */
 function propDrawing(prop: Prop, tone: string): ReactNode {
@@ -108,6 +143,24 @@ function propDrawing(prop: Prop, tone: string): ReactNode {
         </>
       );
     }
+    case 'magnifier':
+      return (
+        <>
+          <circle cx="4.8" cy="4.8" r="3.6" style={{ fill: PAPER, stroke: INK }} strokeWidth="1.1" />
+          <path d="M7.4 7.4 L11 11" style={{ stroke: tone }} strokeWidth="1.9" strokeLinecap="round" />
+        </>
+      );
+    case 'wrench':
+      return (
+        <>
+          <path
+            d="M8.9 0.9 A3.1 3.1 0 0 0 6.4 5 L1.3 10.1 A1.1 1.1 0 0 0 2.9 11.7 L8 6.6 A3.1 3.1 0 0 0 12 4.2 L10.1 4.9 L8.4 3.6 L9.6 1.2 Z"
+            style={{ fill: tone, stroke: INK }}
+            strokeWidth="0.8"
+            strokeLinejoin="round"
+          />
+        </>
+      );
     case 'stopwatch':
       return (
         <>
@@ -291,6 +344,14 @@ function BeanFace({ face, paint }: { face: Face; paint: string | undefined }) {
     }
     case 'wide':
       return eyes(15.3, 2.8, (x) => circle(x, 15.3, 1.3));
+    case 'puzzled':
+      // One eye wide and looking up, the other narrowed under its lid.
+      return (
+        <>
+          {eyes(15.5, 2.3, (x) => circle(x - 0.4, x === at[0] ? 14.7 : 16, 1.1))}
+          <path d={`M${at[1]! - 2.6} 12.8h5.2v2.6h-5.2z`} {...paintedAs(paint)} />
+        </>
+      );
     default: {
       const [dx, dy] = { ahead: [0.8, 0], side: [-0.8, 0.2], up: [0.3, -1], down: [0, 1] }[face as string] ?? [0, 0];
       return eyes(15.5, 2.3, (x) => circle(x + dx!, 15.5 + dy!, 1.1));
@@ -298,8 +359,7 @@ function BeanFace({ face, paint }: { face: Face; paint: string | undefined }) {
   }
 }
 
-function drawBean(body: CharacterBody, pose: CharacterPose): CharacterDrawing {
-  const figure = FIGURES[pose];
+function drawBean(body: CharacterBody, figure: Figure): CharacterDrawing {
   const { legs, arms, raise, prop = 'translate(20 1) scale(0.95)' } = STANCES[figure.stance] ?? {};
   const figureTransform = figure.stance === 'topple' ? 'translate(0 7) rotate(90 16 22)' : raise;
   const bean = <BeanBody body={body} face={figure.face} legs={legs} arms={arms} />;
@@ -374,13 +434,20 @@ function PebbleFace({ face }: { face: Face }) {
       return lines((x) => `M${x - 1.6} 17.6 L${x + 1.6} 20.8 M${x + 1.6} 17.6 L${x - 1.6} 20.8`);
     case 'blank':
       return <path d={at.map((x) => circle(x, 19.4, 0.95)).join('')} style={{ fill: EYE }} opacity="0.7" />;
+    case 'puzzled':
+      // One eye tall and looking up, the other squinting low.
+      return (
+        <g style={{ fill: EYE }}>
+          <rect x={at[0]! - 0.7} y="15.6" width="2.2" height="4.6" rx="1.1" />
+          <rect x={at[1]! - 1.5} y="19" width="3" height="1.7" rx="0.85" />
+        </g>
+      );
     default:
       return capsules(0, 17, 4.4);
   }
 }
 
-function drawPebble(body: CharacterBody, pose: CharacterPose): CharacterDrawing {
-  const figure = FIGURES[pose];
+function drawPebble(body: CharacterBody, figure: Figure): CharacterDrawing {
   const { stance } = figure;
   return {
     viewBox: '0 0 32 32',
@@ -409,12 +476,17 @@ type PixelPaint = 'B' | 'D' | 'E' | 'W' | 'S' | 'P';
 const SPRITES: Record<Prop, readonly string[]> = {
   dots: ['....PP', '....PP', '..P...', '......', 'P.....', '......'],
   gear: ['P.PP.P', '.PPPP.', 'PPWWPP', 'PPWWPP', '.PPPP.', 'P.PP.P'],
-  book: ['......', 'WWDWW.', 'WPDPW.', 'WWDWW.', 'WPDPW.', 'DDDDD.'],
+  // Paper is outlined in ink, or it vanishes on a light tile and leaves a glyph (a book read as ±, a page as =). The
+  // book's spine down its middle keeps it from reading as a phone, and its lines run across the pages: tall bars either
+  // side of the spine would read as a pause sign, the board's own Paused.
+  book: ['DDDDD.', 'PPDPP.', 'WWDWW.', 'PPDPP.', 'WWDWW.', 'DDDDD.'],
   pencil: ['....DD', '...PPD', '..PPP.', '.PPP..', 'WPP...', 'D.....'],
-  flask: ['.DDDD.', '..WW..', '..WW..', '.WPPW.', 'WPPPPW', 'DDDDDD'],
+  flask: ['.DDDD.', '.DWWD.', '.DWWD.', 'DWPPWD', 'DPPPPD', 'DDDDDD'],
+  magnifier: ['.DDD..', 'DWWWD.', 'DWWWD.', '.DDDP.', '....PP', '.....P'],
+  wrench: ['...P.P', '...PPP', '..PPP.', '.PP...', 'PP....', 'P.....'],
   stopwatch: ['..DD..', '.PPPP.', 'PPWPPP', 'PPWWPP', 'PPPPPP', '.PPPP.'],
-  docclock: ['WWWW..', 'WDDW..', 'WWWPP.', 'WDPWPP', 'WWPPPP', '...PP.'],
-  doc: ['.WWWW.', '.WDDW.', '.WWWW.', '.WDDW.', '.WWWW.', '......'],
+  docclock: ['DDDD..', 'DWWD..', 'DWWPP.', 'DWPWPP', 'DDPPPP', '...PP.'],
+  doc: ['DDDDD.', 'DWWWD.', 'DPPWD.', 'DWWWD.', 'DPPPD.', 'DDDDD.'],
   bubble: ['PPPPPP', 'PPPPPP', 'PWPWPW', 'PPPPPP', '.PP...', '.P....'],
   hourglass: ['DDDDDD', '.WPPW.', '..PP..', '..WW..', '.WPPW.', 'DDDDDD'],
   tick: ['......', '.....P', '....PP', 'P..PP.', 'PPPP..', '.PP...'],
@@ -429,8 +501,7 @@ const GRID_WIDTH = 20;
 const GRID_HEIGHT = 14;
 
 /** The grid's cells for a pose, each a paint or empty. */
-function pixelGrid(body: CharacterBody, pose: CharacterPose): (PixelPaint | '.')[][] {
-  const { face, stance, prop } = FIGURES[pose];
+function pixelGrid(body: CharacterBody, pose: CharacterPose, { face, stance, prop }: Figure): (PixelPaint | '.')[][] {
   const grid: (PixelPaint | '.')[][] = Array.from({ length: GRID_HEIGHT }, () => Array<PixelPaint | '.'>(GRID_WIDTH).fill('.'));
   const put = (row: number, column: number, paint: PixelPaint) => {
     if (grid[row]?.[column] !== undefined) grid[row]![column] = paint;
@@ -486,6 +557,10 @@ function pixelGrid(body: CharacterBody, pose: CharacterPose): (PixelPaint | '.')
     case 'blank':
       paint([[7, 3], [7, 9]]);
       break;
+    case 'puzzled':
+      paint(pair([5, 6], [3, 4]));
+      paint(pair([8], [9, 10]));
+      break;
     default:
       paint(pair([6, 7], EYES));
   }
@@ -511,11 +586,11 @@ function pixelGrid(body: CharacterBody, pose: CharacterPose): (PixelPaint | '.')
   return grid;
 }
 
-function drawPixel(body: CharacterBody, pose: CharacterPose): CharacterDrawing {
-  const { tone } = FIGURES[pose];
+function drawPixel(body: CharacterBody, figure: Figure, pose: CharacterPose): CharacterDrawing {
+  const { tone } = figure;
   // One path per paint, whatever the pose: a grid's worth of rects would be the costliest drawing on the board.
   const runs = new Map<PixelPaint, string>();
-  pixelGrid(body, pose).forEach((line, row) => {
+  pixelGrid(body, pose, figure).forEach((line, row) => {
     for (let column = 0; column < GRID_WIDTH; ) {
       const paint = line[column]!;
       let run = 1;
@@ -537,16 +612,19 @@ function drawPixel(body: CharacterBody, pose: CharacterPose): CharacterDrawing {
   };
 }
 
-const DRAWERS: Record<DrawnStyle, (body: CharacterBody, pose: CharacterPose) => CharacterDrawing> = { bean: drawBean, pebble: drawPebble, pixel: drawPixel };
+const DRAWERS: Record<DrawnStyle, (body: CharacterBody, figure: Figure, pose: CharacterPose) => CharacterDrawing> = { bean: drawBean, pebble: drawPebble, pixel: drawPixel };
 
 const drawn = new Map<string, CharacterDrawing>();
 
-/** A pose in a style and body, made the first time it is asked for and the same elements from then on. */
-export function characterDrawing(style: DrawnStyle, body: CharacterBody, pose: CharacterPose): CharacterDrawing {
-  const key = `${style}/${body}/${pose}`;
+/**
+ * A pose in a style and body, with the face and prop the agent gave it if any, made the first time it is asked for and
+ * the same elements from then on.
+ */
+export function characterDrawing(style: DrawnStyle, body: CharacterBody, pose: CharacterPose, face?: AgentFace, prop?: AgentProp): CharacterDrawing {
+  const key = `${style}/${body}/${pose}/${face ?? ''}/${prop ?? ''}`;
   let drawing = drawn.get(key);
   if (drawing === undefined) {
-    drawing = DRAWERS[style](body, pose);
+    drawing = DRAWERS[style](body, figureOf(pose, face, prop), pose);
     drawn.set(key, drawing);
   }
   return drawing;

@@ -5,12 +5,15 @@ import { readFileSync } from 'node:fs';
 import { basename, resolve as resolvePath } from 'node:path';
 import { agentToken, BoardError, BoardRefs, inZone, readBoard, type BoardSession, type BoardView } from './board-ops.ts';
 import {
+  MAX_MEMORY_KEY,
   MEMORY_OLD_DAYS,
   type BoardItem,
   type HistoryVersion,
   type MemoryChange,
   type MemoryData,
   type MemoryEntry,
+  type MemoryReaders,
+  type MemoryView,
   type QueueChange,
   type QueueData,
   type QueueJob,
@@ -30,10 +33,8 @@ const whoText = (refs: BoardRefs, who: StepsWho) => {
 const shortId = (id: string) => `#${id.slice(0, 8)}`;
 const day = (at: string) => at.slice(0, 10);
 const indent = (text: string, by: string) => text.replace(/\n/g, `\n${by}`);
-const size = (text: string) => {
-  const bytes = Buffer.byteLength(text);
-  return bytes < 1024 ? `${bytes} B` : `${Math.round(bytes / 1024)} KB`;
-};
+const sizeOf = (bytes: number) => (bytes < 1024 ? `${bytes} B` : `${Math.round(bytes / 1024)} KB`);
+const size = (text: string) => sizeOf(Buffer.byteLength(text));
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 /** A memory or queue in a line: its ref, title, what it holds, who made it and where it is. */
@@ -43,27 +44,39 @@ function cardLine(refs: BoardRefs, item: BoardItem): string {
   return `${refs.of('item', item.id)}  “${data.title}”  ${holds}  by ${whoText(refs, data.madeBy)}  ${inZone(refs, item.zoneId)}`;
 }
 
+const isStale = (entry: MemoryEntry, now: Date) => now.getTime() - Date.parse(entry.updatedAt) > MEMORY_OLD_DAYS * 86_400_000;
+const readersText = (readers: MemoryReaders | undefined) =>
+  readers === undefined || readers.last === null ? '' : `read by ${plural(readers.count, 'agent')}, last ${readers.last.name} ${day(readers.last.at)}`;
+
+/** An entry: a fact or note in full; a document by its title and size, or, `whole`, in full. */
 function entryText(refs: BoardRefs, entry: MemoryEntry, whole: boolean, now: Date): string {
-  const old = now.getTime() - Date.parse(entry.updatedAt) > MEMORY_OLD_DAYS * 86_400_000;
-  const marks = [entry.pinned ? 'pinned' : null, old ? 'old' : null].filter((mark) => mark !== null);
+  const marks = [entry.pinned ? 'pinned' : null, isStale(entry, now) ? 'stale' : null].filter((mark) => mark !== null);
   const head = marks.length === 0 ? '' : `[${marks.join(', ')}] `;
   const by = `${shortId(entry.id)} · ${whoText(refs, entry.changedBy)} · ${day(entry.updatedAt)}`;
   if (entry.file) {
-    if (whole) return `file ${entry.key} (${size(entry.text)}, ${by}):\n${entry.text}`;
-    const lines = entry.text.split('\n');
-    const preview = lines.slice(0, 3).join('\n    ');
-    return `  ${head}file ${entry.key} (${size(entry.text)}, ${plural(lines.length, 'line')})\n    ${preview}${lines.length > 3 ? '\n    …' : ''}\n     ${by}`;
+    const { bytes, lines } = entry.listed ?? { bytes: Buffer.byteLength(entry.text), lines: entry.text.split('\n').length };
+    const about = `document “${entry.key}” (${sizeOf(bytes)}, ${plural(lines, 'line')}`;
+    return whole ? `${head}${about}, ${by}):\n${entry.text}` : `  ${head}${about})\n     ${by}`;
   }
   const value = entry.key === null ? entry.text : `${entry.key}: ${entry.text}`;
   return `  ${head}${indent(value, '    ')}\n     ${by}`;
 }
 
-function memoryText(refs: BoardRefs, item: BoardItem, entries: MemoryEntry[], search: string | undefined): string {
+function memoryText(refs: BoardRefs, view: MemoryView, search: string | undefined): string {
+  const { item, entries } = view;
   const now = new Date();
-  const head = cardLine(refs, item);
-  if (entries.length === 0) return `${head}\n  ${search === undefined ? 'Nothing remembered yet.' : `No entry holds “${search}”.`}`;
-  const files = entries.some((entry) => entry.file) ? `\n  A file shows its first lines: \`agent-board memory read ${refs.of('item', item.id)} <name>\` prints it whole.` : '';
-  return `${head}${search === undefined ? '' : `  holding “${search}”`}\n${entries.map((entry) => entryText(refs, entry, false, now)).join('\n')}${files}`;
+  const ref = refs.of('item', item.id);
+  const read = readersText(view.readers.memory);
+  const head = `${cardLine(refs, item)}${read === '' ? '' : `  ${read}`}`;
+  const first = `Nothing remembered yet: \`agent-board memory add ${ref} key: value\` adds the first.`;
+  if (entries.length === 0) return `${head}\n  ${search === undefined ? first : `No entry holds “${search}”.`}`;
+  const hints = [
+    entries.some((entry) => entry.file) ? `A document shows its title alone: \`agent-board memory read ${ref} "<title>"\` prints it whole.` : null,
+    entries.some((entry) => isStale(entry, now)) ? `Stale: untouched for ${MEMORY_OLD_DAYS} days. \`agent-board memory confirm ${ref} <entry>\` if one is still true; edit or rm it if not.` : null,
+  ].filter((hint) => hint !== null);
+  // Facts and notes first, then the documents: those are what an agent reads now, these what it may open.
+  const ordered = [...entries.filter((entry) => !entry.file), ...entries.filter((entry) => entry.file)];
+  return `${head}${search === undefined ? '' : `  holding “${search}”`}\n${ordered.map((entry) => entryText(refs, entry, false, now)).join('\n')}${hints.map((hint) => `\n  ${hint}`).join('')}`;
 }
 
 function jobLine(refs: BoardRefs, job: QueueJob, place: number | null): string {
@@ -97,7 +110,7 @@ function queueText(refs: BoardRefs, item: BoardItem, jobs: QueueJob[]): string {
 function historyText<Row extends MemoryEntry | QueueJob>(refs: BoardRefs, item: BoardItem, what: string, versions: HistoryVersion<Row>[]): string {
   const title = (item.data as unknown as MemoryData).title;
   const lines = versions.map((version) => {
-    const value = version.value === null ? '(removed)' : 'kind' in version.value ? `${version.value.state}: ${version.value.text}` : version.value.text;
+    const value = version.value === null ? (version.action === 'confirm' ? '(still true)' : '(removed)') : 'kind' in version.value ? `${version.value.state}: ${version.value.text}` : version.value.text;
     const shown = value.length > 200 ? `${value.slice(0, 200)}…` : value;
     return `  v${version.version}  ${version.action}  by ${whoText(refs, version.by)}  ${version.at.slice(0, 16).replace('T', ' ')}\n     ${indent(shown, '     ')}`;
   });
@@ -135,7 +148,8 @@ export async function newMemory(session: BoardSession, title: string): Promise<B
 export async function listMemories(session: BoardSession): Promise<BoardView> {
   const items = await session.client.call('board.listMemories', { token: agentToken(session, 'list memories') });
   const refs = new BoardRefs(await readBoard(session.client));
-  return { text: items.length === 0 ? 'No memories you can read.' : items.map((item) => cardLine(refs, item)).join('\n'), json: items };
+  const none = 'No memories you can read. `agent-board memory new "<title>"` puts one beside your tile: in a zone, for its agents; on the open board, for all.';
+  return { text: items.length === 0 ? none : items.map((item) => cardLine(refs, item)).join('\n'), json: items };
 }
 
 /** `memory read`: a memory's entries, or one entry whole (a file in full). */
@@ -144,17 +158,22 @@ export async function readMemory(session: BoardSession, ref: string, options: { 
   const { refs, item } = await cardFor(session, 'memory', ref);
   if (options.entry !== undefined && options.search !== undefined) throw new BoardError('give an entry or a search, not both');
   const view = await session.client.call('board.readMemory', { token, id: item.id, ...(options.search === undefined ? {} : { search: options.search }), ...(options.entry === undefined ? {} : { entry: options.entry }) });
-  if (options.entry === undefined) return { text: memoryText(refs, view.item, view.entries, options.search), json: view };
+  if (options.entry === undefined) return { text: memoryText(refs, view, options.search), json: view };
   const entry = view.entries[0]!;
-  return { text: `${cardLine(refs, view.item)}\n${entryText(refs, entry, true, new Date())}`, json: entry };
+  const read = readersText(view.readers.entries[entry.id]);
+  return { text: `${cardLine(refs, view.item)}\n${entryText(refs, entry, true, new Date())}${read === '' ? '' : `\n  ${read}`}`, json: entry };
 }
 
-/** What `memory add|edit|rm|restore` does, as typed; `path` a file to keep whole, from `cwd`. */
+/**
+ * What `memory add|edit|rm|restore|confirm` does, as typed; `path` a file to keep whole, from `cwd`, and `document` the
+ * title to keep `text` whole under, as a document.
+ */
 export type MemoryUpdate =
-  | { action: 'add'; text?: string; key?: string; note?: boolean; path?: string }
+  | { action: 'add'; text?: string; key?: string; note?: boolean; path?: string; document?: string }
   | { action: 'edit'; entry: string; text?: string; key?: string; note?: boolean; pinned?: boolean }
   | { action: 'remove'; entry: string }
-  | { action: 'restore'; entry: string; version: number };
+  | { action: 'restore'; entry: string; version: number }
+  | { action: 'confirm'; entry: string };
 
 /** The text file at `path`, from `cwd`; refused for one that isn't text (a NUL, or bytes that aren't UTF-8). */
 const readFile = (path: string, cwd: string) => {
@@ -168,14 +187,20 @@ const readFile = (path: string, cwd: string) => {
   return text;
 };
 
-/** `memory add|edit|rm|restore`: changes the memory `ref` names, and says what it did. */
+/** `memory add|edit|rm|restore|confirm`: changes the memory `ref` names, and says what it did. */
 export async function updateMemory(session: BoardSession, ref: string, update: MemoryUpdate, cwd: string): Promise<BoardView> {
   const token = agentToken(session, 'change a memory');
   const { refs, item } = await cardFor(session, 'memory', ref);
   let change: MemoryChange;
   switch (update.action) {
     case 'add': {
-      if (update.path !== undefined) {
+      if (update.document !== undefined) {
+        if (update.path !== undefined || update.key !== undefined || update.note === true) throw new BoardError('a document is its title and text: leave out the file, key and no-key');
+        if (update.text === undefined || update.text.trim() === '') throw new BoardError('give the document its text');
+        const title = update.document.trim();
+        if (title === '' || title.length > MAX_MEMORY_KEY || /[\r\n]/.test(title)) throw new BoardError(`a document's title is one line of 1 to ${MAX_MEMORY_KEY} characters`);
+        change = { action: 'add', key: title, text: update.text, file: true };
+      } else if (update.path !== undefined) {
         if (update.text !== undefined && update.text.trim() !== '') throw new BoardError('give the text or a file, not both');
         change = { action: 'add', key: update.key?.trim() || basename(update.path), text: readFile(update.path, cwd), file: true };
       } else {
@@ -196,9 +221,10 @@ export async function updateMemory(session: BoardSession, ref: string, update: M
   // A key set again replaces its value: say what it was, and how to put it back.
   let replaced = '';
   if (update.action === 'add' && entry !== null && entry.key !== null) {
-    const [, before] = await session.client.call('board.memoryHistory', { token, id: item.id, entry: entry.id });
+    // The version before this one; a confirm is none.
+    const before = (await session.client.call('board.memoryHistory', { token, id: item.id, entry: entry.id })).slice(1).find((version) => version.action !== 'confirm');
     if (before !== undefined && before.value !== null) {
-      const was = before.value.file ? `a file of ${size(before.value.text)}` : `“${before.value.text.length > 80 ? `${before.value.text.slice(0, 80)}…` : before.value.text}”`;
+      const was = before.value.file ? `a document of ${size(before.value.text)}` : `“${before.value.text.length > 80 ? `${before.value.text.slice(0, 80)}…` : before.value.text}”`;
       replaced = `Replaced ${name} in ${title}: it was ${was}. \`agent-board memory restore ${refs.of('item', item.id)} ${name.includes(' ') ? `"${name}"` : name} v${before.version}\` puts it back; --no-key keeps text as a note instead.`;
     }
   }
@@ -207,6 +233,7 @@ export async function updateMemory(session: BoardSession, ref: string, update: M
     edit: `Changed ${name} in ${title}.`,
     remove: `Removed ${name} from ${title}: \`memory history\` and \`memory restore\` can put it back.`,
     restore: `Put back ${name} in ${title}.`,
+    confirm: `Confirmed ${name} in ${title}: still true as of today.`,
   }[update.action];
   return { text: entry === null ? said : `${said}\n${entryText(refs, entry, false, new Date())}`, json: { item: changed, entry } };
 }
@@ -232,7 +259,8 @@ export async function newQueue(session: BoardSession, title: string, forUser: bo
 export async function listQueues(session: BoardSession): Promise<BoardView> {
   const items = await session.client.call('board.listQueues', { token: agentToken(session, 'list queues') });
   const refs = new BoardRefs(await readBoard(session.client));
-  return { text: items.length === 0 ? 'No queues you can read.' : items.map((item) => cardLine(refs, item)).join('\n'), json: items };
+  const none = 'No queues you can read. `agent-board queue new "<title>"` puts one beside your tile: in a zone, for its agents; on the open board, for all.';
+  return { text: items.length === 0 ? none : items.map((item) => cardLine(refs, item)).join('\n'), json: items };
 }
 
 /** `queue read`: a queue's jobs and notes in order, then those done. */
@@ -293,15 +321,33 @@ export async function updateQueue(session: BoardSession, ref: string, update: Qu
   }
   const { item: changed, job } = await call(update.action === 'edit' ? { action: 'edit', job: update.job, ...(update.text === undefined ? {} : { text: update.text }), ...(update.link === undefined ? {} : { link: update.link === '' ? null : update.link }) } : update);
   const name = job === null ? (update as { job: string }).job : shortId(job.id);
+  const left = update.action === 'done' ? await waiting(session, token, item) : '';
   const said = {
     edit: `Changed ${name} on ${title()}.`,
     remove: `Removed ${name} from ${title()}: \`queue history\` and \`queue restore\` can put it back.`,
     restore: `Put back ${name} on ${title()}.`,
     take: `You have job ${name} from ${title()}: \`queue done\` once it is done, or \`queue drop\` to put it back. If your session ends first it goes back on its own.`,
     drop: `Put ${name} back at the front of ${title()}.`,
-    done: `Done: ${name} on ${title()}.`,
+    done: left === '' ? `Done: ${name} on ${title()}.` : `Done: ${name} on ${title()}. ${left}`,
   }[update.action];
   return { text: job === null ? said : `${said}\n${jobLine(refs, job, job.state === 'done' ? null : 1)}`, json: { item: changed, job } };
+}
+
+/**
+ * After a job is done: how many jobs wait (notes aside), and the next one's first line. The job is done already, so a
+ * read that fails says nothing rather than an error the agent could take for a failed `done` and retry.
+ */
+async function waiting(session: BoardSession, token: string, item: BoardItem): Promise<string> {
+  let jobs;
+  try {
+    ({ jobs } = await session.client.call('board.readQueue', { token, id: item.id }));
+  } catch {
+    return '';
+  }
+  const queued = jobs.filter((job) => job.kind === 'job' && job.state === 'queued');
+  if (queued.length === 0) return 'No job waiting.';
+  const next = queued[0]!;
+  return `${plural(queued.length, 'job')} waiting; next: “${next.text.split('\n')[0]!.slice(0, 80)}” (${shortId(next.id)}).`;
 }
 
 /** `queue move`: a job (or note) put just before another open one, at the top, or last. */

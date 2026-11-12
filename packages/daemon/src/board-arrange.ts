@@ -35,6 +35,8 @@ export interface ArrangeTile {
   state: AgentState | null;
   /** The id of the tile it reviews, if any: it sits beside that one, as if an edge joined them. */
   reviewOf: string | null;
+  /** The id of the tile of the agent that started it, if that one is no lead: it goes in that one's unit of work, after it. */
+  startedBy?: string | null;
   /** The orchestrator arranging: it goes first, on its own, and its edges chain no one. */
   lead: boolean;
   /** Its size if it was resized; `AGENT_TILE_SIZE` without. */
@@ -165,7 +167,7 @@ const unitOf = (chain: readonly ArrangeTile[]): string | null =>
   chain.find((tile) => tile.issue !== null)?.issue ?? chain.map((tile) => ticketOfBranch(tile.branch)).find((ticket) => ticket !== null) ?? null;
 
 /**
- * The agents joined by `links` (and each reviewer to what it reviews) in chains: each set of tiles joined together, in
+ * The agents joined by `links` (and each reviewer to what it reviews, each agent to the one that started it) in chains: each set of tiles joined together, in
  * the order they flow (`inFlowOrder`), and the chains in order of their unit of work, then their first tile. The lead
  * and shells are in none.
  */
@@ -173,13 +175,21 @@ function chainsOf(agents: readonly ArrangeTile[], links: readonly ArrangeLink[])
   const byId = new Map(agents.map((tile) => [tile.id, tile]));
   const joined = links.filter((link) => byId.has(link.from) && byId.has(link.to) && link.from !== link.to);
   const reviews = agents.filter((tile) => tile.reviewOf !== null && byId.has(tile.reviewOf) && tile.reviewOf !== tile.id);
+  // An agent another started (one that leads none) works for it: it goes after that one, as if an edge joined them. Not
+  // when it is on another ticket, or reviews another agent: one start never joins two tickets' work.
+  const started = agents.flatMap((tile) => {
+    const starter = tile.startedBy == null ? undefined : byId.get(tile.startedBy);
+    if (starter === undefined || starter === tile || (tile.reviewOf !== null && tile.reviewOf !== starter.id)) return [];
+    const [theirs, its] = [unitOf([starter]), unitOf([tile])];
+    return theirs !== null && its !== null && theirs !== its ? [] : [{ from: starter.id, to: tile.id }];
+  });
   const neighbours = new Map(agents.map((tile) => [tile.id, new Set<string>()]));
-  for (const { from, to } of [...joined, ...reviews.map((tile) => ({ from: tile.reviewOf!, to: tile.id }))]) {
+  for (const { from, to } of [...joined, ...started, ...reviews.map((tile) => ({ from: tile.reviewOf!, to: tile.id }))]) {
     neighbours.get(from)!.add(to);
     neighbours.get(to)!.add(from);
   }
   // An edge from a reviewer back to what it reviews hands its findings back: the work still flows the other way.
-  const flow = joined.filter((link) => byId.get(link.from)!.reviewOf !== link.to);
+  const flow = [...joined.filter((link) => byId.get(link.from)!.reviewOf !== link.to), ...started];
   const seen = new Set<string>();
   const chains: ArrangeTile[][] = [];
   for (const start of agents.toSorted(byTile)) {

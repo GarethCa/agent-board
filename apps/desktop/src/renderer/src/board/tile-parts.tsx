@@ -1,12 +1,13 @@
 // The parts an agent's tile is made of under either design: its head's buttons, its name's class, the rows that wait on
 // the user's click (unsent, undelivered, trust, untyped), and its last message for the hover card.
-import { useState, type MouseEvent } from 'react';
-import { FolderCheck, MoreHorizontal, SendHorizontal } from 'lucide-react';
+import { useEffect, useState, type MouseEvent } from 'react';
+import { FolderCheck, MoreHorizontal, RotateCcw, SendHorizontal, SquareTerminal } from 'lucide-react';
 import { permissionPrompt, planPending, questionPrompt, type Agent, type UndeliveredMessage } from '@agent-board/daemon/protocol';
 import { stepsWaitLine, toolSummary } from '../../../shared/needs-you';
 import { Button, IconButton, Menu, type IconButtonProps, type MenuEntry } from '../ui';
 import { cx } from '../ui/cx';
 import { askTitle } from './quick-ask';
+import { twoStep, TWO_STEP_MS, type TwoStep, type TwoStepEvent } from './two-step';
 
 /**
  * The agent's last message for the card that shows below its tile, with the time its turn ended in the card's label:
@@ -219,6 +220,61 @@ export function UntypedRow({ fitted, prompt, onSend }: { fitted: (element: HTMLE
         Send
       </Button>
     </span>
+  );
+}
+
+/** Why a session whose hooks never came leaves the board blind to it, and what to try: the warning row's tooltip. */
+const HOOKS_SILENT_TITLE =
+  "Its session sent no hooks in its first minute, nor since, so the board can't follow its turns: its state, needs-you and hand-offs don't update.\n\nHooks may be turned off in its settings (disableAllHooks), not installed, or unable to reach the board. Open shows its terminal; Stop and restart, pressed twice, ends it and starts it again, carrying on its conversation (the board can't tell whether it is mid-turn). This stays through restarts and clears on its first hook.";
+
+/**
+ * A live agent whose session sent no hook in its first minute, nor since: the board can't follow its turns. Open shows
+ * its terminal; Stop and restart, offered only when its restart carries it on in place (`canRestartLive`), asks first, then
+ * ends it and starts it again. The row goes on its first hook.
+ */
+export function HooksSilentRow({ fitted, onOpen, onRestart }: { fitted: (element: HTMLElement | null) => void; onOpen(): void; onRestart?: () => void }) {
+  return (
+    <span ref={fitted} className="hybrid-tile-body hybrid-tile-unsent" role="note" data-testid="tile-hooks-silent" title={HOOKS_SILENT_TITLE} onDoubleClick={stopPropagation}>
+      <span className="hybrid-tile-text">
+        <strong>No hooks from this session:</strong> the board can&apos;t follow its turns
+      </span>
+      <Button size="xs" icon={<SquareTerminal />} className="nodrag" data-testid="hooks-silent-open" onClick={onOpen}>
+        Open
+      </Button>
+      {onRestart !== undefined && <StopAndRestart onRestart={onRestart} />}
+    </span>
+  );
+}
+
+/** Stop and restart, in two steps: a first press asks "Restart?", and only a second, separate one stops the agent. */
+function StopAndRestart({ onRestart }: { onRestart(): void }) {
+  const [step, setStep] = useState<TwoStep>('idle');
+  const send = (event: TwoStepEvent) => {
+    const next = twoStep(step, event);
+    setStep(next.step);
+    if (next.act) onRestart();
+  };
+  const armed = step !== 'idle';
+  useEffect(() => {
+    if (!armed) return;
+    const timer = setTimeout(() => setStep((now) => twoStep(now, { kind: 'timeout' }).step), TWO_STEP_MS);
+    return () => clearTimeout(timer);
+  }, [armed]);
+  return (
+    <Button
+      size="xs"
+      variant={armed ? 'danger' : undefined}
+      icon={<RotateCcw />}
+      className="nodrag"
+      data-testid="hooks-silent-restart"
+      data-armed={armed || undefined}
+      title={armed ? 'Press again to stop it and start it again' : undefined}
+      onClick={() => send({ kind: 'press', now: Date.now() })}
+      onPointerLeave={() => armed && send({ kind: 'leave' })}
+      onBlur={() => armed && send({ kind: 'leave' })}
+    >
+      {armed ? 'Restart?' : 'Stop and restart'}
+    </Button>
   );
 }
 

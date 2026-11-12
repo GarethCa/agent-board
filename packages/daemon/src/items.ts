@@ -6,6 +6,8 @@ import { imagesOf, type ImageSweeper } from './image-sweeper.ts';
 import { isObject } from './json.ts';
 import { CronError, parseCron } from './cron.ts';
 import {
+  clockMode,
+  type ClockData,
   BOARD_ITEM_KINDS,
   CLOCK_ACTIONS,
   CLOCK_RESULTS,
@@ -41,6 +43,7 @@ import {
 import type { RpcHandlers, RpcMethodError } from './rpc.ts';
 import { checkMemoryData, checkQueueData } from './memory-queue.ts';
 import { checkStepsData } from './steps.ts';
+import { checkTodoData } from './todos.ts';
 import { zoneIdParam } from './tile-position.ts';
 
 type ItemMethods = Pick<DaemonMethods, Extract<keyof DaemonMethods, `item.${string}` | `image.${string}`>>;
@@ -146,6 +149,7 @@ const KIND_DATA: Record<BoardItemKind, (data: Record<string, unknown>) => void> 
   steps: (data) => checkStepsData(data),
   memory: (data) => checkMemoryData(data),
   queue: (data) => checkQueueData(data),
+  todo: (data) => checkTodoData(data),
   // The rest of a crew card's data is the board's own, written from its crew (`crew-cards.ts`).
   crew: (data) => {
     if (typeof data.crewId !== 'string') throw invalidParams("a crew card's crewId must be a string");
@@ -212,6 +216,12 @@ const KIND_DATA: Record<BoardItemKind, (data: Record<string, unknown>) => void> 
     checkBoolean(owner, data, 'enabled');
     checkBoolean(owner, data, 'folded');
     checkOneOf(owner, data, 'does', CLOCK_ACTIONS);
+    // Missing on a clock made before it.
+    if (data.hibernate !== undefined) checkBoolean(owner, data, 'hibernate');
+    if (data.startsAgent !== undefined) checkBoolean(owner, data, 'startsAgent');
+    for (const key of ['modeSetBy', 'stoppedBy']) {
+      if (data[key] != null && !isClockMark(data[key])) throw invalidParams(`a clock's ${key} must be { sessionId, name, why, at } or null`);
+    }
     checkOneOf(owner, data, 'result', CLOCK_RESULTS);
     if (typeof data.prompt !== 'string') throw invalidParams("a clock's prompt must be a string");
     if (data.prompt.length > MAX_STICKY_TEXT) throw invalidParams(`a clock's prompt is over ${MAX_STICKY_TEXT} characters`);
@@ -414,6 +424,7 @@ export function itemHandlers<Context>(
       if (has('y')) y = finiteNumberParam(fields, 'y');
       const patch = has('data') ? dataParam(fields) : undefined;
       const data = patch === undefined ? item.data : { ...item.data, ...patch };
+      if (item.kind === 'clock' && patch !== undefined) clearClockMarks(item.data, data, patch);
       // A shape of a kind this daemon doesn't know (a newer app's), which the patch leaves be or names again (as undo and
       // redo send the whole item back), is checked as a rectangle and stored with its own kind, so the newer app finds it
       // as it was.
@@ -512,4 +523,18 @@ function dataParam(fields: Record<string, unknown>): Record<string, unknown> {
 
 function noItem(id: string): RpcMethodError {
   return invalidParams(`no board item ${id}`);
+}
+
+function isClockMark(value: unknown): boolean {
+  return isObject(value) && ['sessionId', 'name', 'why', 'at'].every((key) => typeof value[key] === 'string');
+}
+
+/**
+ * The marks of an agent's change to its own clock go once the user changes it back: a new mode clears `modeSetBy`, and
+ * turning it on again clears `stoppedBy`, unless the change sets them itself (as `clock.self` and undo do).
+ */
+function clearClockMarks(was: Record<string, unknown>, data: Record<string, unknown>, patch: Record<string, unknown>) {
+  const mode = (each: Record<string, unknown>) => clockMode(each as Pick<ClockData, 'does' | 'hibernate'>);
+  if (!('modeSetBy' in patch) && was.modeSetBy != null && mode(was) !== mode(data)) data.modeSetBy = null;
+  if (!('stoppedBy' in patch) && was.stoppedBy != null && was.enabled === false && data.enabled === true) data.stoppedBy = null;
 }

@@ -280,6 +280,22 @@ describe('handing off explicitly', () => {
     expect(await untilAgent(setup.recorder, agent.sessionId, (seen) => seen.state === 'thinking', since)).toMatchObject({ workFinishedAt: null });
   });
 
+  it('puts an agent that hands off in Done, as its status done does, over the category it set, until its next prompt', async () => {
+    const setup = await handoffDaemon();
+    const { agent, token, connection } = await agentSide(setup, 'impl');
+    await connection.call('board.setStatus', { token, category: 'waiting-on-others', waitingOn: { who: 'Legal' } });
+
+    expect(await connection.call('board.handoff', { token, message: 'Shipped' })).toEqual([]);
+    expect((await setup.client.call('agent.list')).find((each) => each.sessionId === agent.sessionId)).toMatchObject({
+      workFinishedAt: expect.any(String),
+      workCategory: { category: 'done', waitingOn: null, setBy: null },
+    });
+
+    const since = setup.recorder.events.length;
+    await setup.client.call('agent.answer', { sessionId: agent.sessionId, text: 'One more thing' });
+    expect(await untilAgent(setup.recorder, agent.sessionId, (seen) => seen.state === 'thinking', since)).toMatchObject({ workFinishedAt: null, workCategory: null });
+  });
+
   it('hands off to an agent it names with no edge, as a one-off edge drawn afterwards, and again along it', async () => {
     const setup = await handoffDaemon();
     const { agent: a, token, connection } = await agentSide(setup, 'impl');

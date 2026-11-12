@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { fakeHarnessEnv } from '@agent-board/fake-harness';
 import { runBoardCommand } from '../src/board-cli.ts';
 import { daemonPaths } from '../src/paths.ts';
-import { BOARD_ERROR, MAX_MEMORY_VALUE, type Agent, type AgentUpdatedEvent, type BoardItem, type DaemonEvent, type MemoryData, type QueueData } from '../src/protocol.ts';
+import { BOARD_ERROR, MAX_MEMORY_VALUE, type Agent, type AgentUpdatedEvent, type BoardItem, type DaemonEvent, type MemoryData, type MemoryView, type QueueData } from '../src/protocol.ts';
 import { connectTestClient, recordEvents, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
 
 const SIZE = { cols: 120, rows: 40 };
@@ -57,6 +57,8 @@ describe('memories', () => {
     const card = await cardOf('memory', agent);
     expect(card.zoneId).toBe(agent.zoneId);
     expect(card.data).toMatchObject({ title: 'Release notes', noAgents: false, count: 0 });
+    // Empty, it says how to add the first entry.
+    expect((await cli(env, 'memory', 'read', 'Release notes')).out).toMatch(/Nothing remembered yet: `agent-board memory add item:\w+ key: value` adds the first/);
 
     expect((await cli(env, 'memory', 'add', 'Release notes', 'db-host: pg.internal')).out).toContain('Remembered db-host in “Release notes”');
     await cli(env, 'memory', 'add', 'Release notes', 'db-host: pg2.internal');
@@ -83,7 +85,7 @@ describe('memories', () => {
     const read = await cli(env, 'memory', 'read', 'Release notes');
     expect(read.out).toContain('“Release notes”  4 entries');
     expect(read.out).toContain('db-host: pg2.internal');
-    expect(read.out).toContain('file plan.md');
+    expect(read.out).toContain('document “plan.md”');
     expect(read.out).not.toContain('line 4');
     expect((await cli(env, 'memory', 'read', 'Release notes', 'plan.md')).out).toContain('line 4');
     const searched = await cli(env, 'memory', 'read', 'Release notes', '--search', 'MONDAYS');
@@ -96,6 +98,108 @@ describe('memories', () => {
     const tooLong = await cli(env, 'memory', 'add', 'Release notes', `big: ${'x'.repeat(MAX_MEMORY_VALUE + 1)}`);
     expect(tooLong.code).not.toBe(0);
     expect(tooLong.err).toContain('keep a longer text as a file');
+  });
+
+  it('lists a document by its title, gives it whole when named, and counts the agents who read what came back whole', async () => {
+    const { client, start, cardOf } = await boardDaemon();
+    const lead = await start('Memory: Handbook', undefined, 'Lead');
+    const card = await cardOf('memory', lead.agent);
+    await cli(lead.env, 'memory', 'add', 'Handbook', 'db-host: pg.internal');
+    const added = await cli(lead.env, 'memory', 'add', 'Handbook', '--doc', 'Release checklist', '# Steps\n1. tag the build\n2. push the tag');
+    expect(added.out).toContain('Remembered Release checklist in “Handbook”');
+    expect((await cli(lead.env, 'memory', 'add', 'Handbook', '--doc', 'Empty')).err).toContain('give the document its text');
+    expect((await cli(lead.env, 'memory', 'add', 'Handbook', '--doc', ' ', 'text')).err).toContain("a document's title is one line of 1 to 120 characters");
+    expect((await cli(lead.env, 'memory', 'add', 'Handbook', '--doc', 'Two\nlines', 'text')).err).toContain("a document's title is one line");
+
+    // Read, the facts come back whole and the document by its title and size alone: only the facts are read.
+    const listed = await cli(lead.env, 'memory', 'read', 'Handbook');
+    expect(listed.out).toMatch(/db-host: pg\.internal[\s\S]*document “Release checklist” \(\d+ B, 3 lines\)/);
+    expect(listed.out).not.toContain('tag the build');
+    expect(listed.out).toContain('A document shows its title alone: `agent-board memory read item:');
+    const ids = Object.fromEntries((await client.call('memory.read', { id: card.id })).entries.map((entry) => [entry.key, entry.id]));
+    let view = await client.call('memory.read', { id: card.id });
+    expect(view.readers.memory).toMatchObject({ count: 1, last: { name: 'Lead' } });
+    expect(view.readers.entries[ids['db-host']!]).toMatchObject({ count: 1, last: { name: 'Lead' } });
+    expect(view.readers.entries[ids['Release checklist']!]).toEqual({ count: 0, last: null });
+
+    // Another agent reads the document by name: it comes back whole, and it is read.
+    const impl = await start('Memory: Scratch', undefined, 'Impl');
+    const whole = await cli(impl.env, 'memory', 'read', 'Handbook', 'Release checklist');
+    expect(whole.out).toContain('2. push the tag');
+    expect(whole.out).toContain('read by 1 agent, last Impl');
+    expect((await cli(impl.env, 'memory', 'read', 'Handbook')).out).toContain('read by 2 agents, last Impl');
+    // The user's own reads are not counted.
+    view = await client.call('memory.read', { id: card.id });
+    expect(view.readers.memory.count).toBe(2);
+    expect(view.readers.entries[ids['Release checklist']!]).toMatchObject({ count: 1, last: { name: 'Impl' } });
+    expect(view.readers.entries[ids['db-host']!]!.count).toBe(2);
+
+    // Reading again counts no one twice, and a search that finds text inside a document lists it, unread.
+    await cli(impl.env, 'memory', 'read', 'Handbook');
+    expect((await cli(lead.env, 'memory', 'read', 'Handbook', '--search', 'push the tag')).out).toContain('document “Release checklist”');
+    view = await client.call('memory.read', { id: card.id });
+    expect(view.readers.memory.count).toBe(2);
+    expect(view.readers.entries[ids['db-host']!]!.count).toBe(2);
+    expect(view.readers.entries[ids['Release checklist']!]).toMatchObject({ count: 1, last: { name: 'Impl' } });
+
+    // An agent's JSON has a document's size, not its text; the user's has it all.
+    const json = JSON.parse((await cli(lead.env, 'memory', 'read', 'Handbook', '--json')).out) as MemoryView;
+    expect(json.entries.find((entry) => entry.file)).toMatchObject({ text: '', listed: { bytes: 40, lines: 3 } });
+    expect(view.entries.find((entry) => entry.file)?.text).toContain('push the tag');
+
+    // A pin keeps an entry's readers; a new value has none yet, and the memory's count is of what it holds now.
+    await cli(lead.env, 'memory', 'edit', 'Handbook', 'db-host', '--pin');
+    expect((await client.call('memory.read', { id: card.id })).readers.entries[ids['db-host']!]!.count).toBe(2);
+    await cli(lead.env, 'memory', 'add', 'Handbook', 'db-host: pg2.internal');
+    view = await client.call('memory.read', { id: card.id });
+    expect(view.readers.entries[ids['db-host']!]).toEqual({ count: 0, last: null });
+    expect(view.readers.memory).toMatchObject({ count: 1, last: { name: 'Impl' } });
+    await cli(lead.env, 'memory', 'rm', 'Handbook', 'Release checklist');
+    expect((await client.call('memory.read', { id: card.id })).readers.memory).toEqual({ count: 0, last: null });
+  });
+
+  it('marks an entry untouched for a month stale, and confirm says it is still true without changing it', async () => {
+    const { client, dataDir, start, cardOf } = await boardDaemon();
+    const { agent, env } = await start('Memory: Notes');
+    const card = await cardOf('memory', agent);
+    await cli(env, 'memory', 'add', 'Notes', 'db-host: pg.internal');
+    const db = new DatabaseSync(daemonPaths(dataDir).database);
+    db.prepare("UPDATE memory_entries SET updated_at = '2020-01-01T00:00:00.000Z' WHERE item_id = ?").run(card.id);
+    db.close();
+
+    const stale = await cli(env, 'memory', 'read', 'Notes');
+    expect(stale.out).toContain('[stale] db-host: pg.internal');
+    expect(stale.out).toMatch(/`agent-board memory confirm item:\w+ <entry>` if one is still true/);
+    expect((await cli(env, 'memory', 'confirm', 'Notes', 'db-host')).out).toMatch(/^Confirmed db-host in “Notes” \(item:\w+\): still true as of today\./);
+    expect((await cli(env, 'memory', 'read', 'Notes')).out).not.toContain('stale');
+    // A confirm keeps no copy of the value, and a run of them is one row.
+    await cli(env, 'memory', 'confirm', 'Notes', 'db-host');
+    const [confirmed, added, ...none] = await client.call('memory.history', { id: card.id, entry: 'db-host' });
+    expect(confirmed).toMatchObject({ action: 'confirm', value: null });
+    expect(added).toMatchObject({ action: 'add', value: { text: 'pg.internal' } });
+    expect(none).toEqual([]);
+    expect((await cli(env, 'memory', 'history', 'Notes', 'db-host')).out).toMatch(/confirm {2}by .*\n {5}\(still true\)/);
+    expect((await cli(env, 'memory', 'restore', 'Notes', 'db-host', `v${confirmed!.version}`)).err).toContain('only confirmed it: restore one with a value');
+    expect((await cli(env, 'memory', 'confirm', 'Notes')).err).toContain('give the memory and one entry');
+  });
+
+  it("never lets confirms push a document's edits out of its history", async () => {
+    const { client, start, cardOf } = await boardDaemon();
+    const { agent, env } = await start('Memory: Notes');
+    const card = await cardOf('memory', agent);
+    await cli(env, 'memory', 'add', 'Notes', '--doc', 'Runbook', 'First draft');
+    // A document keeps five versions: four edits, each after confirms, leave the first draft the fifth.
+    for (const draft of ['Second', 'Third', 'Fourth', 'Fifth']) {
+      for (let i = 0; i < 3; i++) await cli(env, 'memory', 'confirm', 'Notes', 'Runbook');
+      expect((await cli(env, 'memory', 'edit', 'Notes', 'Runbook', `${draft} draft`)).code).toBe(0);
+    }
+    const versions = await client.call('memory.history', { id: card.id, entry: 'Runbook' });
+    expect(versions.map((version) => version.action)).toEqual(['edit', 'confirm', 'edit', 'confirm', 'edit', 'confirm', 'edit', 'confirm', 'add']);
+    expect((await cli(env, 'memory', 'restore', 'Notes', 'Runbook', `v${versions.at(-1)!.version}`)).code).toBe(0);
+    expect((await cli(env, 'memory', 'read', 'Notes', 'Runbook')).out).toContain('First draft');
+    // Replacing it says what it was before, past the confirm.
+    await cli(env, 'memory', 'confirm', 'Notes', 'Runbook');
+    expect((await cli(env, 'memory', 'add', 'Notes', '--doc', 'Runbook', 'Sixth draft')).out).toMatch(/^Replaced Runbook in “Notes” \(item:\w+\): it was a document of 11 B\./);
   });
 
   it('says when a key set again replaces a value, and keeps only text files', async () => {
@@ -236,7 +340,8 @@ describe('queues', () => {
     expect((await cli(impl.env, 'queue', 'drop', 'Backlog', ref)).out).toContain('back at the front');
     const { job: again } = await take();
     expect(again).toMatchObject({ id: first!.id, drops: 1 });
-    expect((await cli(impl.env, 'queue', 'done', 'Backlog', ref)).out).toContain('Done:');
+    // Done, it says what is left and what comes next, notes aside.
+    expect((await cli(impl.env, 'queue', 'done', 'Backlog', ref)).out).toContain('2 jobs waiting; next: “Fix the login”');
 
     const { job: next } = await take();
     expect(next).toMatchObject({ text: 'Fix the login', link: 'https://example.test/1' });
@@ -269,6 +374,24 @@ describe('queues', () => {
     await cli(lead.env, 'queue', 'move', 'Backlog', front.id.slice(0, 8), moving);
     expect((await queued()).slice(0, 2)).toEqual([front.text, 'Fix the login']);
     expect((await cli(lead.env, 'queue', 'move', 'Backlog', moving)).err).toContain('give the queue, the job, and where');
+  });
+
+  it('counts down the waiting jobs to none, and says how to make a memory or a queue when there is none to read', async () => {
+    const { client, start } = await boardDaemon();
+    const lead = await start('Queue: Backlog', undefined, 'Lead');
+    expect((await cli(lead.env, 'memory', 'ls')).out).toMatch(/^No memories you can read\. `agent-board memory new "<title>"` puts one beside your tile/);
+    await cli(lead.env, 'queue', 'add', 'Backlog', 'First job');
+    await cli(lead.env, 'queue', 'add', 'Backlog', 'Last job');
+    const doneNext = async () => {
+      const job = (await cli(lead.env, 'queue', 'take', 'Backlog')).out.match(/You have job #?(\w+)/)![1]!;
+      return (await cli(lead.env, 'queue', 'done', 'Backlog', job)).out;
+    };
+    expect(await doneNext()).toMatch(/1 job waiting; next: “Last job” \(#\w{8}\)\./);
+    expect(await doneNext()).toContain('No job waiting.');
+
+    const billing = await client.call('zone.add', { path: tempRepo('billing'), x: 4000, y: 0, name: 'billing' });
+    const impl = await start('Memory: Notes', billing.id, 'Impl');
+    expect((await cli(impl.env, 'queue', 'ls')).out).toMatch(/^No queues you can read\. `agent-board queue new "<title>"` puts one beside your tile/);
   });
 
   it('keeps a job through a pause, and puts it back once its taker is deleted with no exit to come', async () => {

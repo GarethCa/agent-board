@@ -20,6 +20,7 @@ const schedule = (fields: Partial<AgentSchedule> = {}): AgentSchedule => ({
   enabled: true,
   nextRunAt: new Date(2026, 9, 10, 9, 0).toISOString(),
   lastRun: null,
+  hibernates: false,
   ...fields,
 });
 

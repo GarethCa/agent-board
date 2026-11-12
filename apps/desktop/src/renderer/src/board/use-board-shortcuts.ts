@@ -141,8 +141,8 @@ export function useBoardShortcuts({
       if (target.closest(CONTROLS) !== null || document.querySelector('[role="dialog"]') !== null) return;
       if (target !== document.body && target.closest('.react-flow') === null) return;
       const [node, ...rest] = selection().nodes;
-      // A shape takes typing; a steps card takes its own keys, for its answers.
-      if (node !== undefined && rest.length === 0 && isItemNode(node) && (node.data.item.kind === 'shape' || node.data.item.kind === 'steps')) {
+      // A shape takes typing; a steps card takes its own keys, for its answers, and a to-do list for its lines.
+      if (node !== undefined && rest.length === 0 && isItemNode(node) && (node.data.item.kind === 'shape' || node.data.item.kind === 'steps' || node.data.item.kind === 'todo')) {
         event.preventDefault();
         return typeInShape(node.id);
       }

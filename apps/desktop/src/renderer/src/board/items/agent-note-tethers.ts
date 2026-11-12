@@ -5,6 +5,7 @@ import type { Edge, Node } from '@xyflow/react';
 import { tileNodeId } from '../tiles';
 import { agentNoteData } from './agent-note';
 import { isItemNode, type ItemNodeType } from './items';
+import { listAgent, todoData } from './todo-view';
 
 export const TETHER_EDGE_TYPE = 'tether';
 const TETHER_EDGE_PREFIX = 'tether:';
@@ -15,16 +16,18 @@ const isAgentNote = (node: Node): node is ItemNodeType => isItemNode(node) && no
 /** A document or plan card: a card of what its agent showed, tied to its tile. */
 const isAgentCard = (node: ItemNodeType): boolean => node.data.item.kind === 'document' || node.data.item.kind === 'plan';
 const isShownCard = (node: Node): node is ItemNodeType => isItemNode(node) && isAgentCard(node);
+/** An agent's to-do list: lines it left for the user, under its tile. */
+const isAgentTodo = (node: Node): node is ItemNodeType => isItemNode(node) && node.data.item.kind === 'todo' && listAgent(todoData(node.data.item.data)) !== undefined;
 
 export const isTether = (edge: Edge): boolean => edge.type === TETHER_EDGE_TYPE;
 
 /**
- * A tether from each agent note to the tile of the agent it is about (an answer, its author's), and from each document
- * or plan card to the agent that showed it, while that tile is on the board.
+ * A tether from each agent note to the tile of the agent it is about (an answer, its author's), from each document
+ * or plan card to the agent that showed it, and from each agent's to-do list to its agent, while that tile is on the board.
  */
 export function agentNoteTethers(nodes: readonly Node[]): Edge[] {
   const onBoard = new Set(nodes.map((node) => node.id));
-  return nodes.filter((node) => isAgentNote(node) || isShownCard(node)).flatMap((note) => {
+  return nodes.filter((node) => isAgentNote(node) || isShownCard(node) || isAgentTodo(node)).flatMap((note) => {
     const subject = tetheredTo(note);
     if (subject === undefined) return [];
     const tile = tileNodeId('agent', subject);
@@ -49,8 +52,9 @@ export function agentNoteTethers(nodes: readonly Node[]): Edge[] {
   });
 }
 
-/** The session of the agent an agent note, document card or plan card is tied to, if any. */
+/** The session of the agent an agent note, document card, plan card or to-do list is tied to, if any. */
 function tetheredTo(node: ItemNodeType): string | undefined {
+  if (node.data.item.kind === 'todo') return listAgent(todoData(node.data.item.data));
   if (isAgentCard(node)) return (node.data.item.data as { agent: { sessionId: string } }).agent.sessionId;
   // The agent a note is about, when it says (an orchestrator's note on a crew member); an answer to the user's
   // question, its author's. A note about no agent has none: no connector leads to the orchestrator that wrote it.

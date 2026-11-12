@@ -129,6 +129,7 @@ describe('starting an agent', () => {
       (event): event is AgentUpdatedEvent => event.type === 'agent.updated' && event.agent.sessionId === sessionId && event.agent.state !== 'starting',
     );
     expect(up.agent.startup).toBeNull();
+    expect(up.agent.hooksSilent).toBe(false);
   });
 
   it('keeps a harness that exits before its first hook as a failed start, with what it printed', async () => {

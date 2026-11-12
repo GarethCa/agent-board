@@ -57,9 +57,11 @@ import {
   type UsageWindow,
   type WaitState,
   type Zone,
+  type WorkCategoryParams,
 } from './protocol.ts';
 import { cutText } from './text-cut.ts';
 import { characterReading, type CharacterReading, type CharacterSet } from './character.ts';
+import { WORK_CATEGORY_LABELS, workCategory } from './work-category.ts';
 import { parsePrefab, prefabFile, prefabFileName } from './crew-prefabs.ts';
 import { minutes, planDecisionText } from './plan-told.ts';
 
@@ -405,6 +407,7 @@ function agentJson(refs: BoardRefs, agent: Agent, caller: BoardCaller | null) {
     state: agent.state,
     status: agent.status,
     workFinishedAt: agent.workFinishedAt,
+    workCategory: agent.workCategory,
     task: agent.description,
     repoRoot: agent.repoRoot,
     branch: agent.branch,
@@ -586,6 +589,7 @@ export function identifyView(refs: BoardRefs, caller: BoardCaller | null, socket
     const agent = tile as Agent;
     lines.push(`state    ${agent.state}`, `status   ${agent.status === null ? 'not set: your tile shows your task' : agentDoing(agent)}`);
     lines.push(`pose     ${characterWords(characterReading(agent))}`);
+    lines.push(`category ${identifyCategoryWords(refs, agent)}`);
     lines.push(`branch   ${branchWords(agent)} in ${tilde(agent.worktree)}`);
     const role = roleLabel(agent);
     if (role !== null) lines.push(`role     ${role}`);
@@ -819,6 +823,7 @@ export function showView(refs: BoardRefs, object: BoardObject, caller: BoardCall
           ...rows([
             ['state', agent.state],
             ['status', agent.status === null ? 'not set' : agentDoing(agent)],
+            ['category', agent.workCategory === null ? null : categoryWords(agent, 'its own')],
             ['task', agent.description === '' ? '(none)' : cut(agent.description, 200)],
             ['harness', `${agent.harness}${agent.model === null ? '' : ` (${agent.model})`}`],
             [
@@ -894,8 +899,8 @@ export function showView(refs: BoardRefs, object: BoardObject, caller: BoardCall
 }
 
 /**
- * Sets the caller's own status: its line (`summary`), its character's pose (`character`), or both. Throws `BoardError`
- * outside an agent-board session.
+ * Sets the caller's own status: its line (`summary`), its character's pose (`character`), its work category
+ * (`category`), or more than one. Throws `BoardError` outside an agent-board session.
  */
 export async function setOwnStatus(
   session: BoardSession,
@@ -903,6 +908,7 @@ export async function setOwnStatus(
   progress: number | undefined,
   done = false,
   character?: CharacterSet,
+  category?: WorkCategoryParams,
 ): Promise<Agent> {
   if (session.token === undefined || session.caller === null) {
     throw new BoardError(`Only an agent in an agent-board session can set its status: there is no ${BOARD_TOKEN_ENV} here.`);
@@ -913,6 +919,7 @@ export async function setOwnStatus(
     ...(progress === undefined ? {} : { progress }),
     ...(done ? { done } : {}),
     ...(character === undefined ? {} : { character }),
+    ...category,
   });
 }
 
@@ -926,6 +933,39 @@ function characterWords(reading: CharacterReading, own = 'yours'): string {
   // Each pose an agent sets is shown by its own word.
   const drawn = reading.shown === reading.yours ? whose : `the board's, over ${reading.yours} (${whose}), shown again after`;
   return `${reading.shown}, ${drawn}; it goes ${reading.expires}`;
+}
+
+/**
+ * A work category set, in words: its name, its label, who it waits on, and whose it is (`own` for the agent's own); or
+ * that the board guesses one, while none is set.
+ */
+function categoryWords(agent: Agent, own = 'yours'): string {
+  const set = agent.workCategory;
+  if (set === null) return "none set: the board guesses one (set one with `agent-board status set --category`)";
+  const label = set.label === null ? '' : ` "${set.label}"`;
+  const waiting = set.waitingOn === null ? '' : `, waiting on ${set.waitingOn.who}${set.waitingOn.ref === null ? '' : ` · ${set.waitingOn.ref}`}`;
+  const whose = set.setBy === null ? own : `set by ${set.setBy}`;
+  const lasts = set.category === 'done' ? 'it goes with the next prompt' : 'it stays until another is set, or none';
+  return `${WORK_CATEGORY_LABELS[set.category]}${label}${waiting}, ${whose}; ${lasts}`;
+}
+
+/**
+ * Identify's category line: the one the agent set, else what the board guesses and why; and, over one it set, what
+ * the overview shows in its place for now (Needs help while something waits on the user).
+ */
+function identifyCategoryWords(refs: BoardRefs, agent: Agent): string {
+  const reviewers = refs.board.agents.filter((each) => each.reviewOf === agent.sessionId);
+  // What the inbox lists of finished turns never makes a category, so either setting reads the same.
+  const reading = workCategory(agent, { shows: 'explicit', reviewers });
+  const shown = `${WORK_CATEGORY_LABELS[reading.category]}${reading.label === null ? '' : ` "${reading.label}"`}${reading.why === null ? '' : ` (${reading.why})`}`;
+  if (agent.workCategory === null) return `none set: the board guesses ${shown}; set one with \`agent-board status set --category\``;
+  const own = categoryWords(agent);
+  return reading.source === 'agent' ? own : `${own}; shown as ${shown} for now`;
+}
+
+/** What a status set with a category answers: the category it has now. */
+export function categoryAnswer(agent: Agent): string {
+  return `Your category: ${categoryWords(agent)}.`;
 }
 
 /** What a status set with a pose answers: the pose drawn, the one set, and when that goes. */
@@ -967,6 +1007,7 @@ export async function setCrewStatus(
   summary: string | undefined,
   progress: number | undefined,
   character?: CharacterSet,
+  category?: WorkCategoryParams,
 ): Promise<BoardView> {
   const { token, agent } = await orchestratorTarget(session, ref);
   await session.client.call('orchestrator.setStatus', {
@@ -975,12 +1016,14 @@ export async function setCrewStatus(
     ...(summary === undefined ? {} : { summary }),
     ...(progress === undefined ? {} : { progress }),
     ...(character === undefined ? {} : { character }),
+    ...category,
   });
   const fresh = await freshAgentLine(session, agent.sessionId);
   const reading = characterReading(fresh.agent, 'its');
   const pose = character === undefined ? '' : `\nIts character: ${characterWords(reading, 'its own')}.`;
+  const kind = category === undefined ? '' : `\nIts category: ${categoryWords(fresh.agent, 'its own')}.`;
   return {
-    text: `Set the status of ${fresh.line}${pose}`,
+    text: `Set the status of ${fresh.line}${pose}${kind}`,
     json: { ...agentJson(fresh.refs, fresh.agent, session.caller), ...(character === undefined ? {} : { character: reading }) },
   };
 }

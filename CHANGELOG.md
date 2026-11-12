@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.6.21 (2026-11-12)
+
+- Zone to-do popover, the To do tab, and the clipboard look
+- Save clocks as templates, for the user and agents to start new ones from
+- Clocks hibernate, close or leave idle their agent after each run
+- Fix a doubled word in CONTEXT.md's Lead entry
+- A unit of work includes the agents an agent started, never its lead
+- Characters: an agent's own face and prop, and who set its pose on hover
+- Memory documents listed by title, readers counted, stale entries confirmed
+- Agents set a work category; the board guesses one for the rest
+- To-do lists: agents remind the user, who ticks them on the board
+- Fix three e2e flakes: a hover card's box catching clicks, a stale Settings radio, a garbled shell line
+- Wait for the pushed-commit search to settle before counting it
+- Say on the tile when the board hears no hooks from an agent's session
+- Agents hear about the zone's memory and queue when it matters
+
 ## v0.6.20 (2026-11-11)
 
 - An older build backs up, opens a backward-safe newer database, or names the backup and restore command

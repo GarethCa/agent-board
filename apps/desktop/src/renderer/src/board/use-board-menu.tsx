@@ -38,6 +38,8 @@ interface BoardMenuOptions {
   addMemory(at: { x: number; y: number }): void;
   /** Adds a queue centred at `at`, a point on the screen. */
   addQueue(at: { x: number; y: number }): void;
+  /** Adds a to-do list of the user's centred at `at`, a point on the screen. */
+  addTodo(at: { x: number; y: number }): void;
   /** Opens the prompt box of a crew from the prefab named, its Zone on the one nearest `at`, a point on the screen. */
   startCrew(prefab: string, at: { x: number; y: number }): void;
   /** Opens the crew library, a crew from it starting on the zone nearest `at`. */
@@ -86,6 +88,7 @@ export function useBoardMenu({
   addSteps,
   addMemory,
   addQueue,
+  addTodo,
   startCrew,
   crewLibrary,
   leadPinned,
@@ -135,6 +138,10 @@ export function useBoardMenu({
     addQueue: () => {
       const at = contextMenu?.at;
       if (at !== undefined) setTimeout(() => addQueue(at), MENU_FOCUS_RETURN_MS);
+    },
+    addTodo: () => {
+      const at = contextMenu?.at;
+      if (at !== undefined) setTimeout(() => addTodo(at), MENU_FOCUS_RETURN_MS);
     },
     startCrew: (prefab) => {
       const at = contextMenu?.at;

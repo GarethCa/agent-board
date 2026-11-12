@@ -58,13 +58,13 @@ const EXTRAS: Record<GalleryState, { harness: Harness; name: string } & Partial<
   'rate-limited': {
     harness: 'claude',
     name: 'Review the diff',
-    schedule: { clockId: 'clock-1', cron: '@daily', prompt: 'Review the diff', enabled: false, nextRunAt: null, lastRun: null },
+    schedule: { clockId: 'clock-1', cron: '@daily', prompt: 'Review the diff', enabled: false, nextRunAt: null, lastRun: null, hibernates: false },
   },
   failed: { harness: 'codex', name: 'Migrate the schema', notice: 'Its process crashed (exit code 1).' },
   scheduled: {
     harness: 'claude',
     name: 'Triage new issues',
-    schedule: { clockId: 'clock-1', cron: '0 9 * * *', prompt: 'Triage new issues', enabled: true, nextRunAt: NEXT_RUN, lastRun: null },
+    schedule: { clockId: 'clock-1', cron: '0 9 * * *', prompt: 'Triage new issues', enabled: true, nextRunAt: NEXT_RUN, lastRun: null, hibernates: false },
   },
   'stopped-by-restart': { harness: 'codex', name: 'Port the scheduler', endedAt: AT },
   'handing-off': { harness: 'claude', name: 'Write the review', lastMessage: 'The diff looks good: two nits inline.' },
@@ -161,8 +161,10 @@ export const galleryAgent = (state: AgentState): Agent => ({
   undelivered: [],
   status: null,
   character: null,
+  workCategory: null,
   workFinishedAt: null,
   startup: null,
+  hooksSilent: false,
   flag: null,
   ...EXTRAS[state === 'starting' ? 'running' : state],
 });
@@ -180,7 +182,7 @@ const CROWDED: Agent = {
     { number: 215, title: 'Movable sessions, part two', url: '', state: 'open', checks: 'failing' },
     { number: 216, title: 'Movable sessions, part three', url: '', state: 'draft', checks: 'pending' },
   ],
-  schedule: { clockId: 'clock-1', cron: '0 9 * * 2', prompt: 'Follow up', enabled: true, nextRunAt: NEXT_RUN, lastRun: null },
+  schedule: { clockId: 'clock-1', cron: '0 9 * * 2', prompt: 'Follow up', enabled: true, nextRunAt: NEXT_RUN, lastRun: null, hibernates: false },
 };
 
 /**
@@ -204,7 +206,7 @@ const CROWDED_ORCHESTRATOR: Agent = {
     { number: 215, title: 'Movable sessions, part two', url: '', state: 'open', checks: 'failing' },
     { number: 216, title: 'Movable sessions, part three', url: '', state: 'draft', checks: 'pending' },
   ],
-  schedule: { clockId: 'clock-1', cron: '0 9 * * 2', prompt: 'Follow up', enabled: true, nextRunAt: NEXT_RUN, lastRun: null },
+  schedule: { clockId: 'clock-1', cron: '0 9 * * 2', prompt: 'Follow up', enabled: true, nextRunAt: NEXT_RUN, lastRun: null, hibernates: false },
   plan: { id: 'plan', version: 3, title: 'Cut the release', format: 'markdown', presentedAt: AT, expiresAt: null, left: true, decision: null, author: 'agent' } as PlanSummary,
   docs: [
     { id: 'doc-1', sessionId: 'gallery-crowded-orchestrator', path: '/docs/a.md', title: 'Status', format: 'markdown', version: 1, writtenAt: AT, writtenBy: 'agent' },
@@ -329,6 +331,14 @@ const START_EXITED: Agent = {
   startup: { output: 'ANTHROPIC_API_KEY not set', failed: true },
 };
 
+/** An agent whose session sent no hooks before it stopped showing `starting`: the board can't follow its turns. */
+const HOOKS_SILENT: Agent = {
+  ...galleryAgent('idle'),
+  sessionId: 'gallery-hooks-silent',
+  name: 'Tidy the docs',
+  hooksSilent: true,
+};
+
 /** A shell tile split in two, one of its panes ended. */
 export const SHELL: Shell = {
   id: 'gallery-shell',
@@ -446,7 +456,7 @@ export function TileGallery() {
         <div style={AGENT_TILE_SIZE}>
           <HybridTile id={START_EXITED_BY_ORCHESTRATOR.sessionId} tile={{ label: START_EXITED_BY_ORCHESTRATOR.name, harness: START_EXITED_BY_ORCHESTRATOR.harness, agent: START_EXITED_BY_ORCHESTRATOR }} />
         </div>
-        {[STARTING, START_EXITED].map((agent) => (
+        {[STARTING, START_EXITED, HOOKS_SILENT].map((agent) => (
           <div key={agent.sessionId} style={AGENT_TILE_SIZE}>
             <HybridTile id={agent.sessionId} tile={{ label: agent.name, harness: agent.harness, agent }} />
           </div>

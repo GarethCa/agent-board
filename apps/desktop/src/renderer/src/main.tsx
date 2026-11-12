@@ -16,9 +16,10 @@ import './demo/demo.css';
 import { App } from './App';
 import { DaemonGate } from './DaemonStatus';
 import { Gallery } from './Gallery';
-import { CharacterChangeDemo, CharacterStylesGallery } from './board/CharacterGallery';
+import { CharacterChangeDemo, CharacterLooksGallery, CharacterStylesGallery } from './board/CharacterGallery';
 import { CharactersSetting } from './chrome/CharactersSetting';
 import { NeedsYouStepsGallery } from './inbox/NeedsYouStepsGallery';
+import { TodoGallery } from './board/items/TodoGallery';
 import { CrewCardGallery } from './board/items/CrewCardGallery';
 import { QueueHandOnGallery } from './board/items/QueueGallery';
 import { ShelvesGallery } from './session/ShelvesGallery';
@@ -110,6 +111,11 @@ createRoot(root).render(
           <div className="gallery">
             <NeedsYouStepsGallery />
           </div>
+        ) : location.hash === '#gallery-todo' ? (
+          // A page of its own too: a to-do list in each of its looks, open and folded.
+          <div className="gallery">
+            <TodoGallery />
+          </div>
         ) : location.hash === '#gallery-queue-hand-on' ? (
           // A page of its own: adding to the dev gallery moves its scrollbar, and so every shot that reaches the page's edge.
           <div className="gallery">
@@ -121,11 +127,13 @@ createRoot(root).render(
             <CrewCardGallery />
           </div>
         ) : location.hash === '#gallery-characters' ? (
-          // A page of its own too: every pose in every style, and the setting that picks one.
+          // A page of its own too: every pose in every style, and the setting that picks one. The looks go last, so
+          // the setting's shot keeps its place on the page.
           <div className="gallery">
             <CharacterStylesGallery />
             <CharactersSetting />
             <CharacterChangeDemo />
+            <CharacterLooksGallery />
           </div>
         ) : location.hash === '#gallery-agent-sidebar' ? (
           // A page of its own too, as its frames are many and tall.

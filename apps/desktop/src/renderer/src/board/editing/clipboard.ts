@@ -37,11 +37,20 @@ export function centreOf({ items }: Copied): { x: number; y: number } {
   return { x: x + width / 2, y: y + height / 2 };
 }
 
-/** The copies to make: each item shifted by `shift` under a new id, and the connectors between them, joined to the copies. */
+/**
+ * The copies to make: each item shifted by `shift` under a new id, and the connectors between them, joined to the copies.
+ * A copy of an agent's to-do list is the user's: an agent has one list, the one under its tile.
+ */
 export function placed(copy: Copied, shift: { dx: number; dy: number }, newId: () => string): Copied {
   const ids = new Map(copy.items.map((item) => [item.id, newId()]));
   return {
-    items: copy.items.map((item) => ({ ...item, id: ids.get(item.id)!, x: item.x + shift.dx, y: item.y + shift.dy })),
+    items: copy.items.map((item) => ({
+      ...item,
+      id: ids.get(item.id)!,
+      x: item.x + shift.dx,
+      y: item.y + shift.dy,
+      ...(item.kind === 'todo' ? { data: { ...item.data, owner: { kind: 'user' } } } : {}),
+    })),
     connectors: copy.connectors.map((connector) => ({
       ...connector,
       id: newId(),

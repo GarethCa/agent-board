@@ -20,7 +20,8 @@ export interface SessionTarget {
  * `gate` is an agent's merge gate: its latest run's steps and logs, named by the agent's session. `plan`
  * is an agent's plans: their versions, the one picked rendered, and the decision on the latest. `doc` is one of
  * an agent's hand-off docs, by its absolute `path`, read through that agent. `document` is a document an agent showed
- * (`board.showDoc`), named by its id, with its agent's session.
+ * (`board.showDoc`), named by its id, with its agent's session. `todo` is an agent's own to-do list, named by the agent's
+ * session.
  */
 export type Surface =
   | { kind: 'own' }
@@ -31,7 +32,8 @@ export type Surface =
   | { kind: 'gate'; sessionId: string }
   | { kind: 'plan'; sessionId: string }
   | { kind: 'doc'; sessionId: string; path: string }
-  | { kind: 'document'; sessionId: string; documentId: string };
+  | { kind: 'document'; sessionId: string; documentId: string }
+  | { kind: 'todo'; sessionId: string };
 
 /** A pull request's surface. */
 export type PullRequestSurface = Extract<Surface, { kind: 'pr' }>;
@@ -51,15 +53,18 @@ export type DocSurface = Extract<Surface, { kind: 'doc' }>;
 /** A document's surface. */
 export type DocumentSurface = Extract<Surface, { kind: 'document' }>;
 
-/** A surface that moves between windows by itself (slice 4): a pull request, a web page, a gate, plans, a doc, a document or another session. */
-export type LooseSurface = Extract<Surface, { kind: 'pr' | 'web' | 'session' | 'gate' | 'plan' | 'doc' | 'document' }>;
+/** An agent's own to-do list's surface. */
+export type TodoSurface = Extract<Surface, { kind: 'todo' }>;
+
+/** A surface that moves between windows by itself (slice 4): a pull request, a web page, a gate, plans, a doc, a document, a to-do list or another session. */
+export type LooseSurface = Extract<Surface, { kind: 'pr' | 'web' | 'session' | 'gate' | 'plan' | 'doc' | 'document' | 'todo' }>;
 
 /**
  * Whether the surface is only a place in a window, which moves between windows by itself and is all a tab window holds:
  * not a window's own session, nor a shell tab, which its owner holds.
  */
 export const isLooseSurface = (surface: Surface): surface is LooseSurface =>
-  surface.kind === 'pr' || surface.kind === 'web' || surface.kind === 'session' || surface.kind === 'gate' || surface.kind === 'plan' || surface.kind === 'doc' || surface.kind === 'document';
+  surface.kind === 'pr' || surface.kind === 'web' || surface.kind === 'session' || surface.kind === 'gate' || surface.kind === 'plan' || surface.kind === 'doc' || surface.kind === 'document' || surface.kind === 'todo';
 
 /** The key of the window's own surface: an agent's session, or a shell tile's own panes. */
 export const OWN_SURFACE = 'own';
@@ -86,6 +91,8 @@ export function surfaceKey(surface: Surface): string {
       return `doc:${surface.sessionId}:${surface.path}`;
     case 'document':
       return `document:${surface.documentId}`;
+    case 'todo':
+      return `todo:${surface.sessionId}`;
   }
 }
 
@@ -296,7 +303,7 @@ export function parseSurface(raw: unknown): Surface | undefined {
     const { repo, number } = fields;
     return typeof repo === 'string' && isGitHubRepo(repo) && typeof number === 'number' && Number.isSafeInteger(number) && number >= 1 ? { kind: 'pr', repo, number } : undefined;
   }
-  if (fields.kind === 'gate' || fields.kind === 'plan') {
+  if (fields.kind === 'gate' || fields.kind === 'plan' || fields.kind === 'todo') {
     return typeof fields.sessionId === 'string' && fields.sessionId !== '' ? { kind: fields.kind, sessionId: fields.sessionId } : undefined;
   }
   if (fields.kind === 'document') {

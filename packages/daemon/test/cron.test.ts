@@ -221,12 +221,12 @@ describe('stuckFlagReason', () => {
 
 describe('lastRunWords', () => {
   const now = at(2026, 11, 1, 19, 37);
-  const run = (outcome: 'started' | 'skipped', reason: string | null = null) => ({ id: 1, dueAt: '', firedAt: '', outcome, reason, sessionId: null, agentName: null, finishedAt: null, result: null });
+  const run = (outcome: 'started' | 'skipped', reason: string | null = null) => ({ id: 1, dueAt: '', firedAt: '', outcome, reason, sessionId: null, agentName: null, finishedAt: null, result: null, awaitsTurn: false, flag: null });
 
   it("says how its last run went, and a run of skips as how many since when", () => {
-    expect(lastRunWords({ id: 'c', nextRunAt: null, runs: [], skips: null }, now)).toBeUndefined();
-    expect(lastRunWords({ id: 'c', nextRunAt: null, runs: [run('started')], skips: null }, now)).toBe('last started');
+    expect(lastRunWords({ id: 'c', nextRunAt: null, changes: [], runs: [], skips: null }, now)).toBeUndefined();
+    expect(lastRunWords({ id: 'c', nextRunAt: null, changes: [], runs: [run('started')], skips: null }, now)).toBe('last started');
     const skips = { count: 8, since: at(2026, 11, 1, 16, 0).toISOString(), reasons: ['it was still working'] };
-    expect(lastRunWords({ id: 'c', nextRunAt: null, runs: [run('skipped', skips.reasons[0])], skips }, now)).toBe('skipped ×8 since 16:00 (still working)');
+    expect(lastRunWords({ id: 'c', nextRunAt: null, changes: [], runs: [run('skipped', skips.reasons[0])], skips }, now)).toBe('skipped ×8 since 16:00 (still working)');
   });
 });

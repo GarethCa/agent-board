@@ -1,7 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { Clock } from './clock.ts';
 import { nextRun, parseCron, type Cron } from './cron.ts';
-import { CLOCK_RUNS_KEPT, type AgentSchedule, type ClockData, type ClockRun, type ClockRunOutcome, type ClockSkips, type ClockStatus } from './protocol.ts';
+import { CLOCK_RUNS_KEPT, type AgentSchedule, type ClockChange, type ClockData, type ClockRun, type ClockRunOutcome, type ClockSkips, type ClockStatus } from './protocol.ts';
 
 /**
  * The longest the scheduler sleeps before it looks at the clock again. Timers don't count time the machine spends
@@ -30,7 +30,9 @@ export interface FiringClock {
  * What firing a clock did: a run that started or skipped at once, or one still `running` (a fresh agent's), which
  * `start` begins once its run has its row.
  */
-export type Fired = (RunStart & { sessionId?: string; agentName?: string }) | { running: true; start(runId: number): void };
+export type Fired =
+  | (RunStart & { sessionId?: string; agentName?: string; awaitsTurn?: boolean; onRun?(runId: number): void })
+  | { running: true; start(runId: number): void; joins?: boolean };
 
 /** What a run's row may be changed to, once it has fired. */
 export interface RunPatch {
@@ -40,6 +42,7 @@ export interface RunPatch {
   agentName?: string | null;
   finishedAt?: string | null;
   result?: string | null;
+  flag?: string | null;
 }
 
 export interface ScheduleHostOptions {
@@ -67,16 +70,35 @@ export interface ScheduleHost {
   forAgent(sessionId: string): AgentSchedule | null;
   /** The ids of the clocks that message the agent, or hand fresh agents' results to it. */
   joinedTo(sessionId: string): string[];
-  /** The run a fresh agent is doing, if it is one. */
-  runOf(sessionId: string): { runId: number; clockId: string } | undefined;
-  /** Every run still `running`, as left by a daemon that stopped during it too. */
-  running(): { runId: number; clockId: string; sessionId: string | null; result: string | null }[];
+  /**
+   * The run the agent is doing, if it is doing one: a fresh agent's (`fresh`), or the turn a clock's message started in
+   * it, which the run waits to end. `firedAt` is when it went off.
+   */
+  runOf(sessionId: string): OpenRun | undefined;
+  /** Every run still going: a fresh agent's `running`, or one waiting for its turn to end, as left by a daemon that stopped during it too. */
+  running(): (OpenRun & { sessionId: string | null; result: string | null })[];
   /** Changes a run, and tells clients. */
   updateRun(runId: number, patch: RunPatch): void;
+  /** Keeps a change an agent made to its own clock, and tells clients. */
+  recordChange(clockId: string, change: Omit<ClockChange, 'id'>): void;
+  /** The changes kept for the run. */
+  changesOf(runId: number): ClockChange[];
   /** Whether any clock is planned: the daemon stays up for them. */
   hasEnabled(): boolean;
   /** Stops firing. */
   close(): void;
+}
+
+/** A run still going: a fresh agent's, or one waiting for the turn its message started to end. */
+export interface OpenRun {
+  runId: number;
+  clockId: string;
+  fresh: boolean;
+  firedAt: string;
+  /** Why its agent flagged you during it, as recorded so far. */
+  flag: string | null;
+  /** Whether it starts its clock's own agent and joins it (`startsAgent`): it settles as a message's run does. */
+  joins: boolean;
 }
 
 interface ItemRow {
@@ -99,12 +121,19 @@ interface RunRow {
   agent_name: string | null;
   finished_at: string | null;
   result: string | null;
+  awaits_turn: number;
+  flag_reason: string | null;
+  joins: number;
 }
 
-/** Whether the clock has what it needs to fire: on, a prompt, and an agent to message or a zone to start one in. */
+/**
+ * Whether the clock has what it needs to fire: on, a prompt, and an agent to message or a zone to start one in. An
+ * unjoined clock that starts its own agent (`startsAgent`) needs the zone too.
+ */
 function clockIsSet(data: ClockData, zoneId: string | null): boolean {
   if (!data.enabled || data.prompt.trim() === '') return false;
-  return data.does === 'message' ? data.agent !== null : zoneId !== null;
+  if (data.does === 'message' && data.agent !== null) return true;
+  return (data.does === 'fresh' || data.startsAgent === true) && zoneId !== null;
 }
 
 /**
@@ -128,21 +157,33 @@ export function createScheduleHost(options: ScheduleHostOptions): ScheduleHost {
     `SELECT id FROM board_items WHERE kind = 'clock' AND (json_extract(data, '$.agent') = ? OR json_extract(data, '$.handoffTo') = ?)`,
   );
   const insertRun = db.prepare(
-    'INSERT INTO clock_runs (clock_id, due_at, fired_at, outcome, reason, session_id, agent_name) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id',
+    'INSERT INTO clock_runs (clock_id, due_at, fired_at, outcome, reason, session_id, agent_name, awaits_turn, joins) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
   );
   const selectRun = db.prepare('SELECT * FROM clock_runs WHERE id = ?');
   const selectRuns = db.prepare('SELECT * FROM clock_runs WHERE clock_id = ? ORDER BY id DESC LIMIT ?');
+  const changeColumns = 'id, run_id AS runId, at, session_id AS sessionId, agent_name AS agentName, change, value, why';
+  const selectChanges = db.prepare(`SELECT ${changeColumns} FROM clock_changes WHERE clock_id = ? ORDER BY id DESC LIMIT ?`);
+  const selectRunChanges = db.prepare(`SELECT ${changeColumns} FROM clock_changes WHERE run_id = ? ORDER BY id`);
+  const insertChange = db.prepare(
+    'INSERT INTO clock_changes (clock_id, run_id, at, session_id, agent_name, change, value, why) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+  );
   const countRuns = db.prepare('SELECT count(*) AS count FROM clock_runs WHERE clock_id = ?');
   // The skips in a row are the runs after its last that is not a skip: each reason once, the latest first.
   const selectSkips = db.prepare(
     `SELECT reason, count(*) AS count, min(fired_at) AS since FROM clock_runs WHERE clock_id = ?1 AND id > coalesce(
        (SELECT max(id) FROM clock_runs WHERE clock_id = ?1 AND outcome != 'skipped'), 0) GROUP BY reason ORDER BY max(id) DESC`,
   );
-  const selectRunning = db.prepare("SELECT * FROM clock_runs WHERE outcome = 'running' ORDER BY id");
+  // A run is going on while a fresh agent works at it (`running`), or while the turn its message started hasn't ended.
+  const going = "(outcome = 'running' OR (awaits_turn = 1 AND finished_at IS NULL))";
+  const selectRunning = db.prepare(`SELECT * FROM clock_runs WHERE ${going} ORDER BY id`);
   const selectRunningOf = db.prepare("SELECT id FROM clock_runs WHERE clock_id = ? AND outcome = 'running' LIMIT 1");
-  const selectRunOf = db.prepare("SELECT id, clock_id FROM clock_runs WHERE session_id = ? AND outcome = 'running' LIMIT 1");
+  const selectRunOf = db.prepare(`SELECT * FROM clock_runs WHERE session_id = ? AND ${going} ORDER BY id DESC LIMIT 1`);
+  const settleEarlier = db.prepare(
+    `UPDATE clock_runs SET outcome = 'failed', reason = 'its turn never ended before the next run', finished_at = ?
+     WHERE clock_id = ? AND awaits_turn = 1 AND finished_at IS NULL AND id < ?`,
+  );
   const updateRunRow = db.prepare(
-    `UPDATE clock_runs SET outcome = coalesce(?, outcome), reason = ?, session_id = ?, agent_name = ?, finished_at = ?, result = ? WHERE id = ?`,
+    `UPDATE clock_runs SET outcome = coalesce(?, outcome), reason = ?, session_id = ?, agent_name = ?, finished_at = ?, result = ?, flag_reason = ? WHERE id = ?`,
   );
 
   /** Each planned clock's cron, parsed, and next fire time. */
@@ -190,8 +231,8 @@ export function createScheduleHost(options: ScheduleHostOptions): ScheduleHost {
 
   const fire = (firing: FiringClock, dueAt: number, now: number) => {
     const times = [new Date(dueAt).toISOString(), new Date(now).toISOString()] as const;
-    const insert = (outcome: ClockRunOutcome, reason: string | null, sessionId: string | null = null, agentName: string | null = null) =>
-      (insertRun.get(firing.id, ...times, outcome, reason, sessionId, agentName) as { id: number }).id;
+    const insert = (outcome: ClockRunOutcome, reason: string | null, sessionId: string | null = null, agentName: string | null = null, awaitsTurn = false, joins = false) =>
+      (insertRun.get(firing.id, ...times, outcome, reason, sessionId, agentName, awaitsTurn ? 1 : 0, joins ? 1 : 0) as { id: number }).id;
     const recorded = () => {
       options.onChange(firing.id);
       const now = status(firing.id);
@@ -217,11 +258,17 @@ export function createScheduleHost(options: ScheduleHostOptions): ScheduleHost {
       fired = { started: false, reason: (error as Error).message };
     }
     if ('running' in fired) {
-      fired.start(insert('running', null));
+      fired.start(insert('running', null, null, null, false, fired.joins === true));
       options.log(`clock ${firing.id} fired: starting a fresh agent`);
     } else {
       const reason = fired.started ? null : fired.reason;
-      insert(fired.started ? 'started' : 'skipped', reason, fired.sessionId ?? null, fired.agentName ?? null);
+      const awaitsTurn = fired.started && fired.awaitsTurn === true;
+      const runId = insert(fired.started ? 'started' : 'skipped', reason, fired.sessionId ?? null, fired.agentName ?? null, awaitsTurn);
+      // A turn that never said it ended at all, not even as cut short, leaves its run going: the next one to start ends it.
+      if (awaitsTurn) {
+        settleEarlier.run(new Date(now).toISOString(), firing.id, runId);
+        fired.onRun?.(runId);
+      }
       options.log(`clock ${firing.id} fired: ${reason === null ? 'started a run' : `skipped, ${reason}`}`);
     }
     recorded();
@@ -257,7 +304,11 @@ export function createScheduleHost(options: ScheduleHostOptions): ScheduleHost {
     agentName: row.agent_name,
     finishedAt: row.finished_at,
     result: row.result,
+    awaitsTurn: row.awaits_turn === 1,
+    flag: row.flag_reason,
   });
+
+  const openRun = (row: RunRow): OpenRun => ({ runId: row.id, clockId: row.clock_id, fresh: row.outcome === 'running', firedAt: row.fired_at, flag: row.flag_reason, joins: row.joins === 1 });
 
   const nextRunAt = (id: string): string | null => {
     const next = due.get(id);
@@ -274,7 +325,13 @@ export function createScheduleHost(options: ScheduleHostOptions): ScheduleHost {
   function status(id: string): ClockStatus | null {
     if (selectOne.get(id) === undefined) return null;
     const runs = (selectRuns.all(id, CLOCK_RUNS_KEPT) as unknown as RunRow[]).map(toRun);
-    return { id, nextRunAt: nextRunAt(id), runs, skips: skipsOf(id, runs[0]) };
+    const changes = selectChanges.all(id, CLOCK_RUNS_KEPT) as unknown as ClockChange[];
+    return { id, nextRunAt: nextRunAt(id), runs, skips: skipsOf(id, runs[0]), changes };
+  }
+
+  function recordChange(clockId: string, change: Omit<ClockChange, 'id'>) {
+    insertChange.run(clockId, change.runId, change.at, change.sessionId, change.agentName, change.change, change.value, change.why);
+    options.onChange(clockId);
   }
 
   function updateRun(runId: number, patch: RunPatch) {
@@ -288,6 +345,7 @@ export function createScheduleHost(options: ScheduleHostOptions): ScheduleHost {
       pick('agentName', row.agent_name),
       pick('finishedAt', row.finished_at),
       pick('result', row.result),
+      pick('flag', row.flag_reason),
       runId,
     );
   }
@@ -320,17 +378,18 @@ export function createScheduleHost(options: ScheduleHostOptions): ScheduleHost {
         enabled: data.enabled,
         nextRunAt: nextRunAt(row.id),
         lastRun: last === undefined ? null : { dueAt: last.due_at, firedAt: last.fired_at, outcome: last.outcome, reason: last.reason },
+        hibernates: data.hibernate === true,
       };
     },
 
     joinedTo: (sessionId) => (selectJoined.all(sessionId, sessionId) as { id: string }[]).map((row) => row.id),
 
     runOf(sessionId) {
-      const row = selectRunOf.get(sessionId) as { id: number; clock_id: string } | undefined;
-      return row === undefined ? undefined : { runId: row.id, clockId: row.clock_id };
+      const row = selectRunOf.get(sessionId) as RunRow | undefined;
+      return row === undefined ? undefined : openRun(row);
     },
 
-    running: () => (selectRunning.all() as unknown as RunRow[]).map((row) => ({ runId: row.id, clockId: row.clock_id, sessionId: row.session_id, result: row.result })),
+    running: () => (selectRunning.all() as unknown as RunRow[]).map((row) => ({ ...openRun(row), sessionId: row.session_id, result: row.result })),
 
     updateRun(runId, patch) {
       // A run settling as the daemon shuts down is settled once it starts again.
@@ -339,6 +398,10 @@ export function createScheduleHost(options: ScheduleHostOptions): ScheduleHost {
       const row = selectRun.get(runId) as RunRow | undefined;
       if (row !== undefined) options.onChange(row.clock_id);
     },
+
+    recordChange,
+
+    changesOf: (runId) => selectRunChanges.all(runId) as unknown as ClockChange[],
 
     hasEnabled: () => due.size > 0,
 

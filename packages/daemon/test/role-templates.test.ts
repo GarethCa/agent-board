@@ -100,6 +100,15 @@ describe('RoleTemplates.describe', () => {
   };
   const implementer = { role: 'implementer', name: null } as const;
 
+  it('tells an implementer to read the memory first and add to it last, and an orchestrator to take from the queue', () => {
+    const implementer = roleSeed(null, 'implementer').body;
+    expect(implementer).toContain('`agent-board memory ls`, then `memory read <memory>`');
+    expect(implementer).toMatch(/Before you finish, also add[^.]*`agent-board memory add <memory> "key: value"`/);
+    const orchestrator = templates().roles.body('z1', tempDataDir(), { role: 'custom', name: 'orchestrator' });
+    expect(orchestrator).toContain('agent-board queue take');
+    expect(orchestrator).toContain('queue done');
+  });
+
   it('names a repo seed with its file, not as the zone’s', () => {
     expect(templates().roles.describe('z1', repoWithSeed(), implementer)).toBe("the repo's implementer seed (impl-prompt.md)");
   });

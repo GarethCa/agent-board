@@ -12,8 +12,8 @@ const DESIGNS = [
 
 for (const { design, tag } of DESIGNS) {
   for (const { theme, suffix } of THEMES) {
-    test(`every pose in every style, and the setting that picks one: ${design}, ${theme}`, async () => {
-      const shots = [`character-styles${tag}${suffix}`, `character-setting${tag}${suffix}`];
+    test(`every pose in every style, every face and prop an agent may give, and the setting that picks one: ${design}, ${theme}`, async () => {
+      const shots = [`character-styles${tag}${suffix}`, `character-setting${tag}${suffix}`, `character-looks${tag}${suffix}`];
       needsBaselines(...shots);
       const dataDir = tempDataDir();
       const { app, window } = await launchGallery(dataDir, theme, undefined, { design }, '#gallery-characters');
@@ -24,6 +24,7 @@ for (const { design, tag } of DESIGNS) {
         await settle(window);
         await expect.soft(window.getByTestId('character-styles')).toHaveScreenshot(`${shots[0]}.png`, SHOT);
         await expect.soft(window.getByRole('group', { name: 'Characters' })).toHaveScreenshot(`${shots[1]}.png`, SHOT);
+        await expect.soft(window.getByTestId('character-looks')).toHaveScreenshot(`${shots[2]}.png`, SHOT);
       } finally {
         await app.close();
         await removeDataDir(dataDir);

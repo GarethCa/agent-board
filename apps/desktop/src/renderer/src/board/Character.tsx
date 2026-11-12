@@ -1,10 +1,12 @@
 import { memo } from 'react';
+import type { AgentFace, AgentProp } from '@agent-board/daemon/character';
 import type { Harness } from '@agent-board/daemon/protocol';
 import { STATE_LABELS } from '../states';
 import { BeanBody, characterDrawing, pixelSnapped, type CharacterBody, type CharacterPose } from './character-figures';
 import type { DrawnStyle } from './characters';
 
-const POSE_LABELS: Record<CharacterPose, string> = { ...STATE_LABELS, reading: 'reading', writing: 'writing code', testing: 'testing', 'waiting-on-review': 'waiting on review' };
+/** Each pose in words, as the tile's state says it. */
+export const POSE_LABELS: Record<CharacterPose, string> = { ...STATE_LABELS, reading: 'reading', writing: 'writing code', testing: 'testing', 'waiting-on-review': 'waiting on review' };
 
 /** The body each harness's characters have: every agent shares one colour, so the shape tells them apart. */
 const BODIES: Record<Harness, CharacterBody> = { claude: 'bean', codex: 'block' };
@@ -14,11 +16,13 @@ const INK = 'var(--figure-ink)';
 /**
  * A small robot standing for an agent or subagent: its pose and face show what it is doing, its body which harness it
  * runs (a bean for Claude, a block for Codex), drawn in `style`, `height` px tall (Pixel snaps its height so it never
- * blurs).
+ * blurs). An agent's own pose may carry a `face` and a `prop` it gave it, drawn in place of the pose's own.
  */
 export const Character = memo(function Character({
   harness,
   pose,
+  face,
+  prop,
   label,
   style = 'bean',
   height = 32,
@@ -27,6 +31,8 @@ export const Character = memo(function Character({
 }: {
   harness: Harness;
   pose: CharacterPose;
+  face?: AgentFace;
+  prop?: AgentProp;
   /** What it is, e.g. `Explore`; read out with its pose. */
   label?: string;
   style?: DrawnStyle;
@@ -35,7 +41,7 @@ export const Character = memo(function Character({
   /** The word beside it says all it does: screen readers skip it. */
   decorative?: boolean;
 }) {
-  const { viewBox, drawing } = characterDrawing(style, BODIES[harness], pose);
+  const { viewBox, drawing } = characterDrawing(style, BODIES[harness], pose, face, prop);
   const [, , boxWidth = 1, boxHeight = 1] = viewBox.split(' ').map(Number);
   const tall = style === 'pixel' ? pixelSnapped(height) : height;
   return (
@@ -43,6 +49,8 @@ export const Character = memo(function Character({
       className="character"
       data-testid={testId}
       data-pose={pose}
+      data-face={face}
+      data-prop={prop}
       data-harness={harness}
       data-body={BODIES[harness]}
       data-style={style}
