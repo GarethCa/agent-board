@@ -19,10 +19,11 @@ import {
   Wrench,
   type LucideIcon,
 } from 'lucide-react';
-import { continuesOnCredits, type Agent, type Harness } from '@agent-board/daemon/protocol';
+import { continuesOnCredits, type Agent, type Harness, type PermissionDecision, type PermissionPrompt } from '@agent-board/daemon/protocol';
 import { Button, ErrorText } from '../ui';
 import { useAction } from '../use-action';
 import { toolSummary } from '../../../shared/needs-you';
+import { keepPlanning, PLAN_CHOICES, planTitle } from '../../../shared/claude-plan';
 import { duration, editCounts, msBetween, startLiveClock, pastedParts, runOpen, toolKind, toolLine, type RunsMode, type ToolCall, type ToolKind } from './chat';
 import type { SenderLook } from './agent-message';
 import type { LiveState } from './chat-live';
@@ -213,6 +214,11 @@ export function liveLine(live: LiveState): LiveLine {
         const [first] = live.prompt.questions;
         return { tone: 'wait', Icon: MessageCircleQuestion, label: first?.question ?? 'Asks you questions', detail: toolSummary(live.prompt), going: false };
       }
+      // Claude's plan approval reads as its plan, answered in Claude's words (`PlanActions`), never as an allow.
+      if (live.prompt.plan !== null) {
+        const label = live.prompt.subagent ? `Its ${live.prompt.subagent.type} subagent has a plan` : 'Plan ready';
+        return { tone: 'wait', Icon: ClipboardList, label, detail: planTitle(live.prompt.plan), going: false };
+      }
       const asker = live.prompt.subagent ? `Its ${live.prompt.subagent.type} subagent: allow ${live.prompt.toolName}?` : `Allow ${live.prompt.toolName}?`;
       return { tone: 'wait', Icon: Pause, label: asker, detail: toolSummary(live.prompt), going: false };
     }
@@ -256,9 +262,9 @@ interface LiveActionsProps {
 }
 
 /**
- * What the user can do about a live state, right where it shows: allow or deny a held permission prompt, answer a
- * question (an option, or in their own words), open or approve a plan, continue on credits past a usage limit, or
- * look at the terminal when only it can answer.
+ * What the user can do about a live state, right where it shows: allow or deny a held permission prompt (Claude's plan
+ * approval in its words), answer a question (an option, or in their own words), open or approve a plan, continue on
+ * credits past a usage limit, or look at the terminal when only it can answer.
  */
 export function LiveActions({ agent, live, onOpenPlan, onShowTerminal, compact = false }: LiveActionsProps) {
   const { busy, error, run } = useAction();
@@ -270,11 +276,14 @@ export function LiveActions({ agent, live, onOpenPlan, onShowTerminal, compact =
     case 'permission': {
       const { prompt } = live;
       const decide = (behavior: 'allow' | 'deny') => run(() => window.agentBoard.agents.decidePermission(sessionId, prompt.id, { behavior }));
+      // Claude's question dialog is answered in the pane or Needs you, never with Allow; else in its terminal.
       actions =
-        prompt.heldUntil === null ? (
+        prompt.heldUntil === null || prompt.questions !== null ? (
           <Button size="xs" variant="ghost" onClick={onShowTerminal}>
             Answer in the terminal
           </Button>
+        ) : prompt.plan !== null ? (
+          <PlanActions sessionId={sessionId} prompt={prompt} busy={busy} run={run} compact={compact} onShowTerminal={onShowTerminal} />
         ) : (
           <>
             <Button size="xs" variant="ghost" disabled={busy} aria-label={`Deny ${prompt.toolName}`} onClick={() => decide('deny')}>
@@ -371,6 +380,86 @@ export function LiveActions({ agent, live, onOpenPlan, onShowTerminal, compact =
       {error && <ErrorText className="chat-live-error">{error}</ErrorText>}
     </>
   );
+}
+
+/** Where Claude's plan approval stands in the chat: folded to one button, its choices, or the field for what to change. */
+export type PlanStep = 'folded' | 'choices' | 'changing';
+
+interface PlanChoicesProps {
+  step: PlanStep;
+  words: string;
+  busy: boolean;
+  onStep(step: PlanStep): void;
+  onWords(words: string): void;
+  onDecide(decision: PermissionDecision): void;
+  onShowTerminal(): void;
+}
+
+/**
+ * Claude's plan approval as the chat draws it, from its state alone: its choices in its words, as Needs you's plan row
+ * has them (`PlanPromptRow`), the primary trailing as Allow does, and where the choices the hook can't give are. Folded,
+ * for the status line's room, it is one Answer plan, as an ask's is one Answer. No, keep planning… opens a field for what
+ * to change; Return sends it, Escape goes back.
+ */
+export function PlanChoices({ step, words, busy, onStep, onWords, onDecide, onShowTerminal }: PlanChoicesProps) {
+  if (step === 'folded') {
+    return (
+      <Button size="xs" onClick={() => onStep('choices')}>
+        Answer plan
+      </Button>
+    );
+  }
+  if (step === 'changing') {
+    return (
+      <>
+        <input
+          className="chat-reply"
+          aria-label="What to change"
+          placeholder="What to change…"
+          autoFocus
+          value={words}
+          disabled={busy}
+          onChange={(event) => onWords(event.target.value)}
+          onKeyDown={(event: KeyboardEvent<HTMLInputElement>) => {
+            if (event.key === 'Enter') onDecide(keepPlanning(words));
+            if (event.key === 'Escape') onStep('choices');
+          }}
+        />
+        <Button size="xs" variant="ghost" disabled={busy} onClick={() => onStep('choices')}>
+          Cancel
+        </Button>
+        <Button size="xs" variant="primary" disabled={busy} onClick={() => onDecide(keepPlanning(words))}>
+          Keep planning
+        </Button>
+      </>
+    );
+  }
+  return (
+    <>
+      <Button size="xs" variant="ghost" disabled={busy} onClick={() => onStep('changing')}>
+        No, keep planning…
+      </Button>
+      {PLAN_CHOICES.toReversed().map((choice) => (
+        <Button key={choice.label} size="xs" variant={choice.primary ? 'primary' : 'secondary'} disabled={busy} onClick={() => onDecide(choice.decision)}>
+          {choice.label}
+        </Button>
+      ))}
+      <span className="quick-ask-where" data-testid="plan-where">
+        Clear context or bypass permissions:{' '}
+        <button type="button" className="quick-ask-link" onClick={onShowTerminal}>
+          in its terminal
+        </button>
+      </span>
+    </>
+  );
+}
+
+/** Claude's plan approval held for the board, answered from the chat through its hook (`PlanChoices`). */
+function PlanActions({ sessionId, prompt, busy, run, compact, onShowTerminal }: { sessionId: string; prompt: PermissionPrompt; busy: boolean; run: ReturnType<typeof useAction>['run']; compact: boolean; onShowTerminal(): void }) {
+  const [step, setStep] = useState<PlanStep>(compact ? 'folded' : 'choices');
+  const [words, setWords] = useState('');
+  const decide = (decision: PermissionDecision) => run(() => window.agentBoard.agents.decidePermission(sessionId, prompt.id, decision));
+  return <PlanChoices step={step} words={words} busy={busy} onStep={setStep} onWords={setWords} onDecide={decide} onShowTerminal={onShowTerminal} />;
 }
 
 /** A live state's actions, if it has any: the kinds that wait on the user, or that the user can move on. */

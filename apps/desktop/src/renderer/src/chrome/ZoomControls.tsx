@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { MiniMap, useReactFlow, useStore, type Node } from '@xyflow/react';
 import { Grid3x3, Map as MapIcon, Minus, Plus } from 'lucide-react';
 import { useSimplified } from '../design';
+import { useMenuBarAction } from '../keys/menu-bar-bridge';
 import { Button, Island, IslandSeparator, ToolButton } from '../ui';
 import { UsagePill } from './UsagePill';
 import { useUsageOnBoard } from './usage-on-board';
@@ -25,6 +26,12 @@ export function ZoomControls({
   const [picked, setMinimap] = useState<boolean>();
   const minimap = picked ?? !simplified;
   const [usageOnBoard] = useUsageOnBoard();
+  // View's zoom, snapping and minimap items do what these do.
+  useMenuBarAction('zoomIn', () => void zoomIn());
+  useMenuBarAction('zoomOut', () => void zoomOut());
+  useMenuBarAction('zoomToFit', () => void fitView({ maxZoom: 1 }));
+  useMenuBarAction('snapToGrid', onGrid, grid);
+  useMenuBarAction('minimap', () => setMinimap(!minimap), minimap);
   return (
     <>
       {minimap && <MiniMap className="board-minimap" pannable zoomable nodeColor={nodeColor} nodeStrokeColor="var(--raised-edge)" ariaLabel="Minimap" />}

@@ -46,6 +46,8 @@ export const VIEW_KEYS = {
   keepTerminals: 'keepTerminals',
   /** Which of its quiet parts an agent's Classic tile shows at rest (Settings › Board › Agent tiles): the quiet tile unless set. */
   tileShows: 'tileShows',
+  /** When the chat's Expand all / Collapse all show: always unless set to show on hover. */
+  chatRunsShow: 'chatRunsShow',
   /** Whether the plan usage pill shows on the board, beside the zoom controls: off unless turned on. */
   usageOnBoard: 'usageOnBoard',
   /** Whether the keys added since the key registry work, the "Extended keyboard shortcuts" setting: on unless turned off. */

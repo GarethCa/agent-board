@@ -23,9 +23,9 @@ const openFromTile = (window: Page, agent: Agent) =>
   tile(window).and(window.locator(`[data-session-id="${agent.sessionId}"]`)).dispatchEvent('dblclick');
 
 /** Starts an agent in the repo's zone and returns it. */
-async function spawn(page: Page, prompt: string): Promise<Agent> {
+async function spawn(page: Page, prompt: string, name?: string): Promise<Agent> {
   const before = await page.evaluate(() => window.agentBoard.agents.list());
-  await spawnAgent(page, 'monorepo', prompt);
+  await spawnAgent(page, 'monorepo', prompt, name === undefined ? {} : { name });
   const after = await page.evaluate(() => window.agentBoard.agents.list());
   return after.find((agent) => !before.some((known) => known.sessionId === agent.sessionId))!;
 }
@@ -78,6 +78,42 @@ test('by default, an agent whose turn ended stays out of Needs you, and one that
       await row.getByRole('button', { name: `Open ${flagged.name}` }).click();
       await expect(count(window)).toHaveAttribute('data-count', '0');
       await expect(flaggedTile.getByTestId('tile-flag')).toHaveCount(0);
+    },
+    {},
+    true,
+  );
+});
+
+test("an orchestrator's ask to remove tiles it didn't start is one prompt: the running tile stays unless ticked, and Allow removes the rest and tells it", async () => {
+  await withApp(
+    scratch('orchestrate'),
+    async (window) => {
+      const tileOf = (agent: Agent) => tile(window).and(window.locator(`[data-session-id="${agent.sessionId}"]`));
+      const agentNow = (agent: Agent) => window.evaluate(async (id) => (await self.agentBoard.agents.list()).find((each) => each.sessionId === id), agent.sessionId);
+      const finished = await spawn(window, 'Finish: The docs are updated', 'docs worker');
+      await expect.poll(async () => (await agentNow(finished))?.workFinishedAt ?? null).not.toBeNull();
+      const busy = await spawn(window, 'Work until interrupted', 'busy worker');
+      await expect(tileOf(busy)).toHaveAttribute('data-state', /running|thinking/);
+      const lead = await spawn(window, 'Ask to remove: docs worker, busy worker', 'tidy lead');
+      await expect.poll(async () => (await agentNow(lead))?.removeAsk?.tiles.length ?? 0).toBe(2);
+
+      await openInbox(window);
+      const ask = item(window, lead.sessionId).getByTestId('inbox-remove-ask');
+      await expect(ask).toContainText("Wants to remove 2 tiles it didn't start");
+      await expect(ask.getByTestId('inbox-remove-tile')).toHaveText(['docs worker']);
+      await expect(ask.getByTestId('inbox-remove-held')).toContainText('busy worker');
+      await expect(ask.getByRole('checkbox')).not.toBeChecked();
+      // Nothing goes before the user presses Allow.
+      await expect(tileOf(finished)).toHaveCount(1);
+
+      const allow = ask.getByRole('button', { name: 'Allow tidy lead to remove them' });
+      await expect(allow).toHaveText('Remove 1');
+      await allow.click();
+      await expect(tileOf(finished)).toHaveCount(0);
+      await expect(tileOf(busy)).toHaveCount(1);
+      await expect(ask).toHaveCount(0);
+      await expect.poll(async () => (await agentNow(lead))?.lastMessage ?? '').toContain('The user allowed it. Removed docs worker');
+      await expect.poll(async () => (await agentNow(lead))?.lastMessage ?? '').toContain('busy worker stays');
     },
     {},
     true,
@@ -330,7 +366,7 @@ test("a Claude agent's permission prompt answered in its terminal instead leaves
   });
 });
 
-test("Claude's question tool shows in Needs you and on its tile as its questions with no Allow, and Open the agent to answer leads to its dialog", async () => {
+test("Claude's question dialog shows in Needs you as the quick ask with no Allow, and picking an option there answers Claude's own dialog", async () => {
   await withApp(
     scratch('ask-questions'),
     async (window) => {
@@ -338,31 +374,22 @@ test("Claude's question tool shows in Needs you and on its tile as its questions
       const asking = item(window, agent.sessionId);
       await expect(count(window)).toHaveAttribute('data-count', '1');
       const onTile = tile(window).and(window.locator(`[data-session-id="${agent.sessionId}"]`));
-      await expect(onTile).toContainText('Which cache should the build use?');
-      await expect(onTile).toContainText('Redis · In memory');
+      await expect(onTile.getByTestId('ask-chip')).toBeVisible();
 
       await openInbox(window);
-      await expect(asking).toHaveAttribute('data-kind', 'asks');
-      const questions = asking.getByTestId('inbox-questions');
-      await expect(questions.getByTestId('inbox-question')).toContainText('Which cache should the build use?');
-      await expect(questions.getByTestId('inbox-question-option')).toHaveText(['Redis', 'In memory']);
-      await expect(questions).toContainText('Other');
-      await expect(asking.getByRole('button', { name: /Allow|Deny/ })).toHaveCount(0);
+      const dialog = asking.getByTestId('dialog-quick-ask');
+      await expect(dialog).toContainText('Which cache should the build use?');
+      await expect(dialog.locator('.quick-ask-option .quick-ask-label')).toHaveText(['RedisShared across machines', /^In memory/]);
+      await expect(dialog.getByTestId('quick-ask-where')).toContainText("In Claude's dialog");
+      await expect(asking.getByRole('button', { name: /^(Allow|Deny)/ })).toHaveCount(0);
 
-      await asking.getByRole('button', { name: `Open ${agent.name} to answer its questions` }).click();
-      await expect(sessionWindow(window)).toBeVisible();
-      if (runDesign() === 'simplified') {
-        // Its window opens on the chat, whose composer is blocked: the dialog is in its terminal.
-        const banner = window.getByTestId('agent-blocked-banner');
-        await expect(banner).toContainText('Its questions wait in its terminal');
-        await banner.getByRole('button', { name: 'Show prompt' }).click();
-      }
-      await expect(screen(window)).toContainText('3. Other');
-      await window.getByTestId('session-terminal').click();
-      await window.keyboard.type('1');
-      await window.keyboard.press('Enter');
-      await expect(screen(window)).toContainText('Going with Redis.');
+      // Picking an option answers Claude's held hook: its dialog takes the answer, and nothing is typed into its terminal.
+      await dialog.locator('.quick-ask-option', { hasText: 'Redis' }).click();
       await expect(count(window)).toHaveAttribute('data-count', '0');
+      await openFromTile(window, agent);
+      await expect(sessionWindow(window)).toBeVisible();
+      // Its window opens on the chat under the Simplified design, on its terminal under the Classic.
+      await expect(runDesign() === 'simplified' ? sessionWindow(window) : screen(window)).toContainText('Going with Redis.');
     },
     {},
     true,

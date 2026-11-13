@@ -1,6 +1,6 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { AGENT_FACES, AGENT_PROPS } from '@agent-board/daemon/character';
 import type { Agent, NeedsYouShows, Subagent } from '@agent-board/daemon/protocol';
 import { CalmTile } from './CalmTile';
@@ -8,6 +8,8 @@ import { Captain, CAPTAIN_SIZES, Character } from './Character';
 import { CHARACTER_POSES } from './character-figures';
 import { CharacterGallery, CharacterLooksGallery, CharacterStylesGallery } from './CharacterGallery';
 import { HybridTile } from './HybridTile';
+import { QUIET_TILE } from './tile-shows';
+import { restoreViewSettings } from './view-settings';
 import { MAX_PERCHED } from './perch';
 import type { TileData } from './tile';
 
@@ -262,6 +264,7 @@ describe('subagents on a Hybrid tile', () => {
       permissions: [],
       ask: null,
       stepsWait: null,
+      removeAsk: null,
       plan: null,
       docs: [],
       schedule: null,
@@ -272,6 +275,7 @@ describe('subagents on a Hybrid tile', () => {
       plainFolder: false,
       orchestrate: null,
       spawnedBy: null,
+      orphanedFrom: null,
       ledBy: null,
       startup: null,
       hooksSilent: false,
@@ -299,7 +303,8 @@ describe('subagents on a Hybrid tile', () => {
 
   it('stands the agent itself at the leading edge of its body, apart from what perches', () => {
     const html = tile([subagent('a')]);
-    expect(html).toMatch(/hybrid-tile-said" data-character="bean"><span class="tile-character" data-pose="running"><svg[^>]*data-testid="tile-character"[^>]*width="30" height="34"/);
+    // In its bottom row, by its state's word (tile B); its bubble's place beside what it said is behind a switch.
+    expect(html).toMatch(/data-testid="tile-mark"[^>]*><span class="tile-character" data-pose="running"><svg[^>]*data-testid="tile-character"[^>]*width="21" height="24"/);
   });
 
   it("draws an agent ended into a shell by its pill's state, as any agent ended", () => {
@@ -337,7 +342,7 @@ describe('subagents on a Hybrid tile', () => {
       heldUntil: null,
       asksInTerminal: false,
       sessionGrant: null,
-      questions: null,
+      dialog: null, plan: null, questions: null,
     };
     const question = { question: 'Postgres or SQLite?', options: ['Postgres', 'SQLite'], freeText: true };
     const ask: Agent['ask'] = { id: 'q', ...question, askedAt: AT, expiresAt: AT, onBoard: false, questions: [question], answers: [null], card: null };
@@ -436,6 +441,9 @@ describe('subagents on a Hybrid tile', () => {
   });
 
   it('carries a clock badge with its next run while it has a schedule, and none while it has none (its More menu schedules it)', () => {
+    // Its chips and pill are behind their switches on the quiet tile (tile B).
+    restoreViewSettings({ tileShows: { chips: true, statePill: true } });
+    onTestFinished(() => restoreViewSettings({ tileShows: QUIET_TILE }));
     const nextRunAt = new Date(Date.now() + 60 * 60_000);
     const schedule = { clockId: 'clock-1', cron: '0 * * * *', prompt: 'Sweep', enabled: true, nextRunAt: nextRunAt.toISOString(), lastRun: null, hibernates: false };
     const time = `${String(nextRunAt.getHours()).padStart(2, '0')}:${String(nextRunAt.getMinutes()).padStart(2, '0')}`;

@@ -7,6 +7,7 @@ import { ArrowUp, CircleCheck, ClipboardList, Clock, Coins, Flag, FolderCheck, G
 import { Button, EmptyState, ErrorText, IconButton, Input, Kbd, useToast } from '../ui';
 import { useAction } from '../use-action';
 import { PermissionRow } from './PermissionRow';
+import { RemoveAskRow } from './RemoveAskRow';
 import { askAnsweredElsewhere, heldPrompts, needsYouSections, problemKey, sinceText, stepsWaitKey, stillReadyToAccept, waitLeft, type NeedsYouRow, type NeedsYouRowKind } from '../../../shared/needs-you';
 import { errorMessage } from '../../../shared/errors';
 import { PlanDecisionBar } from '../plan/PlanTab';
@@ -208,6 +209,9 @@ function RequestBody({ agent, kind, flag, now, open, rowKeys }: { agent: Agent; 
             </Button>
           </div>
         </>
+      ) : agent.removeAsk ? (
+        // Keyed by ask, so a new one never inherits an old one's ticks or error.
+        <RemoveAskRow key={agent.removeAsk.id} agent={agent} ask={agent.removeAsk} now={now} />
       ) : agent.ask !== null ? (
         // Keyed by question, so a new one never inherits an old one's reply or error.
         agent.ask.questions.length > 1 && agent.ask.card === null ? (

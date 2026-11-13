@@ -37,7 +37,7 @@ export interface AgentAlertsOptions {
 
 /**
  * Follows every agent's state, as the daemon reports it, and tells the user when one needs them: an OS notification
- * for each new request in the needs-you inbox (`needsYouKind`: a permission prompt, a question, a plan, a flag, or with
+ * for each new request in the needs-you inbox (`needsYouKind`: a permission prompt, a question, a remove ask, a plan, a flag, or with
  * `turns` a finished turn), and the app's state (needs, working or quiet) with the inbox's size, for the dock and menu
  * bar. Notifications follow the settings: off altogether, or not while the app is in front.
  */
@@ -57,7 +57,7 @@ export interface AgentAlerts {
 
 /**
  * Every request of the agent's that the inbox lists it for, most pressing first, each by its kind and what names it:
- * its permission prompts (one request however many), a question, a plan version, a flag to the user, or (with
+ * its permission prompts (one request however many), a question, a remove ask, a plan version, a flag to the user, or (with
  * `turns`, and nothing else asked) its turn ended. Each new one notifies once.
  */
 function requestsOf(agent: Agent, settings: AlertSettings): { kind: NeedsYouKind; key: string }[] {
@@ -65,6 +65,8 @@ function requestsOf(agent: Agent, settings: AlertSettings): { kind: NeedsYouKind
   const requests: { kind: NeedsYouKind; key: string }[] = [];
   if (agent.state === 'needs-permission' || permissionPrompt(agent) !== undefined) requests.push({ kind: 'permission', key: 'permission' });
   if (agent.ask !== null) requests.push({ kind: 'asks', key: `asks:${agent.ask.id}` });
+  // An orchestrator's ask to remove tiles: only the inbox row answers it, never the banner.
+  if (agent.removeAsk != null) requests.push({ kind: 'asks', key: `remove:${agent.removeAsk.id}` });
   // Claude's question tool asks in its own dialog: a request of its own, which the banner never answers.
   const questions = questionPrompt(agent);
   if (questions !== undefined) requests.push({ kind: 'asks', key: `questions:${questions.id}` });
@@ -77,8 +79,23 @@ function requestsOf(agent: Agent, settings: AlertSettings): { kind: NeedsYouKind
   return requests;
 }
 
-function notificationFor(agent: Agent, kind: NeedsYouKind): AgentNotification {
+/** How many tiles a remove ask's banner names before "and N more". */
+const REMOVE_NAMES_SHOWN = 3;
+
+/** A remove ask's banner: how many tiles, the first few by name, and no Allow, which only the inbox row has. */
+function removeNotification(agent: Agent): AgentNotification {
   const { sessionId, name } = agent;
+  const tiles = agent.removeAsk!.tiles;
+  const shown = tiles.slice(0, REMOVE_NAMES_SHOWN).map((tile) => tile.name);
+  const more = tiles.length - shown.length;
+  const names = more === 0 ? shown.join(', ') : `${shown.join(', ')} and ${more} more`;
+  const count = `${tiles.length} tile${tiles.length === 1 ? '' : 's'}`;
+  return { sessionId, kind: 'asks', name, title: `${name} asks to remove ${count}`, body: `${names}. Open it to allow or deny.` };
+}
+
+function notificationFor(agent: Agent, { kind, key }: { kind: NeedsYouKind; key: string }): AgentNotification {
+  const { sessionId, name } = agent;
+  if (key.startsWith('remove:') && agent.removeAsk != null) return removeNotification(agent);
   switch (kind) {
     case 'turn':
       return { sessionId, kind, name, title: `${name} is waiting for you`, body: agent.lastMessage ?? 'It is waiting for your answer.' };
@@ -142,7 +159,7 @@ export function createAgentAlerts(options: AgentAlertsOptions): AgentAlerts {
     const fresh = requests.find((request) => !told.has(request.key));
     if (fresh === undefined) return;
     if ((!settings.notifications && options.simplified?.() !== true) || (!settings.notifyInFront && options.inFront?.() === true)) return;
-    options.notify(notificationFor(agent, fresh.kind));
+    options.notify(notificationFor(agent, fresh));
   };
 
   return {

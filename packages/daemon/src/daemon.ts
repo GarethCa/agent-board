@@ -38,6 +38,7 @@ import { gateActionHandlers } from './gate-actions.ts';
 import { gatedOwner, mergeGateBlocked } from './gate-rules.ts';
 import { createGateHost } from './gates.ts';
 import { createAskHost } from './asks.ts';
+import { createRemoveAskStore } from './remove-asks.ts';
 import { createDocumentHost } from './documents.ts';
 import { createStepsHost } from './steps.ts';
 import type { ReachesZone } from './item-scope.ts';
@@ -157,6 +158,8 @@ export interface DaemonOptions {
    * prompt takes over: `DEFAULT_PERMISSION_HOLD_MS` by default.
    */
   permissionHoldMs?: number;
+  /** How long after answers are sent to Claude's question dialog its call may take to run: `DIALOG_TAKE_MS` by default. */
+  dialogTakeMs?: number;
   /** How long an agent may answer a message from another agent: an hour by default (`reply-paths.ts`). */
   replyWindowMs?: number;
   /** How long a picture of a zone is waited for from the app: 15 s by default (`zone-captures.ts`). */
@@ -598,6 +601,8 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       },
       log,
     });
+    // The tiles orchestrators ask the user to remove: the orchestrator is `waiting` while one waits.
+    const removeAsks = createRemoveAskStore({ changed: (sessionId, began) => agents.waitChanged(sessionId, began) });
     // The documents agents show the user: a file each, read live, the user's edits told to the agent at its prompt.
     const documents = createDocumentHost({
       db,
@@ -631,6 +636,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       hookUrl: () => `http://127.0.0.1:${hookPort}/hooks`,
       boardMcpUrl: () => `http://127.0.0.1:${hookPort}/mcp`,
       permissionHoldMs: options.permissionHoldMs ?? DEFAULT_PERMISSION_HOLD_MS,
+      dialogTakeMs: options.dialogTakeMs,
       backgroundPollMs: options.backgroundPollMs,
       startStepTimeoutMs: options.startStepTimeoutMs,
       startLimitMs: options.startLimitMs ?? (Number(process.env.AGENT_BOARD_START_LIMIT_MS) || undefined),
@@ -653,13 +659,15 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       onBranchChanged: (sessionId) => void pullRequests.refresh(sessionId),
       onTurnBoundary: (sessionId) => {
         flowEdges.turnBoundary(sessionId);
-        // Its turn is over, so its call is too: nothing waits on the answer now.
+        // A new turn began, or its last one ended with no `Stop`: no call of its waits on the answer now.
         asks.drop(sessionId);
+        removeAsks.drop(sessionId);
       },
       onRemoving: (sessionId) => {
         flowEdges.dropAgent(sessionId);
         gates.forget(sessionId);
         asks.forget(sessionId);
+        removeAsks.drop(sessionId);
         removeDocumentCards(sessionId).catch((error: unknown) => log(`could not take ${sessionId}'s document and plan cards off the board: ${(error as Error).message}`));
         documents.forget(sessionId);
         selectionAsks.forget(sessionId);
@@ -667,6 +675,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       },
       asks,
       stepsWait: (sessionId) => steps.waitOf(sessionId),
+      removeAsk: (sessionId) => removeAsks.pending(sessionId),
       documents,
       broadcast,
       log,
@@ -773,10 +782,11 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       shells,
       zones: () => zoneTable.list(),
       flowEdges,
-      // As `agent.delete` without force: its reviewers go first.
-      deleteAgent: async (sessionId, why) => {
-        await reviews.deleteAgent(sessionId, why, () => agents.delete(sessionId, why, false).then(() => null));
+      // As `agent.delete` without force: its reviewers go first (forced, unless `forceReviewers` is false).
+      deleteAgent: async (sessionId, why, forceReviewers) => {
+        await reviews.deleteAgent(sessionId, why, () => agents.delete(sessionId, why, false).then(() => null), forceReviewers);
       },
+      removeAsks,
       broadcast,
       log,
       ...(options.replyWindowMs === undefined ? {} : { replyWindowMs: options.replyWindowMs }),
@@ -1016,6 +1026,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       }),
       ...crews.handlers<SessionSubscriber & BoardConnection>(orchestrators.access),
       ...asks.handlers<SessionSubscriber & BoardConnection>({ sessions, agents, shells }),
+      ...removeAsks.handlers<SessionSubscriber & BoardConnection>(),
       ...documents.handlers<SessionSubscriber & BoardConnection>({ sessions, agents, shells }),
       ...selectionAsks.handlers<SessionSubscriber & BoardConnection>(),
       ...boardMaster.handlers<SessionSubscriber & BoardConnection>(),
@@ -1222,6 +1233,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         orchestrators.close();
         // Its agents stop as the daemon does, which no crew should take for news.
         crews.close();
+        crewFlags.close();
         crewCards.close();
         pullRequests.stop();
         flowEdges.stop();
@@ -1243,6 +1255,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         const closing: Promise<unknown>[] = [new Promise((resolve) => server.close(resolve)), ingress!.close(), sessions.killAll({ stoppedByRestart: true })];
         await Promise.all(closing);
         asks.close();
+        removeAsks.close();
         documents.close();
         agents.close();
         db!.close();

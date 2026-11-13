@@ -25,6 +25,14 @@ export interface TileShows {
   trusted: boolean;
   /** Its muted bell in the footer, not beside its name. */
   mutedInFooter: boolean;
+  /** What it said in a bubble, with its character beside it, as before tile B (Classic). */
+  bubble: boolean;
+  /** Its chips in the footer: its setup, issue, pull requests, review, plan, docs and gate (Classic). */
+  chips: boolean;
+  /** Its state as a pill, with how long it has been in it, not as a word by its character (Classic). */
+  statePill: boolean;
+  /** Hatching across a paused tile (Classic). */
+  pausedHatch: boolean;
 }
 
 /** The quiet tile, as the board draws it by default. */
@@ -38,6 +46,10 @@ export const QUIET_TILE: TileShows = {
   setBy: false,
   trusted: false,
   mutedInFooter: false,
+  bubble: false,
+  chips: false,
+  statePill: false,
+  pausedHatch: false,
 };
 
 /** Every part on the tile, as it was before the quiet tile: none of the quiet tile's additions. */
@@ -51,6 +63,10 @@ export const FULL_TILE: TileShows = {
   setBy: true,
   trusted: true,
   mutedInFooter: true,
+  bubble: true,
+  chips: true,
+  statePill: true,
+  pausedHatch: true,
 };
 
 /**
@@ -62,8 +78,12 @@ export const PARTS_TO_TURN_ON: readonly { part: keyof TileShows; label: string }
   { part: 'branchAlways', label: 'Branch row, even when it repeats the issue' },
   { part: 'trusted', label: 'The “trusted by this zone’s setting” line' },
   { part: 'setBy', label: 'Who set its status line' },
+  { part: 'bubble', label: 'What it said in a bubble, by its character' },
+  { part: 'chips', label: 'Chips: issue, pull requests, setup, review and more' },
   { part: 'setupApart', label: 'Model and reasoning as two tags' },
   { part: 'mutedInFooter', label: 'A muted bell in the footer, not by the name' },
+  { part: 'statePill', label: 'Its state as a pill, with how long' },
+  { part: 'pausedHatch', label: 'Hatching on a paused tile' },
 ];
 
 /** `look` with one part turned on or off and the rest as they were. */
@@ -167,31 +187,21 @@ export function tileProgress(agent: Pick<Agent, 'state' | 'status'>, shows: Pick
 }
 
 /**
- * Whether its branch says more than its issue already does. A branch named for its issue ("abc-12-fix-login" for
- * ABC-12) says nothing new; nor does none. What a reviewer reviews always says something.
- */
-export function branchSaysMore(agent: Pick<Agent, 'branch' | 'reviews' | 'issue'>): boolean {
-  if (agent.reviews !== null) return true;
-  if (agent.branch === '') return false;
-  if (agent.issue === null) return true;
-  const id = agent.issue.id.toLowerCase();
-  const branch = agent.branch.toLowerCase().split('/').at(-1)!;
-  return branch !== id && !branch.startsWith(`${id}-`);
-}
-
-/**
- * Its hover card's details, one line each: what it says it is for, which no tile shows, and what the quiet tile leaves
- * off. Empty when none applies.
+ * Its hover card's details, one line each: what the quiet tile leaves off. What it is for is not among them: the tile's
+ * line under its name says it. With its chips off, the card lists each of them (`chips`, worded as the "+N" list words
+ * them): the card never takes the pointer, so they are lines to read, opened from its session window's tabs. Empty when
+ * none applies.
  */
 export function tileDetails(
-  agent: Pick<Agent, 'branch' | 'reviews' | 'issue' | 'trustedByZone' | 'status' | 'purpose'>,
+  agent: Pick<Agent, 'branch' | 'reviews' | 'issue' | 'trustedByZone' | 'status'>,
   shows: TileShows,
   branchShown: boolean,
+  chips: readonly string[] = [],
 ): string[] {
   const lines: string[] = [];
-  if (agent.purpose) lines.push(`For: ${agent.purpose}`);
   if (!branchShown && branchLine(agent) !== '') lines.push(`Branch: ${branchLine(agent)}`);
   if (!shows.setBy && agent.status?.setBy != null) lines.push(`Status set by ${agent.status.setBy}`);
   if (!shows.trusted && agent.trustedByZone) lines.push("Trusted by its zone's setting: Claude's trust screen was answered by that setting, not by you");
+  if (!shows.chips) lines.push(...chips);
   return lines;
 }

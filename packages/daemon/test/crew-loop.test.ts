@@ -85,6 +85,7 @@ function crewBoard(options: BoardOptions = {}) {
       hibernated: null,
       permissions: [],
       ask: null,
+      removeAsk: null,
       plan: null,
       flag: null,
       workFinishedAt: null,

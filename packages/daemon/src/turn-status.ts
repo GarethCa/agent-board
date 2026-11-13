@@ -8,7 +8,7 @@ import { oneLine } from './terminal-input.ts';
 const ALSO_WORKING: ReadonlySet<AgentState> = new Set<AgentState>(['rate-limited', 'handing-off', 'on-command']);
 
 /** Whether the live agent is part-way through a turn, a call that waits on the user (`ask`, `plan`) included. */
-export function isWorking(agent: Pick<Agent, 'state' | 'ask' | 'plan' | 'endedAt'>): boolean {
+export function isWorking(agent: Pick<Agent, 'state' | 'ask' | 'removeAsk' | 'plan' | 'endedAt'>): boolean {
   return agent.endedAt === null && (isMidTurn(agent) || ALSO_WORKING.has(agent.state));
 }
 

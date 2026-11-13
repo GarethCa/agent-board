@@ -16,7 +16,8 @@ import { SimplifiedHeader } from './SimplifiedHeader';
 import { useSimplified } from '../design';
 import { showsShelves } from './agent-sidebar';
 import { useAgentSidebar } from './use-agent-sidebar';
-import { useViewSettingsLoaded } from '../board/view-settings';
+import { useChatRunsShow, useViewSettingsLoaded } from '../board/view-settings';
+import { chatControlsPlace } from './chat-runs-show';
 import { useSidebarCollapsed } from './use-sidebar-collapsed';
 import { SessionBody, type WindowContent } from './SessionBody';
 import { pendingTab, requestTab, useTabRequestCount } from './tab-request';
@@ -142,6 +143,12 @@ function SessionWindowShown({ content, title, placement, onClose, onDelete, onMi
   const extended = useExtendedShortcuts();
   const [viewSlot, setViewSlot] = useState<HTMLElement | null>(null);
   const [controlsSlot, setControlsSlot] = useState<HTMLElement | null>(null);
+  // Where the chat's controls go: the tab row's end when it shows, else the header (chat-runs-show.ts).
+  const [tabRowChatSlot, setTabRowChatSlot] = useState<HTMLElement | null>(null);
+  const [headerChatSlot, setHeaderChatSlot] = useState<HTMLElement | null>(null);
+  const tabRow = reviewable || orchestrates;
+  const chatPlace = chatControlsPlace({ tabRow, simplified, show: useChatRunsShow() });
+  const chatControlsSlot = { 'tab-row': tabRowChatSlot, header: headerChatSlot, 'simplified-header': headerChatSlot, 'view-slot': viewSlot }[chatPlace];
   const terminalToggle = useRef<(() => void) | null>(null);
   useMinimiseOnClickOutside(root, placement === 'board' ? onMinimise : undefined);
   // Esc from its header (⌘J has the focus there), or ⌘Esc from anywhere in it: minimised, the focus on its tile.
@@ -200,6 +207,7 @@ function SessionWindowShown({ content, title, placement, onClose, onDelete, onMi
             placement={placement}
             nav={nav}
             onViewSlot={setViewSlot}
+            onChatControlsSlot={chatPlace === 'simplified-header' ? setHeaderChatSlot : undefined}
             terminalToggle={terminalToggle}
             detailsOpen={!detailsCollapsed}
             onDetailsOpen={(open) => setDetailsCollapsed(!open)}
@@ -223,6 +231,7 @@ function SessionWindowShown({ content, title, placement, onClose, onDelete, onMi
           </span>
         )}
         <span className="session-window-head-fill" />
+        {agent && !tabRow && <span className="session-window-chat-controls" ref={setHeaderChatSlot} />}
         {/* Its merge gate, for an agent with a branch of its own. */}
         {agent && gated(agent) && <GateControls agent={agent} visible />}
         {/* The shelves' window controls: one state button, and ⋯ for Stop and splitting the tab. */}
@@ -278,18 +287,22 @@ function SessionWindowShown({ content, title, placement, onClose, onDelete, onMi
           </>
         )}
       </header>
-      {(reviewable || orchestrates) && (
-        <Tabs<WindowTab>
-          className="session-window-tabs"
-          aria-label="Window tabs"
-          value={showing}
-          onChange={setTab}
-          tabs={[
-            { id: 'terminal', label: 'Terminal', icon: <SquareTerminal /> },
-            ...(reviewable ? [{ id: 'review' as const, label: `Review · round ${rounds.at(-1)!.round}`, icon: <FileCheck /> }] : []),
-            ...(orchestrates ? [{ id: 'activity' as const, label: 'Activity', icon: <Activity /> }] : []),
-          ]}
-        />
+      {tabRow && (
+        <div className="session-window-tab-row">
+          <Tabs<WindowTab>
+            className="session-window-tabs"
+            aria-label="Window tabs"
+            value={showing}
+            onChange={setTab}
+            tabs={[
+              { id: 'terminal', label: 'Terminal', icon: <SquareTerminal /> },
+              ...(reviewable ? [{ id: 'review' as const, label: `Review · round ${rounds.at(-1)!.round}`, icon: <FileCheck /> }] : []),
+              ...(orchestrates ? [{ id: 'activity' as const, label: 'Activity', icon: <Activity /> }] : []),
+            ]}
+          />
+          {/* Outside the tablist, which holds only tabs; empty, and hidden, while a Review or Activity tab shows. */}
+          <span className="session-window-chat-controls" ref={setTabRowChatSlot} hidden={showing !== 'terminal'} />
+        </div>
       )}
       <div className="session-window-view" hidden={showing !== 'terminal'}>
         <SessionBody
@@ -302,6 +315,7 @@ function SessionWindowShown({ content, title, placement, onClose, onDelete, onMi
           viewSlot={simplified ? viewSlot : undefined}
           shelves={shelves}
           controlsSlot={controlsSlot}
+          chatControlsSlot={chatControlsSlot}
           terminalToggle={simplified ? terminalToggle : undefined}
         />
       </div>

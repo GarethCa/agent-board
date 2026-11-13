@@ -14,6 +14,7 @@ import { useJobDropOver } from './items/queue-board';
 import { useBoardCommands } from './commands';
 import { HarnessMark } from './HarnessMark';
 import { useAgentTileMenu } from './agent-tile-menu';
+import { useMenuBarSection } from '../keys/menu-bar-bridge';
 import { useNowForSince, useNowToward } from '../inbox/use-now';
 import { calmTimes, QUIET_TILE, tileProgress, type TileShows } from './tile-shows';
 import { useRenameRequest } from './rename';
@@ -24,8 +25,9 @@ import { SubagentPerch } from './SubagentPerch';
 import { ClickOpensContext, TileActionsContext, type TileActions, type TileData } from './tile';
 import { lastMessageCard, nameClass, stopPropagation, TileButton, TileMenu, TrustRow, UndeliveredRow, UnsentRow, UntypedRow } from './tile-parts';
 import { useFittedLines } from './use-fitted-lines';
-import { quickAskOf } from './quick-ask';
+import { quickAskOf, tileDialogOf } from './quick-ask';
 import { TileQuickAsk } from './TileQuickAsk';
+import { TileDialogAsk } from './DialogQuickAsk';
 import { HandPlacedMark } from './HandPlacedMark';
 
 type CalmTileProps = { id: string; selected: boolean; agent: Agent } & Pick<TileData, 'repo' | 'from' | 'crew' | 'crewFlags' | 'implementer'>;
@@ -47,6 +49,7 @@ export function CalmTile({ id, selected, agent, repo, from, crew, crewFlags, imp
   const handoffs = useContext(HandoffsContext);
   const renaming = useRenaming(agent.name, (name) => rename({ kind: 'agent', sessionId: agent.sessionId }, name));
   const menu = useAgentTileMenu(id, agent, { from, implementer }, renaming.startSoon);
+  useMenuBarSection('agent', selected, menu.entries);
   useRenameRequest(id, renaming);
   const nameClicks = useSlowClickRename(renaming, selected);
   const fitted = useFittedLines();
@@ -60,6 +63,8 @@ export function CalmTile({ id, selected, agent, repo, from, crew, crewFlags, imp
   const times = calmTimes(agent, Math.max(sinceNow, towardNow), look);
   const progress = tileProgress(agent, look);
   const quick = quickAskOf(agent);
+  // Claude's own question dialog, answered from the same chip.
+  const dialog = quick === undefined ? tileDialogOf(agent) : undefined;
   const sending = handoffs.sending.has(agent.sessionId) && face.status !== 'needs-you';
   const card = lastMessageCard(agent);
   const open = () => (clickOpens !== 'expand' ? openAgent(agent) : expand(id));
@@ -178,6 +183,8 @@ export function CalmTile({ id, selected, agent, repo, from, crew, crewFlags, imp
           {/* Its ask opens from its chip, beside the tile, in the button's place. */}
           {quick !== undefined ? (
             <TileQuickAsk sessionId={agent.sessionId} name={agent.name} ask={quick} />
+          ) : dialog !== undefined ? (
+            <TileDialogAsk sessionId={agent.sessionId} name={agent.name} prompt={dialog} onOpen={() => openAgent(agent)} />
           ) : (
             face.action !== null && <CalmButton action={face.action} agent={agent} actions={tileActions} open={open} />
           )}

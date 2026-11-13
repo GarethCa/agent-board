@@ -5,6 +5,7 @@ import type { Page } from '@playwright/test';
 import { launch, sessionWindow, SHELL_ENV, spawnAgent, tile, TURN_MS } from './agent-helpers.ts';
 import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone } from './launch.ts';
 import { scratch } from './scratch.ts';
+import { showTileParts } from './settings-helpers.ts';
 
 /** Makes `git worktree add` in `repo` take `seconds` longer, as on a slow disk: its checkout hook sleeps. */
 function slowCheckout(repo: string, seconds: number): void {
@@ -42,7 +43,7 @@ test('a new agent is on the board at once, shows its steps and its harness start
 
     // Once its first hook comes, it is a normal live tile with its task.
     await expect(agent).not.toHaveAttribute('data-start', /.*/, { timeout: TURN_MS });
-    await expect(agent.getByTestId('tile-description')).toContainText('Pick a cache for the job queue');
+    await expect(agent.getByTestId('tile-about')).toContainText('Pick a cache for the job queue');
   } finally {
     await app.close();
     await removeDataDir(dataDir);
@@ -169,6 +170,8 @@ test('a start an orchestrator made, in the gallery with a long name, an issue an
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, {});
   try {
+    // Its chips, which fold into +N while it starts; the quiet tile leaves them to its hover card.
+    await showTileParts(window, ['chips']);
     await window.evaluate(() => {
       location.hash = '#gallery';
       location.reload();
@@ -209,6 +212,8 @@ test('an orchestrator starts a slow worker with a long name, a role, its status 
   try {
     await pickFolderNext(app, repo);
     await browseForZone(window);
+    // Its chips, which fold into +N while it starts; the quiet tile leaves them to its hover card.
+    await showTileParts(window, ['chips']);
     // The reviewer starts through `new_agent`, which leaves `reviewOf` empty: its subtitle is the gallery's to test.
     await spawnAgent(window, 'monorepo', 'Lead a crowded crew: Fix the flaky test', { started: false });
     if (await sessionWindow(window).isVisible()) await sessionWindow(window).getByRole('button', { name: 'Close session window' }).click();

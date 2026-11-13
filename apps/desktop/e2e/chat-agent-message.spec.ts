@@ -71,16 +71,17 @@ test("an agent's hand-off is its own bubble in the receiver's chat, in all three
       await expect(bubble).toContainText('From Write the code');
     }
 
-    // Only my messages folds it into one line, which can show it again.
-    const shown = sessionWindow(window).getByRole('group', { name: 'Messages shown' });
-    await expect(shown.getByRole('button', { name: 'Include agents' })).toHaveAttribute('aria-pressed', 'true');
-    await shown.getByRole('button', { name: 'Only my messages' }).click();
+    // Only my messages (one button, pressed while it shows only the user's own) folds it into one line, which can show it again.
+    const only = sessionWindow(window).getByRole('button', { name: 'Only my messages' });
+    await expect(only).toHaveAttribute('aria-pressed', 'false');
+    await only.click();
+    await expect(only).toHaveAttribute('aria-pressed', 'true');
     await expect(bubble).toHaveCount(0);
     await expect(chat.getByTestId('chat-user')).toHaveText(['Review the code']);
     await expect(chat.getByTestId('chat-agents-hidden')).toContainText('1 agent message hidden');
     await chat.getByTestId('chat-agents-hidden').getByRole('button', { name: 'Show' }).click();
     await expect(bubble).toHaveCount(1);
-    await expect(shown.getByRole('button', { name: 'Include agents' })).toHaveAttribute('aria-pressed', 'true');
+    await expect(only).toHaveAttribute('aria-pressed', 'false');
   } finally {
     await app.close();
     await removeDataDir(dataDir);
@@ -88,7 +89,7 @@ test("an agent's hand-off is its own bubble in the receiver's chat, in all three
   }
 });
 
-test("the Captain's panel shows a message an agent sent as a bubble, has its filter in its header, and the session window's switch stays when the panel closes", async () => {
+test("the Captain's panel shows a message an agent sent as a bubble, has its filter in its header, and the session window's button stays when the panel closes", async () => {
   const { dir, repo, env } = scratch('output');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env);
@@ -121,12 +122,12 @@ test("the Captain's panel shows a message an agent sent as a bubble, has its fil
     // The Captain's session window holds the same chat as the panel.
     await panel.getByRole('button', { name: 'Open its session window' }).click();
     await sessionWindow(window).getByRole('group', { name: 'View' }).getByRole('button', { name: 'Chat' }).click();
-    await expect(sessionWindow(window).getByRole('group', { name: 'Messages shown' })).toBeVisible();
+    await expect(sessionWindow(window).getByRole('button', { name: 'Only my messages' })).toBeVisible();
     // The window covers the board, so the panel's Close is reached by its label, not through the page's roles.
     await panel.locator('button[aria-label="Close"]').dispatchEvent('click');
-    // With the panel's chat gone, the session window's switch stays.
+    // With the panel's chat gone, the session window's button stays.
     await expect(panel).toHaveCount(0);
-    await expect(sessionWindow(window).getByRole('group', { name: 'Messages shown' })).toBeVisible();
+    await expect(sessionWindow(window).getByRole('button', { name: 'Only my messages' })).toBeVisible();
     await sessionWindow(window).getByRole('button', { name: 'Close session window' }).click();
   } finally {
     await app.close();

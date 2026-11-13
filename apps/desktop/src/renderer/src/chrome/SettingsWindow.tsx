@@ -15,7 +15,7 @@ import { AppearanceSetting } from './AppearanceSetting';
 import { BoardBackgroundSetting } from './BoardBackgroundSetting';
 import { ArrangeSpacingSetting } from './ArrangeSpacingSetting';
 import { DockSetting } from './DockSetting';
-import { AgentNoteLookSetting, ClickOpensSetting, ConnectionsSetting, CrewLookSetting, TileShowsSetting } from './BoardViewSettings';
+import { AgentNoteLookSetting, ChatRunsShowSetting, ClickOpensSetting, ConnectionsSetting, CrewLookSetting, TileShowsSetting } from './BoardViewSettings';
 import { ChatStyleSetting } from './ChatStyleSetting';
 import { ChatThemeSetting } from './ChatThemeSetting';
 import { ClickableLinksSetting } from './ClickableLinksSetting';
@@ -72,6 +72,17 @@ function AgentsChatSettings() {
   );
 }
 
+/** Settings › Board › Agent tiles: under Classic, what a tile shows at rest; then when the chat's Expand all / Collapse all show. */
+function AgentTilesSettings() {
+  const simplified = useSimplified();
+  return (
+    <>
+      {!simplified && <TileShowsSetting />}
+      <ChatRunsShowSetting />
+    </>
+  );
+}
+
 function DaemonStatusSetting() {
   return <Hint data-testid="daemon-details">{daemonStatusText(useDaemonStatus())}</Hint>;
 }
@@ -108,7 +119,7 @@ function sectionBody(home: SettingsHome, onError: OnError): ReactNode {
     case 'board.crews':
       return <CrewLookSetting />;
     case 'board.tiles':
-      return <TileShowsSetting />;
+      return <AgentTilesSettings />;
     case 'board.notes':
       return <AgentNoteLookSetting />;
     case 'board.tidying':

@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain, session as sessions, WebContentsView, type IpcMainEvent, type IpcMainInvokeEvent, type Result, type WebContents } from 'electron';
+import type { PageInput } from './page-keys';
 import { isWebTabUrl, WEB_TAB_RULE } from '@agent-board/daemon/web-url';
 import { WEB_TAB_IPC, type FindResult, type WebTabBounds, type WebTabKey, type WebTabState } from '../preload/api';
 import { headless } from './background';
@@ -141,6 +142,7 @@ export function registerWebTabIpc({
   keepLogins,
   simplified = () => false,
   extended = () => true,
+  pageKept = () => {},
 }: {
   isBoard(contents: WebContents): boolean;
   /** Whether `contents` is the Settings window's page, whose Clear browsing data empties the shared session. */
@@ -150,6 +152,8 @@ export function registerWebTabIpc({
   simplified?(): boolean;
   /** Whether "Extended keyboard shortcuts" is on, whose ⌘J a page hands on; off, the page keeps it. */
   extended?(): boolean;
+  /** A page kept a press it has no action for, in the window `owner`: the menu bar drops its accelerator for it. */
+  pageKept?(owner: WebContents, input: PageInput): void;
 }): {
   stopKeepingLogins(): void;
 } {
@@ -381,7 +385,10 @@ export function registerWebTabIpc({
     });
     contents.on('before-input-event', (input, key) => {
       const action = webKey(key, undefined, simplified(), extended());
-      if (action === undefined) return;
+      if (action === undefined) {
+        if (key.type === 'keyDown' && !tab.owner.isDestroyed()) pageKept(tab.owner, key);
+        return;
+      }
       input.preventDefault();
       // A held key acts once, as in the window.
       if (key.isAutoRepeat) return;

@@ -196,7 +196,9 @@ describe('the board MCP tools and the agent-board CLI', () => {
     { tool: 'restart', command: 'restart', positional: ['agent'], renamed: { prompt: 'file' } },
     { tool: 'pause', command: 'pause', positional: ['agent'] },
     { tool: 'wake', command: 'wake', positional: ['agent'] },
-    { tool: 'close', command: 'close', positional: ['agent'] },
+    // `close --remove --ask` is ask_to_remove.
+    { tool: 'close', command: 'close', positional: ['agent'], options: ['remove'] },
+    { tool: 'ask_to_remove', command: 'close', positional: ['agents'], renamed: { timeout_minutes: 'timeout' }, options: ['timeout'] },
     { tool: 'handover', command: 'orchestrate', positional: ['from', 'to'], options: [] },
     { tool: 'add_edge', command: 'edge', positional: ['from', 'to'], renamed: { conditions: 'condition' } },
     { tool: 'list_edges', command: 'edges' },

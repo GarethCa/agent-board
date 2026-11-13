@@ -40,8 +40,8 @@ test('an agent sets its status with agent-board status set (after the MCP set_st
     await spawnAgent(window, 'monorepo', 'Moving session ids to the daemon');
 
     // Its CLI commands each start the app's executable as Node: a turn's worth of time, not a moment's. It sets 10%
-    // through the MCP and 20% through the CLI, mid-turn; its status stands in place of its task while it works.
-    await expect(tile(window).getByTestId('tile-description')).toHaveAttribute('title', /^Moving session ids to the daemon · 20%\n\nTask: Moving session ids to the daemon$/, { timeout: TURN_MS });
+    // through the MCP and 20% through the CLI, mid-turn; its status is what is true now while it works.
+    await expect(tile(window).getByTestId('tile-description')).toHaveText('Moving session ids to the daemon · 20%', { timeout: TURN_MS });
     // Its turn over, the tile still says what it is doing (the percentage going is a unit test's); its last message
     // is on the card that shows below the tile after a moment's hover.
     await expect(tile(window).getByTestId('tile-description')).toHaveText('Moving session ids to the daemon', { timeout: TURN_MS });
@@ -73,8 +73,8 @@ test('an agent that ends turns while its gate runs, then hands off, shows Finish
 
     await spawnAgent(window, 'monorepo', 'Gate in the background');
 
-    await expect(tile(window).getByTestId('tile-finished')).toHaveText('Finished', { timeout: TURN_MS });
-    await expect(tile(window).getByTestId('tile-finished')).toHaveAttribute('title', /^Says its work is finished/);
+    await expect(tile(window).getByTestId('tile-state-word')).toHaveText('Done', { timeout: TURN_MS });
+    await expect(tile(window).getByTestId('tile-description')).toHaveText(/^Finished/);
   } finally {
     await app.close();
     await removeDataDir(dataDir);

@@ -9,6 +9,7 @@ import {
   agentsView,
   BoardError,
   BoardRefs,
+  askToRemove,
   closeAgent,
   pauseAgent,
   wakeAgent,
@@ -117,6 +118,7 @@ import {
   MAX_ACTIVITY_LIMIT,
   MAX_CAPTURE_SIDE,
   ORCHESTRATE_SETTING,
+  MAX_ASK_WAIT_MS,
   MAX_ORCHESTRATOR_WAIT_MS,
   MAX_FLAG_LENGTH,
   MAX_FIGURE_VALUE,
@@ -257,7 +259,7 @@ ORCHESTRATING
   \`agent-board help orchestrate\` shows the loop.
 
   new [options] [--] <prompt>
-                        Start an agent with <prompt> as its first message. In a group, --repo
+                        Start an agent with <prompt> as its first message, in any zone; --repo
                         <path> picks the repo it works in, task by task.
   send <ref> [--] <message>
                         Send an agent its next message, once its turn has ended. Also, from
@@ -283,6 +285,9 @@ ORCHESTRATING
                         End an agent's session. --remove deletes it with its worktree and
                         branch: only an agent you started (any, from a shell), with nothing
                         unsaved.
+  close <ref…> --remove --ask [--timeout <duration>]
+                        Ask the user to remove agents you did not start: one Allow/Deny
+                        prompt for them all. Waits for the answer; nothing goes unless Allow.
   edge add <from> <to> --carries message|handover|json
                         Join two agents (or you) with an edge, marked as made by you.
   edge list             Every edge (as \`edges\`).
@@ -637,8 +642,10 @@ notification), until they open your session or you run \`needs-you --clear\`. Fl
 replaces the reason.
 
 An agent an orchestrator started flags that orchestrator instead, never the user: the reason is
-typed at its prompt once its turn ends, and \`agent-board send\` from it clears the flag. An
-orchestrator that can't settle it passes it on to the user with --via, naming the crew member.
+typed at its prompt, waking it at once if it is there (between its check-ins too), else once its
+turn ends, with any other flags raised together in one message. \`agent-board send\` from it
+clears the flag. An orchestrator that can't settle it passes it on to the user with --via,
+naming the crew member.
 
 For a question with answers to pick from, use the MCP tool \`ask\`, which waits for the answer.
 
@@ -671,8 +678,9 @@ orchestrate.
 In a shell on the board (a shell tile, a tab, an ended agent's shell) or a terminal outside
 agent-board, the orchestrator commands act for the user, on any agent and in any zone, logged
 as that shell (or as you). The agents they start are the user's own.
---scope says where it may act:
-  zone    the agents in the zone its tile is in, and starting agents there (the default)
+Zones are only groups: it may start an agent in any zone, in any repo (--zone, --repo).
+--scope says which agents it didn't start it may act on:
+  zone    the agents in the zone its tile is in (the default)
   repo    the agents of its repo, in any zone of it
   board   any agent, in any zone
 It may always act on the agents it started, wherever they are, and never on itself. It may
@@ -685,6 +693,8 @@ runs under the permissions of the agent that gets it.
 arrange, edit, remove and close them as its own. An orchestrator hands over its own crew, or
 takes over one in its scope, no wider than its own, whose session has ended; either way the one
 that gets the crew must have every agent in it in its scope. From a shell, the user hands over any.
+A removed orchestrator's crew stays its own (\`orphanedFrom\` in \`ls --json\`) until one takes it
+over: name the removed one by its old ref or name.
 
 As an orchestrator, a loop of implementing and reviewing looks like this:
   agent-board new --name impl -- 'Fix the flaky login test. Commit on your branch, write
@@ -774,15 +784,15 @@ works in its own worktree and branch, as any agent does.
   new: {
     usage:
       'agent-board new [--zone <ref>] [--name <name>] [--harness claude|codex] [--model <model>] [--effort <level>] [--role <role>] ' +
-      '[--repo <path>] [--branch <branch>] [--base <branch or agent ref>] [--edges auto|manual] [--issue <id>] [--file <path>] [--] <prompt> | ' +
-      'new --prefab <name> [--zone <ref>] [--repo <path>] [--issue <id>] [--file <path>] [--] <prompt>',
+      '[--repo <path>] [--branch <branch>] [--base <branch or agent ref>] [--edges auto|manual] [--issue <id>] [--description <text>] [--file <path>] [--] <prompt> | ' +
+      'new --prefab <name> [--zone <ref>] [--repo <path>] [--issue <id>] [--description <text>] [--file <path>] [--] <prompt>',
     text: `Starts an agent with <prompt> (or the text of --file) as its first message, in a new worktree and
-branch of its zone's repo, as the user starts one. In a group (a zone with no repo), give it one
-with --repo, else it works in the group's default repo; with neither, in the group's own folder,
-outside git, with no worktree or branch. You must be an orchestrator, a shell, or outside
+branch of its zone's repo, as the user starts one; --repo starts it in another, in any zone. In a
+group (a zone with no repo) without --repo, it works in the group's default repo; with neither, in
+the group's own folder, outside git, with no worktree or branch. You must be an orchestrator, a shell, or outside
 agent-board: see \`agent-board help orchestrate\`. It prints the new agent's ref.
 
-  --zone <ref>       A zone in your scope; your own by default (needed outside agent-board).
+  --zone <ref>       Any zone; your own by default (needed outside agent-board).
   --name <name>      Its tile's name; made from the prompt without.
   --harness <h>      claude (the default) or codex.
   --model <model>    The harness's model (opus, sonnet, haiku; gpt-5-codex, gpt-5); its default
@@ -797,20 +807,24 @@ agent-board: see \`agent-board help orchestrate\`. It prints the new agent's ref
                      \`agent-board roles\`), filled in, then <prompt>; a name with neither starts
                      with <prompt> alone. A reviewer works on a detached checkout of --base,
                      the branch it reviews, with no branch of its own.
-  --repo <path>      In a group, the repo (or a folder in one) to cut its worktree from, for
-                     this task. Refused in a zone bound to a repo, whose agents work in it.
+  --repo <path>      The repo (or a folder in one) to cut its worktree from, for this task,
+                     whatever repo its zone has.
   --no-template      Start it without its role's template: its first message is exactly <prompt>
                      (and the issue, if --issue). For when you write the whole prompt.
   --branch <name>    Its new branch; made from its name without. Not for a reviewer.
   --edges auto|manual  Join a reviewer started on an agent's branch to that agent, both ways. None
                      without: they talk through agent-board send. auto hands the reviewer's findings
                      back by itself (the way back is manual); manual leaves both for the user to send.
-  --base <b>         The branch to cut it from, or an agent's ref (agent:9c1e, agent:impl) for
-                     that agent's branch, as for a reviewer of its work; the repo's HEAD without.
-                     In a group, an agent's ref takes its repo too, unless --repo names one.
+  --base <b>         The branch to cut it from (a remote's, origin/<branch>, is fetched and made
+                     local), or an agent's ref (agent:9c1e, agent:impl) for that agent's branch,
+                     as for a reviewer of its work; the repo's HEAD without. An agent's ref
+                     takes its repo too, unless --repo names one.
                      Refused when its project config (.claude, .mcp.json, .codex) differs
                      from HEAD's.
-  --issue <id>       An issue in the zone's tracker: it comes first in the prompt.
+  --issue <id>       An issue: it comes first in the prompt. Read from the zone's tracker, else
+                     from the tracker its key names, yours, or the one on the board.
+  --description <text>  What it is for: one line, cut to 80 characters, kept as its description
+                     from the start, as \`status set --description\` keeps it.
   --file <path>      Read the prompt from a file.
   --prefab <name>    Start a crew from a crew prefab (\`agent-board prefab ls\`) in place of one
                      agent: its member that starts on the prompt, its builder or its lead, gets
@@ -819,7 +833,7 @@ agent-board: see \`agent-board help orchestrate\`. It prints the new agent's ref
                      off, a fresh one each round, and their reviews go back to it, until each
                      approves or the round limit: see \`agent-board crew\`. A lead starts its
                      own crew, whose members count toward crew depth. Takes --zone, --repo,
-                     --issue and --file; the prefab sets the rest.
+                     --issue, --description and --file; the prefab sets the rest.
   --json             Print the agent as JSON.`,
   },
   prefab: {
@@ -1044,14 +1058,24 @@ conversation, as its tile's Wake does. Refused for an agent that is not paused.
   --json   Print the agent as JSON.`,
   },
   close: {
-    usage: 'agent-board close <ref> [--remove] [--json]',
+    usage: 'agent-board close <ref> [--remove] [--json] | close <ref…> --remove --ask [--timeout <duration>] [--json]',
     text: `Ends the agent's session, as the user stopping it would. Its tile, worktree and branch stay.
 
   --remove   Delete it with its worktree and branch instead: as an agent, only one you started,
              and never one with a reviewer the user started; in a shell, or outside
              agent-board, any. Never one with uncommitted changes or commits no other branch
              has.
-  --json     Print the agent as JSON.`,
+  --ask      With --remove, as an orchestrator: ask the user to remove agents in your scope that
+             you did not start. They get one Allow/Deny prompt for every ref you give, and
+             nothing goes unless they press Allow; one still running, or with an agent it
+             started still running, stays unless they tick it. Waits for the answer and says
+             what was removed and what stayed, and why.
+  --timeout  With --ask: how long to wait, such as 30m (30 minutes by default, 4h at most).
+             No answer by then removes nothing. Nor does the command ending first, or your
+             next turn beginning: the ask is withdrawn. So don't run it in the background,
+             where a message to you starts a new turn; if your shell gives up on a long
+             command, use the ask_to_remove tool, which waits as long as the ask does.
+  --json     Print the agent as JSON, or with --ask, what was removed and kept.`,
   },
   usage: {
     usage: 'agent-board usage [--json]',
@@ -1629,7 +1653,7 @@ outside agent-board, any.
   --template <name>  Start from a saved template.
   --from <ref>       The clock \`schedule template save\` saves.
   --fresh            Start a fresh agent each run instead.
-  --zone <ref>       A fresh agent's zone, in your scope.
+  --zone <ref>       A fresh agent's zone: any zone.
   --harness, --model, --role
                      A fresh agent's, as for \`agent-board new\`.
   --keep             Leave a fresh agent open once its run is over.
@@ -1808,6 +1832,7 @@ const OPTIONS = {
   count: { type: 'string' },
   done: { type: 'boolean' },
   remove: { type: 'boolean' },
+  ask: { type: 'boolean' },
   fresh: { type: 'boolean' },
   scope: { type: 'string' },
   of: { type: 'string' },
@@ -1890,7 +1915,7 @@ export const COMMAND_OPTIONS: Record<string, readonly Option[]> = {
   page: ['file', 'name', 'icon', 'clear'],
   'needs-you': ['via', 'clear'],
   doc: ['title', 'board', 'plan'],
-  new: ['zone', 'name', 'harness', 'model', 'effort', 'role', 'no-template', 'repo', 'branch', 'base', 'edges', 'issue', 'file', 'prefab'],
+  new: ['zone', 'name', 'harness', 'model', 'effort', 'role', 'no-template', 'repo', 'branch', 'base', 'edges', 'issue', 'file', 'prefab', 'description'],
   roles: ['file', 'zone'],
   prefab: ['out', 'add', 'replace'],
   crew: [],
@@ -1898,7 +1923,7 @@ export const COMMAND_OPTIONS: Record<string, readonly Option[]> = {
   wait: ['until', 'any', 'timeout', 'crew'],
   watch: ['crew', 'only', 'since', 'count', 'timeout'],
   restart: ['fresh', 'file'],
-  close: ['remove'],
+  close: ['remove', 'ask', 'timeout'],
   orchestrate: ['scope'],
   activity: ['of', 'limit'],
   handoff: ['to', 'message', 'handover', 'data'],
@@ -2124,7 +2149,7 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
       const prefab = string('prefab');
       if (prefab !== undefined) {
         const set = (['name', 'harness', 'model', 'effort', 'role', 'no-template', 'branch', 'base', 'edges'] as const).find((option) => values[option] !== undefined);
-        if (set !== undefined) throw new UsageError(`--${set} is the prefab's to set: --prefab takes --zone, --repo, --issue and --file`);
+        if (set !== undefined) throw new UsageError(`--${set} is the prefab's to set: --prefab takes --zone, --repo, --issue, --description and --file`);
         return async (session) =>
           print(
             await startPrefab(session, {
@@ -2133,6 +2158,7 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
               zone: string('zone'),
               repo: repo === undefined ? undefined : resolve(process.cwd(), repo),
               issue: string('issue'),
+              description: string('description'),
             }),
           );
       }
@@ -2152,6 +2178,7 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
             base: string('base'),
             edges: edgesOption(string('edges')),
             issue: string('issue'),
+            description: string('description'),
           }),
         );
     }
@@ -2260,7 +2287,13 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
       return async (session) => print(await wakeAgent(session, ref));
     }
     case 'close': {
-      const ref = oneRef();
+      if (values.ask === true) {
+        if (values.remove !== true) throw new UsageError('--ask asks the user to remove agents: give it with --remove');
+        if (positionals.length === 0) throw new UsageError('give the agent refs to ask the user to remove');
+        const seconds = duration('timeout', MAX_ASK_WAIT_MS / 1000);
+        return async (session) => print(await askToRemove(session, positionals, seconds === undefined ? undefined : seconds * 1000));
+      }
+      const ref = oneRef(positionals.length > 1 ? 'close takes one agent ref; to ask the user to remove several, add --remove --ask' : undefined);
       return async (session) => print(await closeAgent(session, ref, values.remove === true));
     }
     case 'orchestrate': {

@@ -68,6 +68,7 @@ describe('the Captain', () => {
       zoneId: null,
       orchestrate: 'board',
       spawnedBy: null,
+      orphanedFrom: null,
       ownsWorktree: false,
       branch: '',
       harness: 'claude',

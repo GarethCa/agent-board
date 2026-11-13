@@ -5,6 +5,7 @@ import {
   DESIGN_IPC,
   TECHNICAL_IPC,
   DOCK_IPC,
+  MENU_BAR_IPC,
   MINIMISED_IPC,
   CAPTURE_IPC,
   CAPTURE_READS,
@@ -298,7 +299,10 @@ const api: AgentBoardApi = {
     resume: (sessionId) => invoke(AGENT_IPC.resume, sessionId),
     restart: (sessionId, force = false) => invoke(AGENT_IPC.restart, sessionId, force),
     decidePermission: (sessionId, requestId, decision) => invoke(AGENT_IPC.decidePermission, sessionId, requestId, decision),
+    decideRemove: (sessionId, askId, allow, include) => invoke(AGENT_IPC.decideRemove, sessionId, askId, allow, include),
     releasePermission: (sessionId, requestId) => invoke(AGENT_IPC.releasePermission, sessionId, requestId),
+    answerQuestion: (sessionId, requestId, index, answer) => invoke(AGENT_IPC.answerQuestion, sessionId, requestId, index, answer),
+    sendAnswers: (sessionId, requestId) => invoke(AGENT_IPC.sendAnswers, sessionId, requestId),
     link: (sessionId, issueId) => invoke(AGENT_IPC.link, sessionId, issueId),
     setSchedule: (sessionId, schedule) => invoke(AGENT_IPC.setSchedule, sessionId, schedule),
     markSeen: (sessionId) => invoke(AGENT_IPC.markSeen, sessionId),
@@ -404,6 +408,10 @@ const api: AgentBoardApi = {
   minimised: {
     report: (windows) => ipc.send(MINIMISED_IPC.report, windows),
     onRestore: (listener) => subscribe(MINIMISED_IPC.restore, listener),
+  },
+  menuBar: {
+    report: (state) => ipc.send(MENU_BAR_IPC.report, state),
+    onRun: (listener) => subscribe(MENU_BAR_IPC.run, listener),
   },
   setup: {
     check: (tool) => invoke(SETUP_IPC.check, tool),

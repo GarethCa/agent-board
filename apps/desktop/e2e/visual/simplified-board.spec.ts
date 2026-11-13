@@ -372,6 +372,10 @@ async function shootSimplifiedSessionWindow(scheme: 'light' | 'dark', appearance
     await expect(sessionWindow(window).getByTestId('chat-live')).toHaveAttribute('data-live', 'done');
     await pinRandomText(window);
     await pinChatTimes(window);
+    // Expand all and Collapse all always show by default: by the name, out of the controls that wait for hover.
+    const runs = sessionWindow(window).locator('.session-window-head > .session-window-chat-controls');
+    await expect(runs.getByRole('button', { name: 'Expand all' })).toBeVisible();
+    await expect(sessionWindow(window).getByTestId('session-window-controls').getByRole('button', { name: 'Expand all' })).toHaveCount(0);
     let restorePointer = await ignorePointer(window);
     await settle(window);
     await expect.soft(window.locator('body')).toHaveScreenshot(`${chatShot}.png`, SHOT);

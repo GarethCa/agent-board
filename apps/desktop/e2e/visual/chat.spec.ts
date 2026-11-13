@@ -7,6 +7,7 @@ import { RENDER_ARGS, RENDER_ENV, VIEWPORT, ignorePointer, pinFonts, pinRandomTe
 import { scratch } from '../scratch.ts';
 import { crowdedPanel, LONG } from '../master-helpers.ts';
 import { SHOT, needsBaselines, PACK_SHOTS, pinChatTimes } from './shared.ts';
+import { showTileParts } from '../settings-helpers.ts';
 
 test.use({ viewport: null });
 
@@ -83,6 +84,8 @@ for (const style of ['Cards', 'Timeline', 'Status line'] as const) {
         await box.fill('Ask permission');
         await box.press('Enter');
         await expect(chat.getByTestId('chat-live')).toHaveAttribute('data-live', 'permission', { timeout: TURN_MS });
+        // The pointer off the style button it pressed, so its tooltip, shown or not by the time of the shot, is not in it.
+        await window.mouse.move(VIEWPORT.width - 4, VIEWPORT.height / 2);
         await pinRandomText(window);
         await pinChatTimes(window);
         let restorePointer = await ignorePointer(window);
@@ -194,8 +197,8 @@ for (const theme of ['light', 'dark'] as const) {
   });
 }
 
-test("the dark theme: a review doc in its implementer's session window", async () => {
-  needsBaselines('dark-review-viewer');
+test("the dark theme: a review doc in its implementer's session window, then its chat with the chat's controls at the tab row's end, wide and narrow", async () => {
+  needsBaselines('dark-review-viewer', 'dark-review-tab-row', 'dark-review-tab-row-narrow');
   const { dir, repo, env } = scratch('review');
   const dataDir = tempDataDir();
   const { app, window } = await launch(
@@ -205,6 +208,7 @@ test("the dark theme: a review doc in its implementer's session window", async (
   );
   await listFinishedTurns(window);
   try {
+    await showTileParts(window, ['chips']);
     await window.setViewportSize(VIEWPORT);
     await window.emulateMedia({ colorScheme: 'dark' });
     await expect(window.locator('html')).toHaveAttribute('data-theme', 'dark');
@@ -217,14 +221,49 @@ test("the dark theme: a review doc in its implementer's session window", async (
     await tileAction(coder, 'Review its work', 'Review & gate');
     // The fake reviewer types its doc a word at a time.
     await expect(window.locator('[data-testid="agent-tile"][data-reviewer]')).toHaveAttribute('data-state', 'done', { timeout: 30_000 });
-    await coder.getByTestId('tile-review').click();
+    // The review chip can fold into +N on a crowded tile: open it from there.
+    const review = coder.getByTestId('tile-review');
+    await expect(review).toHaveCount(1);
+    if (await review.isVisible()) await review.click();
+    else {
+      await coder.getByTestId('tile-folded').click();
+      await window.getByTestId('tile-folded-row').filter({ hasText: /review/i }).first().click();
+    }
     const viewer = sessionWindow(window).getByTestId('review-viewer');
     await expect(viewer.getByTestId('review-verdict')).toContainText('Changes requested');
     await pinRandomText(window);
-    await ignorePointer(window);
+    let restorePointer = await ignorePointer(window);
     await settle(window);
     // A round's time is the clock's when it ran.
     await expect.soft(window.locator('body')).toHaveScreenshot('dark-review-viewer.png', { ...SHOT, mask: [viewer.locator('.review-round-when')] });
+    await restorePointer();
+
+    // The chat's controls sit at the tab row's end, hidden with the chat on the Review tab, and not in the header or the strip.
+    const win = sessionWindow(window);
+    const tabRow = win.locator('.session-window-tab-row');
+    await expect(tabRow.getByRole('button', { name: 'Expand all' })).toBeHidden();
+    await win.getByRole('tab', { name: 'Terminal' }).click();
+    await win.getByRole('group', { name: 'View' }).getByRole('button', { name: 'Chat' }).click();
+    await expect(tabRow.getByRole('group', { name: 'Chat style' })).toBeVisible();
+    await expect(tabRow.getByRole('button', { name: 'Expand all' })).toBeVisible();
+    await expect(tabRow.getByRole('button', { name: 'Collapse all' })).toBeVisible();
+    for (const elsewhere of [win.locator('.session-window-head'), win.locator('.session-window-strip')]) {
+      await expect(elsewhere.getByRole('button', { name: 'Expand all' })).toHaveCount(0);
+    }
+    await pinRandomText(window);
+    await pinChatTimes(window);
+    restorePointer = await ignorePointer(window);
+    await settle(window);
+    await expect.soft(win).toHaveScreenshot('dark-review-tab-row.png', SHOT);
+    // Narrow, Expand all and Collapse all fold to their icons, which keep their names; the tabs keep their words.
+    // The window keeps a 24 px gutter each side: 612 px wide, under the tab row's 640 px fold.
+    await window.setViewportSize({ width: 660, height: VIEWPORT.height });
+    await expect(tabRow.getByText('Expand all', { exact: true })).toBeHidden();
+    await expect(tabRow.getByRole('button', { name: 'Expand all' })).toBeVisible();
+    await expect(win.getByRole('tab', { name: /Review · round/ })).toBeVisible();
+    await settle(window);
+    await expect.soft(win).toHaveScreenshot('dark-review-tab-row-narrow.png', SHOT);
+    await restorePointer();
   } finally {
     await app.close();
     await removeDataDir(dataDir);
@@ -238,6 +277,7 @@ test("an agent's sidebar: the document it showed, and a file, a link and a note 
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
   try {
+    await showTileParts(window, ['chips']);
     await useFullSidebar(window);
     await window.setViewportSize(VIEWPORT);
     await pinFonts(window);

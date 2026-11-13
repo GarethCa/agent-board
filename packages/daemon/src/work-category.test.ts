@@ -11,6 +11,7 @@ const agent = (patch: Partial<Agent>): Agent =>
     exitCode: null,
     permissions: [],
     ask: null,
+    removeAsk: null,
     plan: null,
     stepsWait: null,
     flag: null,

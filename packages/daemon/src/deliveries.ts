@@ -4,12 +4,22 @@ import { handoffLine } from './handoff-text.ts';
 import { refOf } from './crew-flags.ts';
 import { markSender } from './sender-marker.ts';
 import { invalidParams } from './params.ts';
-import { questionPrompt, type Agent, type Harness } from './protocol.ts';
+import { questionPrompt, type Agent, type Harness, type PermissionPrompt } from './protocol.ts';
 import type { RunStart } from './schedules.ts';
 import { CONTINUE, readRateLimitScreen } from './rate-limit-screen.ts';
 import { answerInput, draftAfterInput, oneLine, pastePieces, promptRows, submittedText } from './terminal-input.ts';
 import { cutText } from './text-cut.ts';
 import type { SendTrail } from './send-log.ts';
+
+/**
+ * Why nothing is typed at an agent whose question dialog is up, and where to answer it: on the board too only while the
+ * board can still answer it (its answers unsent, its hook held), else only in its terminal.
+ */
+function askingQuestions(name: string, prompt: PermissionPrompt): string {
+  const { dialog } = prompt;
+  const onBoard = dialog !== null && dialog.sentAt === null && !dialog.keptOpen && prompt.heldUntil !== null;
+  return `${name} is asking you questions: answer them ${onBoard ? 'on the board or ' : ''}in its terminal`;
+}
 
 /**
  * How long the terminal must stay quiet after drawing the typed text for the harness to have taken it in, so Enter
@@ -427,7 +437,8 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
     if (endedAt !== null) return `${name} has ended`;
     if (options.promptNow(sessionId) !== 'moved-on') return undefined;
     if (state === 'needs-permission') return `${name} needs permission first`;
-    if (questionPrompt(agent) !== undefined) return `${name} is asking you questions: answer them in its terminal`;
+    const asking = questionPrompt(agent);
+    if (asking !== undefined) return askingQuestions(name, asking);
     // Its harness may show a menu of what to do about it, where Enter would pick one.
     if (state === 'rate-limited') return `${name} is rate-limited: answer it in its terminal, or Continue on credits`;
     // Claude asked for input (`agent_needs_input`): a question of its turn, or a dialog of its own, which Enter would answer.
@@ -570,7 +581,8 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
     // Its state says so while any permission prompt, its own or a subagent's, is pending.
     if (agent.state === 'needs-permission') throw invalidParams(`${agent.name} needs permission first`);
     // Claude's question dialog is up: typed keys would pick its answers, which only the user does.
-    if (questionPrompt(agent) !== undefined) throw invalidParams(`${agent.name} is asking you questions: answer them in its terminal`);
+    const asking = questionPrompt(agent);
+    if (asking !== undefined) throw invalidParams(askingQuestions(agent.name, asking));
     if (oneLine(text) === '') throw invalidParams('the answer must not be empty');
     // One with an image goes whole: a cut through its path would keep the harness from taking it as a dropped file.
     const line = paste ? answerInput(text, true) : inputFor(sessionId, answerInput(text));

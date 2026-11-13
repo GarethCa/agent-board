@@ -48,9 +48,11 @@ export interface ReviewHost {
   onExit(sessionId: string, resumable: boolean): void;
   /**
    * Deletes an agent with `remove`: first the reviewers of its rounds, telling every client, as `remove` would not; and
-   * after it, tells them of the rounds it reviewed, which no longer have their reviewer.
+   * after it, tells them of the rounds it reviewed, which no longer have their reviewer. The reviewers go `force`d, as
+   * the user's Delete takes them, unless `forceReviewers` is false: then one with unsaved work refuses, and the agent
+   * stays too.
    */
-  deleteAgent(sessionId: string, why: string, remove: () => Promise<null>): Promise<null>;
+  deleteAgent(sessionId: string, why: string, remove: () => Promise<null>, forceReviewers?: boolean): Promise<null>;
   handlers<Context>(): RpcHandlers<ReviewMethods, Context>;
 }
 
@@ -218,10 +220,10 @@ export function createReviewHost(options: ReviewHostOptions): ReviewHost {
       announce(row.id);
     },
 
-    async deleteAgent(sessionId, why, removeAgent) {
+    async deleteAgent(sessionId, why, removeAgent, forceReviewers = true) {
       for (const round of roundsOf(sessionId)) {
         if (round.reviewer !== null && agents.get(round.reviewer) !== undefined) {
-          await agents.delete(round.reviewer, `its implementer's delete for ${why}`, true);
+          await agents.delete(round.reviewer, `its implementer's delete for ${why}`, forceReviewers);
         }
       }
       const reviewed = (selectByReviewer.all(sessionId) as unknown as RoundRow[]).map((row) => row.id);

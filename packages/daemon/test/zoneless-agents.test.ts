@@ -251,9 +251,26 @@ describe('zone-less agents', () => {
     // An agent in the group takes its issues from it, its repo having no zone of its own.
     const linked = await client.call('agent.link', { sessionId: inGroup.sessionId, issueId: 'ACME-16' });
     expect(linked.issue?.id).toBe('ACME-16');
+    // A zone is only a group: named no zone to read it from, the one tracker on the board has it.
+    const unnamed = await client.call('agent.spawn', { zoneId: null, repo: { path: repo }, prompt: '', issueId: 'ACME-12', position: at, ...SIZE });
+    expect(unnamed).toMatchObject({ zoneId: null, issue: { id: 'ACME-12' }, branch: 'acme-12-spawn-agents-in-a-pty-3' });
+    // Named one with no tracker, it says so.
+    const plain = await client.call('zone.addUnbound', { name: 'Plain', x: 4000, y: 0 });
     await expect(
-      client.call('agent.spawn', { zoneId: null, repo: { path: repo }, prompt: '', issueId: 'ACME-12', position: at, ...SIZE }),
-    ).rejects.toMatchObject({ message: 'only a zone with a tracker starts agents from issues' });
+      client.call('agent.spawn', { zoneId: null, repo: { path: repo }, prompt: '', issueId: 'ACME-12', issueZoneId: plain.id, position: at, ...SIZE }),
+    ).rejects.toMatchObject({ message: 'Plain has no tracker to read issues from' });
+  });
+
+  it('start from an issue in a zone with no tracker, read from the tracker of the zone its team names', async () => {
+    const { client } = await agentDaemon();
+    await client.call('tracker.connect', { provider: 'linear', credential: LINEAR_KEY });
+    await client.call('zone.addUnbound', { name: 'Ops', tracker: { provider: 'linear', scope: 'OPS' }, ...at });
+    await client.call('zone.addUnbound', { name: 'Planning', tracker: { provider: 'linear', scope: 'ACME' }, x: 2000, y: 0 });
+    const web = await client.call('zone.add', { path: tempRepo('web'), name: 'web', x: 4000, y: 0 });
+
+    const agent = await client.call('agent.spawn', { zoneId: web.id, prompt: '', issueId: 'ACME-12', ...SIZE });
+
+    expect(agent).toMatchObject({ zoneId: web.id, issue: { id: 'ACME-12' }, branch: 'acme-12-spawn-agents-in-a-pty' });
   });
 
   it('refuse to start with no repo to cut a worktree from', async () => {

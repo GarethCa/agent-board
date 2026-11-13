@@ -130,3 +130,22 @@ export function TileShowsSetting() {
     </Fieldset>
   );
 }
+
+/** Settings › Board › Agent tiles: whether the chat's Expand all and Collapse all always show, or only while the pointer is over the header or tab row they sit in. */
+export function ChatRunsShowSetting() {
+  const { chatRunsShow } = useViewSettings();
+  return (
+    <Fieldset legend="Expand all and Collapse all show">
+      <Segmented
+        aria-label="Expand all and Collapse all show"
+        options={[
+          { id: 'always', label: 'Always' },
+          { id: 'hover', label: 'On hover' },
+        ]}
+        value={chatRunsShow}
+        onChange={(value) => setViewSetting('chatRunsShow', value)}
+      />
+      <Hint>In an agent&apos;s window and its expanded tile, while the chat shows. On hover, they wait until the pointer is over the header or tab row that holds them.</Hint>
+    </Fieldset>
+  );
+}

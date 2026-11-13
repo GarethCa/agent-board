@@ -37,12 +37,13 @@ describe('statusAfterTurn', () => {
 });
 
 describe('isWorking', () => {
-  const live = { endedAt: null, ask: null, plan: null };
+  const live = { endedAt: null, ask: null, removeAsk: null, plan: null };
   it('is true mid-turn and for a call waiting on the user, false at the prompt or once ended', () => {
     expect(isWorking({ ...live, state: 'running' })).toBe(true);
     expect(isWorking({ ...live, state: 'waiting', ask: {} as never })).toBe(true);
+    expect(isWorking({ ...live, state: 'waiting', removeAsk: {} as never })).toBe(true);
     expect(isWorking({ ...live, state: 'waiting' })).toBe(false);
     expect(isWorking({ ...live, state: 'idle' })).toBe(false);
-    expect(isWorking({ endedAt: 'x', ask: null, plan: null, state: 'running' })).toBe(false);
+    expect(isWorking({ endedAt: 'x', ask: null, removeAsk: null, plan: null, state: 'running' })).toBe(false);
   });
 });

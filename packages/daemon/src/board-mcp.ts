@@ -10,6 +10,7 @@ import {
   BoardError,
   askUser,
   BoardRefs,
+  askToRemove,
   closeAgent,
   handOver,
   pauseAgent,
@@ -117,6 +118,7 @@ import {
   MAX_PIN_LABEL,
   MAX_PIN_NOTE,
   MAX_ASK_WAIT_MS,
+  MAX_REMOVE_ASK_TILES,
   MAX_OPTION_LENGTH,
   MAX_PLAN_TITLE_LENGTH,
   MAX_MEMORY_KEY,
@@ -176,7 +178,8 @@ export const ORCHESTRATOR_INSTRUCTIONS =
   'as two auto edges in a loop re-trigger each other. Keep your crew\'s tile lines current ' +
   'with `set_status` and `agent`: what each agent is doing now, as its work moves on. A crew member\'s `needs_you` comes ' +
   'to you, typed at your prompt, and so do its `ask` questions and plans (`show_doc` with `plan`, written in its ' +
-  'worktree, for `read`): answer it with `send`, which clears its flag, or pass it on to the user with `needs_you` ' +
+  'worktree, for `read`). It wakes you at once if you are at your prompt, between check-ins too, or comes as your turn ' +
+  'ends; flags raised together come as one message. Answer it with `send`, which clears its flag, or pass it on to the user with `needs_you` ' +
   'and `via`. Only its permission prompts reach the user directly. When your crew has room, `queue_update` take the next ' +
   "item from your zone's queue, and mark it done when it is.";
 
@@ -392,8 +395,8 @@ export const BOARD_MCP_TOOLS: Tool[] = [
     name: 'needs_you',
     description:
       'Ask for a look, without a question: when you are blocked, your work is ready for review, or you need a decision. ' +
-      'It lists you in the user\'s Needs you with your reason (or, if an orchestrator started you, tells that one), and ' +
-      'nothing waits. A turn ending alone tells no one. Opening your session clears it; so does clear. As ' +
+      'It lists you in the user\'s Needs you with your reason (or, if an orchestrator started you, tells that one, ' +
+      'waking it at once if it is at its prompt, else as its turn ends), and nothing waits. A turn ending alone tells no one. Opening your session clears it; so does clear. As ' +
       '`agent-board needs-you`.',
     inputSchema: {
       type: 'object',
@@ -891,8 +894,8 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
   {
     name: 'new_agent',
     description:
-      'Start an agent with a prompt as its first message, in its own worktree and branch, in a zone in your scope (yours ' +
-      'by default). Returns its ref. A prompt may not start with ! or a /command (a plugin\'s /plugin:command is ' +
+      'Start an agent with a prompt as its first message, in its own worktree and branch, in any zone (yours by default) ' +
+      'and any repo. Returns its ref. A prompt may not start with ! or a /command (a plugin\'s /plugin:command is ' +
       'fine), nor hold a control character. As `agent-board new`.',
     inputSchema: {
       type: 'object',
@@ -925,24 +928,28 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
         repo: {
           type: 'string',
           description:
-            "In a group (a zone with no repo), the absolute path of the repo, or a folder in one, to cut its worktree from: the group's default repo without, else the group's own folder, outside git. Refused in a zone bound to a repo.",
+            "The absolute path of the repo, or a folder in one, to cut its worktree from, whatever repo its zone has. Without, the zone's repo; in a group (a zone with no repo), its default repo, else the group's own folder, outside git.",
         },
         branch: { type: 'string', description: 'Its new branch; made from its name by default. Not for a reviewer.' },
-        base: { type: 'string', description: "The branch to cut it from (a reviewer's to review), or an agent ref for that agent's branch (and, in a group, its repo, unless repo names one)." },
+        base: { type: 'string', description: "The branch to cut it from (a reviewer's to review; a remote's, origin/<branch>, is fetched and made local), or an agent ref for that agent's branch (and its repo, unless repo names one)." },
         edges: {
           type: 'string',
           enum: ['auto', 'manual'],
           description:
             "Join a reviewer started on an agent's branch to that agent. None without: they talk through send. auto hands the reviewer's findings back by itself (the way back is manual); manual leaves both for the user to send.",
         },
-        issue: { type: 'string', description: "An issue in the zone's tracker, which comes first in its prompt." },
+        issue: { type: 'string', description: "An issue, which comes first in its prompt: read from the zone's tracker, else from the tracker its key names, yours, or the one on the board." },
+        description: {
+          type: 'string',
+          description: `What it is for, kept as its description from the start ("Builds the morning overview window"): one line, cut to ${MAX_PURPOSE_LENGTH} characters. As \`status set --description\`.`,
+        },
         prefab: {
           type: 'string',
           description:
             'Start a crew from this crew prefab (as `agent-board prefab ls` lists them) in place of one agent: its member ' +
             'that starts on the prompt, its builder or its lead, gets the prompt, started as the prefab says. Its reviewers ' +
             'start on the builder\'s branch each time the builder hands off, and their reviews go back to it, until each approves ' +
-            'or the round limit (`agent-board crew`); a lead starts its own crew. Takes zone, repo and issue; the prefab sets the rest.',
+            'or the round limit (`agent-board crew`); a lead starts its own crew. Takes zone, repo, issue and description; the prefab sets the rest.',
         },
       },
       required: ['prompt'],
@@ -1446,7 +1453,7 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
     name: 'close',
     description:
       "End an agent's session, keeping its tile, worktree and branch; with remove, delete them too (only an agent you " +
-      'started, with nothing unsaved). As `agent-board close`.',
+      'started, with nothing unsaved: to remove others, use ask_to_remove). As `agent-board close`.',
     inputSchema: {
       type: 'object',
       properties: { agent: AGENT_REF, remove: { type: 'boolean' } },
@@ -1455,10 +1462,29 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
     },
   },
   {
+    name: 'ask_to_remove',
+    description:
+      'Ask the user to remove agents in your scope that you did not start, each with its tile, worktree and branch: ' +
+      'they get one Allow/Deny prompt for the whole list, and nothing goes unless they press Allow. One still running, ' +
+      'or with an agent it started still running, stays unless they tick it. Waits for the answer ' +
+      `(${DEFAULT_ASK_WAIT_MS / 60_000} minutes by default) and returns what was removed and what stayed, and why. ` +
+      'One ask at a time. As `agent-board close <ref…> --remove --ask`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agents: { type: 'array', items: AGENT_REF, minItems: 1, maxItems: MAX_REMOVE_ASK_TILES },
+        timeout_minutes: { type: 'integer', minimum: 1, maximum: MAX_ASK_WAIT_MS / 60_000, description: 'How long to wait for the answer. No answer by then removes nothing.' },
+      },
+      required: ['agents'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'handover',
     description:
       "Hand one orchestrator's crew, and what it made on the board, to another, which may then arrange, edit, remove and " +
       "close them: your own crew to an orchestrator in your scope, or take over one in your scope whose session has ended. " +
+      "`from` may be a removed orchestrator whose crew is still on the board (the crew's `orphanedFrom`). " +
       'As `agent-board orchestrate handover`.',
     inputSchema: {
       type: 'object',
@@ -1750,7 +1776,7 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
     const prefab = stringArg(args, 'prefab', true);
     if (prefab !== undefined) {
       const set = ['name', 'harness', 'model', 'effort', 'role', 'template', 'branch', 'base', 'edges'].find((key) => args[key] !== undefined);
-      if (set !== undefined) throw new BoardError(`${set} is the prefab's to set: with prefab, give zone, repo and issue alone`);
+      if (set !== undefined) throw new BoardError(`${set} is the prefab's to set: with prefab, give zone, repo, issue and description alone`);
       return (
         await startPrefab(session, {
           name: prefab,
@@ -1758,6 +1784,7 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
           zone: stringArg(args, 'zone', true),
           repo: stringArg(args, 'repo', true),
           issue: stringArg(args, 'issue', true),
+          description: stringArg(args, 'description', true),
         })
       ).text;
     }
@@ -1776,6 +1803,7 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
         base: stringArg(args, 'base', true),
         edges: edgesArg(args),
         issue: stringArg(args, 'issue', true),
+        description: stringArg(args, 'description', true),
       })
     ).text;
   },
@@ -1833,6 +1861,11 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
   wake: async (session, args) => (await wakeAgent(session, stringArg(args, 'agent'))).text,
   handover: async (session, args) => (await handOver(session, stringArg(args, 'from'), stringArg(args, 'to'))).text,
   close: async (session, args) => (await closeAgent(session, stringArg(args, 'agent'), args.remove === true)).text,
+  ask_to_remove: async (session, { agents, timeout_minutes: minutes }) => {
+    if (!Array.isArray(agents) || agents.length === 0 || !agents.every((ref) => typeof ref === 'string')) throw new BoardError('agents must be a list of agent refs');
+    if (minutes !== undefined && (!Number.isInteger(minutes) || (minutes as number) < 1)) throw new BoardError('timeout_minutes must be a whole number of minutes');
+    return (await askToRemove(session, agents as string[], minutes === undefined ? undefined : (minutes as number) * 60_000)).text;
+  },
   handoff: async (session, args) =>
     (
       await handOff(session, {

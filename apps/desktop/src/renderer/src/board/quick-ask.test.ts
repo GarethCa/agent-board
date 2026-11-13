@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { AgentAsk, AskAnswer } from '@agent-board/daemon/protocol';
-import { answerText, askTitle, chipWords, firstOpen, nextAfter, quickAskOf } from './quick-ask';
+import type { AgentAsk, AskAnswer, PermissionPrompt } from '@agent-board/daemon/protocol';
+import { answerText, askTitle, chipWords, dialogAsk, dialogStatus, firstOpen, nextAfter, quickAskOf, tileDialogOf, type DialogPrompt } from './quick-ask';
 
 const QUESTIONS = [
   { question: 'Where should the rate limiter live?', options: ['Gateway', 'Each service'], freeText: false },
@@ -54,5 +54,57 @@ describe('the quick ask on a tile', () => {
     expect(chipWords(ask())).toBe('3 questions');
     expect(chipWords({ questions: [QUESTIONS[0]!], answers: [null] })).toBe('1 question');
     expect(askTitle('impl-2', ask())).toBe('impl-2 asks: Where should the rate limiter live? (3 questions)');
+  });
+});
+
+describe("Claude's question dialog in the quick ask", () => {
+  const CLAUDE_QUESTIONS = [
+    { question: 'Which cache?', header: 'Cache', options: [{ label: 'Redis', description: 'Shared across nodes' }, { label: 'In memory', description: '' }], multiSelect: false },
+    { question: 'Which pages?', header: 'Scope', options: [{ label: 'Product', description: '' }, { label: 'Category', description: '' }, { label: 'Search', description: '' }], multiSelect: true },
+  ];
+  const prompt = (fields: Partial<PermissionPrompt> = {}): PermissionPrompt => ({
+    id: 'q',
+    toolName: 'AskUserQuestion',
+    toolInput: { questions: CLAUDE_QUESTIONS },
+    subagent: null,
+    requestedAt: '',
+    heldUntil: '2026-11-12T10:00:00.000Z',
+    asksInTerminal: true,
+    sessionGrant: null,
+    questions: CLAUDE_QUESTIONS,
+    dialog: { answers: [null, null], sentAt: null, keptOpen: false },
+    plan: null,
+    ...fields,
+  });
+  const bash: PermissionPrompt = { ...prompt(), id: 'p', toolName: 'Bash', questions: null, dialog: null };
+
+  it('draws its questions with their headers, descriptions, tick boxes where it takes several, and Other as words', () => {
+    const data = dialogAsk(prompt() as DialogPrompt);
+    expect(data.questions).toEqual([
+      { question: 'Which cache?', header: 'Cache', options: ['Redis', 'In memory'], descriptions: ['Shared across nodes', ''], multiSelect: false, freeText: true },
+      { question: 'Which pages?', header: 'Scope', options: ['Product', 'Category', 'Search'], descriptions: ['', '', ''], multiSelect: true, freeText: true },
+    ]);
+    expect(data.answers).toEqual([null, null]);
+  });
+
+  it('words several options in the question’s order, as Claude takes them', () => {
+    expect(answerText({ question: 'Which pages?', options: ['Product', 'Category', 'Search'], freeText: true }, { options: [2, 0] })).toBe('Product, Search');
+  });
+
+  it('is open to answer while held, sent once its answers went, kept open once Claude kept its dialog up, else for its terminal', () => {
+    expect(dialogStatus(prompt())).toBe('open');
+    expect(dialogStatus(prompt({ heldUntil: null, dialog: { answers: [{ option: 0 }, { options: [0] }], sentAt: '2026-11-12T10:00:00.000Z', keptOpen: false } }))).toBe('sent');
+    expect(dialogStatus(prompt({ heldUntil: null, dialog: { answers: [{ option: 0 }, { options: [0] }], sentAt: '2026-11-12T10:00:00.000Z', keptOpen: true } }))).toBe('kept-open');
+    // A subagent's, or one whose questions couldn't all be read: no dialog kept. Its hold over: only its terminal now.
+    expect(dialogStatus(prompt({ dialog: null }))).toBe('terminal');
+    expect(dialogStatus(prompt({ heldUntil: null }))).toBe('terminal');
+    expect(dialogStatus(bash)).toBe('terminal');
+  });
+
+  it('opens from the tile’s chip once no permission comes first, and not where only its terminal can answer', () => {
+    expect(tileDialogOf({ permissions: [prompt()] })?.id).toBe('q');
+    expect(tileDialogOf({ permissions: [bash, prompt()] })).toBeUndefined();
+    expect(tileDialogOf({ permissions: [prompt({ dialog: null })] })).toBeUndefined();
+    expect(tileDialogOf({ permissions: [] })).toBeUndefined();
   });
 });

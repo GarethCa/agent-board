@@ -633,7 +633,7 @@ export function createClockHost(options: ClockHostOptions): ClockHost {
               const zoneId = optionalStringParam(p, 'zoneId') ?? me.zoneId;
               const zone = zones().find((each) => each.id === zoneId);
               if (zone === undefined) throw invalidParams(zoneId === null ? 'name the zone its fresh agents start in' : `no zone ${zoneId}`);
-              if (!access.reachesZone(me, zone)) throw outOfScope(`${zone.name} is outside your scope (${access.scopeText(me)})`);
+              // Zones are only groups: its fresh agents may start in any of them, as `orchestrator.spawn`'s do.
               // Beside the caller's own tile in that zone, else at the zone's top-left.
               const own = me.agent !== null && me.agent.zoneId === zone.id ? me.agent.sessionId : undefined;
               item = own === undefined ? await add({ ...data, agent: null }, { zoneId: zone.id, x: CLOCK_GAP, y: CLOCK_GAP }) : await add({ ...data, agent: null }, { beside: own });

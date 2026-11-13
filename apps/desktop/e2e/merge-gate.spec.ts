@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { agents, launch, sessionWindow, spawnAgent, tile, tileAction, TURN_MS, zoneNamed } from './agent-helpers.ts';
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
 import { scratch } from './scratch.ts';
+import { showTileParts } from './settings-helpers.ts';
 
 /** The fake gate command (fixtures/gate): its steps pass, fail or stream as its mode says. Never a repo's real checks. */
 const FAKE_GATE = fileURLToPath(new URL('../../../fixtures/gate/fake-gate.sh', import.meta.url));
@@ -40,6 +41,7 @@ test("an agent's merge gate: run in its worktree into a Gate tab, its failure se
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, { ...env, TMPDIR: dir, AGENT_BOARD_GH: github.gh, AGENT_BOARD_PULL_REQUEST_POLL_MS: '200' });
   try {
+    await showTileParts(window, ['chips']);
     await pickFolderNext(app, repo);
     await browseForZone(window);
 
@@ -168,6 +170,7 @@ test("someone else's pull request: the header offers Approve, at the commit show
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, { ...env, AGENT_BOARD_GH: github.gh, AGENT_BOARD_PULL_REQUEST_POLL_MS: '200' });
   try {
+    await showTileParts(window, ['chips']);
     await pickFolderNext(app, repo);
     await browseForZone(window);
     await spawnAgent(window, 'monorepo', 'Review the cart');

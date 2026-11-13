@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createPermissionHolds, permissionReply, promptCounts, questionsOf, stateWithPrompts } from '../src/permissions.ts';
-import { needsYouKind, type Agent } from '../src/protocol.ts';
+import { answerProblem, createPermissionHolds, permissionReply, promptCounts, questionsOf, stateWithPrompts } from '../src/permissions.ts';
+import { DIALOG_TAKE_MS, needsYouKind, type Agent } from '../src/protocol.ts';
 
 const BASH = { tool_name: 'Bash', tool_input: { command: 'rm -rf dist' } };
 const request = (fields: Record<string, unknown> = {}) => ({ hook_event_name: 'PermissionRequest', ...BASH, ...fields });
@@ -13,8 +13,14 @@ const T0 = new Date('2026-10-09T10:00:00.000Z');
 
 function holds() {
   const changed: string[] = [];
-  const permissions = createPermissionHolds({ holdMs: HOLD_MS, askingHoldMs: ASKING_HOLD_MS, onChange: (sessionId) => changed.push(sessionId) });
-  return { permissions, changed };
+  const dropped: string[] = [];
+  const permissions = createPermissionHolds({
+    holdMs: HOLD_MS,
+    askingHoldMs: ASKING_HOLD_MS,
+    onChange: (sessionId) => changed.push(sessionId),
+    onAnswersDropped: (sessionId) => dropped.push(sessionId),
+  });
+  return { permissions, changed, dropped };
 }
 
 const open = () => new AbortController().signal;
@@ -51,6 +57,8 @@ describe('permission holds', () => {
       asksInTerminal: false,
       sessionGrant: null,
       questions: null,
+      dialog: null,
+      plan: null,
     });
     expect(await settled(reply)).toBeUndefined();
 
@@ -322,25 +330,169 @@ describe("Claude's question tool", () => {
   });
   afterEach(() => vi.useRealTimers());
 
-  it('lists its call as questions, not a permission, and never holds it: its own dialog takes the answers', async () => {
+  it("lists its call as questions, not a permission, and holds it while Claude's own dialog asks too", async () => {
     const { permissions } = holds();
     const reply = permissions.hold('s1', askQuestion(), open(), true);
 
-    expect(await settled(reply)).toEqual({ value: undefined });
+    expect(await settled(reply)).toBeUndefined();
     const [prompt] = permissions.prompts('s1');
-    expect(prompt).toMatchObject({ toolName: 'AskUserQuestion', heldUntil: null, sessionGrant: null, questions: QUESTIONS });
+    expect(prompt).toMatchObject({
+      toolName: 'AskUserQuestion',
+      heldUntil: new Date(T0.getTime() + ASKING_HOLD_MS).toISOString(),
+      sessionGrant: null,
+      questions: QUESTIONS,
+      dialog: { answers: [null], sentAt: null, keptOpen: false },
+      plan: null,
+    });
     expect(promptCounts(permissions.prompts('s1'))).toEqual({ pending: 0, questions: 1 });
   });
 
-  it('can be neither allowed nor denied from the board', async () => {
+  it("never holds a subagent's, nor one whose questions can't all be read: only its terminal answers those", async () => {
     const { permissions } = holds();
-    void permissions.hold('s1', askQuestion(), open(), true);
+    expect(await settled(permissions.hold('s1', askQuestion(inSubagent('a1')), open(), false))).toEqual({ value: undefined });
+    const unreadable = askQuestion({ tool_input: { questions: [...QUESTIONS, { question: '' }] } });
+    expect(await settled(permissions.hold('s2', unreadable, open(), true))).toEqual({ value: undefined });
+    const noOptions = askQuestion({ tool_input: { questions: [{ question: 'Go?', options: [] }] } });
+    expect(await settled(permissions.hold('s3', noOptions, open(), true))).toEqual({ value: undefined });
+    for (const sessionId of ['s1', 's2', 's3']) expect(permissions.prompts(sessionId)).toEqual([expect.objectContaining({ heldUntil: null, dialog: null })]);
+  });
+
+  it('can be neither allowed nor denied from the board, only answered', async () => {
+    const { permissions } = holds();
+    const reply = permissions.hold('s1', askQuestion(), open(), true);
     const [prompt] = permissions.prompts('s1');
 
     expect(permissions.decide('s1', prompt!.id, { behavior: 'allow' })).toBe(false);
     expect(permissions.decide('s1', prompt!.id, { behavior: 'deny' })).toBe(false);
-    expect(permissions.release('s1', prompt!.id)).toBe(false);
+    expect(await settled(reply)).toBeUndefined();
     expect(permissions.prompts('s1')).toHaveLength(1);
+  });
+
+  it('keeps the answers on the prompt, sending nothing, until they are sent: then allows with them as its updatedInput', async () => {
+    const { permissions, changed } = holds();
+    const two = [QUESTIONS[0]!, { question: 'Which pages?', header: 'Scope', options: [{ label: 'Product', description: '' }, { label: 'Category', description: '' }, { label: 'Search', description: '' }], multiSelect: true }];
+    const reply = permissions.hold('s1', askQuestion({ tool_input: { questions: two } }), open(), true);
+    const id = permissions.prompts('s1')[0]!.id;
+
+    expect(permissions.sendAnswers('s1', id)).toBe(false);
+    expect(permissions.answerQuestion('s1', id, 0, { option: 0 })).toBe(true);
+    expect(permissions.answerQuestion('s1', id, 1, { options: [1, 0] })).toBe(true);
+    expect(permissions.prompts('s1')[0]!.dialog!.answers).toEqual([{ option: 0 }, { options: [1, 0] }]);
+    expect(await settled(reply)).toBeUndefined();
+
+    expect(permissions.sendAnswers('s1', id)).toBe(true);
+    expect(await reply).toEqual({
+      hookSpecificOutput: {
+        hookEventName: 'PermissionRequest',
+        decision: { behavior: 'allow', updatedInput: { questions: two, answers: { 'Which cache should the build use?': 'Redis', 'Which pages?': 'Product, Category' } } },
+      },
+    });
+    // Sent: it stays, no longer held, until its call runs.
+    expect(permissions.prompts('s1')).toEqual([expect.objectContaining({ id, heldUntil: null, dialog: { answers: [{ option: 0 }, { options: [1, 0] }], sentAt: T0.toISOString(), keptOpen: false } })]);
+    expect(permissions.answerQuestion('s1', id, 0, { option: 1 })).toBe(false);
+    expect(permissions.sendAnswers('s1', id)).toBe(false);
+    expect(changed).toEqual([]);
+  });
+
+  it("answers in the user's own words, and a cleared answer is unanswered again", async () => {
+    const { permissions } = holds();
+    const reply = permissions.hold('s1', askQuestion(), open(), true);
+    const id = permissions.prompts('s1')[0]!.id;
+    permissions.answerQuestion('s1', id, 0, { option: 1 });
+    permissions.answerQuestion('s1', id, 0, null);
+    expect(permissions.sendAnswers('s1', id)).toBe(false);
+    permissions.answerQuestion('s1', id, 0, { text: '  Memcached ' });
+    permissions.sendAnswers('s1', id);
+    expect(await reply).toMatchObject({ hookSpecificOutput: { decision: { updatedInput: { answers: { 'Which cache should the build use?': 'Memcached' } } } } });
+  });
+
+  it("says Claude kept its dialog open once its call hasn't run a while after the answers were sent, and settles as before once it runs", async () => {
+    const { permissions, changed } = holds();
+    void permissions.hold('s1', askQuestion(), open(), true);
+    const id = permissions.prompts('s1')[0]!.id;
+    permissions.answerQuestion('s1', id, 0, { option: 0 });
+    permissions.sendAnswers('s1', id);
+
+    await vi.advanceTimersByTimeAsync(DIALOG_TAKE_MS - 1);
+    expect(permissions.prompts('s1')[0]!.dialog!.keptOpen).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(permissions.prompts('s1')[0]!.dialog!.keptOpen).toBe(true);
+    expect(changed).toEqual(['s1']);
+
+    // Answered in its terminal after all, with the user's own pick.
+    expect(permissions.afterHook('s1', hook('PostToolUse', { tool_name: 'AskUserQuestion', tool_input: { questions: QUESTIONS, answers: { 'Which cache should the build use?': 'In memory' } } }))).toBe(true);
+    expect(permissions.prompts('s1')).toEqual([]);
+  });
+
+  it('tells when a call it sent answers to runs without them, and not when it runs with them or answered in its terminal', async () => {
+    const send = (permissions: ReturnType<typeof holds>['permissions']) => {
+      void permissions.hold('s1', askQuestion(), open(), true);
+      const id = permissions.prompts('s1')[0]!.id;
+      permissions.answerQuestion('s1', id, 0, { option: 0 });
+      permissions.sendAnswers('s1', id);
+    };
+    const ran = (answers: Record<string, string> | undefined, event = 'PostToolUse') =>
+      hook(event, { tool_name: 'AskUserQuestion', tool_input: answers === undefined ? { questions: QUESTIONS } : { questions: QUESTIONS, answers } });
+
+    const dropping = holds();
+    send(dropping.permissions);
+    expect(dropping.permissions.afterHook('s1', ran({}))).toBe(true);
+    expect(dropping.permissions.prompts('s1')).toEqual([]);
+    expect(dropping.dropped).toEqual(['s1']);
+
+    const taking = holds();
+    send(taking.permissions);
+    taking.permissions.afterHook('s1', ran({ 'Which cache should the build use?': 'Redis' }));
+    // The user's own answer, typed in the terminal before Claude took the board's.
+    send(taking.permissions);
+    taking.permissions.afterHook('s1', ran({ 'Which cache should the build use?': 'In memory' }));
+    // Never sent from the board: nothing of the board's was dropped.
+    void taking.permissions.hold('s1', askQuestion(), open(), true);
+    taking.permissions.afterHook('s1', ran(undefined));
+    // A failed call, or the turn ending, isn't the call running without them.
+    send(taking.permissions);
+    taking.permissions.afterHook('s1', ran({}, 'PostToolUseFailure'));
+    send(taking.permissions);
+    taking.permissions.afterHook('s1', hook('Stop'));
+    expect(taking.dropped).toEqual([]);
+  });
+
+  it('never says its dialog was kept open once its call ran in time', async () => {
+    const { permissions, changed } = holds();
+    void permissions.hold('s1', askQuestion(), open(), true);
+    const id = permissions.prompts('s1')[0]!.id;
+    permissions.answerQuestion('s1', id, 0, { option: 0 });
+    permissions.sendAnswers('s1', id);
+    permissions.afterHook('s1', hook('PostToolUse', { tool_name: 'AskUserQuestion', tool_input: { questions: QUESTIONS, answers: { 'Which cache should the build use?': 'Redis' } } }));
+    await vi.advanceTimersByTimeAsync(DIALOG_TAKE_MS);
+    expect(changed).toEqual([]);
+  });
+
+  it("refuses an answer for a prompt that is gone or was answered in its terminal, and for another prompt's id", async () => {
+    const { permissions } = holds();
+    void permissions.hold('s1', askQuestion(), open(), true);
+    const first = permissions.prompts('s1')[0]!.id;
+    permissions.afterHook('s1', hook('PostToolUse', { tool_name: 'AskUserQuestion', tool_input: { questions: QUESTIONS } }));
+    void permissions.hold('s1', askQuestion(), open(), true);
+
+    expect(permissions.answerQuestion('s1', first, 0, { option: 0 })).toBe(false);
+    expect(permissions.sendAnswers('s1', first)).toBe(false);
+    expect(permissions.prompts('s1')[0]!.dialog!.answers).toEqual([null]);
+  });
+
+  it('checks an answer against its question: an option it has, several only where it takes several, words not blank', () => {
+    const single = QUESTIONS[0]!;
+    const multi = { ...single, multiSelect: true };
+    expect(answerProblem(single, { option: 1 })).toBeUndefined();
+    expect(answerProblem(single, { option: 2 })).toMatch(/option/);
+    expect(answerProblem(single, { option: -1 })).toMatch(/option/);
+    expect(answerProblem(single, { options: [0] })).toMatch(/one/);
+    expect(answerProblem(multi, { options: [0, 1] })).toBeUndefined();
+    expect(answerProblem(multi, { options: [] })).toMatch(/option/);
+    expect(answerProblem(multi, { options: [0, 0] })).toMatch(/option/);
+    expect(answerProblem(multi, { option: 0 })).toBeUndefined();
+    expect(answerProblem(single, { text: '  ' })).toMatch(/words/);
+    expect(answerProblem(single, { text: 'Memcached' })).toBeUndefined();
   });
 
   it('is settled by its call running, whatever its input comes back with (its answers added), but not by another tool or asker', () => {
@@ -363,11 +515,50 @@ describe("Claude's question tool", () => {
   });
 
   it('puts the agent in Needs you as asking, not as asking for permission', () => {
-    const prompt = { id: 'q', toolName: 'AskUserQuestion', toolInput: { questions: QUESTIONS }, subagent: null, requestedAt: T0.toISOString(), heldUntil: null, asksInTerminal: true, sessionGrant: null, questions: QUESTIONS };
-    const agent: Pick<Agent, 'endedAt' | 'state' | 'permissions' | 'ask' | 'plan' | 'stepsWait' | 'flag' | 'ledBy'> = { endedAt: null, state: 'waiting', permissions: [prompt], ask: null, plan: null, stepsWait: null, flag: null, ledBy: null };
+    const prompt = { id: 'q', toolName: 'AskUserQuestion', toolInput: { questions: QUESTIONS }, subagent: null, requestedAt: T0.toISOString(), heldUntil: null, asksInTerminal: true, sessionGrant: null, questions: QUESTIONS, dialog: null, plan: null };
+    const agent: Pick<Agent, 'endedAt' | 'state' | 'permissions' | 'ask' | 'removeAsk' | 'plan' | 'stepsWait' | 'flag' | 'ledBy'> = { endedAt: null, state: 'waiting', permissions: [prompt], ask: null, removeAsk: null, plan: null, stepsWait: null, flag: null, ledBy: null };
 
     expect(needsYouKind(agent, 'explicit')).toBe('asks');
     expect(needsYouKind({ ...agent, permissions: [prompt, { ...prompt, id: 'p', toolName: 'Bash', questions: null }] }, 'explicit')).toBe('permission');
+  });
+});
+
+describe("Claude's plan tool", () => {
+  it('holds its call as a permission, with its plan to read and the switch to accept edits it offers', async () => {
+    const { permissions } = holds();
+    const plan = '# Add a cache\n\n1. Add a client';
+    const reply = permissions.hold('s1', request({ tool_name: 'ExitPlanMode', tool_input: { plan }, permission_suggestions: [{ type: 'setMode', mode: 'acceptEdits', destination: 'session' }] }), open(), true);
+    const [prompt] = permissions.prompts('s1');
+    expect(prompt).toMatchObject({ toolName: 'ExitPlanMode', plan, sessionGrant: 'all edits', questions: null, dialog: null });
+    expect(promptCounts(permissions.prompts('s1'))).toEqual({ pending: 1, questions: 0 });
+
+    expect(permissions.decide('s1', prompt!.id, { behavior: 'deny', message: 'Use the LRU first' })).toBe(true);
+    expect(await reply).toEqual(permissionReply({ behavior: 'deny', message: 'Use the LRU first' }));
+  });
+
+  it('approves it always saying the mode to go on in, whatever Claude suggested, so it never stays in plan mode', async () => {
+    const mode = (reply: unknown) => (reply as { hookSpecificOutput: { decision: { behavior: string; updatedPermissions?: unknown } } }).hookSpecificOutput.decision;
+    for (const suggestions of [[{ type: 'setMode', mode: 'acceptEdits', destination: 'session' }], [], undefined]) {
+      const { permissions } = holds();
+      const fields = { tool_name: 'ExitPlanMode', tool_input: { plan: '# Plan' }, ...(suggestions === undefined ? {} : { permission_suggestions: suggestions }) };
+      const auto = permissions.hold('s1', request(fields), open(), true);
+      const first = permissions.prompts('s1')[0]!;
+      // Auto-accept edits is offered whether or not Claude suggested it: the reply sets it.
+      expect(first.sessionGrant).toBe('all edits');
+      expect(permissions.decide('s1', first.id, { behavior: 'allow', scope: 'session' })).toBe(true);
+      expect(mode(await auto)).toEqual({ behavior: 'allow', updatedPermissions: [{ type: 'setMode', mode: 'acceptEdits', destination: 'session' }] });
+
+      const each = permissions.hold('s1', request(fields), open(), true);
+      expect(permissions.decide('s1', permissions.prompts('s1')[0]!.id, { behavior: 'allow' })).toBe(true);
+      expect(mode(await each)).toEqual({ behavior: 'allow', updatedPermissions: [{ type: 'setMode', mode: 'default', destination: 'session' }] });
+    }
+  });
+
+  it("has no plan to read where its input has none, nor for any other tool", () => {
+    const { permissions } = holds();
+    void permissions.hold('s1', request({ tool_name: 'ExitPlanMode', tool_input: {} }), open(), true);
+    void permissions.hold('s1', request({ tool_input: { plan: 'not a plan' } }), open(), true);
+    expect(permissions.prompts('s1').map((prompt) => prompt.plan)).toEqual([null, null]);
   });
 });
 

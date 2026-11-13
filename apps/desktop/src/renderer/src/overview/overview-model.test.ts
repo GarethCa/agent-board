@@ -19,6 +19,7 @@ const agent = (patch: Partial<Agent>): Agent =>
     ask: null,
     plan: null,
     stepsWait: null,
+    removeAsk: null,
     flag: null,
     ledBy: null,
     reviewOf: null,

@@ -1,5 +1,5 @@
 import { expect, type Page } from '@playwright/test';
-import { closeAgent, launch, listFinishedTurns, openSubmenu, tile, windowKey } from './agent-helpers.ts';
+import { closeAgent, launch, listFinishedTurns, openSubmenu, tile, tileGroup, windowKey } from './agent-helpers.ts';
 import { demoReady, scenarioPicker, seedBoard, stillBoard } from './demo-board.ts';
 import { removeDataDir, tempDataDir, test } from './launch.ts';
 import { RENDER_ARGS, RENDER_ENV, settle, VIEWPORT } from './render.ts';
@@ -82,7 +82,7 @@ test('a zone on status shelves: a stack per unit of work on its shelf, the lead 
     // By its bottom-right corner, clear of the board menu's island over the top-left of the view.
     const leadSize = (await lead.boundingBox())!;
     await lead.click({ button: 'right', position: { x: leadSize.width - 24, y: leadSize.height - 12 } });
-    await openSubmenu(page, 'Arrange');
+    await openSubmenu(page, tileGroup('Arrange'));
     // A lone tile has nothing to line up with: its Align is greyed, and says why.
     await expect(page.getByRole('menuitem', { name: /^Align/ })).toHaveAttribute('aria-disabled', 'true');
     await expect(page.getByRole('menuitem', { name: /^Align/ })).toContainText('Select two or more to line them up');

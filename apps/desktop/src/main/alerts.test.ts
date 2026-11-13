@@ -50,6 +50,7 @@ const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}
   permissions: [],
   ask: null,
   stepsWait: null,
+  removeAsk: null,
   plan: null,
   docs: [],
   schedule: null,
@@ -60,6 +61,7 @@ const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}
   plainFolder: false,
   orchestrate: null,
   spawnedBy: null,
+  orphanedFrom: null,
   ledBy: null,
   startup: null,
   hooksSilent: false,
@@ -87,7 +89,7 @@ const prompt: PermissionPrompt = {
   requestedAt: '2026-10-10T10:00:00.000Z',
   heldUntil: '2026-10-10T10:00:20.000Z',
   asksInTerminal: false,
-  sessionGrant: null, questions: null,
+  sessionGrant: null, dialog: null, plan: null, questions: null,
 };
 
 /** As before explicit requests: Needs you lists every finished turn too. */
@@ -336,6 +338,23 @@ describe('agent notifications for every finished turn too', () => {
     expect(notifications).toEqual([
       { sessionId: 'a', kind: 'asks', name: 'Agent a', title: 'Agent a asks you', ask: { askId: 'q1', question: 'Which cache should the product pages use?', options: ['Redis', 'CDN only'] }, body: 'Which cache should the product pages use? (Redis · CDN only)' },
       { sessionId: 'a', kind: 'plan', name: 'Agent a', title: 'Agent a has a plan to review', body: 'Cache product pages in Redis · v2' },
+    ]);
+  });
+
+  it("notifies once of an orchestrator's ask to remove tiles, naming the first few, with nothing to allow from the banner", () => {
+    const { alerts, notifications } = recorded();
+    alerts.reset([agent('m', 'running')]);
+    const tiles = ['docs', 'api', 'web', 'cli', 'ops'].map((name) => ({ sessionId: name, name, held: name === 'ops' ? 'still running' : null }));
+    const removeAsk = { id: 'r1', askedAt: '', expiresAt: '', tiles };
+
+    alerts.updated(agent('m', 'waiting', { removeAsk }));
+    alerts.updated(agent('m', 'waiting', { removeAsk }));
+    alerts.updated(agent('m', 'running'));
+    alerts.updated(agent('m', 'waiting', { removeAsk: { ...removeAsk, id: 'r2', tiles: tiles.slice(0, 1) } }));
+
+    expect(notifications).toEqual([
+      { sessionId: 'm', kind: 'asks', name: 'Agent m', title: 'Agent m asks to remove 5 tiles', body: 'docs, api, web and 2 more. Open it to allow or deny.' },
+      { sessionId: 'm', kind: 'asks', name: 'Agent m', title: 'Agent m asks to remove 1 tile', body: 'docs. Open it to allow or deny.' },
     ]);
   });
 

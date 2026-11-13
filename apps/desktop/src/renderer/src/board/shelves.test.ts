@@ -25,6 +25,7 @@ function agent(sessionId: string, fields: Partial<Agent> = {}): Agent {
     roleName: null,
     master: false,
     spawnedBy: null,
+    orphanedFrom: null,
     issue: null,
     state: 'running',
     endedAt: null,

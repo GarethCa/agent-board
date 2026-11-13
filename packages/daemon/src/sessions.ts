@@ -792,7 +792,7 @@ function lastScreenLine(model: xtermHeadless.Terminal): string | null {
 }
 
 /** The lines of `model`'s screen, top to bottom, box drawing taken out. */
-function visibleLines(model: xtermHeadless.Terminal): string[] {
+export function visibleLines(model: xtermHeadless.Terminal): string[] {
   const top = model.buffer.active.baseY;
   return Array.from({ length: model.rows }, (_, row) => lineText(model, top + row));
 }

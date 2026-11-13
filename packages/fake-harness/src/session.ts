@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
-import { runHooks, runStatusLine, permissionDecision, permissionUpdates, type HooksConfig, type HookRunOptions, type HookOutput } from './hooks.ts';
+import { runHooks, runStatusLine, permissionDecision, permissionUpdates, hookAnswers, denyMessage, type HooksConfig, type HookRunOptions, type HookOutput } from './hooks.ts';
 import { execFile, spawnSync } from 'node:child_process';
 import { McpClient, type McpServerConfig, type McpToolResult } from './mcp.ts';
 import type { HarnessName } from './paths.ts';
@@ -45,6 +45,26 @@ function ownClearKey(): void {
   const stty = (...settings: string[]) => spawnSync('stty', settings, { stdio: [process.stdin, 'ignore', 'ignore'] });
   stty('kill', 'undef');
   process.once('exit', () => stty('kill', '^U'));
+}
+
+/**
+ * Writes a start-up screen recorded from the real Claude Code (`fixtures/claude/tui/<name>.bin`) to the terminal, at
+ * the pace it was drawn: its `<name>.json` lists each chunk as `[ms from the start, offset it ends at]`. A recording
+ * without that list is written at once.
+ */
+async function replayStartupScreen(file: string): Promise<void> {
+  const bytes = readFileSync(file);
+  const sidecar = file.replace(/\.bin$/, '.json');
+  const chunks = existsSync(sidecar) ? ((JSON.parse(readFileSync(sidecar, 'utf8')) as { chunks?: [number, number][] }).chunks ?? []) : [];
+  const start = Date.now();
+  let from = 0;
+  for (const [at, end] of chunks) {
+    const wait = start + at - Date.now();
+    if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+    process.stdout.write(bytes.subarray(from, end));
+    from = end;
+  }
+  if (from < bytes.length) process.stdout.write(bytes.subarray(from));
 }
 
 /** Ctrl-U: clears the prompt's line up to the cursor. */
@@ -170,6 +190,9 @@ const MATCH_FIELD: Record<string, string> = {
 
 const SESSION_SCOPED = new Set(['SessionStart', 'SessionEnd']);
 
+/** Claude's tool that asks the user to approve its plan before it leaves plan mode. */
+export const PLAN_TOOL = 'ExitPlanMode';
+
 /** How long a session answered on its trust screen with `slow-prompt` shows a line of its own before its prompt. */
 const SLOW_PROMPT_MS = 1_000;
 /** How long a session answered on its trust screen with `slow-redraw` leaves it drawn after Enter. */
@@ -258,9 +281,17 @@ export class FakeSession {
   /** The MCP servers started so far. */
   private readonly mcpClients: Record<string, McpClient> = {};
 
-  /** The permission mode it was started in (`--permission-mode`), `default` without. */
+  /** Its permission mode now: the one it was started in (`--permission-mode`, `default` without) until a hook's allow sets another. */
+  private mode: string | undefined;
+
+  /** Its permission mode: the one it was started in (`--permission-mode`), `default` without, until a hook's allow sets one. */
   get permissionMode(): string {
-    return this.dialect.permissionMode;
+    return this.mode ?? this.dialect.permissionMode;
+  }
+
+  /** Goes into plan mode, as Claude is when it asks to approve a plan (`PLAN_TOOL`). */
+  enterPlanMode(): void {
+    this.mode = 'plan';
   }
 
   constructor(dialect: Dialect) {
@@ -300,10 +331,13 @@ export class FakeSession {
    * is drawn `SLOW_PROMPT_MS` after a line of its own; with `slow-redraw`, the trust screen stays drawn `SLOW_REDRAW_MS`
    * after Enter picks its yes row; with `stuck-pointer`, Down never moves its pointer. A Codex TUI draws its composer as it loads, then the startup
    * screen `FAKE_HARNESS_START_SCREEN` names (until Enter answers it), then its composer with its status line, and fires
-   * its `SessionStart` with its first prompt.
+   * its `SessionStart` with its first prompt. With `FAKE_HARNESS_STARTUP_SCREEN`, a new Claude session first writes that
+   * file's bytes to its terminal as they are, at the pace they were recorded: a start-up screen from the real Claude Code.
    */
   async start(): Promise<void> {
     const { harness, cwd, model, version, shellEnv } = this.dialect;
+    const recorded = process.env.FAKE_HARNESS_STARTUP_SCREEN ?? '';
+    if (recorded !== '' && harness === 'claude' && !this.resumed) await replayStartupScreen(recorded);
     if (this.dialect.demo) {
       quietTerminal();
       this.printLines(demo.welcome(harness, { cwd, model, version, home: shellEnv.HOME }));
@@ -484,7 +518,11 @@ export class FakeSession {
    * runs beside its own dialog, which draws each question with its numbered options, and a line typed at it is the
    * answer to them all (an option's number picks it; anything else is an "Other" answer in the user's words). The call
    * then runs with the answers added to its input, as Claude's `PostToolUse` carries them. A hook that allows it first
-   * runs it with no answers. Returns the answers, by question, or undefined if the session's input ended.
+   * answers it with its `updatedInput.answers`, as Claude's `canUseTool` does, or with none if it has none.
+   * `FAKE_HARNESS_QUESTIONS_KEEP_DIALOG=1`: the hook's answer is dropped and the dialog stays up for a typed line, as a
+   * Claude that took no answers from its hook would. `FAKE_HARNESS_QUESTIONS_DROP_ANSWERS=1`: the hook's allow closes
+   * the dialog but the call runs with no answers, as a Claude that took the allow and not its `updatedInput` would.
+   * Returns the answers, by question, or undefined if the session's input ended.
    */
   async askQuestions(questions: { question: string; header: string; options: { label: string; description: string }[]; multiSelect: boolean }[]): Promise<Record<string, string> | undefined> {
     const id = toolUseId();
@@ -498,13 +536,13 @@ export class FakeSession {
       this.printLines([`${header === '' ? '' : `[${header}] `}${question}`, ...options.map((option, index) => `  ${index + 1}. ${option.label}`), `  ${options.length + 1}. Other`]);
     }
     this.print('Answer: ');
-    const first = await this.hookOrLine(hook);
-    let answers: Record<string, string> = {};
+    const first = process.env.FAKE_HARNESS_QUESTIONS_KEEP_DIALOG === '1' ? { line: await this.readLine() } : await this.hookOrLine(hook);
+    let answers: Record<string, string>;
     if ('line' in first) {
       if (first.line === undefined) return undefined;
       const typed = first.line.trim();
       answers = Object.fromEntries(questions.map(({ question, options }) => [question, options[Number(typed) - 1]?.label ?? typed]));
-    }
+    } else answers = process.env.FAKE_HARNESS_QUESTIONS_DROP_ANSWERS === '1' ? {} : hookAnswers(first.outputs);
     const answered = { ...input, answers };
     const response = { questions, answers };
     this.dialect.transcript.toolResult(id, response, false);
@@ -1086,6 +1124,9 @@ export class FakeSession {
     }
   }
 
+  /** The message the last permission denied by a hook came with, which Claude tells its model. */
+  denyMessage: string | undefined;
+
   /** Tools the user allowed for the session (an allow carrying `updatedPermissions`), which are not asked about again. */
   private readonly allowedForSession = new Set<string>();
 
@@ -1094,7 +1135,8 @@ export class FakeSession {
     const fields: Record<string, unknown> = { ...inside, tool_name: name, tool_input: input };
     // Claude suggests the rule its "don't ask again" would add; `FAKE_HARNESS_PERMISSION_SUGGESTIONS=1` has the fake do too.
     if (this.dialect.permissionSuggestions) {
-      fields.permission_suggestions =
+      // Its plan dialog offers to accept edits from then on, as Claude's does.
+      fields.permission_suggestions = name === PLAN_TOOL ? [{ type: 'setMode', mode: 'acceptEdits', destination: 'session' }] :
         process.env.FAKE_HARNESS_PERMISSION_SUGGESTIONS === '1'
           ? [{ type: 'addRules', rules: [typeof input.command === 'string' ? { toolName: name, ruleContent: input.command } : { toolName: name }], behavior: 'allow', destination: 'localSettings' }]
           : [];
@@ -1108,7 +1150,13 @@ export class FakeSession {
     const first = alongside ? await this.hookOrLine(hook) : { outputs: await hook };
     if ('outputs' in first) {
       const decision = permissionDecision(first.outputs);
-      if (decision === 'allow' && permissionUpdates(first.outputs).some((update) => update.destination === 'session')) {
+      this.denyMessage = decision === 'deny' ? denyMessage(first.outputs) : undefined;
+      const setMode = decision === 'allow' ? permissionUpdates(first.outputs).find((update) => update.type === 'setMode' && typeof update.mode === 'string') : undefined;
+      // A `setMode` update switches its permission mode, as approving a plan does; a plain allow leaves it as it was.
+      if (setMode !== undefined) {
+        this.mode = setMode.mode;
+        if (setMode.mode === 'acceptEdits') this.print('  ⎿ Accepting edits\n');
+      } else if (decision === 'allow' && permissionUpdates(first.outputs).some((update) => update.destination === 'session')) {
         this.allowedForSession.add(name);
         this.print(`  ⎿ Allowed ${name} for the session\n`);
       }
@@ -1117,7 +1165,10 @@ export class FakeSession {
     }
     const answer = 'line' in first ? first.line : await this.readLine();
     if (answer === undefined) return false;
-    return this.dialect.demo ? demo.allowsInDemo(this.dialect.harness, answer) : /^y(es)?$/i.test(answer.trim());
+    const allowed = this.dialect.demo ? demo.allowsInDemo(this.dialect.harness, answer) : /^y(es)?$/i.test(answer.trim());
+    // Its plan dialog's yes leaves plan mode, approving each edit.
+    if (allowed && name === PLAN_TOOL && this.mode === 'plan') this.mode = 'default';
+    return allowed;
   }
 
   /** Draws the harness's own permission prompt, and tells its hooks so (Claude's `permission_prompt`). */
@@ -1160,7 +1211,7 @@ export class FakeSession {
       transcript_path: this.dialect.transcript.path,
       cwd: this.dialect.cwd,
     };
-    if (this.dialect.permissionModeEvents?.has(event) ?? true) payload.permission_mode = this.dialect.permissionMode;
+    if (this.dialect.permissionModeEvents?.has(event) ?? true) payload.permission_mode = this.permissionMode;
     payload.hook_event_name = event;
     if (this.dialect.modelAndTurnIdFields) {
       payload.model = this.dialect.model;

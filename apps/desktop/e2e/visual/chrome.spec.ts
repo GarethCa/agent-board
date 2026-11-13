@@ -6,7 +6,7 @@ import { agents, launch, listFinishedTurns, LONG_MODEL, narrowBy, pickInChip, sc
 import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone, newShell } from '../launch.ts';
 import { RENDER_ARGS, RENDER_ENV, VIEWPORT, ignorePointer, pinFonts, pinRandomText, settle } from '../render.ts';
 import { scratch } from '../scratch.ts';
-import { openSettings, settingsSection } from '../settings-helpers.ts';
+import { openSettings, settingsSection, showTileParts } from '../settings-helpers.ts';
 import { SETTINGS_GROUPS } from '../../src/renderer/src/chrome/settings-ia.ts';
 import { SHOT, needsBaselines, viewSettled } from './shared.ts';
 
@@ -115,6 +115,7 @@ test('a crowded tile at its narrowest, and New agent with a long model id: nothi
   const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
   await listFinishedTurns(window);
   try {
+    await showTileParts(window, ['chips']);
     await window.setViewportSize(VIEWPORT);
     await pinFonts(window);
     await pickFolderNext(app, repo);
@@ -155,6 +156,7 @@ test('a tile with model and role badges gains two PR chips, which stay while the
   const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0', AGENT_BOARD_GH: github.gh, AGENT_BOARD_PULL_REQUEST_POLL_MS: '200' }, RENDER_ARGS);
   await listFinishedTurns(window);
   try {
+    await showTileParts(window, ['chips']);
     await window.setViewportSize(VIEWPORT);
     await pinFonts(window);
     await pickFolderNext(app, repo);
@@ -193,7 +195,7 @@ test('a tile with model and role badges gains two PR chips, which stay while the
   }
 });
 
-test('a finished agent keeps the summary it set and shows no percentage from mid-turn', async () => {
+test('a finished agent says it finished, with what it is for under its name', async () => {
   needsBaselines('tile-finished-status');
   const { dir, repo, env } = scratch('board');
   const dataDir = tempDataDir();
@@ -207,13 +209,15 @@ test('a finished agent keeps the summary it set and shows no percentage from mid
     await browseForZone(window);
     await spawnAgent(window, 'monorepo', 'Look around');
     // Its turn over (its CLI calls take a turn's worth of time) it waits, its tile saying what it last said. Stopped, it
-    // shows what it set, with no percentage.
+    // says it finished.
     await expect(tile(window)).toHaveAttribute('data-state', 'waiting', { timeout: TURN_MS });
     await tile(window).getByRole('button', { name: 'Expand' }).click();
     const expanded = window.getByTestId('expanded-tile');
     await expanded.getByRole('navigation', { name: 'Session controls' }).getByRole('button', { name: 'Stop' }).click();
     await expanded.getByRole('button', { name: 'Collapse', exact: true }).click();
-    await expect(tile(window).getByTestId('tile-description')).toHaveText('Look around');
+    // What it is for stays under its name; its line says it finished.
+    await expect(tile(window).getByTestId('tile-about')).toHaveText('Look around');
+    await expect(tile(window).getByTestId('tile-description')).toHaveText('Finished');
     await pinRandomText(window);
     const restorePointer = await ignorePointer(window);
     await settle(window);

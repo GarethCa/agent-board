@@ -11,6 +11,7 @@ import { useNeedsYouShows } from '../needs-you-setting';
 import { UsageIsland } from './UsagePill';
 import { useUsageOnBoard } from './usage-on-board';
 import { keyText } from '../keys/registry';
+import { useMenuBarAction } from '../keys/menu-bar-bridge';
 import type { PaneSide } from '../master/use-master-panel';
 
 export interface NeedsYouProps {
@@ -42,6 +43,8 @@ export function NeedsYou({ agents, onOpen, onSettings, onMaster, onNeedsYou, pan
   const count = unseenCount(agents, useNeedsYouShows());
   const simplified = useSimplified();
   const [usageOnBoard] = useUsageOnBoard();
+  // Window › Needs You: the pill's pane, or under Classic its popover.
+  useMenuBarAction('needsYou', simplified ? onNeedsYou : () => setOpen((shown) => !shown));
   return (
     <Island className="needs-you island-top-right" data-tour="needs-you">
       {simplified && usageOnBoard && <UsageIsland separated />}

@@ -41,13 +41,13 @@ export function followExtendedShortcuts(): void {
   window.agentBoard.view.onChanged((key, saved) => key === VIEW_KEYS.extendedShortcuts && update(extendedShortcutsFrom(saved)));
 }
 
+/** Calls `listener` whenever the setting changes; returns the way to stop. */
+export function onExtendedShortcuts(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
 /** The setting, for a component that shows it or what it turns on. */
 export function useExtendedShortcuts(): boolean {
-  return useSyncExternalStore(
-    (listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    extendedShortcuts,
-  );
+  return useSyncExternalStore(onExtendedShortcuts, extendedShortcuts);
 }

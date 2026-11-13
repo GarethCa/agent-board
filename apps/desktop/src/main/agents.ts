@@ -2,7 +2,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { app, BrowserWindow, ipcMain } from 'electron';
 import { DaemonRpcError, type DaemonLink } from '@agent-board/daemon/client';
-import { AGENT_ERROR, type AgentRecordKind, type Effort, type AskSelectionParams, type PermissionDecision, type ScheduleSpec, type SpawnAgentParams, type StartMasterParams, type TileMove } from '@agent-board/daemon/protocol';
+import { AGENT_ERROR, type AgentRecordKind, type Effort, type AskSelectionParams, type PermissionDecision, type PromptAnswer, type ScheduleSpec, type SpawnAgentParams, type StartMasterParams, type TileMove } from '@agent-board/daemon/protocol';
 import { revealWindow } from './background';
 import { AGENT_IPC, type AgentStartsResetEvent, type DeleteAgentResult, type RestartAgentResult, type SpawnAgentResult } from '../preload/api';
 import { forwardEvents, sendToAllWindows } from './broadcast';
@@ -71,7 +71,10 @@ export function registerAgentIpc(daemon: DaemonLink, dataDir: string): void {
     }
   });
   passthroughVoid(daemon, AGENT_IPC.decidePermission, 'agent.decidePermission', (sessionId: string, requestId: string, decision: PermissionDecision) => ({ sessionId, requestId, ...decision }));
+  passthrough(daemon, AGENT_IPC.decideRemove, 'removeAsk.decide', (sessionId: string, askId: string, allow: boolean, include: string[]) => ({ sessionId, askId, allow, include }));
   passthroughVoid(daemon, AGENT_IPC.releasePermission, 'agent.releasePermission', (sessionId: string, requestId: string) => ({ sessionId, requestId }));
+  passthroughVoid(daemon, AGENT_IPC.answerQuestion, 'agent.answerQuestion', (sessionId: string, requestId: string, index: number, answer: PromptAnswer | null) => ({ sessionId, requestId, index, answer }));
+  passthroughVoid(daemon, AGENT_IPC.sendAnswers, 'agent.sendAnswers', (sessionId: string, requestId: string) => ({ sessionId, requestId }));
   passthrough(daemon, AGENT_IPC.link, 'agent.link', (sessionId: string, issueId: string | null) => ({ sessionId, issueId }));
   passthrough(daemon, AGENT_IPC.setSchedule, 'agent.setSchedule', (sessionId: string, schedule: ScheduleSpec | null) => ({ sessionId, schedule }));
   passthrough(daemon, AGENT_IPC.setName, 'agent.setName', (sessionId: string, name: string) => ({ sessionId, name }));

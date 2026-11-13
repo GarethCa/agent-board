@@ -7,7 +7,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { rmSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { centreOf, drag, settledBox, withDaemon } from './board-helpers.ts';
-import { launch, normalNewZones, setClickOpens, SHELL_ENV, showDetails, spawnAgent, tile, windowKey, useFullSidebar } from './agent-helpers.ts';
+import { launch, normalNewZones, setClickOpens, SHELL_ENV, showDetails, spawnAgent, tile, groupName, windowKey, useFullSidebar } from './agent-helpers.ts';
 import { test, addEmptyZone, classicOnly, browseForZone, connectedDaemonPid, pickFolderNext, removeDataDir, stopDaemon, tempDataDir, placeWithTool } from './launch.ts';
 import { scratch } from './scratch.ts';
 import { openSettings, settingsSection } from './settings-helpers.ts';
@@ -430,7 +430,7 @@ test('an agent is found by name from ⌘K, and its tile’s More menu works from
     await more.focus();
     await window.keyboard.press('Enter');
     const menu = window.getByRole('menu');
-    await expect(menu.getByRole('menuitem', { name: 'Settings' })).toBeVisible();
+    await expect(menu.getByRole('menuitem', { name: groupName('Settings') })).toBeVisible();
     await expect(menu.getByRole('menuitem', { name: 'Delete agent' })).toBeVisible();
     await window.keyboard.press('Escape');
     await expect(menu).toHaveCount(0);
@@ -438,7 +438,7 @@ test('an agent is found by name from ⌘K, and its tile’s More menu works from
 
     // Opened again from the keyboard, a pick does what it says.
     await window.keyboard.press('Enter');
-    await window.getByRole('menuitem', { name: 'Settings' }).focus();
+    await window.getByRole('menuitem', { name: groupName('Settings') }).focus();
     await window.keyboard.press('ArrowRight');
     await window.getByRole('menuitem', { name: 'Schedule…' }).focus();
     await window.keyboard.press('Enter');
@@ -459,14 +459,14 @@ test('hovering a tile moves nothing on it: its state stays at the bottom and its
     await addZone(app, window, repo);
     await spawnAgent(window, 'monorepo', 'Hold still');
     const card = tile(window);
-    const parts = [card.locator('.ui-pill'), card.locator('.hybrid-tile-name'), card.locator('.hybrid-tile-body')];
+    const parts = [card.getByTestId('tile-mark'), card.locator('.hybrid-tile-name'), card.locator('.hybrid-tile-body')];
     const corner = card.locator('.hybrid-tile-corner');
     const boxes = () => Promise.all(parts.map((part) => settledBox(part)));
 
     await window.mouse.move(0, 0);
-    // Its state settles first: the fake agent works, then waits, and the pill's label (so its width) follows.
+    // Its state settles first: the fake agent works, then waits, and the word (so its width) follows.
     await expect(card).toHaveAttribute('data-state', 'waiting');
-    await expect(card.locator('.ui-pill')).toHaveCount(1);
+    await expect(card.getByTestId('tile-mark')).toHaveCount(1);
     // Hidden at rest and shown on hover, keeping their room, so nothing moves.
     await expect(corner).toHaveCSS('opacity', '0');
     const before = await boxes();
@@ -475,8 +475,7 @@ test('hovering a tile moves nothing on it: its state stays at the bottom and its
     await expect(corner).toHaveCSS('opacity', '1');
     await expect(card.getByRole('button', { name: 'Expand' })).toBeVisible();
     await expect(card.getByRole('button', { name: 'More' })).toBeVisible();
-    await expect(card.locator('.ui-pill')).toHaveCount(1);
-    await expect(card.locator('.ui-pill')).toBeVisible();
+    await expect(card.getByTestId('tile-mark')).toBeVisible();
     // The same either way: its parts are where they were.
     expect(await boxes()).toEqual(before);
     // The corner is laid over the end of the head, so the name runs to the tile's edge under it.

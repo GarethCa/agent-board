@@ -16,6 +16,7 @@ const BASE: Omit<Agent, 'sessionId' | 'name' | 'zoneId'> = {
   ask: null,
   plan: null,
   stepsWait: null,
+  removeAsk: null,
   flag: null,
   ledBy: null,
   reviewOf: null,

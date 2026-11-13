@@ -55,6 +55,8 @@ describe('the Settings window’s groups', () => {
       'keepTerminals',
       // Added since: how an open to-do list looks.
       'todoLook',
+      // Added since: when the chat's Expand all / Collapse all show.
+      'chatRunsShow',
     ];
     const ids = SETTINGS_CONTROLS.map((control) => control.id);
     expect(new Set(ids).size).toBe(ids.length);

@@ -77,6 +77,8 @@ function ExpandedTileShown({ id, tile, parent }: TileProps & { parent: ExpandedP
   const [detailsCollapsed, setDetailsCollapsed] = useSidebarCollapsed(shelves, root, () => isNarrowTile(root.current?.offsetWidth ?? EXPANDED_SIZE.width));
   // Where in the header the shelves' window controls go: the state button and ⋯, which the strip holds otherwise.
   const [controlsSlot, setControlsSlot] = useState<HTMLElement | null>(null);
+  // Where the chat's controls go while it shows: the header, which has no tab row under it.
+  const [chatControlsSlot, setChatControlsSlot] = useState<HTMLElement | null>(null);
   const popOut = agent ? () => popOutAgent(agent) : shell ? () => popOutShell(shell) : undefined;
   // As its tile's ⋯ menu deletes it, asking the same first. An external session is only taken off the board.
   const remove = agent
@@ -121,6 +123,7 @@ function ExpandedTileShown({ id, tile, parent }: TileProps & { parent: ExpandedP
         {/* Its shelves hold the branch, issue and pull requests, as in its window: the header says them only while they are on the rail. */}
         {!(shelves && !detailsCollapsed) && <HeadFacts simplified={simplified} agent={agent} shell={shell} external={external} openLink={openLink} openPullRequest={openPullRequest} />}
         <span className="session-window-head-fill" />
+        {agent && <span className="session-window-chat-controls nodrag" ref={setChatControlsSlot} />}
         {shelves && <span className="session-window-shelf-controls nodrag" ref={setControlsSlot} />}
         {/* The Simplified header's toggle, as its window's: Classic's rail brings the shelves back by itself. */}
         {shelves && simplified && <DetailsToggle open={!detailsCollapsed} onOpen={(open) => setDetailsCollapsed(!open)} hideLabel="Hide the shelves" />}
@@ -142,7 +145,7 @@ function ExpandedTileShown({ id, tile, parent }: TileProps & { parent: ExpandedP
             terminal hidden
           </div>
         ) : content ? (
-          <SessionBody content={content} detailsCollapsed={detailsCollapsed} onDetailsCollapsed={setDetailsCollapsed} autoFocus={false} shelves={shelves} controlsSlot={controlsSlot} compactControls />
+          <SessionBody content={content} detailsCollapsed={detailsCollapsed} onDetailsCollapsed={setDetailsCollapsed} autoFocus={false} shelves={shelves} controlsSlot={controlsSlot} chatControlsSlot={chatControlsSlot} compactControls />
         ) : external ? (
           <ExternalBody session={external} detailsCollapsed={detailsCollapsed} onDetailsCollapsed={setDetailsCollapsed} />
         ) : null}

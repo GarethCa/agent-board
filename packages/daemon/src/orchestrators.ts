@@ -4,12 +4,12 @@
 import { closeSync, openSync, readSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import type { AgentHost } from './agents.ts';
+import type { AgentHost, RemovedOrchestrator } from './agents.ts';
 import type { Answered } from './deliveries.ts';
 import { agentTarget, boardCaller, sessionCaller, type ActivityLogger, type BoardCallerSources, type BoardConnection } from './board.ts';
 import type { FlowEdgeHost } from './flow-edges.ts';
 import { runGit } from './git.ts';
-import { checkedBranchName, noBranchWhy } from './worktrees.ts';
+import { checkedBranchName, localBaseBranch } from './worktrees.ts';
 import { createCrewEventLog, type LoggedEvent } from './crew-events.ts';
 import { refOf } from './crew-flags.ts';
 import { markSender, sendTrailer } from './sender-marker.ts';
@@ -20,6 +20,9 @@ import {
   BOARD_ERROR,
   CREW_EVENT_KINDS,
   DEFAULT_ACTIVITY_LIMIT,
+  DEFAULT_ASK_WAIT_MS,
+  MAX_ASK_WAIT_MS,
+  MAX_REMOVE_ASK_TILES,
   DEFAULT_ORCHESTRATOR_WAIT_MS,
   HARNESSES,
   isWaitState,
@@ -49,12 +52,16 @@ import {
   type OrchestratorActivity,
   type OrchestratorSent,
   type PullRequest,
+  type RemoveAskResult,
+  type RemoveAskTile,
   type SendDelivery,
   type WaitState,
   type Zone,
 } from './protocol.ts';
 import type { LayoutMethods } from './orchestrator-layout.ts';
 import { RpcMethodError, type RpcHandlers } from './rpc.ts';
+import { keptAll, type RemoveAskEnd, type RemoveAskStore } from './remove-asks.ts';
+import { isWorking } from './turn-status.ts';
 
 /** The orchestrator methods but the layout commands, which `orchestrator-layout.ts` handles. */
 type OrchestratorMethods = Omit<
@@ -111,6 +118,7 @@ const LOGGED_METHODS: Partial<Record<DaemonMethod, OrchestratorAction>> = {
   'orchestrator.pause': 'pause',
   'orchestrator.wake': 'wake',
   'orchestrator.close': 'close',
+  'orchestrator.askRemove': 'ask-remove',
   'orchestrator.handover': 'handover',
   'orchestrator.addEdge': 'add-edge',
   'orchestrator.removeEdge': 'remove-edge',
@@ -204,12 +212,17 @@ export interface OrchestratorHostOptions extends BoardCallerSources {
   db: DatabaseSync;
   agents: Pick<
     AgentHost,
-    'get' | 'list' | 'announce' | 'handCrew' | 'fallbackOwner' | 'spawn' | 'answer' | 'interrupt' | 'setEffort' | 'continueOnCredits' | 'resume' | 'stop' | 'pause' | 'finalMessage' | 'orchestrateFacts' | 'waitsAtPrompt' | 'setStatus' | 'clearFlag' | 'sendUnsent' | 'clearUnsent' | 'queueAfterTurn' | 'deliverAfterTurn'
+    'get' | 'list' | 'announce' | 'handCrew' | 'removedOrchestrator' | 'fallbackOwner' | 'spawn' | 'answer' | 'interrupt' | 'setEffort' | 'continueOnCredits' | 'resume' | 'stop' | 'pause' | 'finalMessage' | 'orchestrateFacts' | 'waitsAtPrompt' | 'setStatus' | 'clearFlag' | 'sendUnsent' | 'clearUnsent' | 'queueAfterTurn' | 'deliverAfterTurn'
   >;
   zones: () => Zone[];
   flowEdges: Pick<FlowEdgeHost, 'create' | 'get' | 'link' | 'remove'>;
-  /** Deletes the agent with its worktree and branch, as `agent.delete` without `force` does. */
-  deleteAgent(sessionId: string, why: string): Promise<void>;
+  /**
+   * Deletes the agent with its worktree and branch, as `agent.delete` without `force` does. Its reviewers go first,
+   * forced as the user's Delete takes them, unless `forceReviewers` is false: then one with unsaved work refuses it.
+   */
+  deleteAgent(sessionId: string, why: string, forceReviewers?: boolean): Promise<void>;
+  /** The remove asks orchestrators wait on the user for. */
+  removeAsks: Pick<RemoveAskStore, 'ask'>;
   /** How long an agent may answer a message from another: an hour by default. */
   replyWindowMs?: number;
   broadcast(event: DaemonEvent): void;
@@ -585,17 +598,129 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
   const takeOverRefusal = (me: Orchestrator, from: Agent): string | undefined => {
     if (from.endedAt === null) return `${from.name} is still running: it hands its crew over itself, or the user does`;
     if (!startedBy(me, from) && !SCOPES[me.orchestrate].agent(me, from)) return `${from.name} is outside your scope (${scopeText(me)}), and you did not start it`;
-    if (from.orchestrate !== null && SCOPE_RANK[from.orchestrate] > SCOPE_RANK[me.orchestrate]) {
-      return `${from.name} orchestrated with a scope wider than yours (${orchestrateScopeWords(from.orchestrate)}): only the user may hand its crew on`;
-    }
-    return undefined;
+    return widerScopeRefusal(me, from);
   };
+
+  /**
+   * Why `me` may not take over `from`'s crew for the scope `from` orchestrated at being wider than `me`'s, if it was.
+   * All a removed orchestrator is asked: it has no tile to be in scope or not, so a handover asks that of each agent of
+   * its crew instead.
+   */
+  const widerScopeRefusal = (me: Orchestrator, from: Pick<Agent | RemovedOrchestrator, 'name' | 'orchestrate'>): string | undefined =>
+    from.orchestrate !== null && SCOPE_RANK[from.orchestrate] > SCOPE_RANK[me.orchestrate]
+      ? `${from.name} orchestrated with a scope wider than yours (${orchestrateScopeWords(from.orchestrate)}): only the user may hand its crew on`
+      : undefined;
+
+  /** Whether a handover from `from` moves `agent`: one `from` started, on the board or removed since. */
+  const inCrewToHand = (agent: Agent, from: string): boolean => agent.spawnedBy === from || agent.orphanedFrom?.sessionId === from;
 
   /** The agent `sessionId` names, which `me` may look at. */
   const target = (me: Orchestrator, sessionId: string): Agent => {
     const agent = agentNamed(sessionId);
     checkTarget(me, agent);
     return agent;
+  };
+
+  /**
+   * Why `agent` is still running, or null: its session is live, and it is mid-turn, or at its prompt without having
+   * said its work is finished. A finished tile's session has ended, or it said it is done and came to rest.
+   */
+  const stillRunning = (agent: Agent): string | null => {
+    if (agent.endedAt !== null) return null;
+    if (isWorking(agent)) return 'still running: it is mid-turn';
+    if (agent.workFinishedAt === null || !(agent.state === 'idle' || agent.state === 'waiting')) return 'still running: its session is open and it has not said it is finished';
+    return null;
+  };
+
+  /**
+   * Why a remove ask holds `agent` back for itself, or null: it is still running, or an agent it started that `batch`
+   * leaves out is. `all` is the board's agents, listed once per ask or decision.
+   */
+  const ownHold = (agent: Agent, batch: ReadonlySet<string>, all: readonly Agent[]): string | null => {
+    const running = stillRunning(agent);
+    if (running !== null) return running;
+    const child = all.find((each) => each.spawnedBy === agent.sessionId && each.endedAt === null && !batch.has(each.sessionId));
+    return child === undefined ? null : `${child.name}, an agent it started, is still running`;
+  };
+
+  /**
+   * Why a remove ask holds `agent` back unless the user ticks it, or null: it is held for itself (`ownHold`),
+   * or a reviewer of it is. A Delete takes its reviewers first, so a reviewer `batch` leaves out would go with it, and
+   * one in `batch` held back may stay, which keeps `agent` too.
+   */
+  const heldBack = (agent: Agent, batch: ReadonlySet<string>, all: readonly Agent[]): string | null => {
+    const own = ownHold(agent, batch, all);
+    if (own !== null) return own;
+    for (const reviewer of all.filter((each) => each.reviewOf === agent.sessionId)) {
+      if (!batch.has(reviewer.sessionId)) return `its reviewer ${reviewer.name} would go with it`;
+      if (ownHold(reviewer, batch, all) !== null) return `its reviewer ${reviewer.name} is held back`;
+    }
+    return null;
+  };
+
+  /**
+   * What the user allowed of `requesterId`'s remove ask, removed: each tile checked again as it is now (still
+   * there, still in the requester's scope, and held back only if the user ticked it), then deleted as the user's own
+   * Delete takes it, never forced. Reviewers first, as a Delete of the tile they review would take them anyway. A tile
+   * whose reviewer in the ask stayed, stays: its Delete would take the reviewer the user kept. One whose reviewer the
+   * ask left out takes it along (the user ticked it, told so), unforced: a reviewer with unsaved work keeps them both.
+   */
+  const removeAllowed = async (requesterId: string, tiles: readonly RemoveAskTile[], end: RemoveAskEnd): Promise<RemoveAskResult> => {
+    if (end === null) return keptAll(tiles, 'denied', 'the ask was withdrawn before the user answered: the call waiting on it ended, or your next turn began');
+    if (end === 'timed-out') return keptAll(tiles, 'timed-out', 'no answer came');
+    if (!end.allow) return keptAll(tiles, 'denied', 'the user denied it');
+    // Checked as it is now: the user may have stopped it orchestrating, or narrowed its scope, while it waited.
+    const requester = agents.get(requesterId);
+    const scope = sessionCaller(options, requesterId)?.orchestrate ?? null;
+    if (requester === undefined || scope === null) return keptAll(tiles, 'allowed', 'the orchestrator may not orchestrate now');
+    const me: Orchestrator = { ...asOrchestrator(requester), orchestrate: scope };
+    const ticked = new Set(end.include);
+    const batch = new Set(tiles.map((tile) => tile.sessionId));
+    const all = agents.list();
+    const reviewersOf = new Map<string, Agent[]>();
+    for (const each of all) if (each.reviewOf != null) reviewersOf.set(each.reviewOf, [...(reviewersOf.get(each.reviewOf) ?? []), each]);
+    const reviews = new Set(all.filter((each) => each.reviewOf != null).map((each) => each.sessionId));
+    const result: RemoveAskResult = { outcome: 'allowed', removed: [], kept: [] };
+    const order = [...tiles].sort((a, b) => Number(reviews.has(b.sessionId)) - Number(reviews.has(a.sessionId)));
+    for (const tile of order) {
+      const agent = agents.get(tile.sessionId);
+      if (agent === undefined) {
+        result.kept.push({ sessionId: tile.sessionId, name: tile.name, why: 'it was gone already' });
+        continue;
+      }
+      const reviewers = (reviewersOf.get(agent.sessionId) ?? []).filter((reviewer) => agents.get(reviewer.sessionId) !== undefined);
+      const why = (() => {
+        try {
+          checkSteerable(me, agent);
+        } catch (error) {
+          return (error as Error).message;
+        }
+        const held = heldBack(agent, batch, all);
+        if (held !== null && !ticked.has(agent.sessionId)) return `held back: ${held}`;
+        const stays = reviewers.find((reviewer) => batch.has(reviewer.sessionId));
+        return stays === undefined ? undefined : `its reviewer ${stays.name} stays, and its Delete would take it`;
+      })();
+      if (why !== undefined) {
+        result.kept.push({ sessionId: agent.sessionId, name: agent.name, why });
+        continue;
+      }
+      try {
+        // Its reviewers unforced: one the ask left out goes with it only if it has no unsaved work.
+        await options.deleteAgent(agent.sessionId, `the user's remove, as orchestrator ${requester.name} asked (agent:${requester.sessionId})`, false);
+        result.removed.push({ sessionId: agent.sessionId, name: agent.name });
+        record(me, 'remove', { on: agentTarget(agent), detail: 'the user allowed it' });
+      } catch (error) {
+        result.kept.push({ sessionId: agent.sessionId, name: agent.name, why: (error as Error).message });
+      }
+      // A reviewer the ask left out goes first, so it may be gone even if the tile it reviews refused: say so either way.
+      for (const reviewer of reviewers) if (agents.get(reviewer.sessionId) === undefined) result.removed.push({ sessionId: reviewer.sessionId, name: reviewer.name });
+    }
+    // In the order asked, as the prompt listed them; a reviewer the ask left out, at the end.
+    const at = new Map(tiles.map((tile, index) => [tile.sessionId, index]));
+    const place = (sessionId: string) => at.get(sessionId) ?? tiles.length;
+    result.removed.sort((a, b) => place(a.sessionId) - place(b.sessionId));
+    result.kept.sort((a, b) => place(a.sessionId) - place(b.sessionId));
+    return result;
   };
 
   /**
@@ -651,29 +776,38 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
   };
 
   /**
-   * Throws unless `base` names a branch of the repo whose project config is the repo's HEAD's: an agent cut from it
-   * would otherwise run under settings the orchestrator chose. It is checked as `addWorktree` cuts it, by
-   * `refs/heads/<base>` alone (never a tag or another ref of that name), and reaches git only as a checked branch name
-   * after `--end-of-options`, so no name is ever read as an option. Anything git can't answer refuses the spawn.
+   * The repo's branch `base` names (a remote's made local first, as `localBaseBranch` does), when its
+   * project config is the repo's HEAD's; else throws: an agent cut from it would otherwise run under settings the
+   * orchestrator chose. It is checked as `addWorktree` cuts it, by `refs/heads/<branch>` alone (never a tag or another
+   * ref of that name), or, for a remote's, by `refs/remotes/<remote>/<branch>` before the local branch is made or moved
+   * there; and reaches git only as a checked branch name after `--end-of-options`, so no name is ever read as an option.
+   * Anything git can't answer refuses the spawn.
    */
-  const checkBaseConfig = async (repoRoot: string, base: string) => {
-    const name = await checkedBranchName(base).catch(() => {
+  const checkBaseConfig = async (repoRoot: string, base: string): Promise<string> => {
+    const asked = await checkedBranchName(base).catch(() => {
       throw invalidParams(`${JSON.stringify(base)} is not a branch name`);
     });
-    const ref = `refs/heads/${name}`;
-    if (!(await runGit(repoRoot, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])).ok) throw invalidParams(await noBranchWhy(repoRoot, name));
-    // A repo with no commits yet has no HEAD to compare with: against the empty tree, any project config differs.
-    const head = (await runGit(repoRoot, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'])).ok
-      ? 'HEAD'
-      : (await runGit(repoRoot, ['hash-object', '-t', 'tree', '/dev/null'])).stdout;
-    const diff = await runGit(repoRoot, ['diff', '--name-only', '--end-of-options', head, ref, '--', ...PROJECT_CONFIG_PATHS]);
-    if (!diff.ok) throw invalidParams(`could not compare ${name} with the repo's HEAD: ${diff.stderr.trim()}`);
-    if (diff.stdout.trim() !== '') {
-      throw outOfScope(
-        `${name}'s project config differs from the repo's HEAD (${diff.stdout.trim().split('\n').join(', ')}): an agent ` +
-          'started from it would run under settings you chose. Ask the user to start it.',
-      );
-    }
+    // The base's config is checked at the commit the branch will be at, before a branch of a remote is made or moved
+    // to it, so a refused base leaves the repo's branches as they were.
+    const sameConfigAsHead = async (ref: string, name: string) => {
+      // A repo with no commits yet has no HEAD to compare with: against the empty tree, any project config differs.
+      const head = (await runGit(repoRoot, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'])).ok
+        ? 'HEAD'
+        : (await runGit(repoRoot, ['hash-object', '-t', 'tree', '/dev/null'])).stdout;
+      const diff = await runGit(repoRoot, ['diff', '--name-only', '--end-of-options', head, ref, '--', ...PROJECT_CONFIG_PATHS]);
+      if (!diff.ok) throw invalidParams(`could not compare ${name} with the repo's HEAD: ${diff.stderr.trim()}`);
+      if (diff.stdout.trim() !== '') {
+        throw outOfScope(
+          `${name}'s project config differs from the repo's HEAD (${diff.stdout.trim().split('\n').join(', ')}): an agent ` +
+            'started from it would run under settings you chose. Ask the user to start it.',
+        );
+      }
+    };
+    const name = await localBaseBranch(repoRoot, asked, sameConfigAsHead).catch((error: unknown) => {
+      if (error instanceof RpcMethodError) throw error;
+      throw invalidParams(error instanceof Error ? error.message : String(error));
+    });
+    return name;
   };
 
   const notifyWaiters = () => {
@@ -798,7 +932,8 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
             if (me.agent !== null && agents.orchestrateFacts(me.agent.sessionId).depth >= MAX_CREW_DEPTH - 1) {
               throw outOfScope(`you are ${MAX_CREW_DEPTH} agents deep in a crew, as deep as a crew goes: ask the agent that started you to start it`);
             }
-            if (!SCOPES[me.orchestrate].zone(me, zone)) throw outOfScope(`${zone.name} is outside your scope (${scopeText(me)})`);
+            // Zones are logical groups: an orchestrator starts agents in any of them, and what it starts is its own
+            // to reach wherever it is. What it may do to agents it didn't start stays its scope's.
             // The Captain's lead in a zone whose switch is off could start no one: the user hears of it instead (ADR-0019).
             if (me.agent?.master === true && !zone.agentsOrchestrate && isOrchestratorRole(optionalStringParam(p, 'role') ?? null)) {
               throw invalidParams(
@@ -806,17 +941,17 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
               );
             }
             checkText(prompt);
-            // A group's agent works in the repo it is given; a bound zone's, in the zone's own.
+            // The agent works in the repo it is given, whatever zone it sits in; else in the zone's own.
             const repo = optionalStringParam(p, 'repo');
             if (repo !== undefined && !isAbsolute(repo)) throw invalidParams(`repo path must be absolute, got ${repo}`);
-            if (repo !== undefined && zone.repoRoot !== null) throw invalidParams(`${zone.name} is bound to its own repo: its agents work there`);
-            const baseBranch = optionalStringParam(p, 'baseBranch');
+            const askedBase = optionalStringParam(p, 'baseBranch');
             const edgesParam = p.edges === undefined ? undefined : oneOf(p, 'edges', ['auto', 'manual'] as const);
-            if (edgesParam !== undefined && baseBranch === undefined) throw invalidParams('--edges joins a reviewer to the agent whose branch it reviews: give --base');
+            if (edgesParam !== undefined && askedBase === undefined) throw invalidParams('--edges joins a reviewer to the agent whose branch it reviews: give --base');
             const repoRoot = repo ?? zone.repoRoot ?? zone.defaultRepo;
-            if (baseBranch !== undefined) {
+            let baseBranch: string | undefined;
+            if (askedBase !== undefined) {
               if (repoRoot === null) throw invalidParams(`${zone.name} has no repo to cut a branch from`);
-              await checkBaseConfig(repoRoot, baseBranch);
+              baseBranch = await checkBaseConfig(repoRoot, askedBase);
             }
             const used: { template: string | null } = { template: null };
             const agent = await agents.spawn(
@@ -833,6 +968,7 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
                 branch: optionalStringParam(p, 'branch'),
                 baseBranch,
                 issueId: optionalStringParam(p, 'issueId'),
+                purpose: optionalStringParam(p, 'description'),
                 prompt,
                 ...SPAWN_SIZE,
               },
@@ -1179,27 +1315,33 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
           const me = orchestrator('orchestrator.handover', p, connection);
           const entry: Entry = { detail: '' };
           return logged(me, 'handover', entry, () => {
-            const from = agentNamed(stringParam(p, 'from'));
+            // `from` may be an orchestrator since removed, whose crew is still on the board (`Agent.orphanedFrom`).
+            const fromId = stringParam(p, 'from');
+            const live = agents.get(fromId);
+            const removed = live === undefined ? agents.removedOrchestrator(fromId) : undefined;
+            const from = live ?? removed;
+            if (from === undefined) throw invalidParams(`no agent ${fromId}, and no removed orchestrator whose crew is still on the board`);
             const to = agentNamed(stringParam(p, 'to'));
             entry.on = agentTarget(from);
             entry.detail = `to ${to.name} (agent:${to.sessionId})`;
             if (from.sessionId === to.sessionId) throw invalidParams('give two different orchestrators');
             if (!mayOrchestrate(to.sessionId)) throw invalidParams(notOrchestrating(to.sessionId));
+            const fromDepth = removed === undefined ? agents.orchestrateFacts(from.sessionId).depth : removed.depth;
             // Never deeper: the crew it takes would sit below the cap it was started under.
-            if (agents.orchestrateFacts(to.sessionId).depth > agents.orchestrateFacts(from.sessionId).depth) {
+            if (agents.orchestrateFacts(to.sessionId).depth > fromDepth) {
               throw invalidParams(`${to.name} is deeper in a crew than ${from.name}: hand ${from.name}'s crew to an orchestrator no deeper than it`);
             }
             if (me.agent !== null) {
               const mine = me.agent.sessionId;
               if (mine === from.sessionId) checkTarget(me, to);
               else if (mine === to.sessionId) {
-                checkTarget(me, from);
-                const refusal = takeOverRefusal(me, from);
+                if (live !== undefined) checkTarget(me, live);
+                const refusal = live === undefined ? widerScopeRefusal(me, from) : takeOverRefusal(me, live);
                 if (refusal !== undefined) throw outOfScope(refusal);
               } else throw outOfScope('an orchestrator hands over only its own crew, or takes over one whose session has ended');
               // Each agent moved must be one `to` could steer from its own scope: a crew never carries it past its scope.
               const receiver = mine === to.sessionId ? me : asOrchestrator(to);
-              const beyond = agents.list().filter((agent) => agent.spawnedBy === from.sessionId && agent.sessionId !== to.sessionId && !steerableFrom(receiver, agent));
+              const beyond = agents.list().filter((agent) => inCrewToHand(agent, from.sessionId) && agent.sessionId !== to.sessionId && !steerableFrom(receiver, agent));
               if (beyond.length > 0) {
                 throw outOfScope(`${beyond.map((agent) => agent.name).join(', ')} ${beyond.length === 1 ? 'is' : 'are'} outside ${to.name}'s scope (${orchestrateScopeWords(receiver.orchestrate)}): only the user may hand this crew over`);
               }
@@ -1234,7 +1376,10 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
               return null;
             }
             if (!startedBy(me, agent)) {
-              throw outOfScope(`${agent.name} was not started by you: an orchestrator removes only an agent you started`);
+              throw outOfScope(
+                `${agent.name} was not started by you: an orchestrator removes only an agent you started. Ask the user to ` +
+                  'remove it instead (agent-board close <ref…> --remove --ask, or ask_to_remove): they allow or deny it.',
+              );
             }
             // Removing an agent removes its reviewers first, unasked: never one the user started.
             const reviewers = agents.list().filter((each) => each.reviewOf === agent.sessionId && !startedBy(me, each));
@@ -1246,6 +1391,36 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
             }
             await options.deleteAgent(agent.sessionId, actedBy(me, 'remove'));
             return null;
+          });
+        },
+
+        'orchestrator.askRemove': (params, connection) => {
+          const p = paramsObject(params);
+          const me = orchestrator('orchestrator.askRemove', p, connection);
+          const entry: Entry = { detail: '' };
+          let asked: Agent[] = [];
+          return logged(me, 'ask-remove', entry, async () => {
+            const timeoutMs = optionalCountParam(p, 'timeoutMs');
+            const ids = p.sessionIds;
+            if (!Array.isArray(ids) || !ids.every((id) => typeof id === 'string')) throw invalidParams('sessionIds must be a list of agent session ids');
+            entry.detail = `${ids.length} tile${ids.length === 1 ? '' : 's'}`;
+            // The user's side removes them itself, as the user does: there is no one else to ask.
+            if (me.agent === null) throw invalidParams('you act for the user: remove them with close --remove, which asks no one');
+            if (ids.length === 0) throw invalidParams('name at least one agent to remove');
+            if (ids.length > MAX_REMOVE_ASK_TILES) throw invalidParams(`ask to remove at most ${MAX_REMOVE_ASK_TILES} tiles at once; this names ${ids.length}`);
+            if (new Set(ids).size !== ids.length) throw invalidParams('name each agent once');
+            // Every tile in scope, or none is asked: an orchestrator never asks past its own scope.
+            asked = (ids as string[]).map(agentNamed);
+            for (const agent of asked) checkSteerable(me, agent);
+            if (asked.length === 1) entry.on = agentTarget(asked[0]!);
+            entry.detail = `${asked.map((agent) => agent.name).join(', ')}`;
+            const batch = new Set(asked.map((agent) => agent.sessionId));
+            const all = agents.list();
+            const tiles = asked.map((agent) => ({ sessionId: agent.sessionId, name: agent.name, held: heldBack(agent, batch, all) }));
+            const requester = me.agent;
+            const ms = Math.min(timeoutMs ?? DEFAULT_ASK_WAIT_MS, MAX_ASK_WAIT_MS);
+            const signal = connection.closed ?? new AbortController().signal;
+            return options.removeAsks.ask(requester.sessionId, tiles, ms, signal, (end) => removeAllowed(requester.sessionId, tiles, end));
           });
         },
 

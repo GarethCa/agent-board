@@ -26,7 +26,7 @@ const QUESTIONS: AgentAsk['questions'] = [
 ];
 const ASK: AgentAsk = { id: 'gallery-ask', question: QUESTIONS[0]!.question, options: QUESTIONS[0]!.options, freeText: false, askedAt: ago(3), expiresAt: ago(-27), onBoard: false, questions: QUESTIONS, answers: [{ option: 0 }, null, null], card: null };
 
-const agent = (sessionId: string, name: string, fields: Partial<Agent>): Agent => ({ ...galleryAgent('idle'), sessionId, name, permissions: [], ask: null, plan: null, flag: null, stepsWait: null, seen: false, ...fields });
+const agent = (sessionId: string, name: string, fields: Partial<Agent>): Agent => ({ ...galleryAgent('idle'), sessionId, name, permissions: [], ask: null, plan: null, flag: null, stepsWait: null, removeAsk: null, seen: false, ...fields });
 
 /** Needs you with a set to answer, a to-do waited on, and an ask of several questions, as the inbox lists them. */
 const AGENTS: Agent[] = [

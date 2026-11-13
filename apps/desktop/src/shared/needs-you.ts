@@ -1,5 +1,6 @@
 import { needsYouKind, needsYouNow, questionPrompt, type Agent, type AgentAsk, type AgentStepsWait, type NeedsYouKind, type NeedsYouShows, type PermissionPrompt, type PromptQuestion } from '@agent-board/daemon/protocol';
 import { isOpenPullRequest } from '@agent-board/daemon/gate-rules';
+import { planTitle } from './claude-plan';
 
 /** Longest tool summary shown; the full input is in the agent's terminal. */
 const MAX_SUMMARY_LENGTH = 300;
@@ -18,7 +19,7 @@ function askedSince(agent: Agent, kind: NeedsYouKind): string {
     case 'permission':
       return agent.permissions.map((prompt) => prompt.requestedAt).sort()[0] ?? agent.finishedAt ?? agent.createdAt;
     case 'asks':
-      return agent.ask?.askedAt ?? questionPrompt(agent)?.requestedAt ?? agent.createdAt;
+      return agent.ask?.askedAt ?? agent.removeAsk?.askedAt ?? questionPrompt(agent)?.requestedAt ?? agent.createdAt;
     case 'plan':
       return agent.plan!.presentedAt;
     case 'steps':
@@ -173,6 +174,7 @@ export function toolSummary(prompt: PermissionPrompt): string {
   const input = prompt.toolInput;
   let summary: string;
   if (prompt.questions !== null) summary = questionsLine(prompt.questions);
+  else if (prompt.plan !== null) summary = planTitle(prompt.plan);
   else if (input === null || input === undefined) summary = '';
   else if (typeof input === 'object' && 'command' in input && typeof input.command === 'string') summary = input.command;
   else if (typeof input === 'object' && 'file_path' in input && typeof input.file_path === 'string') summary = input.file_path;

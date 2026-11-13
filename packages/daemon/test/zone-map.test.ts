@@ -301,7 +301,7 @@ describe('a zone map', () => {
     expect(last(apart)).toBe('lint  check · no overlaps · widest gap 0 slots · 0 off-grid · 4 slots between lanes');
     // Beside a gap the widest gap already names, the label's is not said again.
     const stray = arrangedZone(crew, (thing) => (thing.key === 'item:issue:ACME-9-label' ? { ...thing, x: thing.x - 4 * GRID_COLUMN } : thing));
-    expect(last(stray)).toBe('lint  check · no overlaps · widest gap 4 slots · 0 off-grid');
+    expect(last(stray)).toBe('lint  check · no overlaps · widest gap 4 slots · 0 off-grid · 1 stranded (item:issue:ACME)');
     const past = arrangedZone(crew, (thing) => (thing.key === 'item:issue:ACME-9-label' ? { ...thing, x: thing.x + 5 * GRID_COLUMN } : thing));
     expect(last(past)).toMatch(/^lint {2}check · .* · label \d slots from its tiles$/);
     const roomy = { ...arrangedZone(crew), width: 4000, height: 3000 };
@@ -401,6 +401,32 @@ describe('a zone map', () => {
     const width = 32 + AGENT_TILE_SIZE.width + 32 + 2.6 * GRID_COLUMN;
     expect(spareSlots({ width, height: 480, things: [lead], spacing: 'roomy' }).columns).toBe(2);
     expect(spareSlots({ width, height: 480, things: [lead], spacing: 'normal' }).columns).toBe(3);
+  });
+
+  it('finds a lane label or note left away from its tiles: stranded', () => {
+    expect(arrangedZone(crew).stranded).toEqual([]);
+    expect(arrangedZone(crew, undefined, 'columns').stranded).toEqual([]);
+    // Every part moved to a column of its own far right of the crew, as an arrange by state that kept them left them.
+    const far = 12 * GRID_COLUMN;
+    const column = arrangedZone(crew, (thing) => (thing.key.startsWith('item:') ? { ...thing, x: far } : thing));
+    expect(column.stranded.sort()).toEqual(['item:issue:ACME-12-label', 'item:issue:ACME-12-note', 'item:issue:ACME-9-label', 'item:issue:ACME-9-note']);
+    expect(laneTable(column, 'zone:z', ref).split('\n').at(-1)).toMatch(/^lint {2}check · .* · 4 stranded \(item:issue:ACME, /);
+    // A label only a slot or two from its lane is far, not stranded: the label gap says so.
+    const near = arrangedZone(crew, (thing) => (thing.key === 'item:issue:ACME-9-label' ? { ...thing, x: thing.x - 2 * GRID_COLUMN } : thing));
+    expect(near.stranded).toEqual([]);
+  });
+
+  it('counts notes parked in a column beside the crew, one below the next, as kept in one place, not stranded', () => {
+    const map = arrangedZone(crew, (thing) => thing, 'rows', [], undefined, 'state');
+    const right = Math.max(...map.things.map((thing) => thing.x + thing.width));
+    const notes: ZoneMapThing[] = [0, 1, 2, 3].map((index) => ({ key: `item:parked-${index}`, itemKind: 'agent-note', name: 'note', state: null, x: right + GRID_COLUMN, y: 40 + index * ROW_STEP, ...AGENT_TILE_SIZE }));
+    const things = [...map.things, ...notes];
+    const parts = new Map(notes.map((note, index) => [`agent:gone-${index}#note`, note.key] as const));
+    const parked = buildZoneMap({ lanes: lanesOf(crew, []), things, parts, arrange: map.arrange });
+    expect(parked.stranded).toEqual([]);
+    // One left far below them all is.
+    const lost = { ...notes[3]!, y: 40 + 20 * ROW_STEP };
+    expect(buildZoneMap({ lanes: lanesOf(crew, []), things: [...map.things, ...notes.slice(0, 3), lost], parts, arrange: map.arrange }).stranded).toEqual([lost.key]);
   });
 
   it('says what is amiss on its lint line', () => {

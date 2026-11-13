@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { agents, launch, showTerminalView, sessionWindow, spawnAgent, tile, TURN_MS, windowKey } from './agent-helpers.ts';
 import { browseForZone, connectedDaemonPid, runDesign, launchApp, pickFolderNext, removeDataDir, tempDataDir, test, tabText } from './launch.ts';
 import { scratch } from './scratch.ts';
+import { showTileParts } from './settings-helpers.ts';
 
 const tabs = (page: Page) => sessionWindow(page).getByTestId('session-tab');
 const tabNamed = (page: Page, name: string) => tabs(page).filter({ has: page.getByRole('tab', { name, exact: true }) });
@@ -37,6 +38,8 @@ test("an agent's window opens shell tabs beside its run (⌘T, + menu, a package
   try {
     await pickFolderNext(app, repo);
     await browseForZone(window);
+    // The shells chip, with its list, is one of the chips a Classic tile drops at rest: its switch puts it back.
+    await showTileParts(window, ['chips']);
     await spawnAgent(window, 'monorepo', 'Pick a database');
     await expect(tile(window)).toHaveCount(1);
     await tile(window).dblclick();

@@ -21,7 +21,7 @@ describe('calmFace', () => {
   it('asks for permission in the tool’s own words, with one filled Review & allow', () => {
     const agent = working({
       state: 'needs-permission',
-      permissions: [{ id: 'p', toolName: 'Bash', toolInput: { command: 'rm -rf dist' }, subagent: null, requestedAt: AT, heldUntil: null, asksInTerminal: false, sessionGrant: null, questions: null }],
+      permissions: [{ id: 'p', toolName: 'Bash', toolInput: { command: 'rm -rf dist' }, subagent: null, requestedAt: AT, heldUntil: null, asksInTerminal: false, sessionGrant: null, dialog: null, plan: null, questions: null }],
     });
     expect(calmFace(agent, 'explicit')).toEqual({ status: 'needs-you', line: 'Bash: rm -rf dist', action: { kind: 'open', label: 'Review & allow', prominent: true } });
   });
@@ -32,13 +32,13 @@ describe('calmFace', () => {
   });
 
   it("shows Claude's question tool's questions, with a filled Answer rather than an allow", () => {
-    const agent = working({ state: 'waiting', permissions: [{ id: 'q', toolName: 'AskUserQuestion', toolInput: {}, subagent: null, requestedAt: AT, heldUntil: null, asksInTerminal: true, sessionGrant: null, questions: [{ question: 'Which cache?', header: 'Cache', options: [{ label: 'Redis', description: '' }, { label: 'In memory', description: '' }], multiSelect: false }] }] });
+    const agent = working({ state: 'waiting', permissions: [{ id: 'q', toolName: 'AskUserQuestion', toolInput: {}, subagent: null, requestedAt: AT, heldUntil: null, asksInTerminal: true, sessionGrant: null, dialog: null, plan: null, questions: [{ question: 'Which cache?', header: 'Cache', options: [{ label: 'Redis', description: '' }, { label: 'In memory', description: '' }], multiSelect: false }] }] });
     expect(calmFace(agent, 'explicit')).toEqual({ status: 'needs-you', line: 'Which cache? (Redis · In memory)', action: { kind: 'open', label: 'Answer', prominent: true } });
   });
 
   it('shows the permission, not the questions, when a subagent asks one beside its question tool', () => {
-    const questions = { id: 'q', toolName: 'AskUserQuestion', toolInput: {}, subagent: null, requestedAt: AT, heldUntil: null, asksInTerminal: true, sessionGrant: null, questions: [{ question: 'Which cache?', header: '', options: [], multiSelect: false }] };
-    const bash = { id: 'p', toolName: 'Bash', toolInput: { command: 'rm -rf dist' }, subagent: { id: 'a1', type: 'general-purpose' }, requestedAt: AT, heldUntil: null, asksInTerminal: false, sessionGrant: null, questions: null };
+    const questions = { id: 'q', toolName: 'AskUserQuestion', toolInput: {}, subagent: null, requestedAt: AT, heldUntil: null, asksInTerminal: true, sessionGrant: null, dialog: null, plan: null, questions: [{ question: 'Which cache?', header: '', options: [], multiSelect: false }] };
+    const bash = { id: 'p', toolName: 'Bash', toolInput: { command: 'rm -rf dist' }, subagent: { id: 'a1', type: 'general-purpose' }, requestedAt: AT, heldUntil: null, asksInTerminal: false, sessionGrant: null, dialog: null, plan: null, questions: null };
     const agent = working({ state: 'needs-permission', permissions: [questions, bash] });
     expect(calmFace(agent, 'explicit')).toEqual({ status: 'needs-you', line: 'Bash: rm -rf dist', action: { kind: 'open', label: 'Review & allow', prominent: true } });
   });

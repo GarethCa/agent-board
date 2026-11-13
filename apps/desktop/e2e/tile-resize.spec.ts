@@ -5,7 +5,7 @@ import { claudeInTerminal, launch, spawnAgent, tile } from './agent-helpers.ts';
 import { drag, settledBox } from './board-helpers.ts';
 import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone, connectedDaemonPid, launchApp, placeWithTool, stopDaemon } from './launch.ts';
 import { scratch } from './scratch.ts';
-import { openSettings, settingsSection } from './settings-helpers.ts';
+import { openSettings, settingsSection, showTileParts } from './settings-helpers.ts';
 
 async function addRepoZone(page: Page, app: Parameters<typeof pickFolderNext>[0], repo: string): Promise<void> {
   await pickFolderNext(app, repo);
@@ -24,7 +24,7 @@ async function expectInside(inner: Locator, outer: Locator, what: string): Promi
 
 const LONG_PROMPT = Array.from({ length: 40 }, (_, n) => `Line ${n + 1} of a very long prompt that goes on and on about the task`).join('\n');
 
-test('a 40-line prompt never pushes a tile’s branch or state pill off its bottom', async () => {
+test('a 40-line prompt never pushes what a tile is for or its state off its bottom', async () => {
   const { dir, repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env);
@@ -32,9 +32,9 @@ test('a 40-line prompt never pushes a tile’s branch or state pill off its bott
     await addRepoZone(window, app, repo);
     await spawnAgent(window, 'monorepo', LONG_PROMPT);
     await expect(tile(window)).toHaveCount(1);
-    await expectInside(tile(window).locator('.hybrid-tile-branch'), tile(window), 'branch');
+    await expectInside(tile(window).getByTestId('tile-about'), tile(window), 'what it is for');
     await expectInside(tile(window).locator('.hybrid-tile-footer'), tile(window), 'footer');
-    await expectInside(tile(window).locator('.hybrid-tile-footer .ui-status-pill, .hybrid-tile-footer [data-state]').last(), tile(window), 'state pill');
+    await expectInside(tile(window).getByTestId('tile-mark'), tile(window), 'its state');
     // Whatever the tile says in place of its task, waiting or not, stays inside it.
     await expectInside(tile(window).locator('.hybrid-tile-body').first(), tile(window), 'body');
   } finally {
@@ -74,6 +74,8 @@ test('a selected tile resizes from its handles, shows more of its task when bigg
   let { app, window } = await launch(dataDir, env);
   try {
     await addRepoZone(window, app, repo);
+    // Its task in full and its branch row, which the quiet tile leaves to its hover card.
+    await showTileParts(window, ['bubble', 'branchAlways']);
     await spawnAgent(window, 'monorepo', LONG_PROMPT);
     await expect(tile(window)).toHaveCount(1);
     const initial = await sizeOf(window);
@@ -149,7 +151,7 @@ async function toLeastSize(page: Page, of: Locator) {
 
 const LONG_COMMAND = Array.from({ length: 12 }, (_, n) => `echo step-${n + 1} && sleep 1`).join(' && ');
 
-test('what a waiting agent asks never pushes its branch or state pill off the tile, at the default and the least size', async () => {
+test('what a waiting agent asks never pushes its state off the tile, at the default and the least size, nor what it is for at the default', async () => {
   const { dir, repo, env } = scratch('long-permission');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env);
@@ -163,8 +165,10 @@ test('what a waiting agent asks never pushes its branch or state pill off the ti
     for (const [where, check] of [['default', async () => {}], ['least', async () => void (await toLeastSize(window, tile(window)))]] as const) {
       await check();
       const agentTile = tile(window);
-      await expectInside(agentTile.locator('.hybrid-tile-branch'), agentTile, `branch at the ${where} size`);
+      // What it is for gives way at the least size, before its question and footer do.
+      if (where === 'default') await expectInside(agentTile.getByTestId('tile-about'), agentTile, 'what it is for at the default size');
       await expectInside(agentTile.locator('.hybrid-tile-footer'), agentTile, `footer at the ${where} size`);
+      await expectInside(agentTile.getByTestId('tile-mark'), agentTile, `its state at the ${where} size`);
       // The ask never covers the footer: it is whole lines above it, or hidden when not one fits.
       const shown = await ask.evaluate((element) => getComputedStyle(element).visibility !== 'hidden');
       if (shown) {

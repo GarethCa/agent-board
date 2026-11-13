@@ -31,3 +31,22 @@ writer prints `ESC ] 8 ; ; <url> BEL`, the label in `blueBright` (`ESC [ 94 m â€
 screen renderer writes one such span per drawn segment, so each row of a wrapped address carries the whole URL. The file
 holds: an address with `[`, `]` and `'` in it, hard-wrapped over two rows; a labelled link to `http://example.com/docs`
 (which the terminal view may not open); and one whose address ends in `.`. Used by the terminal link e2e (`web-tab.spec.ts`).
+
+## Start-up screens
+
+`tui/`: what Claude Code draws as it starts, as raw terminal bytes, for the tests that read a new agent's screen
+(`packages/daemon/test/recorded-startup-screens.test.ts`, and the fake harness's `startupScreen`, which replays one).
+Each `<name>.bin` has a `<name>.json` beside it: the Claude Code `version`, the terminal size (`cols`, `rows`), what it
+shows (`screen`: `prompt` or `trust`), whether it was `recorded` from the real TUI, and `chunks`: each chunk's time in
+ms from the start and the byte offset it ends at, so the fake harness replays it at the pace it was drawn.
+
+They show what the screen looks like and how fast it settles. They don't show when Claude's hooks fire: a test that
+needs that sets the fake's own hook options.
+
+- `startup-<version>.bin` and `startup-<version>-trust.bin`: **recorded** from the real `claude` by
+  [`scripts/claude-capture/`](../../scripts/claude-capture/README.md), started with no prompt: its empty prompt in a
+  trusted folder, and its trust screen in a new one. Record them again when Claude Code updates.
+- `hand-built-prompt.bin` and `hand-built-trust.bin`: **hand-built** in the shapes Claude Code 2.1.312 draws, not
+  recorded: Ink-style frames inside synchronized-output marks, the banner, a first frame erased and drawn again, the
+  input box between two rules with its placeholder and a reverse-video cursor, and the footer; and the trust screen, its
+  pointer on `No, exit`.

@@ -4,11 +4,11 @@ import { viewMenu, type TechnicalItem } from './view-menu';
 
 const technical = (over: Partial<TechnicalItem> = {}): TechnicalItem => ({ simplified: false, on: false, set: vi.fn(), ...over });
 const items = (packaged: boolean, item = technical()) => viewMenu(packaged, item).submenu as MenuItemConstructorOptions[];
-const roles = (packaged: boolean) => items(packaged).map((item) => item.role);
+const roles = (packaged: boolean) => (items(packaged).find((item) => item.label === 'Developer')!.submenu as MenuItemConstructorOptions[]).map((item) => item.role);
 const showTechnical = (item: TechnicalItem) => items(true, item).find((entry) => entry.label === 'Show Technical Details')!;
 
 describe('the View menu', () => {
-  it('has Reload and Force Reload in a dev build', () => {
+  it('has Reload and Force Reload under Developer in a dev build', () => {
     expect(roles(false)).toEqual(expect.arrayContaining(['reload', 'forceReload', 'toggleDevTools']));
   });
 
@@ -16,6 +16,12 @@ describe('the View menu', () => {
     expect(roles(true)).not.toContain('reload');
     expect(roles(true)).not.toContain('forceReload');
     expect(roles(true)).toContain('toggleDevTools');
+  });
+
+  it('has no zoom roles and no keys for board zoom, as ⌘+ ⌘- ⌘0 are the terminal text’s', () => {
+    const list = items(true);
+    expect(list.map((item) => item.role)).not.toContain('zoomIn');
+    for (const label of ['Zoom In', 'Zoom Out', 'Zoom to Fit']) expect(list.find((item) => item.label === label)?.accelerator).toBeUndefined();
   });
 
   it('shows Show Technical Details, with no key of its own, only under the Simplified design', () => {

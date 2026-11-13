@@ -1,5 +1,7 @@
 import { expect, type Locator, type Page } from '@playwright/test';
 import { SETTINGS_GROUPS } from '../src/renderer/src/chrome/settings-ia.ts';
+import { PARTS_TO_TURN_ON, type TileShows } from '../src/renderer/src/board/tile-shows.ts';
+import { runDesign } from './launch.ts';
 
 /** Whether `page` is the Settings window's. */
 export const isSettingsWindow = (page: Page) => page.url().includes('settings=');
@@ -25,3 +27,20 @@ export async function openSettings(window: Page, pane?: string): Promise<Page> {
 
 /** A section of the Settings window's page, by its heading: "Notifications", "Plan usage". */
 export const settingsSection = (settings: Page, name: string): Locator => settings.getByRole('region', { name, exact: true });
+
+/**
+ * Turns `parts` of the Classic tile back on in Settings › Board › Agent tiles, then closes Settings, for a spec about a
+ * part the quiet tile leaves off (its chips, its pill, its bubble). The board hears the change as from another window.
+ */
+export async function showTileParts(window: Page, parts: (keyof TileShows)[]): Promise<void> {
+  // The Simplified tile has no such parts: its specs read it as it is.
+  if (runDesign() === 'simplified') return;
+  const settings = await openSettings(window, 'board.tiles');
+  const section = settingsSection(settings, 'Agent tiles');
+  for (const part of parts) {
+    const toggle = section.getByRole('switch', { name: PARTS_TO_TURN_ON.find((each) => each.part === part)!.label });
+    await toggle.click();
+    await expect(toggle).toBeChecked();
+  }
+  await settings.close();
+}

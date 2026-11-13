@@ -426,45 +426,35 @@ const LOOKS = [...THEME_SCOPES, ...SIMPLIFIED_SCOPES, ...SIMPLIFIED_PACK_SCOPES]
  */
 function hexOf(name: string, scope: string | string[] = ':root'): string {
   const stack = typeof scope === 'string' ? [scope] : scope;
-  return resolve(name, [...stack, ':root'], 0);
+  const value = resolve(name, [...stack, ':root'], 0);
+  if (!/^#[0-9a-f]{6}$/i.test(value)) throw new Error(`${name} is ${value}, not a six-digit hex colour or an alias of one`);
+  return value;
 }
 
 /** Scopes on the root element are one element: a var() there resolves against all of them together. */
 const onRoot = (selector: string) => selector.startsWith(':root');
 
+const channel = (hex: string, i: number) => parseInt(hex.slice(1 + i * 2, 3 + i * 2), 16);
+
 /**
- * `name` as the first scope from `from` outwards sets it. An alias resolves where it is declared, as CSS has it: its
- * target is looked up again from that element's own scopes, not from the nearest scope of the stack, so a scope on a child
- * element doesn't re-point an alias declared above it.
+ * `name` as the first scope from `from` outwards sets it, worked out where it can be: each var() in it, then a
+ * `color-mix(in srgb, #a n%, #b)` to its hex, or one with `transparent` to `#rrggbbaa`. Anything else (a shadow, a
+ * var() with a fallback) comes back as written with its var()s worked out. A var() resolves where it is declared, as
+ * CSS has it: its target is looked up again from that element's own scopes, not from the nearest scope of the stack,
+ * so a scope on a child element doesn't re-point an alias declared above it.
  */
 function resolve(name: string, stack: string[], from: number): string {
   const at = stack.findIndex((each, index) => index >= from && scopes.get(each)?.get(name) !== undefined);
   if (at < 0) throw new Error(`${name} is not defined`);
-  const value = scopes.get(stack[at]!)!.get(name)!;
-  const alias = /^var\((--[a-z0-9-]+)\)$/.exec(value.trim());
-  if (alias) {
-    let start = at;
-    while (start > from && onRoot(stack[start - 1]!) && onRoot(stack[at]!)) start--;
-    return resolve(alias[1]!, stack, start);
-  }
-  // color-mix(in srgb, A n%, B): each side a var() resolved where the mix is declared, or a hex.
-  const mix = /^color-mix\(in srgb, (var\(--[a-z0-9-]+\)|#[0-9a-f]{6}) (\d+)%, (var\(--[a-z0-9-]+\)|#[0-9a-f]{6})\)$/i.exec(value.trim());
-  if (mix) {
-    const side = (part: string) => {
-      const ref = /^var\((--[a-z0-9-]+)\)$/.exec(part);
-      if (!ref) return part;
-      let start = at;
-      while (start > from && onRoot(stack[start - 1]!) && onRoot(stack[at]!)) start--;
-      return resolve(ref[1]!, stack, start);
-    };
-    const [a, b] = [side(mix[1]!), side(mix[3]!)];
-    const share = Number(mix[2]) / 100;
-    const channel = (hex: string, i: number) => parseInt(hex.slice(1 + i * 2, 3 + i * 2), 16);
-    return `#${[0, 1, 2].map((i) => Math.round(channel(a, i) * share + channel(b, i) * (1 - share)).toString(16).padStart(2, '0')).join('')}`;
-  }
-  const hex = /^#[0-9a-f]{6}$/i.exec(value.trim());
-  if (!hex) throw new Error(`${name} is ${value}, not a six-digit hex colour or an alias of one`);
-  return hex[0];
+  let start = at;
+  while (start > from && onRoot(stack[start - 1]!) && onRoot(stack[at]!)) start--;
+  const value = scopes.get(stack[at]!)!.get(name)!.trim().replace(/var\((--[a-z0-9-]+)\)/g, (_, ref: string) => resolve(ref, stack, start));
+  const blend = /^color-mix\(in srgb, (#[0-9a-f]{6}) ([\d.]+)%, (#[0-9a-f]{6}|transparent)\)$/i.exec(value);
+  if (!blend) return value;
+  const [a, b, share] = [blend[1]!, blend[3]!, Number(blend[2]) / 100];
+  const hex = (n: number) => Math.round(n).toString(16).padStart(2, '0');
+  if (b === 'transparent') return `${a}${hex(share * 255)}`;
+  return `#${[0, 1, 2].map((i) => hex(channel(a, i) * share + channel(b, i) * (1 - share))).join('')}`;
 }
 
 /**
@@ -599,6 +589,35 @@ describe('themes', () => {
     await expect(css).toMatchFileSnapshot('./theme-packs.css');
   });
 
+  /*
+   * The palette each theme draws, on the board and on each surface that re-points its tokens: every colour
+   * token worked out as far as `resolve` can (aliases, opaque and `transparent` mixes). The visual baselines can't hold
+   * it: Playwright's per-pixel threshold passes a colour a few levels off (the grey note paper made beige by mistake is a
+   * YIQ difference of 4.4 where its default allows 1,408), and a threshold tight enough to catch that would fail on
+   * anti-aliasing (docs/theme-tokens.md, "Visual regression"). So a colour that moves fails here: the file names the
+   * theme and each key its surface and token. A change meant to move one updates the files with `vitest run -u`.
+   * A pack's entries repeat much of theme-packs.css's snapshot above; keep them, as a token a pack leaves unset falls
+   * through to the light theme's and only these files show it. The Simplified looks draw Classic's palette (above).
+   */
+  const SURFACES = [
+    ['window', [WINDOW]],
+    ['chat-light', ["[data-chat-theme='light']", WINDOW]],
+    ['chat-match', ["[data-chat-theme='match']", WINDOW]],
+    ['master-panel', ['.master-panel-chat']],
+    ['settings', ['.settings-window']],
+  ] as const;
+
+  it.each(THEME_SCOPES)("draws the $id palette as its snapshot holds it", async ({ id, stack }) => {
+    const entries = (surface: string, names: Iterable<string>, at: string[]) =>
+      [...names].map((name) => [`${surface} ${name}`, resolve(name, [...at, ...stack, ':root'], 0)] as const).filter(([, value]) => colourIn(value) !== undefined);
+    // A surface's own scopes are on a child element: only the tokens they set differ from the board's.
+    const palette = Object.fromEntries([
+      ...entries('board', scopes.get(':root')!.keys(), []),
+      ...SURFACES.flatMap(([surface, at]) => entries(surface, new Set(at.flatMap((scope) => [...scopes.get(scope)!.keys()])), [...at])),
+    ]);
+    await expect(`${JSON.stringify(palette, null, 2)}\n`).toMatchFileSnapshot(`./__snapshots__/palette/${id}.json`);
+  });
+
   it("the light theme draws each stored colour (a note's, a text item's, a shape's) as it was stored", () => {
     expect(Object.fromEntries([...boardPaint()].map(([name]) => [name, hexOf(name)]))).toEqual(Object.fromEntries(boardPaint()));
   });
@@ -634,13 +653,8 @@ describe('the Simplified design', () => {
     [...scopes.get(':root')!]
       .filter(([name, value]) => colourIn(value) !== undefined && !/^--(shadow-|sticky-shadow$|scrim$|surface-dot$)/.test(name))
       .map(([name]) => name);
-  /** A token as a look draws it: its value as written, through any plain var() alias. */
-  const drawnIn = (name: string, stack: string[]): string => {
-    const written = [...stack, ':root'].map((at) => scopes.get(at)?.get(name)).find((found) => found !== undefined);
-    if (written === undefined) throw new Error(`${name} is not defined`);
-    const alias = /^var\((--[a-z0-9-]+)\)$/.exec(written.trim());
-    return alias ? drawnIn(alias[1]!, stack) : written.trim();
-  };
+  /** A token as a look draws it, worked out as far as `resolve` can. */
+  const drawnIn = (name: string, stack: string[]): string => resolve(name, [...stack, ':root'], 0);
   const CLASSIC_OF = [
     ...SIMPLIFIED_SCOPES.map(({ id, scheme, stack }) => ({ id, stack, classic: scheme === 'dark' ? [DARK] : [] })),
     ...SIMPLIFIED_PACK_SCOPES.map(({ id, stack, theme }) => ({ id, stack, classic: [theme.scope] })),

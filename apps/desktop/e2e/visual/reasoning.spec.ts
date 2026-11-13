@@ -1,6 +1,6 @@
 import { expect } from '@playwright/test';
 import { rmSync } from 'node:fs';
-import { launch, listFinishedTurns, openSubmenu, pickInChip, spawnAgent, tile, TURN_MS, zoneControl, zoneNamed } from '../agent-helpers.ts';
+import { launch, listFinishedTurns, openSubmenu, pickInChip, spawnAgent, tile, tileGroup, TURN_MS, zoneControl, zoneNamed } from '../agent-helpers.ts';
 import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone } from '../launch.ts';
 import { RENDER_ARGS, RENDER_ENV, VIEWPORT, ignorePointer, pinFonts, pinRandomText, settle } from '../render.ts';
 import { scratch } from '../scratch.ts';
@@ -37,14 +37,18 @@ test('the Reasoning chip with a level picked, and a running agent’s Reasoning 
     await expect(form).toBeHidden();
 
     await tile(window).getByRole('button', { name: 'More' }).click();
-    await openSubmenu(window, 'Settings');
+    await openSubmenu(window, tileGroup('Settings'));
     await window.getByRole('menuitem', { name: /^Reasoning/ }).focus();
     await window.keyboard.press('ArrowRight');
     await expect(window.getByRole('menuitem', { name: /^Max/ })).toBeVisible();
     await pinRandomText(window);
     restorePointer = await ignorePointer(window);
     await settle(window);
-    await expect.soft(window.locator('body')).toHaveScreenshot('agent-menu-reasoning.png', SHOT);
+    await expect.soft(window.locator('body')).toHaveScreenshot('agent-menu-reasoning.png', {
+      ...SHOT,
+      // The Copy rows show this run's branch, worktree and session id.
+      mask: [window.getByRole('menuitem', { name: /^(Branch name|Worktree path|Session id)/ }).locator('.ui-menu-detail')],
+    });
     await restorePointer();
   } finally {
     await app.close();

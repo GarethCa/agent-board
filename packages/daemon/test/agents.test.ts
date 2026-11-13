@@ -1,11 +1,12 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it, vi } from 'vitest';
 import { fakeHarnessEnv, type CodexStartScreen, type FakeScenario } from '@agent-board/fake-harness';
 import { DaemonRpcError, type DaemonClient } from '../src/client.ts';
 import { claudeSettings } from '../src/agent-spawns.ts';
+import { ANSWERS_DROPPED_FLAG } from '../src/agents.ts';
 import { HOOK_TOKEN_ENV, HOOK_URL_ENV } from '../src/hook-forwarder.ts';
 import { daemonPaths } from '../src/paths.ts';
 import { isProcessAlive } from '../src/pid.ts';
@@ -25,6 +26,7 @@ import {
 import type { Clock } from '../src/clock.ts';
 import { QUIET_TURN_MS, readTranscriptTail, turnEndedInTranscript } from '../src/quiet-turns.ts';
 import { createFakeClock } from './fake-clock.ts';
+import { newestPromptRecording, recordingBytes } from './startup-recordings.ts';
 import { connectTestClient, git, recordEvents, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
 
 const SIZE = { cols: 100, rows: 30 };
@@ -49,6 +51,8 @@ async function agentDaemon(
     sessionStartSource?: string;
     /** Its fakes show Claude's trust screen first, as in a folder Claude has never opened (`late-start`: see the fakes). */
     trustScreen?: boolean | 'late-start' | 'slow-prompt' | 'slow-redraw' | 'stuck-pointer';
+    /** A file of raw bytes its fake Claude writes to its terminal as it starts: a start-up screen of the real TUI's. */
+    startupScreen?: string;
     /** The startup screen its fake Codex shows over its composer until Enter answers it. */
     startScreen?: CodexStartScreen;
     /** How long its fake Claude sits idle at its prompt before it compacts its conversation, as Claude's idle compaction. */
@@ -71,6 +75,12 @@ async function agentDaemon(
     hangTool?: boolean;
     /** Its fake Claude's tool calls fail when they run (`PostToolUseFailure`). */
     toolFails?: boolean;
+    /** Its fake Claude's question dialog ignores a hook's answers, as a Claude that doesn't take them would. */
+    questionsKeepDialog?: boolean;
+    /** Its fake Claude's question dialog closes on a hook's allow but runs the call with no answers. */
+    questionsDropAnswers?: boolean;
+    /** How long after answers are sent to Claude's dialog the daemon waits for its call to run. */
+    dialogTakeMs?: number;
   } = {},
 ) {
   const home = options.home ?? tempDataDir();
@@ -88,6 +98,7 @@ async function agentDaemon(
       noSessionStart: options.noSessionStart,
       sessionStartSource: options.sessionStartSource,
       trustScreen: options.trustScreen,
+      startupScreen: options.startupScreen,
       startScreen: options.startScreen,
       idleCompactMs: options.idleCompactMs,
       idleNeedsInputMs: options.idleNeedsInputMs,
@@ -99,8 +110,11 @@ async function agentDaemon(
       promptBox: options.promptBox,
       hangTool: options.hangTool,
       toolFails: options.toolFails,
+      questionsKeepDialog: options.questionsKeepDialog,
+      questionsDropAnswers: options.questionsDropAnswers,
     }),
     permissionHoldMs: options.permissionHoldMs,
+    dialogTakeMs: options.dialogTakeMs,
     clock: options.clock,
     ...(options.log === undefined ? {} : { log: options.log }),
   });
@@ -677,6 +691,25 @@ describe('Claude agents', () => {
     } finally {
       clearInterval(ticking);
     }
+  });
+
+  it("types a stalled Claude agent's task at the prompt the real Claude Code draws as it starts", async () => {
+    // Claude's start-up screen as its TUI drew it (`fixtures/claude/tui/`), with no `SessionStart` to say it is up: only
+    // reading that screen as its prompt types the task.
+    const recording = newestPromptRecording();
+    const clock = createFakeClock(new Date());
+    const { client, recorder } = await agentDaemon('output', { clock, noSessionStart: true, startupScreen: recordingBytes(recording) });
+    const zone = await addZone(client, tempRepo());
+    const agent = await client.call('agent.spawn', { zoneId: zone.id, prompt: 'Tidy the docs', ...SIZE });
+    await client.call('session.attach', { sessionId: agent.sessionId });
+    // Given up on only once the whole recording is drawn, at its own pace: the screen read then is the one Claude shows.
+    await recorder.waitForText(agent.sessionId, readFileSync(recordingBytes(recording), 'utf8').slice(-24));
+    clock.advance(60_000);
+    await recorder.waitFor(
+      (e): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'UserPromptSubmit' && e.payload.prompt === 'Tidy the docs',
+    );
+    const flagged = recorder.events.filter((e) => isAgentUpdate(e) && e.agent.sessionId === agent.sessionId && e.agent.flag !== null);
+    expect(flagged).toEqual([]);
   });
 
   it("never types a Claude agent's task on a SessionStart after a compaction, which can come mid-turn", async () => {
@@ -2057,6 +2090,8 @@ describe('the needs-you inbox', () => {
         asksInTerminal: true,
         sessionGrant: null,
         questions: null,
+        dialog: null,
+        plan: null,
       },
     ]);
     // Claude asks in its terminal too while the hook is held, and says so with its permission_prompt notification:
@@ -2145,7 +2180,7 @@ describe('the needs-you inbox', () => {
     ).rejects.toMatchObject({ code: AGENT_ERROR.permissionGone });
   });
 
-  it("lists Claude's question tool call as its questions, waiting for the user, never holds it, and clears it once answered in its terminal", async () => {
+  it("lists Claude's question tool call as its questions, holds it, and sends the answers kept on it to Claude's dialog on Send", async () => {
     const { client, recorder } = await agentDaemon('ask-questions');
     const zone = await addZone(client, tempRepo());
     const agent = await spawnAttached(client, zone.id, 'Set up the build');
@@ -2155,19 +2190,129 @@ describe('the needs-you inbox', () => {
     const now = (await client.call('agent.list')).find((a) => a.sessionId === agent.sessionId)!;
     expect(now.state).toBe('waiting');
     expect(now.permissions).toEqual([
-      expect.objectContaining({ toolName: 'AskUserQuestion', heldUntil: null, sessionGrant: null, questions: [expect.objectContaining({ question: 'Which cache should the build use?', header: 'Cache' })] }),
+      expect.objectContaining({
+        toolName: 'AskUserQuestion',
+        heldUntil: expect.any(String),
+        sessionGrant: null,
+        questions: [expect.objectContaining({ question: 'Which cache should the build use?', header: 'Cache' })],
+        dialog: { answers: [null], sentAt: null, keptOpen: false },
+      }),
     ]);
-    // Only its own dialog answers it: an allow from the board would answer none of its questions.
-    await expect(
-      client.call('agent.decidePermission', { sessionId: agent.sessionId, requestId: asking.permissions[0]!.id, behavior: 'allow' }),
-    ).rejects.toMatchObject({ code: AGENT_ERROR.permissionGone });
-    // Nor does a message typed at it: its keys would pick an answer in the dialog.
+    const ref = { sessionId: agent.sessionId, requestId: asking.permissions[0]!.id };
+    // Only its answers answer it: an allow would answer none of its questions, and keys typed at it would pick one.
+    await expect(client.call('agent.decidePermission', { ...ref, behavior: 'allow' })).rejects.toMatchObject({ code: RPC_ERROR.invalidParams });
     await expect(client.call('agent.answer', { sessionId: agent.sessionId, text: 'Redis' })).rejects.toMatchObject({ code: RPC_ERROR.invalidParams });
+    await expect(client.call('agent.sendAnswers', ref)).rejects.toMatchObject({ code: RPC_ERROR.invalidParams });
+    await expect(client.call('agent.answerQuestion', { ...ref, index: 0, answer: { option: 7 } })).rejects.toMatchObject({ code: RPC_ERROR.invalidParams });
+    await expect(client.call('agent.answerQuestion', { ...ref, index: 0, answer: { pick: 0 } as never })).rejects.toMatchObject({ code: RPC_ERROR.invalidParams });
 
+    // An answer is kept, and every window hears it, but nothing reaches Claude until Send.
+    const picked = recorder.events.length;
+    await client.call('agent.answerQuestion', { ...ref, index: 0, answer: { option: 0 } });
+    await untilAgent(recorder, agent.sessionId, (a) => a.permissions[0]?.dialog?.answers[0] !== null, picked);
+    expect(recorder.screenText(agent.sessionId)).not.toContain('Going with');
+
+    const sent = recorder.events.length;
+    await client.call('agent.sendAnswers', ref);
+    await recorder.waitForText(agent.sessionId, 'Going with Redis.');
+    await untilAgent(recorder, agent.sessionId, (a) => a.permissions.length === 0 && a.state !== 'waiting', sent);
+    await expect(client.call('agent.answerQuestion', { ...ref, index: 0, answer: { option: 1 } })).rejects.toMatchObject({ code: AGENT_ERROR.permissionGone });
+  });
+
+  it("clears Claude's questions once answered in its terminal, refusing an answer from the board after", async () => {
+    const { client, recorder } = await agentDaemon('ask-questions');
+    const zone = await addZone(client, tempRepo());
+    const agent = await spawnAttached(client, zone.id, 'Set up the build');
+
+    const asking = await untilAgent(recorder, agent.sessionId, (a) => a.permissions.length > 0);
+    await recorder.waitForText(agent.sessionId, '3. Other');
     const typed = recorder.events.length;
     await client.call('session.write', { sessionId: agent.sessionId, data: '2\r' });
     await recorder.waitForText(agent.sessionId, 'Going with In memory.');
     await untilAgent(recorder, agent.sessionId, (a) => a.permissions.length === 0 && a.state !== 'waiting', typed);
+    const ref = { sessionId: agent.sessionId, requestId: asking.permissions[0]!.id };
+    await expect(client.call('agent.answerQuestion', { ...ref, index: 0, answer: { option: 0 } })).rejects.toMatchObject({ code: AGENT_ERROR.permissionGone });
+    await expect(client.call('agent.sendAnswers', ref)).rejects.toMatchObject({ code: AGENT_ERROR.permissionGone });
+  });
+
+  it("says Claude kept its dialog open when its call doesn't run after the answers were sent, until its terminal answers", async () => {
+    const { client, recorder } = await agentDaemon('ask-questions', { questionsKeepDialog: true, dialogTakeMs: 300 });
+    const zone = await addZone(client, tempRepo());
+    const agent = await spawnAttached(client, zone.id, 'Set up the build');
+
+    const asking = await untilAgent(recorder, agent.sessionId, (a) => a.permissions.length > 0);
+    await recorder.waitForText(agent.sessionId, '3. Other');
+    const ref = { sessionId: agent.sessionId, requestId: asking.permissions[0]!.id };
+    await client.call('agent.answerQuestion', { ...ref, index: 0, answer: { text: 'Memcached' } });
+    await client.call('agent.sendAnswers', ref);
+
+    // Sent already: another answer says so, rather than that the terminal answered.
+    await expect(client.call('agent.answerQuestion', { ...ref, index: 0, answer: { option: 1 } })).rejects.toMatchObject({
+      code: AGENT_ERROR.permissionGone,
+      message: expect.stringContaining('answers were already sent from the board'),
+    });
+
+    const kept = await untilAgent(recorder, agent.sessionId, (a) => a.permissions[0]?.dialog?.keptOpen === true);
+    expect(kept.state).toBe('waiting');
+    expect(kept.permissions[0]).toMatchObject({ heldUntil: null, dialog: { sentAt: expect.any(String) } });
+
+    const typed = recorder.events.length;
+    await client.call('session.write', { sessionId: agent.sessionId, data: '1\r' });
+    await recorder.waitForText(agent.sessionId, 'Going with Redis.');
+    await untilAgent(recorder, agent.sessionId, (a) => a.permissions.length === 0, typed);
+  });
+
+  it('flags the user when Claude runs its questions without the answers sent from the board', async () => {
+    const { client, recorder } = await agentDaemon('ask-questions', { questionsDropAnswers: true });
+    const zone = await addZone(client, tempRepo());
+    const agent = await spawnAttached(client, zone.id, 'Set up the build');
+
+    const asking = await untilAgent(recorder, agent.sessionId, (a) => a.permissions.length > 0);
+    await recorder.waitForText(agent.sessionId, '3. Other');
+    const ref = { sessionId: agent.sessionId, requestId: asking.permissions[0]!.id };
+    await client.call('agent.answerQuestion', { ...ref, index: 0, answer: { option: 0 } });
+    const sent = recorder.events.length;
+    await client.call('agent.sendAnswers', ref);
+    await recorder.waitForText(agent.sessionId, 'No answer came.');
+    const flagged = await untilAgent(recorder, agent.sessionId, (a) => a.permissions.length === 0 && a.flag !== null, sent);
+    expect(flagged.flag).toMatchObject({ reason: ANSWERS_DROPPED_FLAG, to: 'user', via: null });
+  });
+
+  describe("Claude's plan approval", () => {
+    it('holds it as a permission with its plan to read, and allowing with the switch it offers accepts edits', async () => {
+      const { client, recorder } = await agentDaemon('plan-mode');
+      const zone = await addZone(client, tempRepo());
+      const agent = await spawnAttached(client, zone.id, 'Add a cache');
+
+      const asking = await untilAgent(recorder, agent.sessionId, (a) => a.permissions.length > 0);
+      expect(asking.state).toBe('needs-permission');
+      expect(asking.permissions[0]).toMatchObject({ toolName: 'ExitPlanMode', plan: expect.stringContaining('# Add a cache'), sessionGrant: 'all edits', questions: null });
+      await client.call('agent.decidePermission', { sessionId: agent.sessionId, requestId: asking.permissions[0]!.id, behavior: 'allow', scope: 'session' });
+      await recorder.waitForText(agent.sessionId, 'Starting on the plan.');
+      expect(recorder.screenText(agent.sessionId)).toContain('Accepting edits');
+    });
+
+    it('approving each edit takes it out of plan mode, so it starts', async () => {
+      const { client, recorder } = await agentDaemon('plan-mode');
+      const zone = await addZone(client, tempRepo());
+      const agent = await spawnAttached(client, zone.id, 'Add a cache');
+
+      const asking = await untilAgent(recorder, agent.sessionId, (a) => a.permissions.length > 0);
+      await client.call('agent.decidePermission', { sessionId: agent.sessionId, requestId: asking.permissions[0]!.id, behavior: 'allow' });
+      await recorder.waitForText(agent.sessionId, 'Starting on the plan.');
+      expect(recorder.screenText(agent.sessionId)).not.toContain('Still in plan mode');
+      expect(recorder.screenText(agent.sessionId)).not.toContain('Accepting edits');
+    });
+
+    it("keeps planning with what to change, when it's denied with a message", async () => {
+      const { client, recorder } = await agentDaemon('plan-mode');
+      const zone = await addZone(client, tempRepo());
+      const agent = await spawnAttached(client, zone.id, 'Add a cache');
+
+      const asking = await untilAgent(recorder, agent.sessionId, (a) => a.permissions.length > 0);
+      await client.call('agent.decidePermission', { sessionId: agent.sessionId, requestId: asking.permissions[0]!.id, behavior: 'deny', message: 'Use the LRU first' });
+      await recorder.waitForText(agent.sessionId, 'Keeping on planning: Use the LRU first.');
+    });
   });
 
   describe('with two subagents asking at once', () => {

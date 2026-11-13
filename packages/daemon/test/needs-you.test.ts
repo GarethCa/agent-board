@@ -5,7 +5,7 @@ import { fakeHarnessEnv, McpClient } from '@agent-board/fake-harness';
 import { CREW_PLAN_PATH, CREW_QUESTION_PATH, MAX_FLAG_LENGTH, RPC_ERROR, type Agent, type AgentUpdatedEvent, type DaemonEvent, type SettingsUpdatedEvent } from '../src/protocol.ts';
 import { runBoardCommand } from '../src/board-cli.ts';
 import { BOARD_SOCKET_ENV, BOARD_TOKEN_ENV } from '../src/board-env.ts';
-import { refOf } from '../src/crew-flags.ts';
+import { CREW_FLAG_GATHER_MS, refOf } from '../src/crew-flags.ts';
 import { markSender } from '../src/sender-marker.ts';
 import { connectTestClient, recordEvents, startTestDaemon, TEST_CLI_LAUNCHER, tempDataDir, tempRepo } from './helpers.ts';
 import { createFakeClock } from './fake-clock.ts';
@@ -302,6 +302,29 @@ describe("a crew member's flag", () => {
     expect(heard.events).toContainEqual(expect.objectContaining({ kind: 'flagged', sessionId: member.agent.sessionId, detail: "can't reproduce it on CI, only locally" }));
   });
 
+  it('wakes an orchestrator waiting for its next check-in at once, without the check-in, and a burst of flags as one turn', async () => {
+    const { setup, lead, member } = await crew();
+    const leadId = lead.agent.sessionId;
+    const second = await lead.connection.call('orchestrator.spawn', { token: lead.token, prompt: 'Print your board identity', name: 'cache keeper' });
+    const other = { agent: second, ...(await agentSideOf(setup, second.sessionId)) };
+    // Its check-ins are a year apart: only a flag can wake it in this test.
+    await setup.client.call('agent.setSchedule', { sessionId: leadId, schedule: { cron: '0 0 1 1 *', prompt: 'Check in on your crew' } });
+    await untilAgent(setup.recorder, leadId, (a) => a.state === 'scheduled');
+
+    // Raised together, so both land well inside one gather window however loaded the machine is.
+    await Promise.all([
+      member.connection.call('board.needsYou', { token: member.token, reason: 'PR #12 is ready for review' }),
+      other.connection.call('board.needsYou', { token: other.token, reason: 'Blocked on the fixture' }),
+    ]);
+
+    // Both arrive in one message, which starts its turn: its one reply holds both flags.
+    const replied = await untilAgent(setup.recorder, leadId, (a) => a.lastMessage?.startsWith('Done: [agent-board]') === true);
+    expect(replied.lastMessage).toContain('needs you: PR #12 is ready for review');
+    expect(replied.lastMessage).toContain('needs you: Blocked on the fixture');
+    expect(replied.lastMessage!.match(/Reply with `agent-board send/g)).toHaveLength(1);
+    expect((await setup.client.call('agent.list')).find((a) => a.sessionId === leadId)?.schedule?.lastRun ?? null).toBeNull();
+  });
+
   it('goes to its orchestrator when its first prompt stalls, whose send waits, leaving the flag, until the user sends it', async () => {
     const clock = createFakeClock(new Date());
     const setup = await flagDaemon({ clock, noSessionStart: true });
@@ -354,9 +377,9 @@ describe("a crew member's flag", () => {
     await setup.client.call('session.write', { sessionId: leadId, data: 'half a tho' });
 
     await member.connection.call('board.needsYou', { token: member.token, reason: 'Which fixture?' });
-    // The flag's own update, and the lead's, come and go with the draft still there.
+    // The flag's own update, and the lead's, come and go with the draft still there, and so does its gather window.
     await untilAgent(setup.recorder, member.agent.sessionId, (a) => a.flag !== null);
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => setTimeout(resolve, CREW_FLAG_GATHER_MS + 500));
     expect(setup.recorder.screenText(leadId)).not.toContain('needs you:');
 
     // The user sends the draft: once that turn is over, the flag is told.

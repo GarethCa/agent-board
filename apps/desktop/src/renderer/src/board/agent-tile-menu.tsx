@@ -1,5 +1,6 @@
-// An agent tile's own menu, as its ⋯ and a right-click on it both draw it: the rows `agentTileMenu` lists, from the
-// agent as it is now, its gate and reviews, the tiles it is linked to, and what the board does to the tile.
+// An agent tile's own menu, as its ⋯ and a right-click on it both draw it: the rows `stateTileMenu` lists under Classic
+// and `agentTileMenu` under Simplified, from the agent as it is now, its gate and reviews, the tiles it is linked to,
+// and what the board does to the tile.
 import { createContext, useContext, useReducer } from 'react';
 import type { Agent } from '@agent-board/daemon/protocol';
 import { useGateRun } from '../gate/GatesProvider';
@@ -8,7 +9,9 @@ import { roundsOf } from '../review/reviews';
 import { ContextMenu } from '../ui';
 import { useBoardCommands } from './commands';
 import type { Reorder } from './editing/arrange';
-import { agentTileMenu, type ModelEntry, type RelatedTile } from './menu-model';
+import { useSimplified } from '../design';
+import { useNeedsYouShows } from '../needs-you-setting';
+import { agentTileMenu, stateTileMenu, type ModelEntry, type RelatedTile } from './menu-model';
 import { ClickOpensContext, TileActionsContext, type TileData } from './tile';
 
 /** What the board does to a tile, by its node id, for the tile's menu. */
@@ -80,13 +83,16 @@ export function useAgentTileMenu(nodeId: string, agent: Agent, links: TileLinks,
   const rounds = roundsOf(reviews, agent.sessionId);
   const review = agent.reviewOf === null ? undefined : roundsOf(reviews, agent.reviewOf).find((each) => each.reviewer === agent.sessionId);
   const pinned = board.leadPinned(nodeId);
-  const entries = agentTileMenu({
+  const shows = useNeedsYouShows();
+  const menu = useSimplified() ? agentTileMenu : stateTileMenu;
+  const entries = menu({
     nodeId,
     agent,
     clickOpens,
     gate,
     rounds,
     review,
+    shows,
     rename,
     actions,
     related: relatedTiles(agent, links, rounds.at(-1)?.reviewer, board.onBoard),

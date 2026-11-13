@@ -1,14 +1,16 @@
 import { expect } from '@playwright/test';
 import { rmSync } from 'node:fs';
 import { launch, spawnAgent, tile, tileAction } from './agent-helpers.ts';
-import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone } from './launch.ts';
+import { test, pickFolderNext, removeDataDir, runDesign, tempDataDir, browseForZone } from './launch.ts';
 import { scratch } from './scratch.ts';
+import { showTileParts } from './settings-helpers.ts';
 
 test("an agent's Schedule… puts a clock beside its tile, joined to it: the agent shows scheduled with a clock badge until the clock goes", async () => {
   const { dir, repo, env } = scratch('output');
   const dataDir = tempDataDir();
   const { app, window: page } = await launch(dataDir, env);
   try {
+    await showTileParts(page, ['chips']);
     await pickFolderNext(app, repo);
     await browseForZone(page);
     await spawnAgent(page, 'monorepo', 'Check the build');
@@ -47,7 +49,9 @@ test("an agent's Schedule… puts a clock beside its tile, joined to it: the age
     await page.getByRole('button', { name: 'Fold clock' }).click();
     await expect(clock).toHaveAttribute('data-folded', 'true');
     await expect(clock.getByTestId('clock-soon')).toHaveText(/^(in .+|tomorrow 06:30)$/);
-    await tileAction(tile(page), 'Edit schedule', 'Settings');
+    // Classic's menu leads a scheduled agent with what it waits on, its schedule, in place of Edit schedule….
+    if (runDesign() === 'simplified') await tileAction(tile(page), 'Edit schedule', 'Settings');
+    else await tileAction(tile(page), 'Show what it waits on');
     await dialog.getByRole('button', { name: 'Delete' }).click();
     await expect(clock).toHaveCount(0);
     await expect(tile(page).getByTestId('tile-clock')).toHaveCount(0);
