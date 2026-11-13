@@ -3,6 +3,7 @@ import { HandoffsContext } from './flow-edges';
 import { GitBranch } from 'lucide-react';
 import { HarnessMark } from './HarnessMark';
 import { HybridTile } from './HybridTile';
+import { TileShowsOverride } from './view-settings';
 import { AGENT_TILE_SIZE } from '@agent-board/daemon/board-layout';
 import { StatusPill } from '../ui';
 
@@ -42,7 +43,7 @@ const EXTRAS: Record<GalleryState, { harness: Harness; name: string } & Partial<
     harness: 'claude',
     name: 'Clean the build',
     muted: true,
-    permissions: [{ id: 'ask', toolName: 'Bash', toolInput: { command: 'rm -rf dist' }, subagent: null, requestedAt: AT, heldUntil: null, asksInTerminal: false, sessionGrant: null, questions: null }],
+    permissions: [{ id: 'ask', toolName: 'Bash', toolInput: { command: 'rm -rf dist' }, subagent: null, requestedAt: AT, heldUntil: null, asksInTerminal: false, sessionGrant: null, dialog: null, plan: null, questions: null }],
   },
   idle: {
     harness: 'codex',
@@ -141,6 +142,7 @@ export const galleryAgent = (state: AgentState): Agent => ({
   permissions: [],
   ask: null,
   stepsWait: null,
+  removeAsk: null,
   plan: null,
   docs: [],
   schedule: null,
@@ -151,6 +153,7 @@ export const galleryAgent = (state: AgentState): Agent => ({
   plainFolder: false,
   orchestrate: null,
   spawnedBy: null,
+  orphanedFrom: null,
   ledBy: null,
   unsent: null,
   untypedPrompt: null,
@@ -396,13 +399,32 @@ function HeaderCases() {
   );
 }
 
+/**
+ * What each state's gallery agent says it is for, the top line of a Classic tile. The idle one has none, so its tile falls
+ * back to its task's first line.
+ */
+const GALLERY_PURPOSES: Partial<Record<GalleryState, string>> = {
+  running: 'Put the session dock on the board',
+  thinking: 'Rename the spacing tokens',
+  waiting: 'Choose the database for the local cache',
+  'needs-permission': 'Clear out the stale build output',
+  'rate-limited': 'Review the dock change',
+  failed: 'Move the schema to its new tables',
+  scheduled: 'Label new issues each morning',
+  'stopped-by-restart': 'Port the scheduler to the daemon',
+  'handing-off': 'Review the dock change',
+  hibernated: 'Pick a cache for the job queue',
+  'on-command': 'Find why checkout fails on CI',
+  done: 'Make the checkout test pass every time',
+};
+
 /** An agent tile in every agent state, a crowded one, two ended ones, one with a long description, one receiving a hand-off, a shell tile, and an agent starting, for checking how they look. The app shows it at `#gallery`. */
 export function TileGallery() {
   return (
     <HandoffsContext value={HANDOFFS}>
       <div className="tile-gallery" data-testid="tile-gallery">
         {GALLERY_STATES.map((state) => {
-          const agent = galleryAgent(state);
+          const agent = { ...galleryAgent(state), purpose: GALLERY_PURPOSES[state] ?? null };
           return (
             <div key={state} style={AGENT_TILE_SIZE}>
               <HybridTile id={agent.sessionId} tile={{ label: agent.name, harness: agent.harness, agent }} />
@@ -468,20 +490,25 @@ export function TileGallery() {
   );
 }
 
+/** The crowded tile is about its chips, so it shows them whatever Settings says. */
+const CHIPS_SHOWN = { chips: true } as const;
+
 /** A crowded orchestrator's tile at the board's size and at its narrowest, for checking that its chips stay inside it. Shown at `#gallery`. */
 export function CrowdedOrchestratorGallery() {
   return (
     <HandoffsContext value={HANDOFFS}>
-      <div className="tile-gallery" data-testid="crowded-orchestrator-gallery">
-        {[AGENT_TILE_SIZE.width, 200].map((width) => (
-          <div key={width} style={{ ...AGENT_TILE_SIZE, width }}>
-            <HybridTile
-              id={`${CROWDED_ORCHESTRATOR.sessionId}-${width}`}
-              tile={{ label: CROWDED_ORCHESTRATOR.name, harness: CROWDED_ORCHESTRATOR.harness, agent: CROWDED_ORCHESTRATOR, crew: 24, crewFlags: 3 }}
-            />
-          </div>
-        ))}
-      </div>
+      <TileShowsOverride value={CHIPS_SHOWN}>
+        <div className="tile-gallery" data-testid="crowded-orchestrator-gallery">
+          {[AGENT_TILE_SIZE.width, 200].map((width) => (
+            <div key={width} style={{ ...AGENT_TILE_SIZE, width }}>
+              <HybridTile
+                id={`${CROWDED_ORCHESTRATOR.sessionId}-${width}`}
+                tile={{ label: CROWDED_ORCHESTRATOR.name, harness: CROWDED_ORCHESTRATOR.harness, agent: CROWDED_ORCHESTRATOR, crew: 24, crewFlags: 3 }}
+              />
+            </div>
+          ))}
+        </div>
+      </TileShowsOverride>
     </HandoffsContext>
   );
 }

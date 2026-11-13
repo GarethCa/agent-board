@@ -3,7 +3,7 @@ import { connectDaemon } from '@agent-board/daemon/client';
 import { daemonPaths } from '@agent-board/daemon/paths';
 import { existsSync, rmSync } from 'node:fs';
 import { run, withDaemon } from './board-helpers.ts';
-import { agents, launch, sessionWindow, setClickOpens, SHELL_ENV, spawnAgent, tile } from './agent-helpers.ts';
+import { agents, launch, sessionWindow, setClickOpens, SHELL_ENV, spawnAgent, tile, groupName } from './agent-helpers.ts';
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
 import { scratch } from './scratch.ts';
 
@@ -41,13 +41,13 @@ test('an ended agent is deleted from the right-click menu, keeping its worktree 
     await tile(window).click({ modifiers: ['Shift'] });
     await tile(window).click({ button: 'right' });
     await expect(window.getByRole('menu', { name: 'Selection' })).toBeVisible();
-    await expect(window.getByRole('menuitem', { name: 'Settings' })).toHaveCount(0);
+    await expect(window.getByRole('menuitem', { name: groupName('Settings') })).toHaveCount(0);
     await window.keyboard.press('Escape');
     await expect(window.getByRole('menu')).toHaveCount(0);
 
     await tile(window).click();
     await tile(window).click({ button: 'right' });
-    await expect(window.getByRole('menuitem', { name: 'Settings' })).toBeVisible();
+    await expect(window.getByRole('menuitem', { name: groupName('Settings') })).toBeVisible();
     await window.getByRole('menuitem', { name: /^Delete/ }).click();
     // Even ended, an agent with a worktree of its own asks whether to remove it with its branch or keep them.
     const confirm = window.getByRole('alertdialog', { name: 'Delete agent?' });

@@ -6,6 +6,7 @@ import { ClipboardList, FolderCheck, SendHorizontal, SquareArrowOutUpRight, Time
 import { Button, EmptyState, ErrorText, Input, Kbd } from '../ui';
 import { useAction } from '../use-action';
 import { PermissionRow } from './PermissionRow';
+import { RemoveAskRow } from './RemoveAskRow';
 import { KIND_TAGS } from './kind-tags';
 import { HarnessMark } from '../board/HarnessMark';
 import { HARNESSES } from '../harness';
@@ -117,6 +118,9 @@ function InboxItem({ agent, kind, lead, now, onOpen }: { agent: Agent; kind: Nee
         ))
       ) : agent.state === 'needs-permission' ? (
         <p className="inbox-item-note">Asking for permission in its terminal.</p>
+      ) : agent.removeAsk ? (
+        // Keyed by ask, so a new one never inherits an old one's ticks or error.
+        <RemoveAskRow key={agent.removeAsk.id} agent={agent} ask={agent.removeAsk} now={now} />
       ) : agent.ask !== null ? (
         // Keyed by question, so a new one never inherits an old one's reply or error.
         agent.ask.questions.length > 1 && agent.ask.card === null ? (

@@ -24,6 +24,9 @@ export interface ZoneMapInput {
   measured?: boolean;
 }
 
+/** A gap of more slots than this is a lane spread too far apart. */
+const MAX_GAP = 2;
+
 const rectOf = (thing: ZoneMapThing): Rect => ({ x: thing.x, y: thing.y, width: thing.width, height: thing.height });
 /**
  * Whether `thing` (a tile of the crew) is where it belongs: where an arrange as set would put it now (`arranged`, by key),
@@ -37,7 +40,7 @@ const onGrid = (thing: ZoneMapThing, arranged: ReadonlyMap<string, Point>, grid:
 };
 
 /** The map of a zone: its lanes, the rest above them, and what is amiss. */
-export function buildZoneMap({ lanes, things: drawn, parts, arrange, spacing = 'normal', compact = new Map(), arranged = new Map(), measured = false }: ZoneMapInput): Pick<ZoneMap, 'top' | 'lanes' | 'overlaps' | 'widestGap' | 'laneGap' | 'labelGap' | 'offGrid' | 'emptyBands'> {
+export function buildZoneMap({ lanes, things: drawn, parts, arrange, spacing = 'normal', compact = new Map(), arranged = new Map(), measured = false }: ZoneMapInput): Pick<ZoneMap, 'top' | 'lanes' | 'overlaps' | 'widestGap' | 'laneGap' | 'labelGap' | 'offGrid' | 'emptyBands' | 'stranded'> {
   // Every gap is measured past the one this spacing's arrange keeps, in this spacing's slots.
   const grid = zoneGrid(spacing);
   const { column: columnStep, row: rowStep } = grid;
@@ -143,7 +146,47 @@ export function buildZoneMap({ lanes, things: drawn, parts, arrange, spacing = '
   if (along === 'column' && topThings.length > 0 && lanesTop !== Infinity) {
     laneGap = Math.max(laneGap, Math.round((lanesTop - Math.min(...topThings.map((thing) => thing.y))) / rowStep));
   }
-  return { top, lanes: mapped, overlaps: overlapping, widestGap, laneGap, labelGap, offGrid: [...offGrid], emptyBands: emptyBands(things, grid) };
+  return { top, lanes: mapped, overlaps: overlapping, widestGap, laneGap, labelGap, offGrid: [...offGrid], emptyBands: emptyBands(things, grid), stranded: strandedParts(things, mapped, parts, grid) };
+}
+
+/**
+ * The lane labels and notes an arrange made that lie away from the tiles they belong with, by key: more than
+ * `MAX_GAP` slots past the gap kept, across or down. A note lies near a tile, or near a note that does: one below the
+ * next in a column beside the crew is where an arrange that draws no lanes parks the notes someone wrote on. A label
+ * lies near its own lane's tiles, or near its lane's note when that note is where it should be (a tall note between a
+ * label and its tiles, in columns or cards).
+ */
+function strandedParts(things: readonly ZoneMapThing[], lanes: readonly ZoneMapLane[], parts: ReadonlyMap<string, string>, grid: ZoneGrid): string[] {
+  const byKey = new Map(things.map((thing) => [thing.key, thing]));
+  const slotsApart = (a: Rect, b: Rect, axis: 'x' | 'y') => {
+    const [size, step, kept] = axis === 'x' ? (['width', grid.column, grid.gaps.tile] as const) : (['height', grid.row, Math.max(grid.gaps.tile, grid.gaps.lane)] as const);
+    return Math.round(Math.max(0, b[axis] - (a[axis] + a[size]) - kept, a[axis] - (b[axis] + b[size]) - kept) / step);
+  };
+  const near = (a: Rect, b: Rect) => Math.max(slotsApart(a, b, 'x'), slotsApart(a, b, 'y')) <= MAX_GAP;
+  const partOf = (slot: string) => {
+    const key = parts.get(slot);
+    return key === undefined ? undefined : byKey.get(key);
+  };
+  const laneOf = (slot: string) => slot.replace(/#[^#]*$/, '');
+  const notes = [...parts.keys()].filter((slot) => slot.endsWith('#note')).flatMap((slot) => partOf(slot) ?? []);
+  // Out from the tiles, a note at a time: what is still unreached at the end lies away from them all.
+  const reached: ZoneMapThing[] = things.filter((thing) => thing.itemKind === null);
+  let unreached = notes;
+  for (let more = true; more; ) {
+    const next = unreached.filter((note) => !reached.some((other) => near(note, other)));
+    more = next.length < unreached.length;
+    reached.push(...unreached.filter((note) => !next.includes(note)));
+    unreached = next;
+  }
+  const laneTiles = new Map(lanes.map((lane) => [lane.key, LANE_SLOTS.flatMap((slot) => lane.slots[slot]).flatMap((key) => byKey.get(key) ?? [])]));
+  const labels = [...parts.keys()].filter((slot) => slot.endsWith('#label')).flatMap((slot) => {
+    const label = partOf(slot);
+    if (label === undefined) return [];
+    const note = partOf(`${laneOf(slot)}#note`);
+    const anchors = [...(laneTiles.get(laneOf(slot)) ?? []), ...(note !== undefined && !unreached.includes(note) ? [note] : [])];
+    return anchors.some((anchor) => near(label, anchor)) ? [] : [label.key];
+  });
+  return [...labels, ...unreached.map((note) => note.key)];
 }
 
 /**
@@ -169,8 +212,6 @@ function emptyBands(things: readonly ZoneMapThing[], grid: ZoneGrid): ZoneMap['e
 /** How a map names the things in it: by ref (`agent:9c1e`), as the board CLI does. */
 export type RefOf = (key: string) => string;
 
-/** A gap of more slots than this is a lane spread too far apart. */
-const MAX_GAP = 2;
 const MAX_NAME = 16;
 
 /**
@@ -197,6 +238,7 @@ export function lintLine(map: ZoneMap, ref: RefOf): string {
   const { columns, rows } = map.emptyBands;
   const empty = [...(columns > MAX_GAP && columns > columnsNamed ? [`${columns} empty columns`] : []), ...(rows > MAX_GAP && rows > rowsNamed ? [`${rows} empty rows`] : [])];
   const spread = [
+    ...(map.stranded.length === 0 ? [] : [`${map.stranded.length} stranded (${map.stranded.map(ref).join(', ')})`]),
     ...(map.laneGap > MAX_GAP ? [`${map.laneGap} slots between lanes`] : []),
     ...(map.labelGap > MAX_GAP && map.labelGap > map.widestGap ? [`label ${map.labelGap} slots from its tiles`] : []),
     ...(spare.columns > MAX_GAP || spare.rows > MAX_GAP ? [`zone ${spare.columns} columns and ${spare.rows} rows bigger than its contents`] : []),

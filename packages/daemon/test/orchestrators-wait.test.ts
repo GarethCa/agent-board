@@ -24,6 +24,7 @@ function host(agents = new Map<string, Agent>()) {
       endedAt: null,
       permissions: [],
       ask: null,
+      removeAsk: null,
       plan: null,
       orchestrate: null,
       spawnedBy: null,
@@ -54,6 +55,7 @@ function host(agents = new Map<string, Agent>()) {
       fallbackOwner: () => undefined,
       announce: () => {},
       handCrew: () => [],
+      removedOrchestrator: () => undefined,
       answer: async () => ({ queued: false }),
       spawn: () => Promise.reject(new Error('not here')),
       interrupt: () => {
@@ -90,6 +92,7 @@ function host(agents = new Map<string, Agent>()) {
       remove: () => {},
     },
     deleteAgent: async () => {},
+    removeAsks: { ask: () => Promise.reject(new Error('not here')) },
     broadcast: () => {},
     log: () => {},
   });

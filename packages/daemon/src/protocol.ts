@@ -1641,6 +1641,14 @@ export type SessionState = (typeof SESSION_STATES)[number];
 export const AGENT_STATES = [...SESSION_STATES, 'scheduled', 'stopped-by-restart', 'handing-off', 'starting', 'on-command', 'hibernated'] as const;
 export type AgentState = (typeof AGENT_STATES)[number];
 
+/**
+ * Whether the orchestrator waits on the user's answer to its remove ask. An agent from a daemon before it has
+ * no `removeAsk` at all, which asks nothing.
+ */
+export function asksToRemove(agent: Pick<Agent, 'removeAsk'>): boolean {
+  return (agent.removeAsk ?? null) !== null;
+}
+
 /** The states a live agent may be paused in: between turns, at its prompt. */
 const PAUSABLE_STATES: ReadonlySet<AgentState> = new Set<AgentState>(['idle', 'waiting', 'failed', 'scheduled']);
 
@@ -1648,7 +1656,7 @@ const PAUSABLE_STATES: ReadonlySet<AgentState> = new Set<AgentState>(['idle', 'w
  * Why the agent can't be paused (hibernated) now, or undefined if it can: only a live agent between turns, asking the
  * user nothing, pauses. The daemon checks its prompt too (the user typing there, a message never sent).
  */
-export function pauseRefusal(agent: Pick<Agent, 'endedAt' | 'state' | 'ask' | 'plan' | 'permissions'>): string | undefined {
+export function pauseRefusal(agent: Pick<Agent, 'endedAt' | 'state' | 'ask' | 'removeAsk' | 'plan' | 'permissions'>): string | undefined {
   if (agent.state === 'hibernated') return 'it is already paused';
   if (agent.endedAt !== null) return 'it has ended';
   if (agent.state === 'needs-permission' || agent.permissions.length > 0 || waitsOnUser(agent) || planPending(agent)) return 'it is waiting on you';
@@ -1663,7 +1671,7 @@ export function pauseRefusal(agent: Pick<Agent, 'endedAt' | 'state' | 'ask' | 'p
 export const INTERRUPTIBLE_STATES: ReadonlySet<AgentState> = new Set<AgentState>(['running', 'thinking', 'needs-permission']);
 
 /** Whether the agent is mid-turn, which `agent.interrupt` takes: working, or with its call waiting on the user. */
-export function isMidTurn(agent: Pick<Agent, 'state' | 'ask' | 'plan'>): boolean {
+export function isMidTurn(agent: Pick<Agent, 'state' | 'ask' | 'removeAsk' | 'plan'>): boolean {
   return INTERRUPTIBLE_STATES.has(agent.state) || waitsOnUser(agent);
 }
 
@@ -1710,12 +1718,12 @@ export interface AgentStepsWait {
  * Whether an agent is free to be handed a job: live, its turn ended at its prompt, and asking the user nothing (no
  * permission prompt, question or plan waiting). A working agent takes no hand-on.
  */
-export function takesHandOn(agent: Pick<Agent, 'endedAt' | 'state' | 'permissions' | 'ask' | 'plan'>): boolean {
-  return agent.endedAt === null && (agent.state === 'idle' || agent.state === 'waiting') && agent.permissions.length === 0 && agent.ask === null && !planPending(agent);
+export function takesHandOn(agent: Pick<Agent, 'endedAt' | 'state' | 'permissions' | 'ask' | 'removeAsk' | 'plan'>): boolean {
+  return agent.endedAt === null && (agent.state === 'idle' || agent.state === 'waiting') && agent.permissions.length === 0 && agent.ask === null && !asksToRemove(agent) && !planPending(agent);
 }
 
 /** The agent fields the needs-you rule reads. */
-export type NeedsYouFacts = Pick<Agent, 'endedAt' | 'state' | 'permissions' | 'ask' | 'plan' | 'stepsWait' | 'flag' | 'ledBy'>;
+export type NeedsYouFacts = Pick<Agent, 'endedAt' | 'state' | 'permissions' | 'ask' | 'removeAsk' | 'plan' | 'stepsWait' | 'flag' | 'ledBy'>;
 
 /** Why the agent is in the needs-you inbox under `shows` (an ended one only for its flag), or null if it isn't. */
 export function needsYouKind(agent: NeedsYouFacts, shows: NeedsYouShows): NeedsYouKind | null {
@@ -1723,7 +1731,7 @@ export function needsYouKind(agent: NeedsYouFacts, shows: NeedsYouShows): NeedsY
   if (agent.endedAt !== null) return agent.flag?.to === 'user' ? 'flagged' : null;
   // A question tool's prompt asks questions, not a permission: it is the agent asking.
   if (agent.state === 'needs-permission' || permissionPrompt(agent) !== undefined) return 'permission';
-  if (agent.ask !== null || questionPrompt(agent) !== undefined) return 'asks';
+  if (agent.ask !== null || asksToRemove(agent) || questionPrompt(agent) !== undefined) return 'asks';
   if (planPending(agent)) return 'plan';
   // A steps card it waits on: its set to answer, or a to-do of the user's (none on a record that predates them).
   const card = agent.stepsWait?.kind;
@@ -1942,6 +1950,11 @@ export interface Agent {
    */
   stepsWait: AgentStepsWait | null;
   /**
+   * The tiles it asks the user to remove (`orchestrator.askRemove`) and waits on, mid-turn; null while it asks
+   * none. While it asks, it is `waiting`.
+   */
+  removeAsk: RemoveAsk | null;
+  /**
    * Its latest plan (`board.presentPlan`): v1, v2… with its decision once the user has made one. While that is
    * still to make, it waits on it and is `waiting`. Null before its first; `plan.list` has them all, with their bodies.
    */
@@ -1973,8 +1986,13 @@ export interface Agent {
    * or null while it may not. Only the user sets it (`agent.setOrchestrate`); an agent an orchestrator starts never has it.
    */
   orchestrate: OrchestrateScope | null;
-  /** The orchestrator that started it, or null for an agent the user started (or once that orchestrator is deleted). */
+  /** The orchestrator that started it, or null for an agent the user started (or once that orchestrator is removed). */
   spawnedBy: string | null;
+  /**
+   * The orchestrator that started it, once that one is removed and until another takes its crew over
+   * (`orchestrator.handover`): its session id and name. Null for an agent the user started, and while `spawnedBy` is set.
+   */
+  orphanedFrom: { sessionId: string; name: string } | null;
   /**
    * The name of the orchestrator that started it while that one is live, else null (a loose agent, or one whose
    * orchestrator has ended). Its turns, questions and open changes go to that orchestrator, not the user.
@@ -2442,14 +2460,47 @@ export interface PermissionPrompt {
    */
   sessionGrant: string | null;
   /**
-   * For a call of Claude's question tool (`QUESTION_TOOL`), its questions: the harness's own dialog asks them and takes
-   * the answers, so the prompt is never held and can't be allowed or denied from the board. Null for any other call.
+   * For a call of Claude's question tool (`QUESTION_TOOL`), its questions: the harness's own dialog asks them too. They
+   * can't be allowed or denied from the board, only answered, when `dialog` is set. Null for any other call.
    */
   questions: PromptQuestion[] | null;
+  /**
+   * For a question prompt the board can answer (Claude's own, every question readable), the answers so far and whether
+   * they were sent; null where only its terminal can answer it (a subagent's, one with questions that can't be read)
+   * and for any other call. Answered with `agent.answerQuestion` and `agent.sendAnswers` while it is held.
+   */
+  dialog: PromptDialog | null;
+  /** For a call of Claude's plan tool (`PLAN_TOOL`), the plan it asks the user to approve, in Markdown; else null. */
+  plan: string | null;
 }
 
 /** Claude Code's tool that asks the user questions with options; its PermissionRequest is its dialog, not a permission. */
 export const QUESTION_TOOL = 'AskUserQuestion';
+
+/** Claude Code's tool that asks the user to approve its plan as it leaves plan mode: a permission, with a plan to read. */
+export const PLAN_TOOL = 'ExitPlanMode';
+
+/**
+ * How long after the board sends a question prompt's answers its call must run (its `PostToolUse`) before the board
+ * says Claude kept its dialog open (`PromptDialog.keptOpen`), and the user answers in its terminal.
+ */
+export const DIALOG_TAKE_MS = 15_000;
+
+/**
+ * The user's answer to one of Claude's questions, kept until sent: one of its options (by index), several of them for a
+ * question that takes several (`multiSelect`), or their own words (its Other).
+ */
+export type PromptAnswer = { option: number } | { options: number[] } | { text: string };
+
+/** Answering a question prompt from the board: the answers so far, and whether they were sent and taken. */
+export interface PromptDialog {
+  /** One per question, null while unanswered; kept until sent, so every window shows the same picks. */
+  answers: (PromptAnswer | null)[];
+  /** When the board sent them to Claude's dialog through its hook; null before. The prompt stays until its call runs. */
+  sentAt: string | null;
+  /** Sent, but its call hadn't run `DIALOG_TAKE_MS` later: Claude kept its dialog open, and its terminal must answer. */
+  keptOpen: boolean;
+}
 
 /** One question of a question-tool call: its text, its short header, its options and whether several can be picked. */
 export interface PromptQuestion {
@@ -2531,6 +2582,47 @@ export interface AskResult {
   /** The steps card that holds its questions, if it was put on the board or kept there as it ended half-answered. */
   card?: string;
 }
+
+/**
+ * One tile an orchestrator asks the user to remove (`orchestrator.askRemove`), as the prompt lists it. `held`
+ * says why it stays unless the user ticks it: it is still running, it has a live agent under it that is not in the
+ * ask, or a reviewer of it would go with it (one the ask leaves out) or is itself held back. Null for a finished tile,
+ * which Allow removes.
+ */
+export interface RemoveAskTile {
+  sessionId: string;
+  name: string;
+  held: string | null;
+}
+
+/**
+ * What an orchestrator asks the user to remove, in one prompt: tiles in its scope that it did not start. It
+ * is in the needs-you inbox and on its tile until the user allows or denies it, it times out, or the orchestrator stops
+ * waiting. Only the user's press answers it: nothing allows it for them.
+ */
+export interface RemoveAsk {
+  /** Names this ask, so a decision can't land on another one. */
+  id: string;
+  askedAt: string;
+  /** When it stops waiting, with nothing removed. */
+  expiresAt: string;
+  /** The tiles, in the order asked. */
+  tiles: RemoveAskTile[];
+}
+
+/**
+ * What `orchestrator.askRemove` tells the orchestrator: what the user decided, what was removed, and what was kept and
+ * why (denied, held back and not ticked, gone, its reviewer staying, or refused as the user's own Delete would refuse
+ * it). `removed` may end with a reviewer the ask left out, which went with a ticked tile it reviews.
+ */
+export interface RemoveAskResult {
+  outcome: 'allowed' | 'denied' | 'timed-out';
+  removed: { sessionId: string; name: string }[];
+  kept: { sessionId: string; name: string; why: string }[];
+}
+
+/** Most tiles one remove ask names. */
+export const MAX_REMOVE_ASK_TILES = 200;
 
 /** Most options a question offers: one per key 1-9. */
 export const MAX_ASK_OPTIONS = 9;
@@ -2632,7 +2724,7 @@ export const planPending = <T extends Pick<Agent, 'plan'>>(agent: T): agent is T
   agent.plan !== null && agent.plan.decision === null;
 
 /** Whether the agent's call waits on the user: a question it asks, or its latest plan, unless it left that and went on. */
-export const waitsOnUser = (agent: Pick<Agent, 'ask' | 'plan'>): boolean => agent.ask !== null || (planPending(agent) && !agent.plan.left);
+export const waitsOnUser = (agent: Pick<Agent, 'ask' | 'removeAsk' | 'plan'>): boolean => agent.ask !== null || asksToRemove(agent) || (planPending(agent) && !agent.plan.left);
 
 /** The kinds of file an agent shows as a document, by their extensions. */
 export const DOCUMENT_EXTENSIONS: Record<PlanFormat, readonly string[]> = { markdown: ['.md', '.markdown'], html: ['.html', '.htm'] };
@@ -3625,6 +3717,7 @@ export const ORCHESTRATOR_ACTIONS = [
   'wake',
   'close',
   'remove',
+  'ask-remove',
   'handover',
   'add-edge',
   'remove-edge',
@@ -3715,6 +3808,8 @@ export interface OrchestratorSpawnParams {
   edges?: 'auto' | 'manual';
   issueId?: string;
   prompt?: string;
+  /** What it is for (`Agent.purpose`), kept as `board.setStatus` with `description` keeps it, but cut to `MAX_PURPOSE_LENGTH` rather than refused. */
+  description?: string;
 }
 
 /** What `orchestrator.spawn` answers: the agent, and which role template its first message began with, if one. */
@@ -3910,6 +4005,8 @@ export interface ZoneMap {
   /** The widest band of grid columns, and of rows, running right across the zone with nothing in it, past the gap kept. */
   emptyBands: { columns: number; rows: number };
   offGrid: string[];
+  /** The lane labels and notes an arrange made that lie away from the tiles they belong with: left behind. */
+  stranded: string[];
 }
 
 /**
@@ -4508,18 +4605,21 @@ export type SpawnAgentParams = TerminalSize & {
   template?: string;
   /** Its first message. Empty or missing starts it at its prompt, named `new-agent-N`; no message is sent. */
   prompt?: string;
+  /** What it is for (`Agent.purpose`): one line, cut to `MAX_PURPOSE_LENGTH`. None without. */
+  purpose?: string;
   /** Start a Codex agent even though its worktree has Codex config of its own (see `AGENT_ERROR.projectCodexConfig`). */
   allowProjectCodexConfig?: boolean;
   /** Shown on its tile; made from the prompt when missing. */
   name?: string;
   /**
-   * An issue in the zone's tracker to start from: the agent is linked to it, its branch is named from it
-   * (`acme-12-short-title`), and the issue comes first in its prompt, before `prompt`.
+   * An issue to start from: the agent is linked to it, its branch is named from it (`acme-12-short-title`), and the
+   * issue comes first in its prompt, before `prompt`. Read from `issueZoneId`'s tracker, else its own zone's, else the
+   * tracker of the zone that names the issue's team, its starter's zone, or a zone of its repo.
    */
   issueId?: string;
   /**
    * The zone whose tracker `issueId` is in, when it isn't the agent's own zone: for an agent started from an issue card
-   * loose on the board, or one picked a repo for. Its own zone without.
+   * loose on the board, or one picked a repo for. Without, the tracker that would have it (`issueId`).
    */
   issueZoneId?: string;
   /** Where its tile goes: in the zone (the board slots it in without), or on the board for a loose one. */
@@ -5018,11 +5118,30 @@ export interface DaemonMethods {
    */
   'agent.decidePermission': { params: SessionRef & { requestId: string } & PermissionDecision; result: null };
   /**
+   * The user's answer to the remove ask `askId` of the orchestrator `sessionId`: with `allow`, removes its
+   * tiles not held back, and those of `include` that are; without, removes nothing. Resolves once they are removed, with
+   * what the orchestrator is told. The app's alone: refused to every board token, the orchestrator's own among them.
+   * Fails with `invalidParams` when that ask is no longer waiting.
+   */
+  'removeAsk.decide': { params: SessionRef & { askId: string; allow: boolean; include?: string[] }; result: RemoveAskResult };
+  /**
    * Releases the agent's held permission prompt `requestId` with no decision, so the harness asks in its terminal at
    * once instead of when the hold lapses. Answers nothing for the user. Fails with `AGENT_ERROR.permissionGone` if it is
    * not held any more.
    */
   'agent.releasePermission': { params: SessionRef & { requestId: string }; result: null };
+  /**
+   * Keeps the user's answer (null clears it) to question `index` of the agent's question prompt `requestId`
+   * (`PermissionPrompt.dialog`), sending nothing to Claude yet. Fails with `AGENT_ERROR.permissionGone` once that prompt
+   * is no longer held (answered in its terminal, sent, gone), and `invalidParams` for an answer its question can't take.
+   */
+  'agent.answerQuestion': { params: SessionRef & { requestId: string; index: number; answer: PromptAnswer | null }; result: null };
+  /**
+   * Sends the answers kept on the agent's question prompt `requestId` to Claude's dialog, through its held hook (an
+   * allow whose `updatedInput` carries them). Fails with `invalidParams` while any question is unanswered, and with
+   * `AGENT_ERROR.permissionGone` once that prompt is no longer held: nothing is sent to another one.
+   */
+  'agent.sendAnswers': { params: SessionRef & { requestId: string }; result: null };
   /**
    * Links the agent to an issue in the tracker of a zone of its own repo (the one it sits in, if it is one), or
    * unlinks it with null. Its branch stays as it is.
@@ -5155,6 +5274,17 @@ export interface DaemonMethods {
    * orchestrator started may be. Resolves with the agent, or null once removed.
    */
   'orchestrator.close': { params: { token?: string; sessionId: string; remove?: boolean }; result: Agent | null };
+  /**
+   * Asks the user to remove tiles in the orchestrator's scope that it did not start, in one prompt, and waits
+   * for their answer: as long as `timeoutMs` (`DEFAULT_ASK_WAIT_MS` by default, at most `MAX_ASK_WAIT_MS`). It is
+   * withdrawn, removing nothing, once its connection closes or the orchestrator's next turn begins (a prompt typed or
+   * sent to it). Nothing is removed until the user presses Allow, and then each tile goes as the user's own Delete takes
+   * it (its worktree and branch, never forced). A tile still running, with a live agent under it, or whose reviewer would
+   * go with it or is itself held back, is held back unless the user ticks it, and a tile whose reviewer stays always
+   * stays. Refused (`outOfScope`) whole if any tile is out of scope; refused (`invalidParams`) if a tile is the
+   * orchestrator itself, and to the user's side, which removes them itself.
+   */
+  'orchestrator.askRemove': { params: { token?: string; sessionIds: string[]; timeoutMs?: number }; result: RemoveAskResult };
   /**
    * Hands the orchestrator `from`'s crew (the agents it started) and what it made (notes, lane labels, clocks, shapes,
    * connectors, zones and edges) to the orchestrator `to`, as if `to` had started and made them: `to` may then arrange,
@@ -5323,7 +5453,7 @@ export interface DaemonMethods {
    * two free levels of crew depth. `roundLimit` replaces the prefab's for this crew alone (the prompt box's Stop after).
    */
   'orchestrator.startPrefab': {
-    params: { token?: string; name: string; prompt?: string; zoneId?: string; repo?: string; issueId?: string; roundLimit?: number };
+    params: { token?: string; name: string; prompt?: string; zoneId?: string; repo?: string; issueId?: string; description?: string; roundLimit?: number };
     result: PrefabStarted;
   };
   /** The running crews the caller reaches (by their builders), newest first; the one `crewId` names alone if given. */
@@ -5971,6 +6101,7 @@ export const ORCHESTRATOR_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMet
   'orchestrator.pause',
   'orchestrator.wake',
   'orchestrator.close',
+  'orchestrator.askRemove',
   'orchestrator.handover',
   'orchestrator.addEdge',
   'orchestrator.removeEdge',

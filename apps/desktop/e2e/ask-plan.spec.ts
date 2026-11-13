@@ -6,6 +6,7 @@ import { launch, screen, sessionWindow, spawnAgent, tile, windowKey } from './ag
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test, tabText } from './launch.ts';
 import { scratch } from './scratch.ts';
 import { serveWebPages } from './web-server.ts';
+import { showTileParts } from './settings-helpers.ts';
 
 // An agent asks the user and presents plans through the board MCP, and the user answers from the inbox and
 // the Plan tab. The fake claude's `ask-plan` scenario does the asking; nothing here answers for the user.
@@ -39,6 +40,7 @@ async function withApp(body: (window: Page, app: ElectronApplication) => Promise
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, setup.env);
   try {
+    await showTileParts(window, ['chips', 'statePill']);
     await pickFolderNext(app, setup.repo);
     await browseForZone(window);
     await body(window, app);
@@ -269,7 +271,14 @@ test('an HTML plan runs its script in a view of its own, and reaches neither the
       const windowsBefore = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length);
       const agent = await spawn(window, `Plan HTML: ${server.url}`);
 
-      await agentTile(window, agent).getByTestId('tile-plan').click();
+      // Its chip, or its row in +N when the footer folds it.
+      const chip = agentTile(window, agent).getByTestId('tile-plan');
+      await expect(chip).toHaveCount(1);
+      if (await chip.isVisible()) await chip.click();
+      else {
+        await agentTile(window, agent).getByTestId('tile-folded').click();
+        await window.getByTestId('tile-folded-row').filter({ hasText: /plan/i }).first().click();
+      }
       await expect(planView(window).getByTestId('plan-body')).toHaveAttribute('data-format', 'html');
       await expect(planView(window).getByTestId('plan-page')).toHaveAttribute('data-drawn', 'true');
 

@@ -58,13 +58,97 @@ async function hasCommit(repoRoot: string): Promise<boolean> {
  * Why there is nothing to start from at the repo's branch `branch`, which has no commit: the repo has none yet, the
  * branch is one checked out with none yet (an agent's in a repo that had none), or there is no such branch.
  */
-export async function noBranchWhy(repoRoot: string, branch: string): Promise<string> {
+async function noBranchWhy(repoRoot: string, branch: string): Promise<string> {
   if (!(await hasCommit(repoRoot))) return `${basename(repoRoot)} has no commits yet: there is nothing to start from until it has a first commit`;
   const listed = await runGit(repoRoot, ['worktree', 'list', '--porcelain']);
   if (listed.ok && listed.stdout.split('\n').includes(`branch refs/heads/${branch}`)) {
     return `${branch} has no commits yet: there is nothing to start from until it has one`;
   }
   return `${basename(repoRoot)} has no branch ${branch}`;
+}
+
+/** Whether the repo has `ref`, naming a commit. */
+const hasCommitRef = async (repoRoot: string, ref: string): Promise<boolean> =>
+  (await runGit(repoRoot, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])).ok;
+
+/**
+ * How long a base branch's fetch from its remote may take: a branch the user named on a remote (`origin/<branch>`), and
+ * a bare name the repo doesn't have, which may be a typo, so is given less.
+ */
+const BASE_FETCH_TIMEOUT_MS = { named: 60_000, guessed: 15_000 };
+
+/** The repos whose base branch is being resolved, each to the end of its last resolution: one at a time per repo. */
+const resolving = new Map<string, Promise<unknown>>();
+
+/** Runs `task` once every earlier one for `repoRoot` has ended, so two spawns never fetch or make one branch at once. */
+async function oneAtATime<T>(repoRoot: string, task: () => Promise<T>): Promise<T> {
+  const before = resolving.get(repoRoot) ?? Promise.resolve();
+  const run = before.then(task, task);
+  const settled = run.catch(() => undefined);
+  resolving.set(repoRoot, settled);
+  void settled.then(() => {
+    if (resolving.get(repoRoot) === settled) resolving.delete(repoRoot);
+  });
+  return run;
+}
+
+/**
+ * The repo's own branch to start an agent from for `base`, a checked branch name: `base` itself when the repo
+ * has it; else, for a branch of a remote (`origin/<branch>`, or `<branch>` on `origin`, or on the one remote there is),
+ * the local branch of that name at the remote's tip, tracking it. The remote's branch is fetched each time (the
+ * remote-tracking ref the repo has stands in only when the fetch fails), so an agent never starts from a stale tip. A
+ * local branch of that name is taken only at the remote's tip, or moved there when it is behind and no worktree has it
+ * checked out; one that has gone its own way is refused, never moved.
+ *
+ * `check`, when given, sees the ref of the commit the branch will be at before any local branch is made or moved, and
+ * throws to refuse it, so a refused base leaves the repo's branches as they were. Throws, saying why, when no remote has
+ * it either.
+ */
+export async function localBaseBranch(repoRoot: string, base: string, check?: (ref: string, name: string) => Promise<void>): Promise<string> {
+  const local = `refs/heads/${base}`;
+  if (await hasCommitRef(repoRoot, local)) {
+    await check?.(local, base);
+    return base;
+  }
+  return oneAtATime(repoRoot, async () => {
+    const remotes = (await runGit(repoRoot, ['remote'])).stdout.split('\n').filter((name) => name !== '');
+    const slash = base.indexOf('/');
+    const named = slash > 0 && remotes.includes(base.slice(0, slash)) ? { remote: base.slice(0, slash), branch: base.slice(slash + 1) } : undefined;
+    const fallback = remotes.includes('origin') ? 'origin' : remotes.length === 1 ? remotes[0] : undefined;
+    const { remote, branch } = named ?? { remote: fallback, branch: base };
+    if (remote === undefined || branch === '') throw new Error(await noBranchWhy(repoRoot, base));
+    const tracking = `refs/remotes/${remote}/${branch}`;
+    // Never asks for a password: a remote that wants one is as good as none here.
+    const timeout = named === undefined ? BASE_FETCH_TIMEOUT_MS.guessed : BASE_FETCH_TIMEOUT_MS.named;
+    await runGit(repoRoot, ['fetch', '--quiet', '--no-tags', remote, `+refs/heads/${branch}:${tracking}`], timeout, { GIT_TERMINAL_PROMPT: '0' });
+    const tip = await runGit(repoRoot, ['rev-parse', '--verify', '--quiet', `${tracking}^{commit}`]);
+    if (!tip.ok) throw new Error(await noBranchWhy(repoRoot, base));
+    const head = `refs/heads/${branch}`;
+    const mine = await runGit(repoRoot, ['rev-parse', '--verify', '--quiet', `${head}^{commit}`]);
+    if (mine.ok && mine.stdout === tip.stdout) {
+      await check?.(head, branch);
+      return branch;
+    }
+    if (mine.ok) {
+      const behind = (await runGit(repoRoot, ['merge-base', '--is-ancestor', mine.stdout, tip.stdout])).ok;
+      const listed = await runGit(repoRoot, ['worktree', 'list', '--porcelain']);
+      const checkedOut = !listed.ok || listed.stdout.split('\n').includes(`branch ${head}`);
+      if (!behind || checkedOut) {
+        throw new Error(
+          `${branch} here is not ${remote}/${branch}` + (behind ? ', and is checked out, so it is not moved' : ', and has commits it lacks') +
+            `: give --base ${branch} to start from it, or update it`,
+        );
+      }
+      await check?.(tracking, branch);
+      const moved = await runGit(repoRoot, ['update-ref', head, tip.stdout, mine.stdout]);
+      if (!moved.ok) throw new Error(`could not move ${branch} to ${remote}/${branch}: ${moved.stderr.trim()}`);
+      return branch;
+    }
+    await check?.(tracking, branch);
+    const made = await runGit(repoRoot, ['branch', '--quiet', '--track', '--end-of-options', branch, tracking]);
+    if (!made.ok) throw new Error(`could not make ${branch} from ${remote}/${branch}: ${made.stderr.trim()}`);
+    return branch;
+  });
 }
 
 /** The first git that can add a worktree on a branch with no commits (`git worktree add --orphan`). */

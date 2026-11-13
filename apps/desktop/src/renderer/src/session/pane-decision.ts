@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import { planPending, type Agent, type AgentAsk, type PermissionPrompt, type PlanSummary } from '@agent-board/daemon/protocol';
+import { dialogStatus } from '../board/quick-ask';
 
 /** A decision the agent waits on the user for, shown above the pane's composer under the Simplified design. */
 export type PaneDecision = { kind: 'permission'; prompt: PermissionPrompt } | { kind: 'ask'; ask: AgentAsk } | { kind: 'plan'; plan: PlanSummary };
@@ -12,11 +13,12 @@ export const decisionId = (decision: PaneDecision): string => (decision.kind ===
 
 /**
  * What `agent` waits on the user for: the permission prompts the board still holds the harness for (oldest first, as
- * their hold runs out and the terminal asks instead; one asking there already is the banner's), then, as the Needs you
- * inbox lists them, its question and its plan still to be decided.
+ * their hold runs out and the terminal asks instead; one asking there already is the banner's), with Claude's question
+ * dialog the board answers, until its call runs (what became of the answers shows there), then, as the Needs you inbox
+ * lists them, its question and its plan still to be decided.
  */
 function pendingDecisions(agent: Waiting): PaneDecision[] {
-  const held = (agent.permissions ?? []).filter((prompt) => prompt.heldUntil !== null).sort((a, b) => a.requestedAt.localeCompare(b.requestedAt));
+  const held = (agent.permissions ?? []).filter((prompt) => prompt.heldUntil !== null || dialogStatus(prompt) !== 'terminal').sort((a, b) => a.requestedAt.localeCompare(b.requestedAt));
   return [
     ...held.map((prompt): PaneDecision => ({ kind: 'permission', prompt })),
     ...(agent.ask !== null ? [{ kind: 'ask', ask: agent.ask } as const] : []), ...(planPending(agent) ? [{ kind: 'plan', plan: agent.plan } as const] : [])];
@@ -68,4 +70,4 @@ export function subscribeDeferred(listener: () => void): () => void {
 }
 
 /** The decisions put off in this window, followed as they change. */
-export const useDeferredDecisions = (): ReadonlySet<string> => useSyncExternalStore(subscribeDeferred, deferredDecisions);
+export const useDeferredDecisions = (): ReadonlySet<string> => useSyncExternalStore(subscribeDeferred, deferredDecisions, deferredDecisions);

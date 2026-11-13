@@ -4,6 +4,7 @@ import * as api from './api';
 /** Every `*_IPC` channel the preload and main share. Adding or renaming one is a change to the app's exposed surface. */
 const CHANNELS: string[] = [
   'agent:answer',
+  'agent:answerQuestion',
   'agent:askSelection',
   'agent:captureSelection',
   'agent:changed',
@@ -11,6 +12,7 @@ const CHANNELS: string[] = [
   'agent:clearUnsent',
   'agent:continueOnCredits',
   'agent:decidePermission',
+  'agent:decideRemove',
   'agent:delete',
   'agent:dismissStart',
   'agent:interrupt',
@@ -28,6 +30,7 @@ const CHANNELS: string[] = [
   'agent:restart',
   'agent:resume',
   'agent:retryStart',
+  'agent:sendAnswers',
   'agent:sendUnsent',
   'agent:setEffort',
   'agent:setMuted',
@@ -119,6 +122,8 @@ const CHANNELS: string[] = [
   'item:read-queue',
   'item:taken-jobs',
   'item:update',
+  'menuBar:report',
+  'menuBar:run',
   'minimised:report',
   'minimised:restore',
   'orchestrator:activity',

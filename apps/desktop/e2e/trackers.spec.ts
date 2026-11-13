@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { test, connectedDaemonPid, launchApp, pickFolderNext, removeDataDir, tempDataDir, browseForZone } from './launch.ts';
 import { agents, expectCardBesideTile, LINEAR_API_KEY, listFinishedTurns, serveLinearFixtures, setZoneTracker, tileAction, untilStarted } from './agent-helpers.ts';
 import { scratch } from './scratch.ts';
+import { showTileParts } from './settings-helpers.ts';
 
 const tile = (window: Page, sessionId: string) =>
   window.locator(`[data-testid="agent-tile"][data-session-id="${sessionId}"]`);
@@ -33,6 +34,7 @@ test('a zone connects to Linear, an agent starts from an issue on its branch, an
   try {
     const window = await app.firstWindow();
     await connectedDaemonPid(window);
+    await showTileParts(window, ['chips', 'branchAlways']);
     await pickFolderNext(app, repo);
     await browseForZone(window);
 
@@ -140,6 +142,7 @@ test('a zone takes its issues from a GitHub repo through gh, an agent starts fro
   try {
     const window = await app.firstWindow();
     await connectedDaemonPid(window);
+    await showTileParts(window, ['chips', 'statePill']);
     // Its waiting pill, which sets how many PR chips fold, reads as needing you once Needs you lists finished turns.
     await listFinishedTurns(window);
     await pickFolderNext(app, repo);

@@ -9,7 +9,8 @@ import { useTechnicalDetails } from '../technical';
 import { CrewFramesContext } from './crew-view';
 import { CrewFrameBoxes } from './CrewFrameBoxes';
 import { FoldButton } from './FoldedZone';
-import { projectContextMenu, projectMenu, type ProjectMenuInput } from './menu-model';
+import { projectContextMenu, projectMenu, type ModelEntry, type ProjectMenuInput } from './menu-model';
+import { useMenuBarSection } from '../keys/menu-bar-bridge';
 import { ProjectSummaryContext } from './project-summary';
 import { StatusGlyph } from './StatusMark';
 import {
@@ -29,6 +30,9 @@ import {
 
 /** Puts a new sticky note on the board where the screen point `at` is. */
 export const NewNoteContext = createContext<(at: { x: number; y: number }) => void>(() => {});
+
+/** No rows: the menu bar's Project menu while the well isn't selected. */
+const NO_ROWS: readonly ModelEntry[] = [];
 
 /**
  * A zone under the Simplified design: a project, drawn as a neutral well with a heading of its colour's dot, its name, how
@@ -75,6 +79,8 @@ export function ProjectWell({ data: { zone, tileCount = 0, resizeMin, shelves, c
     rename: renaming.startSoon,
     actions: { ...binding, newAgent, newShell, pickTracker, bind, cancelClone, addIssue },
   };
+  // The menu bar's Project menu, while it is selected.
+  useMenuBarSection('project', selected === true, selected ? projectMenu(input) : NO_ROWS);
   const folder = zone.repoRoot === null ? (zone.userFolder ? zone.groupFolder : null) : zone.folder === '' ? zone.repoRoot : `${zone.repoRoot}/${zone.folder}`;
   const onContextMenu = (event: MouseEvent) => {
     // A right-click in one of its menus reaches here too, through the portal: it is the menu's, not a new one.

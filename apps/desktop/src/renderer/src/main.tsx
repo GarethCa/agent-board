@@ -41,6 +41,7 @@ import { followTechnical } from './technical';
 import { followDock } from './dock';
 import { followExtendedShortcuts } from './keys/extended-shortcuts';
 import { followEscapeHatch } from './keys/escape-hatch';
+import { startMenuBar } from './keys/menu-bar-bridge';
 import { ToastProvider, TooltipProvider } from './ui';
 import { ParkThought } from './keys/ParkThought';
 
@@ -84,6 +85,9 @@ if (DEMO) document.documentElement.dataset.demo = '';
 followExtendedShortcuts();
 followEscapeHatch();
 followViewSettings();
+
+// The menu bar's items press this window's keys, and it shows the menus of what is selected here (keys/menu-bar-bridge.ts).
+startMenuBar();
 
 // How the window is framed, for the styles that leave room for macOS's traffic lights and draw the drag regions round
 // them. In full screen the lights hide, and what sat beside them moves into the corner.

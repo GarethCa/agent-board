@@ -6,7 +6,7 @@ import { permissionPrompt, planPending, questionPrompt, type Agent, type Undeliv
 import { stepsWaitLine, toolSummary } from '../../../shared/needs-you';
 import { Button, IconButton, Menu, type IconButtonProps, type MenuEntry } from '../ui';
 import { cx } from '../ui/cx';
-import { askTitle } from './quick-ask';
+import { askTitle, tileDialogOf } from './quick-ask';
 import { twoStep, TWO_STEP_MS, type TwoStep, type TwoStepEvent } from './two-step';
 
 /**
@@ -31,7 +31,8 @@ export function askOf(agent: Agent): { tool?: string; text: string; title?: stri
   // Claude's question tool's call shows as its questions with their options, as a question through the board does.
   if (prompt?.questions != null) {
     const text = prompt.questions.map(({ question, options }) => (options.length === 0 ? question : `${question}\n${options.map((option) => option.label).join(' · ')}`)).join('\n');
-    return { text, title: `${text}\n\nOpen the agent to answer.`, question: true };
+    const where = tileDialogOf(agent) !== undefined ? 'Answer from its chip, or in its terminal.' : 'Open the agent to answer.';
+    return { text, title: `${text}\n\n${where}`, question: true };
   }
   if (prompt !== undefined) return { tool: prompt.toolName, text: toolSummary(prompt) };
   if (agent.ask !== null && agent.ask.card !== null) return { text: 'Asking you on a steps card', title: agent.ask.question, question: true };

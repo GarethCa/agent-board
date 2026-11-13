@@ -4,6 +4,7 @@ import type { ReviewRound } from '@agent-board/daemon/protocol';
 import { agents, launch, sessionWindow, spawnAgent, tile, tileAction } from './agent-helpers.ts';
 import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone } from './launch.ts';
 import { scratch } from './scratch.ts';
+import { showTileParts } from './settings-helpers.ts';
 
 const rounds = (page: Page): Promise<ReviewRound[]> => page.evaluate(() => window.agentBoard.reviews.list());
 
@@ -15,6 +16,7 @@ test("a reviewer spawned from an implementer's tile leaves its doc and ends; the
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env);
   try {
+    await showTileParts(window, ['chips']);
     await pickFolderNext(app, repo);
     await browseForZone(window);
     await spawnAgent(window, 'monorepo', 'Write the code');

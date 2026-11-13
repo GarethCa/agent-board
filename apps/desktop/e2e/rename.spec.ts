@@ -1,6 +1,6 @@
 import { expect, type Locator, type Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
-import { agents, launch, openSubmenu, sessionWindow, SHELL_ENV, spawnAgent, tile, zoneNamed, zones } from './agent-helpers.ts';
+import { agents, launch, openSubmenu, tileGroup, sessionWindow, SHELL_ENV, spawnAgent, tile, zoneNamed, zones } from './agent-helpers.ts';
 import { test, addEmptyZone, browseForZone, pickFolderNext, removeDataDir, tempDataDir } from './launch.ts';
 import { scratch } from './scratch.ts';
 import { clickClosing } from './windows.ts';
@@ -155,16 +155,17 @@ test('renames from the session window header, the menus and a popped-out window,
 
     // The tile's context menu, then its More menu, the same menu (Escape leaves the name alone).
     await name.click({ button: 'right' });
-    await openSubmenu(window, 'Settings');
-    await window.getByRole('menuitem', { name: 'Rename' }).click();
+    await openSubmenu(window, tileGroup('Settings'));
+    // By its start: Agent ▸ also copies the branch, which this test's name puts in.
+    await window.getByRole('menuitem', { name: /^Rename/ }).click();
     await expect(field(window)).toBeFocused();
     await field(window).fill('From context menu');
     await field(window).press('Enter');
     await expect(name).toHaveText('From context menu');
     await tile(window).hover();
     await tile(window).getByRole('button', { name: 'More' }).click();
-    await openSubmenu(window, 'Settings');
-    await window.getByRole('menuitem', { name: 'Rename' }).click();
+    await openSubmenu(window, tileGroup('Settings'));
+    await window.getByRole('menuitem', { name: /^Rename/ }).click();
     await expect(field(window)).toBeFocused();
     await field(window).press('Escape');
     await expect(name).toHaveText('From context menu');

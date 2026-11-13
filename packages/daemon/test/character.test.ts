@@ -23,7 +23,7 @@ const set = (pose: AgentCharacter['pose'], extra: Partial<AgentCharacter> = {}):
 
 /** The facts `characterReading` reads of an agent: live, at work, asking nothing. */
 const agent = (extra: Partial<Agent> = {}): Agent =>
-  ({ state: 'running', endedAt: null, permissions: [], ask: null, plan: null, stepsWait: null, flag: null, ledBy: null, character: null, ...extra }) as unknown as Agent;
+  ({ state: 'running', endedAt: null, permissions: [], ask: null, removeAsk: null, plan: null, stepsWait: null, flag: null, ledBy: null, character: null, ...extra }) as unknown as Agent;
 
 describe("reading an agent's character", () => {
   it('names every pose an agent may set, a face and a prop, and refuses a word outside them by naming the list', () => {

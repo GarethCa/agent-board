@@ -218,19 +218,39 @@ export async function sessionItems(window: Page): Promise<Locator> {
 }
 
 /**
- * Picks `action` from a tile's More menu, inside the group `within` names where an agent's menu puts it there: Delete
+ * Picks the row whose name starts with `action` from a tile's More menu, inside the group `within` names where an agent's menu puts it there: Delete
  * agent at the top; Schedule…, Link issue… or Mute notifications in Settings; Restart agent in Run; Run gate or Review
  * its work in Review & gate; Fold to a chip in Arrange. A shell's menu has no groups.
  */
 export async function tileAction(tile: Locator, action: string, within?: string): Promise<void> {
   await tile.getByRole('button', { name: 'More' }).click();
-  if (within !== undefined) await openSubmenu(tile.page(), within);
-  await tile.page().getByRole('menuitem', { name: action }).click();
+  if (within !== undefined) await openSubmenu(tile.page(), tileGroup(within));
+  await tile.page().getByRole('menuitem', { name: startsWith(action) }).click();
 }
+
+/**
+ * The group of an agent tile's menu that holds what Simplified's group `name` holds: under Classic (M3), Settings,
+ * Review & gate and Copy are in Agent, and Arrange is in Board.
+ */
+export function tileGroup(name: string): string {
+  if (runDesign() === 'simplified') return name;
+  const classic: Record<string, string> = { Settings: 'Agent', 'Review & gate': 'Agent', Copy: 'Agent', Arrange: 'Board' };
+  return classic[name] ?? name;
+}
+
+/**
+ * The row of the tile menu's group that holds what Simplified's group `name` holds (see `tileGroup`), by the start of
+ * its name: Classic's Agent, as a bare name, would also find Delete agent.
+ */
+export function groupName(name: string): RegExp {
+  return startsWith(tileGroup(name));
+}
+
+const startsWith = (name: string) => new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`);
 
 /** Opens the group `name` of the menu open, as a click on its row does, and waits for its rows. */
 export async function openSubmenu(page: Page, name: string): Promise<void> {
-  const row = page.getByRole('menuitem', { name: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`) });
+  const row = page.getByRole('menuitem', { name: startsWith(name) });
   await row.click();
   await expect(row).toHaveAttribute('aria-expanded', 'true');
 }

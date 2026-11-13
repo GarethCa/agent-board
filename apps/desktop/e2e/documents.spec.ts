@@ -6,6 +6,7 @@ import { launch, screen, sessionWindow, setClickOpens, spawnAgent, tile, TURN_MS
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test, tabText } from './launch.ts';
 import { scratch } from './scratch.ts';
 import { centreOf, drag, settledBox } from './board-helpers.ts';
+import { showTileParts } from './settings-helpers.ts';
 
 // An agent shows the user a document through the board MCP: a Document tab in its window, and a card on the board. The
 // user edits a Markdown one there, which writes the file and tells the agent what changed. The fake claude's
@@ -29,6 +30,7 @@ async function withApp(body: (window: Page, app: ElectronApplication) => Promise
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, setup.env);
   try {
+    await showTileParts(window, ['chips']);
     await pickFolderNext(app, setup.repo);
     await browseForZone(window);
     await body(window, app);

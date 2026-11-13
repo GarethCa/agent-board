@@ -7,7 +7,7 @@ import { BOARD_HELP, COMMAND_HELP, runBoardCommand } from '../src/board-cli.ts';
 import { runAgentBoardCli } from '../src/cli.ts';
 import { paneIds } from '../src/pane-layout.ts';
 import { daemonPaths, defaultDataDir } from '../src/paths.ts';
-import { AGENT_NOTE_SIZE, newShapeData, type AgentUpdatedEvent, type DaemonEvent } from '../src/protocol.ts';
+import { AGENT_NOTE_SIZE, MAX_PURPOSE_LENGTH, newShapeData, type AgentUpdatedEvent, type DaemonEvent } from '../src/protocol.ts';
 import { connectTestClient, git, recordEvents, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
 
 const SIZE = { cols: 100, rows: 30 };
@@ -359,6 +359,24 @@ describe('orchestrating from the command line', () => {
 
     const refused = await run(env, 'new', '--zone', ref('zone', web.id), '--harness', 'codex', '--effort', 'max', '--', 'Think harder');
     expect(refused).toMatchObject({ code: 1, err: expect.stringContaining('Codex takes a reasoning effort of low, medium, high or xhigh') });
+  });
+
+  it('starts an agent with its purpose from --description: one line, cut to the cap, for new and new --prefab', async () => {
+    const { env, client, web } = await board();
+    const purposeOf = async (name: string) => (await client.call('agent.list')).find((agent) => agent.name === name)!.purpose;
+
+    expect(await run(env, 'new', '--zone', ref('zone', web.id), '--name', 'about', '--description', '  Builds the\n  overview  ', '--', 'Go')).toMatchObject({ code: 0, err: '' });
+    expect(await purposeOf('about')).toBe('Builds the overview');
+
+    const long = 'x'.repeat(MAX_PURPOSE_LENGTH + 20);
+    expect(await run(env, 'new', '--zone', ref('zone', web.id), '--name', 'long', '--description', long, '--', 'Go')).toMatchObject({ code: 0 });
+    expect((await purposeOf('long'))!.length).toBe(MAX_PURPOSE_LENGTH);
+
+    expect(await run(env, 'new', '--zone', ref('zone', web.id), '--name', 'bare', '--', 'Go')).toMatchObject({ code: 0 });
+    expect(await purposeOf('bare')).toBeNull();
+
+    const prefab = JSON.parse((await run(env, 'new', '--prefab', 'Solo agent', '--zone', ref('zone', web.id), '--description', 'Tidies up', '--json', '--', 'Tidy up')).out) as { started: { name: string }[] };
+    expect(await purposeOf(prefab.started[0]!.name)).toBe('Tidies up');
   });
 
   it('checks each command’s options before it connects', async () => {

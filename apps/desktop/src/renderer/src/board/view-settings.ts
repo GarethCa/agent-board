@@ -1,7 +1,7 @@
 // The board's view settings: what a double-click on a tile opens, how a crew and agent notes look, which connections
-// are drawn, which sidebar an agent's window shows, whether terminals draw with the GPU, and what an agent's tile shows. Kept in the daemon's view state, and held here once per window, so the board and the Settings window read
+// are drawn, which sidebar an agent's window shows, whether terminals draw with the GPU, what an agent's tile shows, and when the chat's Expand all / Collapse all show. Kept in the daemon's view state, and held here once per window, so the board and the Settings window read
 // and set the same values. Main tells every window of a change, so each follows live.
-import { useSyncExternalStore } from 'react';
+import { createContext, useContext, useMemo, useSyncExternalStore } from 'react';
 import { VIEW_KEYS } from '../../../shared/view-saver';
 import { clickOpensFrom, type ClickOpens } from './click-opens';
 import { connectionsViewFrom, type ConnectionsView } from './connections-view';
@@ -10,6 +10,7 @@ import { agentNoteLookFrom, type AgentNoteLook } from './items/agent-note-look';
 import { agentSidebarFrom, type AgentSidebar } from '../session/agent-sidebar';
 import { gpuTerminalsFrom } from '../session/terminal-gpu';
 import { keepTerminalsFrom } from '../session/kept-terminals';
+import { chatRunsShowFrom, type ChatRunsShow } from '../session/chat-runs-show';
 import { sameLook, tileShowsFrom, type TileShows } from './tile-shows';
 
 export interface ViewSettings {
@@ -21,6 +22,7 @@ export interface ViewSettings {
   gpuTerminals: boolean;
   keepTerminals: boolean;
   tileShows: TileShows;
+  chatRunsShow: ChatRunsShow;
 }
 
 export const DEFAULT_VIEW_SETTINGS: ViewSettings = {
@@ -32,6 +34,7 @@ export const DEFAULT_VIEW_SETTINGS: ViewSettings = {
   gpuTerminals: gpuTerminalsFrom(undefined),
   keepTerminals: keepTerminalsFrom(undefined),
   tileShows: tileShowsFrom(undefined),
+  chatRunsShow: chatRunsShowFrom(undefined),
 };
 
 /** Each setting's view state key and the reader of what was saved under it (read back untyped). */
@@ -44,6 +47,7 @@ const SETTINGS = {
   gpuTerminals: { key: VIEW_KEYS.gpuTerminals, from: gpuTerminalsFrom },
   keepTerminals: { key: VIEW_KEYS.keepTerminals, from: keepTerminalsFrom },
   tileShows: { key: VIEW_KEYS.tileShows, from: tileShowsFrom },
+  chatRunsShow: { key: VIEW_KEYS.chatRunsShow, from: chatRunsShowFrom },
 } as const;
 
 let current: ViewSettings = DEFAULT_VIEW_SETTINGS;
@@ -124,9 +128,21 @@ export function useViewSettingsLoaded(): boolean {
 
 const tileShowsNow = () => current.tileShows;
 
+/** Parts a gallery turns on for the tiles inside it, over the window's settings: a gallery about chips shows its chips. */
+export const TileShowsOverride = createContext<Partial<TileShows> | null>(null);
+
 /** What an agent's tile shows, for a tile: it draws again only when the look changes, not on any other setting. */
 export function useTileShows(): TileShows {
-  return useSyncExternalStore(subscribe, tileShowsNow, tileShowsNow);
+  const held = useSyncExternalStore(subscribe, tileShowsNow, tileShowsNow);
+  const over = useContext(TileShowsOverride);
+  return useMemo(() => (over ? { ...held, ...over } : held), [held, over]);
+}
+
+const chatRunsShowNow = () => current.chatRunsShow;
+
+/** When the chat's Expand all / Collapse all show, for a session window: it draws again only when that changes. */
+export function useChatRunsShow(): ChatRunsShow {
+  return useSyncExternalStore(subscribe, chatRunsShowNow, chatRunsShowNow);
 }
 
 /** The settings, for a component that shows them; rendered to markup (as the tile tests do), the ones held now. */

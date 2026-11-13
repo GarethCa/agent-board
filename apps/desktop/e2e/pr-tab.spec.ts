@@ -5,6 +5,7 @@ import { rmSync } from 'node:fs';
 import { agents, launch, sessionWindow, showDetails, spawnAgent, tile, useFullSidebar } from './agent-helpers.ts';
 import { browseForZone, pickFolderNext, removeDataDir, runDesign, tempDataDir, test, tabText } from './launch.ts';
 import { scratch } from './scratch.ts';
+import { showTileParts } from './settings-helpers.ts';
 
 const tabs = (page: Page) => sessionWindow(page).getByTestId('session-tab');
 const tabNamed = (page: Page, name: string) => tabs(page).filter({ has: page.getByRole('tab', { name, exact: true }) });
@@ -36,6 +37,7 @@ test("an agent's PR chip opens a PR tab: its description, checks, files and comm
   const appEnv = { ...env, AGENT_BOARD_GH: github.gh, AGENT_BOARD_PULL_REQUEST_POLL_MS: '200' };
   let { app, window } = await launch(dataDir, appEnv);
   try {
+    await showTileParts(window, ['chips']);
     await useFullSidebar(window);
     await pickFolderNext(app, repo);
     await browseForZone(window);

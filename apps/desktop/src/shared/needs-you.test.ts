@@ -49,6 +49,7 @@ const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}
   permissions: [],
   ask: null,
   stepsWait: null,
+  removeAsk: null,
   plan: null,
   docs: [],
   schedule: null,
@@ -59,6 +60,7 @@ const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}
   plainFolder: false,
   orchestrate: null,
   spawnedBy: null,
+  orphanedFrom: null,
   ledBy: null,
   startup: null,
   hooksSilent: false,
@@ -86,7 +88,7 @@ const prompt: PermissionPrompt = {
   requestedAt: '2026-10-09T10:00:00.000Z',
   heldUntil: '2026-10-09T10:00:20.000Z',
   asksInTerminal: false,
-  sessionGrant: null, questions: null,
+  sessionGrant: null, dialog: null, plan: null, questions: null,
 };
 const lapsed: PermissionPrompt = { ...prompt, id: 'p2', heldUntil: null };
 

@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.6.23 (2026-11-13)
+
+- The Classic tile says what an agent is for and what's true now
+- Flake sweep: steady the web-tab login test, harden the Simplified notes shot
+- The chat controls move up beside the Terminal and Activity tabs, freeing the strip
+- The tile menu leads with what each state needs (M3)
+- agent-board new --description sets an agent's purpose as it starts
+- Classic chat shows Claude's plan approval in Claude's words
+- Record Claude Code's start-up screens and test readiness detection against them
+- Answer Claude's question dialog and plan approval from the board
+- A removed orchestrator's crew stays orphaned from it, and another orchestrator may take it over
+- Zones are only logical groups: an agent can start agents in any zone and any repo
+- A crew member's needs_you wakes its orchestrator at once, a burst as one message
+- An orchestrator asks to remove tiles it didn't start, and the user allows or denies the batch in one prompt
+- register the two menu-bar IPC channels in the allowlist test
+- stop exporting three menu-bar names that only their own files use, so knip passes
+- drop a ticket ID from a tokens test comment, so the release leak check is clean
+- The full menu bar: File, Edit, View, Agent, Project, Window and Help
+- Every theme's drawn palette is a snapshot, so a colour that moves fails by name
+- an arrange by role or state removes the lane labels and unedited notes an arrange by issue made; the zone map lints a stranded label or note
+
 ## v0.6.22 (2026-11-12)
 
 **Rolling back:** this release changes the database in a way older versions can't read (`0089_queue_kinds`). It backs the database up first. To go back to an older version afterwards, restore that backup: see [Rolling back](https://github.com/GarethCa/agent-board/blob/main/docs/rolling-back.md).

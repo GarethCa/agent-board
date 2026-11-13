@@ -43,6 +43,7 @@ import { registerShellIpc } from './shells';
 import { registerTrackerIpc } from './trackers';
 import { daemonViewState, registerViewIpc } from './view';
 import { clearWebLogins, registerWebTabIpc } from './web-tabs';
+import { pageKeys } from './page-keys';
 import { registerTabDragIpc } from './tab-drags';
 import { registerWindowIpc } from './windows';
 import { registerZoneIpc } from './zones';
@@ -256,6 +257,8 @@ const boardFullScreen = (window: BrowserWindow) => window.isFullScreen() || (!ap
 const settingsWindow = registerSettingsWindow({ open: openWindow, board: liveBoard, isFullScreen: boardFullScreen });
 /** "Extended keyboard shortcuts", as the windows last saved it: read once the view state is up, then followed. */
 let extendedShortcuts = true;
+/** The presses web pages kept, which the menu bar's accelerators drop. */
+const pageKept = pageKeys(process.platform === 'darwin');
 const webTabs = registerWebTabIpc({
   isBoard: (contents) => board !== undefined && !board.isDestroyed() && board.webContents === contents,
   isSettings: settingsWindow.isSettings,
@@ -263,6 +266,7 @@ const webTabs = registerWebTabIpc({
   // Read as a key is pressed, after `design` is registered below.
   simplified: () => design.current() === 'simplified',
   extended: () => extendedShortcuts,
+  pageKept: (owner, input) => pageKept.kept(owner.id, input),
 });
 const followKeepLogins = (keep: boolean) => {
   if (!keep && keptWebLogins !== false) {
@@ -337,7 +341,7 @@ void app.whenReady().then(() => {
     openAgent(sessionId);
   };
   stopNotifications = registerNotifications(daemon, notify, openFromNotification, showBoard, isSimplified);
-  setAppMenu(() => openBoard(), { settings: () => settingsWindow.show(), overview: () => overviewWindow.show() }, { design, technical }, { liveBoard, openBoard });
+  setAppMenu(() => openBoard(), { settings: () => settingsWindow.show(), overview: () => overviewWindow.show() }, { design, technical }, { liveBoard, openBoard }, pageKept);
   // Start (or find) the daemon at launch, not when the window first asks.
   daemon.call('daemon.health').catch((error: unknown) => console.error('agent-board: could not reach the daemon:', error));
   openBoard();

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, type RefObject } from 'react';
 import type { BoardItem, BoardItemKind, Connector, TileMove, UpdateConnectorParams, UpdateItemParams, ZoneLayout } from '@agent-board/daemon/protocol';
 import { historyStep, inOverlay } from '../../keys';
 import { pressed } from '../../keys/registry';
+import { useMenuBarKey } from '../../keys/menu-bar-bridge';
 import { boundsOnBoard, isItemNode, ITEM_NODE_PREFIX, placeOnBoard, type ItemNodeType } from '../items/items';
 import type { TileData, TileNodeType } from '../tile';
 import { compactSizeOf, isSessionTile, isZone, subjectOf, type BoardNode } from '../tiles';
@@ -312,6 +313,14 @@ export function useEditing(options: EditingOptions) {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [options.loaded, optionsRef, selectAll, duplicate, restack, selection, resetRotation]);
+
+  // Picked in the menu bar, Duplicate and Order run here, not as their keys: ⌘D, ⌘[ and ⌘] are a session window's keys too,
+  // and a pressed key would be taken by a session window that is stepping.
+  useMenuBarKey('edit.duplicate', duplicate);
+  useMenuBarKey('edit.front', () => restack('front'));
+  useMenuBarKey('edit.forward', () => restack('forward'));
+  useMenuBarKey('edit.backward', () => restack('backward'));
+  useMenuBarKey('edit.back', () => restack('back'));
 
   // ⇧S turns the selected arrows round, ahead of the board's S, which would arm the Shape tool: in capture, so it never
   // reaches it. With no arrow selected it is the board's.

@@ -9,6 +9,7 @@ const agent = (overrides: Partial<Agent> = {}): Agent =>
     state: 'running',
     endedAt: null,
     spawnedBy: null,
+    orphanedFrom: null,
     master: false,
     flag: null,
     permissions: [],

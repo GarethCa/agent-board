@@ -6,7 +6,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import { fakeHarnessEnv, McpClient } from '@agent-board/fake-harness';
 import { prefabFile } from '../src/crew-prefabs.ts';
-import { BOARD_ERROR, RPC_ERROR, type CrewPrefab, type DaemonEvent, type HookEvent } from '../src/protocol.ts';
+import { BOARD_ERROR, MAX_PURPOSE_LENGTH, RPC_ERROR, type CrewPrefab, type DaemonEvent, type HookEvent } from '../src/protocol.ts';
 import { connectTestClient, recordEvents, startTestDaemon, TEST_CLI_LAUNCHER, tempDataDir, tempRepo } from './helpers.ts';
 
 const SIZE = { cols: 120, rows: 40 };
@@ -373,6 +373,29 @@ describe('starting a crew from a prefab', () => {
       isError: true,
       text: expect.stringContaining("model is the prefab's to set"),
     });
+  });
+
+  it('starts the agent with the description new_agent is given, with and without prefab, and says what was stored', async () => {
+    const setup = await prefabDaemon();
+    const zoneLead = await lead(setup, 'zone');
+    const mcp = new McpClient(
+      {
+        command: TEST_CLI_LAUNCHER.command,
+        args: [...TEST_CLI_LAUNCHER.args, 'mcp'],
+        env: { ...process.env, AGENT_BOARD_SOCKET: setup.daemon.socketPath, AGENT_BOARD_IDENTITY: zoneLead.token },
+      },
+      tempDataDir(),
+    );
+    const purposeOf = async (name: string) => (await setup.client.call('agent.list')).find((agent) => agent.name === name)?.purpose;
+
+    const plain = await mcp.callTool('new_agent', { prompt: 'Go', name: 'described', description: `Builds the\n overview ${'x'.repeat(100)}` });
+    expect(plain).toMatchObject({ isError: false, text: expect.stringContaining('Its description: "Builds the overview ') });
+    expect((await purposeOf('described'))!.length).toBe(MAX_PURPOSE_LENGTH);
+
+    const crew = await mcp.callTool('new_agent', { prompt: 'Go', prefab: 'Solo agent', description: 'Tidies up' });
+    expect(crew).toMatchObject({ isError: false, text: expect.stringContaining('Its description: "Tidies up"') });
+    const started = (await setup.client.call('agent.list')).filter((agent) => agent.purpose === 'Tidies up');
+    expect(started).toHaveLength(1);
   });
 
   it('is waited on by the wait tool given its crew ref alone, until it stops, as `agent-board wait crew:<id>`', async () => {

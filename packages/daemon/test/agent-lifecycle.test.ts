@@ -818,16 +818,28 @@ describe('deleting an agent', () => {
     expect(broadcasts).toEqual([]);
   });
 
-  it('leaves the agents it started in place, started by no one, and tells their clients', async () => {
-    const { lifecycle, addAgent, events, getRow } = setup();
+  it('leaves the agents it started in place, led by no one but orphaned from it, and tells their clients', async () => {
+    const { lifecycle, addAgent, events, getRow, db } = setup();
     addAgent('parent');
     addAgent('child', { spawnedBy: 'parent' });
     addAgent('other', { spawnedBy: 'someone' });
     await lifecycle.delete('parent', 'a test', false);
-    expect(getRow('child')!.spawned_by).toBeNull();
-    expect(getRow('other')!.spawned_by).toBe('someone');
+    expect(getRow('child')).toMatchObject({ spawned_by: null, orphaned_from: 'parent' });
+    expect(getRow('other')).toMatchObject({ spawned_by: 'someone', orphaned_from: null });
     expect(events).toContain('announce child');
     expect(events).not.toContain('announce other');
+    expect(db.prepare('SELECT session_id, orchestrate FROM removed_orchestrators').all()).toEqual([{ session_id: 'parent', orchestrate: null }]);
+
+    // Its last orphan gone, nothing of it is kept.
+    await lifecycle.delete('child', 'a test', false);
+    expect(db.prepare('SELECT session_id FROM removed_orchestrators').all()).toEqual([]);
+  });
+
+  it('keeps nothing of a removed agent that started no one', async () => {
+    const { lifecycle, addAgent, db } = setup();
+    addAgent('loner');
+    await lifecycle.delete('loner', 'a test', false);
+    expect(db.prepare('SELECT session_id FROM removed_orchestrators').all()).toEqual([]);
   });
 
   it("keeps a copy of a reviewer's review for the follow-ups of its branch", async () => {

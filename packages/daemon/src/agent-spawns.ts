@@ -21,6 +21,7 @@ import {
   effortRefusal,
   MAX_ASK_WAIT_MS,
   MAX_DESCRIPTION_LENGTH,
+  MAX_PURPOSE_LENGTH,
   MAX_ROLE_TEMPLATE_LENGTH,
   MODEL_NAME,
   ORCHESTRATE_SCOPES,
@@ -32,10 +33,11 @@ import {
   type SpawnAgentParams,
   type TerminalSize,
 } from './protocol.ts';
-import { folderPath } from './repo-zone.ts';
+import { folderPath, issueZoneOf } from './repo-zone.ts';
 import { checkNamedTemplate, fillTemplate, roleChoice, type TemplateValues } from './role-templates.ts';
 import { RpcMethodError } from './rpc.ts';
 import { sessionEnv, type SessionHost } from './sessions.ts';
+import { oneLine } from './terminal-input.ts';
 import { frontZ } from './tile-position.ts';
 import { hashToken, newToken } from './tokens.ts';
 import {
@@ -48,6 +50,7 @@ import {
   freeBranchName,
   freeTypedBranch,
   freeWorktreePath,
+  localBaseBranch,
   removeWorktree,
 } from './worktrees.ts';
 import { nameSlug } from './work-units.ts';
@@ -173,6 +176,20 @@ export interface FolderPlace {
 }
 
 /**
+ * A purpose cut to `MAX_PURPOSE_LENGTH` UTF-16 units, the measure `setStatus` checks, at a whole character, with an
+ * ellipsis: what the cap allows is then what `status set --description` accepts again.
+ */
+function cutPurpose(text: string): string {
+  if (text.length <= MAX_PURPOSE_LENGTH) return text;
+  let kept = '';
+  for (const { segment } of new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(text)) {
+    if (kept.length + segment.length > MAX_PURPOSE_LENGTH - 1) break;
+    kept += segment;
+  }
+  return `${kept.trimEnd()}…`;
+}
+
+/**
  * Starts agents: a new one in a worktree of its own, a reviewer of another's work, or a harness session started outside
  * agent-board, adopted; and launches each one's harness, as a relaunch does too.
  */
@@ -198,7 +215,9 @@ export function createAgentSpawns(
   );
   const setPlainFolder = db.prepare('UPDATE agents SET plain_folder = 1 WHERE session_id = ?');
   const selectNames = db.prepare('SELECT name FROM agents');
+  const selectZones = db.prepare('SELECT * FROM zones');
   const setReadOnly = db.prepare('UPDATE agents SET read_only = 1 WHERE session_id = ?');
+  const setPurpose = db.prepare('UPDATE agents SET purpose = ? WHERE session_id = ?');
   const setMaster = db.prepare('UPDATE agents SET master = 1 WHERE session_id = ?');
   const selectBranchReviews = db.prepare('SELECT * FROM branch_reviews WHERE repo_root = ? AND branch = ? ORDER BY id');
   const insertBranchReview = db.prepare('INSERT INTO branch_reviews (repo_root, branch, head, session_id) VALUES (?, ?, ?, ?)');
@@ -417,12 +436,29 @@ export function createAgentSpawns(
     return reviewer === undefined ? undefined : reviewFile(reviewer.worktree);
   };
 
-  /** The zone a new agent's issue comes from: `issueZoneId`, else its own; it must have a tracker. */
-  const issueZone = (params: SpawnAgentParams, zone: ZoneRow | undefined): string => {
-    const id = params.issueZoneId ?? zone?.id;
-    const from = id === undefined ? undefined : getZone(id);
-    if (from === undefined || from.tracker_provider === null) throw invalidParams('only a zone with a tracker starts agents from issues');
-    return from.id;
+  /**
+   * The zone a new agent's issue comes from: `issueZoneId`, which must have a tracker; else whichever zone's tracker
+   * would have it (`issueZoneOf`), as a zone is only a group: its own, the one that names the issue's team,
+   * its starter's, one of its repo.
+   */
+  const issueZone = (params: SpawnAgentParams & { issueId: string }, zone: ZoneRow | undefined, spawnedBy: string | undefined): string => {
+    if (params.issueZoneId !== undefined) {
+      const from = getZone(params.issueZoneId);
+      if (from === undefined || from.tracker_provider === null) throw invalidParams(`${from?.name ?? `zone ${params.issueZoneId}`} has no tracker to read issues from`);
+      return from.id;
+    }
+    const zones = (selectZones.all() as unknown as ZoneRow[]).map((row) => ({
+      id: row.id,
+      name: row.name,
+      repoRoot: row.repo_root ?? row.default_repo,
+      tracker: row.tracker_provider === null || row.tracker_scope === null ? null : { provider: row.tracker_provider, scope: row.tracker_scope, project: row.tracker_project },
+      createdAt: row.created_at,
+    }));
+    const repo = params.repo !== undefined && 'path' in params.repo ? params.repo.path : (zone?.repo_root ?? zone?.default_repo ?? null);
+    const spawnerZoneId = spawnedBy === undefined ? null : (getRow(spawnedBy)?.zone_id ?? null);
+    const found = issueZoneOf({ issueId: params.issueId, zoneId: zone?.id ?? null, spawnerZoneId, repo }, zones);
+    if (typeof found === 'string') throw invalidParams(found);
+    return found.id;
   };
 
   const starts = createAgentStarts(options.broadcast);
@@ -508,7 +544,7 @@ export function createAgentSpawns(
     if (params.orchestrate !== undefined && !ORCHESTRATE_SCOPES.includes(params.orchestrate)) {
       throw invalidParams(`unknown orchestrate scope ${String(params.orchestrate)}`);
     }
-    const fromZone = issueId === undefined ? undefined : issueZone(params, zone);
+    const fromZone = issueId === undefined ? undefined : issueZone({ ...params, issueId }, zone, spawnedBy);
     const id = randomUUID();
     // Named for now by what it was given; one started from an issue is named after it once the issue is read.
     const shownName = name?.trim() || (issueId !== undefined ? issueId : prompt.trim() === '' ? freeAgentName() : defaultName(prompt.trim()));
@@ -607,8 +643,10 @@ export function createAgentSpawns(
       // Timed inside the repo's queue, so a step that gives up frees it for the next start in the repo. `owns` is whether
       // a worktree and branch were made for it, which deleting it removes.
       const { branch, worktree, baseCommit, reviews, owns } = place !== undefined ? { branch: '', worktree: place.cwd, baseCommit: null, reviews: null, owns: false } : mainCheckout ? { ...(await within(inMainCheckout(repoRoot), 'reading the checkout')), owns: false } : await inRepoQueue(repoRoot, () => within((async () => {
+        // A base on a remote only (`origin/<branch>`) is made a local branch first.
+        const baseBranch = params.baseBranch === undefined ? undefined : await localBaseBranch(repoRoot, params.baseBranch).catch(wrapInvalid);
         if (reviewer) {
-          const reviewed = params.baseBranch ?? (await checkedOutBranch(repoRoot).catch(wrapInvalid));
+          const reviewed = baseBranch ?? (await checkedOutBranch(repoRoot).catch(wrapInvalid));
           const worktree = freeWorktreePath(agentWorktreePath(options.worktreesDir, repoRoot, `${reviewed}-review`));
           const head = await addDetachedWorktree(repoRoot, worktree, reviewed).catch(wrapInvalid);
           return { branch: '', worktree, baseCommit: head, reviews: { branch: reviewed, head }, owns: true };
@@ -622,7 +660,7 @@ export function createAgentSpawns(
         const worktree = agentWorktreePath(options.worktreesDir, repoRoot, branch);
         // A repo with no commits yet, and a git too old to branch a worktree from none: it works in the repo's own
         // checkout instead, as an orchestrator in the main checkout does (ADR-0011). Nothing is committed for it.
-        if (!(await addWorktree(repoRoot, worktree, branch, params.baseBranch).catch(wrapInvalid))) {
+        if (!(await addWorktree(repoRoot, worktree, branch, baseBranch).catch(wrapInvalid))) {
           // A branch asked for by name can't be had there: said so, rather than dropped.
           if (typedBranch !== undefined) {
             throw invalidParams(`${basename(repoRoot)} has no commits yet, and this git is too old (before 2.42) to start ${typedBranch} with none: update git, or start the agent without a branch`);
@@ -725,6 +763,9 @@ export function createAgentSpawns(
         firstMessages.set(id, firstMessage);
         options.promptQueued(id);
       }
+      // What it is for, as `setStatus` keeps it: one line, cut to the cap.
+      const purpose = cutPurpose(oneLine(params.purpose ?? ''));
+      if (purpose !== '') setPurpose.run(purpose, id);
       if (readOnly) setReadOnly.run(id);
       if (plain) setPlainFolder.run(id);
       if (place?.master === true) setMaster.run(id);

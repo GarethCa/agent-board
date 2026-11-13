@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Agent } from '@agent-board/daemon/protocol';
 import { PAUSE_HINT, pauseControl, pausedLine, WAKE_HINT } from './paused';
 
-const idle: Pick<Agent, 'endedAt' | 'state' | 'ask' | 'plan' | 'permissions'> = { endedAt: null, state: 'idle', ask: null, plan: null, permissions: [] };
+const idle: Pick<Agent, 'endedAt' | 'state' | 'ask' | 'removeAsk' | 'plan' | 'permissions'> = { endedAt: null, state: 'idle', ask: null, removeAsk: null, plan: null, permissions: [] };
 
 describe('pauseControl', () => {
   it('offers Pause for a live agent between turns, and Wake for a paused one', () => {

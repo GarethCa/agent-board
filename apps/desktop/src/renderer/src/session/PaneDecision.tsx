@@ -10,7 +10,9 @@ import { PermissionButtons, lowerFirst, usePermissionDecision } from '../inbox/p
 import { askAnsweredElsewhere, permissionWaitLine } from '../../../shared/needs-you';
 import { permissionSentence } from '../../../shared/permission-sentence';
 import { QuickAsk, type QuickAskDrafts } from '../board/QuickAsk';
-import { firstOpen } from '../board/quick-ask';
+import { dialogStatus, firstOpen, isDialogPrompt, type DialogPrompt } from '../board/quick-ask';
+import { DialogQuickAsk } from '../board/DialogQuickAsk';
+import { PlanPromptRow } from '../inbox/PlanPromptRow';
 import { useQuickAskActions } from '../board/TileQuickAsk';
 import { decisionId, deferDecision, deferredDecision, paneDecision, useDeferredDecisions } from './pane-decision';
 
@@ -37,6 +39,12 @@ export function PaneDecisions({ agent, onReadPlan, onShowTerminal, chatTheme }: 
   const putOff = deferredDecision(agent, deferred);
   if (decision !== undefined) {
     const onDefer = () => deferDecision(decisionId(decision));
+    if (decision.kind === 'permission' && isDialogPrompt(decision.prompt) && dialogStatus(decision.prompt) !== 'terminal') {
+      return <DialogDecision key={decision.prompt.id} agent={agent} prompt={decision.prompt} onDefer={onDefer} onShowTerminal={onShowTerminal} chatTheme={chatTheme} />;
+    }
+    if (decision.kind === 'permission' && decision.prompt.plan !== null) {
+      return <ClaudePlanDecision key={decision.prompt.id} agent={agent} prompt={decision.prompt} plan={decision.prompt.plan} onDefer={onDefer} onShowTerminal={onShowTerminal} chatTheme={chatTheme} />;
+    }
     if (decision.kind === 'permission') {
       return <PermissionCard key={decision.prompt.id} agent={agent} prompt={decision.prompt} onDefer={onDefer} onShowTerminal={onShowTerminal} chatTheme={chatTheme} />;
     }
@@ -100,6 +108,32 @@ function AskDecision({ agent, ask, onDefer, chatTheme }: { agent: Agent; ask: Ag
   // Several questions are stepped through here as on its tile; one on the board is answered on its card.
   if (ask.card === null && ask.questions.length > 1) return <QuickAskDecision agent={agent} ask={ask} onDefer={onDefer} chatTheme={chatTheme} />;
   return <OneAskDecision agent={agent} ask={ask} onDefer={onDefer} chatTheme={chatTheme} />;
+}
+
+/** Claude's own question dialog: the quick ask, as for an ask, sending to its dialog. */
+function DialogDecision({ agent, prompt, onDefer, onShowTerminal, chatTheme }: { agent: Agent; prompt: DialogPrompt; onDefer(): void; onShowTerminal?(): void; chatTheme?: string }) {
+  const decideLater = useDecideLater(onDefer);
+  return (
+    <section className="pane-decision" data-chat-theme={chatTheme} data-testid="pane-decision" data-kind="dialog" aria-label={`${agent.name}'s questions`} onKeyDown={decideLater}>
+      <DialogQuickAsk sessionId={agent.sessionId} name={agent.name} prompt={prompt} onOpen={onShowTerminal} still={false} />
+      <footer className="pane-decision-foot">
+        <DecideLater onDefer={onDefer} />
+      </footer>
+    </section>
+  );
+}
+
+/** Claude's plan approval, in its words (P1): the row Needs you draws, with Decide later. */
+function ClaudePlanDecision({ agent, prompt, plan, onDefer, onShowTerminal, chatTheme }: { agent: Agent; prompt: PermissionPrompt; plan: string; onDefer(): void; onShowTerminal?(): void; chatTheme?: string }) {
+  const decideLater = useDecideLater(onDefer);
+  return (
+    <section className="pane-decision" data-chat-theme={chatTheme} data-testid="pane-decision" data-kind="claude-plan" aria-label={`${agent.name}'s plan`} onKeyDown={decideLater}>
+      <PlanPromptRow agent={agent} prompt={prompt} plan={plan} onOpen={onShowTerminal} />
+      <footer className="pane-decision-foot">
+        <DecideLater onDefer={onDefer} />
+      </footer>
+    </section>
+  );
 }
 
 /** An ask of several questions: the quick ask itself, one question at a time, then the answers and Send. */

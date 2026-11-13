@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent, LinkedIssue } from '@agent-board/daemon/protocol';
 import {
-  branchSaysMore,
   calmTimes,
   FULL_TILE,
   PARTS_TO_TURN_ON,
@@ -139,25 +138,6 @@ describe('the progress hairline', () => {
   });
 });
 
-describe('the branch row', () => {
-  it('says nothing new for a branch named for its issue', () => {
-    expect(branchSaysMore(agent())).toBe(false);
-    expect(branchSaysMore(agent({ branch: 'abc-12' }))).toBe(false);
-    expect(branchSaysMore(agent({ branch: 'dev/ABC-12-fix-login' }))).toBe(false);
-  });
-
-  it('says something when the branch differs from its issue, or it has no issue', () => {
-    expect(branchSaysMore(agent({ branch: 'abc-120-other' }))).toBe(true);
-    expect(branchSaysMore(agent({ branch: 'spike-login' }))).toBe(true);
-    expect(branchSaysMore(agent({ issue: null }))).toBe(true);
-  });
-
-  it('says nothing with no branch, and always what a reviewer reviews', () => {
-    expect(branchSaysMore(agent({ branch: '', issue: null }))).toBe(false);
-    expect(branchSaysMore(agent({ reviews: { branch: 'abc-12-fix-login', head: 'abcdef1234' } }))).toBe(true);
-  });
-});
-
 describe('the hover card’s details', () => {
   const setBy = { summary: 'Merging', progress: null, updatedAt: ago(0), setBy: 'release-lead' };
 
@@ -169,8 +149,14 @@ describe('the hover card’s details', () => {
     ]);
   });
 
-  it('leads with what the agent says it is for, whatever the look', () => {
-    expect(tileDetails(agent({ purpose: 'Hooks go quiet outside work hours' }), FULL_TILE, true)).toEqual(['For: Hooks go quiet outside work hours']);
+  it('leaves what the agent is for to the line under its name', () => {
+    expect(tileDetails(agent({ purpose: 'Hooks go quiet outside work hours' }), FULL_TILE, true)).toEqual([]);
+  });
+
+  it('lists its chips while the tile leaves them off, and not once they show', () => {
+    const chips = ['ABC-12 · Fix the login', 'PR #44 · open', 'Gate: running', 'Review round 1'];
+    expect(tileDetails(agent({ branch: '' }), QUIET_TILE, false, chips)).toEqual(chips);
+    expect(tileDetails(agent({ branch: '' }), { ...QUIET_TILE, chips: true }, false, chips)).toEqual([]);
   });
 
   it('holds nothing the tile already shows', () => {
@@ -205,7 +191,7 @@ describe('the switches that turn parts back on', () => {
   it('are one for each part the quiet tile leaves off, and none for what it adds', () => {
     const leftOff = (Object.keys(QUIET_TILE) as (keyof TileShows)[]).filter((part) => !QUIET_TILE[part]);
     expect(PARTS_TO_TURN_ON.map((each) => each.part).sort()).toEqual([...leftOff].sort());
-    expect(leftOff).toHaveLength(6);
+    expect(leftOff).toHaveLength(10);
   });
 
   it('change one part and keep the others as they were', () => {

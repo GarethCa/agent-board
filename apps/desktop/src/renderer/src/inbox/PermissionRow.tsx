@@ -6,6 +6,9 @@ import { useAction } from '../use-action';
 import { useSimplified } from '../design';
 import { permissionWaitLine, secondsLeft, toolSummary } from '../../../shared/needs-you';
 import { PermissionButtons, lowerFirst, usePermissionDecision } from './permission-decision';
+import { DialogQuickAsk } from '../board/DialogQuickAsk';
+import { dialogStatus, isDialogPrompt } from '../board/quick-ask';
+import { PlanPromptRow } from './PlanPromptRow';
 
 /** A tool input longer than this, or on several lines, is clamped to one line with a Show all toggle. */
 const CLAMP_AT = 60;
@@ -28,13 +31,19 @@ interface PermissionRowProps {
  */
 export function PermissionRow(props: PermissionRowProps) {
   const simplified = useSimplified();
-  if (props.prompt.questions !== null) return <QuestionsRow agent={props.agent} questions={props.prompt.questions} onOpen={props.onOpen ?? props.onReview} />;
+  const { agent, prompt } = props;
+  const open = props.onOpen ?? props.onReview;
+  // Claude's question dialog: answered here while the board can, else read only (a subagent's, or unreadable).
+  if (isDialogPrompt(prompt) && dialogStatus(prompt) !== 'terminal') return <DialogQuickAsk sessionId={agent.sessionId} name={agent.name} prompt={prompt} onOpen={open} />;
+  if (prompt.questions !== null) return <QuestionsRow agent={agent} questions={prompt.questions} onOpen={open} />;
+  if (prompt.plan !== null) return <PlanPromptRow agent={agent} prompt={prompt} plan={prompt.plan} onOpen={open} />;
   return simplified ? <SimplifiedPermissionRow {...props} /> : <ClassicPermissionRow {...props} />;
 }
 
 /**
- * Claude's question tool's call, under either design: its questions, each with its options and the "Other" answer the
- * dialog always offers, to read. Only the agent's own dialog answers them, so the row has no Allow: it opens the agent.
+ * Claude's question tool's call the board can't answer, under either design: its questions, each with its options and
+ * the "Other" answer the dialog always offers, to read. Only the agent's own dialog answers them (a subagent's, one
+ * whose questions can't all be read, or its hold over), so the row has no Allow: it opens the agent.
  */
 function QuestionsRow({ agent, questions, onOpen }: { agent: Agent; questions: PromptQuestion[]; onOpen?(): void }) {
   return (

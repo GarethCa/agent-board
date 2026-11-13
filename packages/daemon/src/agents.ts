@@ -29,7 +29,7 @@ import {
 } from './params.ts';
 import type { AskHost } from './asks.ts';
 import type { DocumentHost } from './documents.ts';
-import { ASKING_PERMISSION_HOLD_MS, createPermissionHolds, promptCounts, stateWithPrompts, type HookReply } from './permissions.ts';
+import { answerProblem, ASKING_PERMISSION_HOLD_MS, createPermissionHolds, promptCounts, stateWithPrompts, type HookReply } from './permissions.ts';
 import {
   AGENT_ERROR,
   DEFAULT_REVIEW_CAP,
@@ -50,6 +50,7 @@ import {
   type WorkCategory,
   type WorkCategorySet,
   type AgentStepsWait,
+  type RemoveAsk,
   type AgentRepo,
   type AgentStart,
   type AgentRole,
@@ -64,6 +65,8 @@ import {
   ORCHESTRATE_SCOPES,
   type OrchestrateScope,
   type PermissionDecision,
+  type PromptAnswer,
+  type PromptQuestion,
   type LinkedIssue,
   type SessionInfo,
   type SessionState,
@@ -105,6 +108,13 @@ const STALLED_FIRST_PROMPT =
 /** The flag an agent with no first prompt raises once its session is given up on saying it is up (`STALLED_FIRST_PROMPT`). */
 const STALLED_START =
   "its session never said it was up, so messages to it wait: answer what its terminal shows, or type at its prompt. Its terminal shows: ";
+
+/**
+ * The flag raised for the user when Claude ran its question call without the answers the board sent (it took the
+ * allow, not its `updatedInput`): it carries on as if the user had answered nothing (ADR-0004).
+ */
+export const ANSWERS_DROPPED_FLAG =
+  'Claude ran its questions without the answers sent from the board, so it carries on as if you answered nothing: tell it your answers in its terminal';
 
 /** How long after output a starting agent's screen is read for Claude's trust screen or its prompt, at most. */
 const PROBE_MS = 250;
@@ -219,6 +229,8 @@ export interface AgentHostOptions {
    * terminal waits on the hook. One its terminal asks at the same time is held for `ASKING_PERMISSION_HOLD_MS`.
    */
   permissionHoldMs: number;
+  /** How long after answers are sent to Claude's question dialog its call may take to run: `DIALOG_TAKE_MS` by default. */
+  dialogTakeMs?: number;
   /** How long an agent's session gets to say it is up before its first prompt is offered by hand: a minute by default (tests shorten it). */
   startLimitMs?: number;
   /** How long a step of an agent's start may wait on another process: `START_STEP_TIMEOUT_MS` by default. */
@@ -257,6 +269,8 @@ export interface AgentHostOptions {
   asks?: Pick<AskHost, 'pendingAsk' | 'latestPlan' | 'drop'>;
   /** What an agent waits on the user for on a steps card, between turns (Needs you). */
   stepsWait?(sessionId: string): AgentStepsWait | null;
+  /** The tiles an orchestrator asks the user to remove, and waits on: while it does, it is `waiting`. */
+  removeAsk?(sessionId: string): RemoveAsk | null;
   /** The documents agents show the user. */
   documents?: Pick<DocumentHost, 'list'>;
   /** Ends the shells in the agent's session window's tabs, and removes the tabs: it is being deleted. */
@@ -392,10 +406,12 @@ export interface AgentHost {
    */
   orchestrateFacts(sessionId: string): { off: boolean; depth: number };
   /**
-   * Makes the agents `from` started `to`'s, as if `to` had started them. Returns their ids; the caller tells the clients,
+   * Makes the agents `from` started `to`'s, as if `to` had started them, `from` on the board or removed. Returns their ids; the caller tells the clients,
    * once whatever it runs this in has committed.
    */
   handCrew(from: string, to: string): string[];
+  /** The removed orchestrator `sessionId` while some of its crew is still on the board (`Agent.orphanedFrom`), else undefined. */
+  removedOrchestrator(sessionId: string): RemovedOrchestrator | undefined;
   /**
    * Hears a zone's `agentsOrchestrate` change. Off, it stops every agent in it orchestrating (a grant by hand goes for
    * good), and on, they do again; tells the clients of each.
@@ -454,6 +470,10 @@ export interface AgentHost {
   decidePermission(sessionId: string, requestId: string, decision: PermissionDecision): void;
   /** Releases one of the agent's held permission prompts unanswered, so the harness asks in its terminal now. */
   releasePermission(sessionId: string, requestId: string): void;
+  /** Keeps the user's answer (null clears it) to one question of the agent's held question prompt, sending nothing. */
+  answerQuestion(sessionId: string, requestId: string, index: number, answer: PromptAnswer | null): void;
+  /** Sends the answers kept on the agent's held question prompt to its harness's dialog. */
+  sendAnswers(sessionId: string, requestId: string): void;
   /**
    * Starts a scheduled run. An agent sitting at its prompt (idle, or after a failed turn) gets `prompt` as its next
    * message. An ended agent is relaunched in its worktree with `prompt`: Claude resumes its conversation, Codex starts
@@ -547,6 +567,16 @@ interface ConversationRow {
   ended_at: string;
 }
 
+/** A removed orchestrator whose crew is still on the board: what taking that crew over checks. */
+export interface RemovedOrchestrator {
+  sessionId: string;
+  name: string;
+  /** The scope it orchestrated at as it was removed, or null for none. */
+  orchestrate: OrchestrateScope | null;
+  /** How deep in a crew it was started: its crew is one deeper. */
+  depth: number;
+}
+
 export interface AgentRow extends PositionColumns {
   session_id: string;
   /** Null for a tile loose on the board. */
@@ -637,6 +667,8 @@ export interface AgentRow extends PositionColumns {
   /** 1 once the user turned it off: no zone lets it orchestrate then, until the user turns it on. */
   orchestrate_off: number;
   spawned_by: string | null;
+  /** The removed orchestrator that started it, until another takes its crew over (`Agent.orphanedFrom`). */
+  orphaned_from: string | null;
   /** How deep in a crew it was started (0 for the user's), fixed at spawn: removing an agent above it never lowers it. */
   crew_depth: number;
 }
@@ -668,6 +700,8 @@ export interface ZoneRow {
   board_mcp: number;
   agents_orchestrate: number;
   tracker_provider: string | null;
+  tracker_scope: string | null;
+  tracker_project: string | null;
   created_at: string;
 }
 
@@ -686,7 +720,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   const selectAll = db.prepare(`${select} ORDER BY a.rowid`);
   const selectOne = db.prepare(`${select} WHERE a.session_id = ?`);
   const zoneColumns =
-    'id, name, repo_root, folder, default_repo, group_folder, codex_bypass_hook_trust, trusts_folder, board_mcp, agents_orchestrate, tracker_provider, clone_repo, created_at';
+    'id, name, repo_root, folder, default_repo, group_folder, codex_bypass_hook_trust, trusts_folder, board_mcp, agents_orchestrate, tracker_provider, tracker_scope, tracker_project, clone_repo, created_at';
   const selectZone = db.prepare(`SELECT ${zoneColumns} FROM zones WHERE id = ?`);
   const selectZones = db.prepare(`SELECT ${zoneColumns} FROM zones`);
   const updatePlace = db.prepare('UPDATE agents SET zone_id = ?, x = ?, y = ?, z = ? WHERE session_id = ?');
@@ -800,9 +834,20 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   const permissions = createPermissionHolds({
     holdMs: options.permissionHoldMs,
     askingHoldMs: Math.max(options.permissionHoldMs, ASKING_PERMISSION_HOLD_MS),
+    dialogTakeMs: options.dialogTakeMs,
     onChange(sessionId) {
       const agent = get(sessionId);
       if (agent !== undefined) options.broadcast({ type: 'agent.updated', agent });
+    },
+    // Claude took the board's Send but not its answers, and carries on as if the user had answered nothing: only the
+    // user can tell it what they picked, so flag them, in place of whatever flag it had.
+    onAnswersDropped(sessionId) {
+      const row = getRow(sessionId);
+      if (row === undefined || row.ended_at !== null) return;
+      const earlier = underFoldings(sessionId);
+      if (earlier !== undefined) unfold(sessionId, earlier.id, undefined);
+      flags.set(sessionId, { id: ++lastFlagId, reason: ANSWERS_DROPPED_FLAG, at: new Date().toISOString(), via: null, forUser: true });
+      announce(sessionId);
     },
   });
   /** What times the agent host's own waits: the system clock by default. */
@@ -1403,7 +1448,20 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
 
   const selectLiveSession = db.prepare('SELECT 1 FROM sessions WHERE id = ? AND ended_at IS NULL');
   const selectCrew = db.prepare('SELECT session_id FROM agents WHERE spawned_by = ?');
-  const updateLead = db.prepare('UPDATE agents SET spawned_by = ? WHERE session_id = ?');
+  const updateLead = db.prepare('UPDATE agents SET spawned_by = ?, orphaned_from = NULL WHERE session_id = ?');
+  const selectHandedCrew = db.prepare('SELECT session_id FROM agents WHERE spawned_by = ? OR orphaned_from = ?');
+  // Only while a crew agent still names it: a removed orchestrator with none left has nothing to hand over.
+  const selectRemovedLead = db.prepare(
+    'SELECT session_id, name, orchestrate, crew_depth FROM removed_orchestrators r WHERE session_id = ? AND EXISTS (SELECT 1 FROM agents WHERE orphaned_from = r.session_id)',
+  );
+  const selectRemovedLeadName = db.prepare('SELECT name FROM removed_orchestrators WHERE session_id = ?');
+  const deleteRemovedLead = db.prepare('DELETE FROM removed_orchestrators WHERE session_id = ?');
+
+  /** The removed orchestrator `id` whose crew is still on the board, as a handover needs it; undefined for none. */
+  const removedLead = (id: string): RemovedOrchestrator | undefined => {
+    const row = selectRemovedLead.get(id) as { session_id: string; name: string; orchestrate: OrchestrateScope | null; crew_depth: number } | undefined;
+    return row === undefined ? undefined : { sessionId: row.session_id, name: row.name, orchestrate: row.orchestrate, depth: row.crew_depth };
+  };
 
   /** The name of the agent's orchestrator while that one is live; null for a loose agent, the Captain's, or one whose orchestrator ended. */
   const led = (row: AgentRow): string | null => {
@@ -1430,6 +1488,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     const schedule = options.schedules.forAgent(row.session_id);
     const live = row.ended_at === null;
     const ask = live ? (options.asks?.pendingAsk(row.session_id) ?? null) : null;
+    const removeAsk = live ? (options.removeAsk?.(row.session_id) ?? null) : null;
     const plan = options.asks?.latestPlan(row.session_id) ?? null;
     // A clock's fresh agent whose turn ended on a question waits for you, as a scheduled one does: its run goes on.
     const clockRunAsking = options.schedules.runOf(row.session_id) !== undefined && hookStates.askingAtPrompt(row);
@@ -1443,7 +1502,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
             ? 'waiting'
             : row.state;
     // Its call waits on the user mid-turn, whatever its hooks say, but for a permission prompt of a subagent's.
-    const state = live && waitsOnUser({ ask, plan }) && hooked !== 'needs-permission' ? 'waiting' : hooked;
+    const state = live && waitsOnUser({ ask, removeAsk, plan }) && hooked !== 'needs-permission' ? 'waiting' : hooked;
     // Its first prompt is queued and its session has sent no hook: the turn hasn't begun, which is not idle.
     const starting = live && state === 'idle' && hookStates.isStarting(row.session_id);
     // At its prompt, asking nothing, with a command it left running: its work goes on, and it doesn't wait for you.
@@ -1498,7 +1557,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
         row.status_summary === null || row.status_updated_at === null
           ? null
           : { summary: row.status_summary, progress: row.status_progress, updatedAt: row.status_updated_at, setBy: row.status_set_by },
-        isWorking({ state: shownState, ask, plan, endedAt: row.ended_at }),
+        isWorking({ state: shownState, ask, removeAsk, plan, endedAt: row.ended_at }),
         // Kept for hand-offs, but of a turn before an interrupted one: no tile shows it as that turn's.
         hookStates.endedOnNoMessage(row.session_id)
           ? undefined
@@ -1535,6 +1594,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       finishedAt: row.finished_at,
       permissions: permissions.prompts(row.session_id),
       ask,
+      removeAsk,
       stepsWait: live ? (options.stepsWait?.(row.session_id) ?? null) : null,
       plan,
       docs: options.documents?.list(row.session_id) ?? [],
@@ -1547,6 +1607,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       plainFolder: row.plain_folder === 1 || inGroupFolder(options.groupsDir, row.worktree),
       orchestrate: orchestrateNow(row),
       spawnedBy: row.spawned_by,
+      orphanedFrom: row.orphaned_from === null ? null : { sessionId: row.orphaned_from, name: (selectRemovedLeadName.get(row.orphaned_from) as { name: string } | undefined)?.name ?? 'a removed orchestrator' },
       ledBy: led(row),
       records: records.of(row.session_id),
       page: pages.of(row.session_id) ?? null,
@@ -1608,6 +1669,26 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     const row = getRow(sessionId);
     if (row === undefined) throw invalidParams(`no agent ${sessionId}`);
     return row;
+  };
+
+  /**
+   * Why an answer to the agent's question prompt can't land: its answers were sent from the board already (`sent`), or
+   * it is gone, answered in its terminal or changed.
+   */
+  const questionsGone = (agent: Agent, sent = false) =>
+    new RpcMethodError(
+      AGENT_ERROR.permissionGone,
+      sent
+        ? `${agent.name}'s answers were already sent from the board: nothing more was sent`
+        : `${agent.name}'s questions were answered in its terminal, or changed: nothing was sent from here`,
+    );
+  /** The questions of the agent's question prompt `requestId` while the board can still answer it, or it refuses. */
+  const openQuestions = (agent: Agent, requestId: string): PromptQuestion[] => {
+    const prompt = permissions.prompts(agent.sessionId).find((each) => each.id === requestId);
+    if (prompt === undefined || prompt.questions === null || prompt.dialog === null || prompt.heldUntil === null) {
+      throw questionsGone(agent, (prompt?.dialog?.sentAt ?? null) !== null);
+    }
+    return prompt.questions;
   };
 
   const requireAgent = (sessionId: string): Agent => toAgent(requireRow(sessionId));
@@ -2003,6 +2084,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     decidePermission(sessionId, requestId, decision) {
       const agent = requireAgent(sessionId);
       const prompt = permissions.prompts(sessionId).find((each) => each.id === requestId);
+      if (prompt?.questions != null) throw invalidParams(`${agent.name} asked questions: answer them (agent.answerQuestion, then agent.sendAnswers)`);
       if (decision.behavior === 'allow' && decision.scope === 'session' && prompt?.heldUntil != null && prompt.sessionGrant === null) {
         throw invalidParams('the harness suggested nothing to allow for the session with that prompt');
       }
@@ -2022,6 +2104,26 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
         throw new RpcMethodError(AGENT_ERROR.permissionGone, `${agent.name} is no longer waiting on that permission here`);
       }
       // Its prompt stays, now asking in the terminal.
+      options.broadcast({ type: 'agent.updated', agent: get(sessionId)! });
+    },
+
+    answerQuestion(sessionId, requestId, index, answer) {
+      const agent = requireAgent(sessionId);
+      const question = openQuestions(agent, requestId)[index];
+      if (question === undefined) throw invalidParams(`${agent.name}'s dialog has no question ${index}`);
+      const problem = answer === null ? undefined : answerProblem(question, answer);
+      if (problem !== undefined) throw invalidParams(problem);
+      if (!permissions.answerQuestion(sessionId, requestId, index, answer)) throw questionsGone(agent);
+      options.broadcast({ type: 'agent.updated', agent: get(sessionId)! });
+    },
+
+    sendAnswers(sessionId, requestId) {
+      const agent = requireAgent(sessionId);
+      openQuestions(agent, requestId);
+      const prompt = permissions.prompts(sessionId).find((each) => each.id === requestId);
+      if (prompt?.dialog?.answers.some((each) => each === null)) throw invalidParams(`answer each of ${agent.name}'s questions before sending`);
+      if (!permissions.sendAnswers(sessionId, requestId)) throw questionsGone(agent);
+      // Still waiting on its dialog until the call runs (its PostToolUse settles the prompt).
       options.broadcast({ type: 'agent.updated', agent: get(sessionId)! });
     },
 
@@ -2199,10 +2301,13 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     },
 
     handCrew(from, to) {
-      const crew = (selectCrew.all(from) as { session_id: string }[]).map((row) => row.session_id).filter((id) => id !== to);
+      const crew = (selectHandedCrew.all(from, from) as { session_id: string }[]).map((row) => row.session_id).filter((id) => id !== to);
       for (const id of crew) updateLead.run(to, id);
+      deleteRemovedLead.run(from);
       return crew;
     },
+
+    removedOrchestrator: removedLead,
 
     zoneOrchestrateChanged(zoneId, on) {
       // Its agents follow it (`orchestrateNow`); a grant by hand in it goes for good when it goes off.
@@ -2385,6 +2490,7 @@ function spawnParams(params: unknown): SpawnAgentParams {
     prompt: optionalStringParam(p, 'prompt'),
     name: optionalStringParam(p, 'name'),
     issueId: optionalStringParam(p, 'issueId'),
+    purpose: optionalStringParam(p, 'purpose'),
     position: optionalPlaceParam(p),
     orchestrate: optionalStringParam(p, 'orchestrate') as OrchestrateScope | undefined,
     cols: dimensionParam(p, 'cols'),
@@ -2473,6 +2579,18 @@ export function agentHandlers<Context>(
       agents.releasePermission(stringParam(p, 'sessionId'), stringParam(p, 'requestId'));
       return null;
     },
+    'agent.answerQuestion': (params) => {
+      const p = paramsObject(params);
+      const index = p.index;
+      if (typeof index !== 'number' || !Number.isInteger(index) || index < 0) throw invalidParams('index must be a whole number, from 0');
+      agents.answerQuestion(stringParam(p, 'sessionId'), stringParam(p, 'requestId'), index, promptAnswerParam(p.answer));
+      return null;
+    },
+    'agent.sendAnswers': (params) => {
+      const p = paramsObject(params);
+      agents.sendAnswers(stringParam(p, 'sessionId'), stringParam(p, 'requestId'));
+      return null;
+    },
     'agent.link': (params) => {
       const p = paramsObject(params);
       return agents.link(stringParam(p, 'sessionId'), p.issueId === null ? null : stringParam(p, 'issueId'));
@@ -2550,4 +2668,18 @@ function createStartupLines(
     /** Reads the line now: the session is ending. */
     now: read,
   };
+}
+
+/** An answer to one of Claude's questions, as the app sends it: an option, several, the user's own words, or null to clear it. */
+function promptAnswerParam(answer: unknown): PromptAnswer | null {
+  if (answer === null) return null;
+  const shape = 'answer must be null, { option }, { options } or { text }';
+  if (typeof answer !== 'object' || Array.isArray(answer)) throw invalidParams(shape);
+  const keys = Object.keys(answer);
+  const value = answer as Record<string, unknown>;
+  if (keys.length !== 1) throw invalidParams(shape);
+  if (typeof value.option === 'number') return { option: value.option };
+  if (Array.isArray(value.options) && value.options.every((each) => typeof each === 'number')) return { options: value.options as number[] };
+  if (typeof value.text === 'string') return { text: value.text };
+  throw invalidParams(shape);
 }

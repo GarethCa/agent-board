@@ -35,6 +35,7 @@ import {
   type Harness,
   type OrchestrateScope,
   type OrchestratorActivity,
+  type RemoveAskResult,
   orchestrateScopeWords,
   type AgentNoteData,
   type BoardItem,
@@ -230,22 +231,30 @@ export class BoardRefs {
       if (caller === null) throw new BoardError('`me` means your own tile, and you are not in an agent-board session.');
       return this.resolve(`${caller.kind}:${caller.tileId}`, null);
     }
+    const matches = this.matching(wanted);
+    if (matches.length === 1) return matches[0]!;
+    if (matches.length > 1) throw this.ambiguous(wanted, matches);
+    throw new BoardError(`nothing on the board is called ${JSON.stringify(wanted)}. \`agent-board tree\` lists what is.`);
+  }
+
+  /**
+   * What on the board `text` (not `me`) names, as `resolve` reads it: a whole id, else `<kind>:<start of id>`, else a name.
+   * Empty for nothing; more than one when it is ambiguous.
+   */
+  matching(text: string): BoardObject[] {
+    const wanted = text.trim();
     const colon = wanted.indexOf(':');
     const kind = colon === -1 ? undefined : (REF_KINDS as readonly string[]).includes(wanted.slice(0, colon)) ? (wanted.slice(0, colon) as RefKind) : undefined;
     const rest = kind === undefined ? wanted : wanted.slice(colon + 1);
     const kinds = kind === undefined ? REF_KINDS : [kind];
     const all = kinds.flatMap((each) => this.objects(each));
     const byId = all.filter((object) => idOf(object) === rest);
-    if (byId.length === 1) return byId[0]!;
+    if (byId.length === 1) return byId;
     if (kind !== undefined && rest !== '') {
       const byPrefix = all.filter((object) => idOf(object).startsWith(rest));
-      if (byPrefix.length === 1) return byPrefix[0]!;
-      if (byPrefix.length > 1) throw this.ambiguous(wanted, byPrefix);
+      if (byPrefix.length > 0) return byPrefix;
     }
-    const byName = all.filter((object) => nameOf(object)?.toLowerCase() === rest.toLowerCase());
-    if (byName.length === 1) return byName[0]!;
-    if (byName.length > 1) throw this.ambiguous(wanted, byName);
-    throw new BoardError(`nothing on the board is called ${JSON.stringify(wanted)}. \`agent-board tree\` lists what is.`);
+    return all.filter((object) => nameOf(object)?.toLowerCase() === rest.toLowerCase());
   }
 
   private ambiguous(wanted: string, matches: BoardObject[]): BoardError {
@@ -416,6 +425,7 @@ function agentJson(refs: BoardRefs, agent: Agent, caller: BoardCaller | null) {
     pullRequests: agent.pullRequests.map(({ number, url, state }) => ({ number, url, state })),
     orchestrate: agent.orchestrate,
     spawnedBy: agent.spawnedBy === null ? null : refs.of('agent', agent.spawnedBy),
+    orphanedFrom: agent.orphanedFrom === null ? null : { ref: refs.of('agent', agent.orphanedFrom.sessionId), name: agent.orphanedFrom.name },
   };
 }
 
@@ -1059,6 +1069,8 @@ export interface NewAgentOptions {
   /** Join a reviewer started on an agent's branch to that agent: none without. */
   edges?: 'auto' | 'manual';
   issue?: string;
+  /** What it is for, as `status set --description`: kept as its purpose from the start. */
+  description?: string;
 }
 
 /** The caller, and the agent `ref` names. */
@@ -1082,6 +1094,38 @@ export function resolveAgent(refs: BoardRefs, text: string, caller: BoardCaller 
   const object = refs.resolve(text, caller);
   if (object.kind !== 'agent') throw new BoardError(`${text} is a ${object.kind}, not an agent`);
   return object.agent;
+}
+
+/**
+ * What `text` names as the orchestrator a handover takes a crew from: an agent on the board, or else a removed
+ * orchestrator whose crew is still on it (`Agent.orphanedFrom`), by `agent:<start of its id>`, its whole id or its name.
+ */
+function resolveHandoverFrom(refs: BoardRefs, text: string, caller: BoardCaller | null): { sessionId: string; name: string } {
+  const wanted = text.trim();
+  const removed = wanted === 'me' ? [] : removedLeadsNamed(refs, wanted);
+  if (removed.length === 0) return resolveAgent(refs, text, caller);
+  // A removed orchestrator's ref no longer holds its prefix: a live object may have taken it, or share its name.
+  const onBoard = refs.matching(wanted);
+  if (onBoard.length === 0 && removed.length === 1) return removed[0]!;
+  const listed = [
+    ...onBoard.map((object) => `  ${refs.refOf(object)}  ${describeObject(object)}`),
+    ...removed.map((lead) => `  agent:${lead.sessionId}  ${lead.name} (removed orchestrator)`),
+  ].join('\n');
+  throw new BoardError(`${JSON.stringify(wanted)} could be any of ${onBoard.length + removed.length} things; use a ref, or a removed orchestrator's whole id:\n${listed}`);
+}
+
+/** The removed orchestrators whose crew is still on the board (`Agent.orphanedFrom`) that `wanted` names, as `resolve` reads it. */
+function removedLeadsNamed(refs: BoardRefs, wanted: string): { sessionId: string; name: string }[] {
+  const removed = [...new Map(refs.board.agents.flatMap((agent) => (agent.orphanedFrom === null ? [] : [[agent.orphanedFrom.sessionId, agent.orphanedFrom] as const]))).values()];
+  const prefixed = wanted.startsWith('agent:');
+  const rest = prefixed ? wanted.slice('agent:'.length) : wanted;
+  const byId = removed.filter((lead) => lead.sessionId === rest);
+  if (byId.length === 1) return byId;
+  if (prefixed && rest !== '') {
+    const byPrefix = removed.filter((lead) => lead.sessionId.startsWith(rest));
+    if (byPrefix.length > 0) return byPrefix;
+  }
+  return removed.filter((lead) => lead.name.toLowerCase() === rest.toLowerCase());
 }
 
 /** The agent as one line, with its ref read afresh: it may be new since `refs` were. */
@@ -1123,9 +1167,9 @@ export async function newAgent(session: BoardSession, options: NewAgentOptions):
     }
     baseBranch = agent.reviews?.branch ?? agent.branch;
     if (baseBranch === '') throw new BoardError(`${options.base} has no branch to start from: it works outside git, or on a detached HEAD`);
-    // In a group, its agents each work in a repo of their own: the branch is the based-on agent's, so is the repo.
+    // The branch is the based-on agent's, so is the repo, wherever the new agent sits.
     const target = refs.board.zones.find((zone) => zone.id === (zoneId ?? caller?.zoneId));
-    if (repo === undefined && target?.repoRoot === null) repo = agent.repoRoot;
+    if (repo === undefined && (target?.repoRoot ?? target?.defaultRepo ?? null) !== agent.repoRoot) repo = agent.repoRoot;
   }
   const started = await session.client.call('orchestrator.spawn', {
     token,
@@ -1142,6 +1186,7 @@ export async function newAgent(session: BoardSession, options: NewAgentOptions):
     ...(baseBranch === undefined ? {} : { baseBranch }),
     ...(options.edges === undefined ? {} : { edges: options.edges }),
     ...(options.issue === undefined ? {} : { issueId: options.issue }),
+    ...(options.description === undefined ? {} : { description: options.description }),
   });
   const fresh = await freshAgentLine(session, started.sessionId);
   // Which template its first message began with, so an orchestrator that wrote the whole prompt sees it was prefixed.
@@ -1151,8 +1196,9 @@ export async function newAgent(session: BoardSession, options: NewAgentOptions):
       : options.noTemplate === true && options.role !== undefined
         ? '\n  No role template: its first message is your prompt alone.'
         : '';
+  const about = options.description === undefined ? '' : `\n  ${purposeAnswer(fresh.agent, 'Its')}`;
   return {
-    text: `Started ${fresh.line}\n  ${checkout(started)} in ${tilde(started.worktree)}, ${inZone(fresh.refs, started.zoneId)}${templateLine}`,
+    text: `Started ${fresh.line}\n  ${checkout(started)} in ${tilde(started.worktree)}, ${inZone(fresh.refs, started.zoneId)}${templateLine}${about}`,
     json: { ...agentJson(fresh.refs, fresh.agent, session.caller), template: started.template },
   };
 }
@@ -1311,6 +1357,8 @@ export interface StartPrefabOptions {
   /** In a group, the absolute path of the repo (or a folder in one) to cut its worktree from. */
   repo?: string;
   issue?: string;
+  /** What its first agent is for, as `NewAgentOptions.description`. */
+  description?: string;
 }
 
 /** `new --prefab`: starts a crew from a prefab, its builder or lead with the prompt, and says which members start later. */
@@ -1329,12 +1377,14 @@ export async function startPrefab(session: BoardSession, options: StartPrefabOpt
     ...(zoneId === undefined ? {} : { zoneId }),
     ...(options.repo === undefined ? {} : { repo: options.repo }),
     ...(options.issue === undefined ? {} : { issueId: options.issue }),
+    ...(options.description === undefined ? {} : { description: options.description }),
   });
   const lines = [crew.crew === null ? `Started a crew from ${crew.prefab}:` : `Started crew:${crew.crew} from ${crew.prefab}:`];
   const json: unknown[] = [];
   for (const started of crew.started) {
     const fresh = await freshAgentLine(session, started.sessionId);
     lines.push(`  ${started.member}: ${fresh.line}`, `    ${checkout(started)} in ${tilde(started.worktree)}, ${inZone(fresh.refs, started.zoneId)}`);
+    if (options.description !== undefined && started === crew.started[0]) lines.push(`    ${purposeAnswer(fresh.agent, 'Its')}`);
     json.push({ member: started.member, ...agentJson(fresh.refs, fresh.agent, session.caller) });
   }
   const builder = crew.started[0]?.member ?? 'the builder';
@@ -1619,13 +1669,42 @@ export async function closeAgent(session: BoardSession, ref: string, remove: boo
   return { text: `Closed ${label}: its session ended; its tile, worktree and branch stay.`, json: agentJson(refs, closed, session.caller) };
 }
 
+/** `a`, `a and b`, `a, b and c`: names in a sentence. */
+const andList = (names: readonly string[]) => (names.length <= 1 ? (names[0] ?? '') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`);
+
+/** What the orchestrator is told of the user's answer to its remove ask, in words. */
+function removeAskText(result: RemoveAskResult): string {
+  const asked = andList([...result.removed, ...result.kept].map((tile) => tile.name));
+  const kept = result.kept.map((tile) => `${tile.name} stays: ${tile.why}.`).join(' ');
+  if (result.outcome === 'timed-out') return `The user did not answer, so nothing was removed: ask again later, or tell them why.`;
+  if (result.outcome === 'denied') {
+    return result.kept.every((tile) => tile.why === 'the user denied it')
+      ? `The user denied removing ${asked}: nothing was removed.`
+      : `Nothing was removed. ${kept}`;
+  }
+  const removed = result.removed.length === 0 ? 'The user allowed it, but nothing was removed.' : `The user allowed it. Removed ${andList(result.removed.map((tile) => tile.name))}, with their worktrees and branches.`;
+  return kept === '' ? removed : `${removed} ${kept}`;
+}
+
+/**
+ * `close <ref…> --remove --ask` and `ask_to_remove`: asks the user, in one Allow/Deny prompt, to remove tiles
+ * the orchestrator did not start. Waits for the answer; nothing is removed unless the user presses Allow.
+ */
+export async function askToRemove(session: BoardSession, agentRefs: readonly string[], timeoutMs?: number): Promise<BoardView> {
+  const { caller, token, refs } = await orchestratingCaller(session);
+  const sessionIds = agentRefs.map((ref) => resolveAgent(refs, ref, caller).sessionId);
+  const result = await session.client.call('orchestrator.askRemove', { token, sessionIds, ...(timeoutMs === undefined ? {} : { timeoutMs }) });
+  return { text: removeAskText(result), json: result };
+}
+
 /**
  * `orchestrate handover`: hands the orchestrator `fromRef`'s crew and what it made (notes, lane labels, clocks, shapes,
  * connectors, zones and edges) to the orchestrator `toRef`, which may then arrange, edit, remove and close them.
+ * `fromRef` may name an orchestrator since removed, whose crew is still on the board.
  */
 export async function handOver(session: BoardSession, fromRef: string, toRef: string): Promise<BoardView> {
   const { caller, token, refs } = await orchestratingCaller(session);
-  const [from, to] = [resolveAgent(refs, fromRef, caller), resolveAgent(refs, toRef, caller)];
+  const [from, to] = [resolveHandoverFrom(refs, fromRef, caller), resolveAgent(refs, toRef, caller)];
   const { crew, made } = await session.client.call('orchestrator.handover', { token, from: from.sessionId, to: to.sessionId });
   const agentsText = crew.length === 0 ? 'no agents' : crew.map((agent) => `${refs.of('agent', agent.sessionId)} ${agent.name}`).join(', ');
   return {

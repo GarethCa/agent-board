@@ -1,7 +1,7 @@
 // The quick ask on an agent's tile: its chip, and the ask it opens beside the tile. Only a click on the chip opens it,
 // never the ask arriving; esc or a click elsewhere closes it, and the answers so far stay on the ask, in the daemon.
 import { useCallback, useMemo, useRef, useState } from 'react';
-import type { AgentAsk } from '@agent-board/daemon/protocol';
+import type { AgentAsk, AskAnswer } from '@agent-board/daemon/protocol';
 import { AnchoredPopover, ErrorText, type Measured } from '../ui';
 import { useAction } from '../use-action';
 import { AskChip, QuickAsk, type QuickAskActions, type QuickAskDrafts } from './QuickAsk';
@@ -14,7 +14,7 @@ export function useQuickAskActions(sessionId: string, askId: string, onCard?: ()
   const actions = useMemo<QuickAskActions>(() => {
     const asks = () => window.agentBoard.asks;
     return {
-      answer: (index, answer, onDone) => run(() => asks().answer(sessionId, askId, answer, index), onDone),
+      answer: (index, answer, onDone) => run(() => asks().answer(sessionId, askId, answer as AskAnswer, index), onDone),
       send: () => run(() => asks().sendAsk(sessionId, askId)),
       skip: () => run(() => asks().answer(sessionId, askId, { skip: true })),
       toCard: () => run(() => asks().askToCard(sessionId, askId), onCard),

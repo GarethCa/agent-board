@@ -1366,6 +1366,119 @@ kbd {
   overflow-wrap: anywhere;
 }
 
+/* Tile B (Classic): what it is for, one line under its name, then what is true now, two lines at most. At the least
+   size, with the old parts switched back on, the line gives way before the branch row and footer do. */
+.hybrid-tile-about {
+  flex: 0 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  color: var(--text-soft);
+  font-size: var(--font-size-md);
+  line-height: var(--leading-snug);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hybrid-tile-about[data-empty] {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.hybrid-tile-now {
+  flex: 1 1 0;
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--font-size-sm);
+  line-height: var(--leading-snug);
+  overflow-wrap: anywhere;
+}
+
+.hybrid-tile-now[data-tone='ask'] {
+  color: var(--text);
+}
+
+.hybrid-tile-now[data-tone='fail'] {
+  color: var(--state-failed-ink);
+}
+
+/* Its bottom row's state: its character, its state in a word, and on Needs you or Paused a time in steps. */
+.hybrid-tile-mark {
+  display: inline-flex;
+  flex: 0 1 auto;
+  gap: var(--space-1-25);
+  align-items: center;
+  min-width: 0;
+  margin-right: auto;
+  color: var(--text-soft);
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+}
+
+.hybrid-tile-word {
+  font-weight: var(--weight-semibold);
+}
+
+.hybrid-tile-when {
+  color: var(--muted);
+}
+
+.hybrid-tile-mark[data-tile-state='thinking'] .hybrid-tile-word {
+  color: var(--accent-ink);
+}
+
+.hybrid-tile-mark[data-tile-state='needs-you'] .hybrid-tile-word {
+  color: var(--state-waiting-ink);
+}
+
+.hybrid-tile-mark[data-tile-state='paused'] .hybrid-tile-word {
+  color: var(--state-hibernated-ink);
+}
+
+.hybrid-tile-mark[data-tile-state='done'] .hybrid-tile-word {
+  color: var(--state-done-ink);
+}
+
+.hybrid-tile-mark[data-tile-state='failed'] .hybrid-tile-word {
+  color: var(--state-failed-ink);
+}
+
+/* Finished tiers: a tile whose turn is over and asks nothing lies flat; a done one also steps back. Only its own shadow
+   goes: the Captain's, an orchestrator's and a lit crew's halos are drawn in box-shadow too, and stay. */
+.hybrid-tile-agent[data-flat]:not([data-orchestrator], [data-master], [data-crew-lit]) {
+  box-shadow: none;
+}
+
+/* A flat tile still lifts while it is dragged: the flat rule above outranks the drag rule, so this one restates it. */
+.react-flow__node.dragging .hybrid-tile-agent[data-flat] {
+  box-shadow: var(--shadow-lifted);
+}
+
+/* A warning keeps its colour in a word too: a rate limit reads Waiting, in amber. */
+.hybrid-tile-mark[data-warn] .hybrid-tile-word {
+  color: var(--state-rate-limited-ink);
+}
+
+.hybrid-tile-agent[data-tile-state='done'] .hybrid-tile-name {
+  color: var(--text-soft);
+  font-weight: var(--weight-medium);
+}
+
+.hybrid-tile-agent[data-tile-state='done'] .hybrid-tile-about {
+  color: var(--muted);
+}
+
+.hybrid-tile-agent[data-tile-state='done'] .hybrid-tile-mark .tile-character {
+  opacity: 0.75;
+}
+
+/* Paused, without its hatching switched back on: its slate border on a plain tile. [data-tile-state] keeps the rule off
+   the Simplified tile, which shares the class but has its own paused look; a paused tile that flags the user is plain too. */
+.hybrid-tile-agent[data-tile-state][data-state='hibernated']:not([data-hatch]) {
+  background: var(--raised);
+  --tile-fill: var(--raised);
+}
+
 /* Who set the line, when it was not the agent: its orchestrator, under the line. */
 .hybrid-tile-byline {
   flex: none;
@@ -2861,6 +2974,47 @@ kbd {
   margin-left: var(--space-1);
 }
 
+/* An orchestrator's ask to remove tiles: the names that go, as the question's options, and the held-back
+   tiles to tick, each with why. */
+.inbox-remove-tiles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1-5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.inbox-remove-tiles li {
+  padding: var(--space-0-5) var(--space-1-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: var(--font-size-sm);
+}
+
+/* Held-back tiles, grouped by why: the why once, then a checkbox per tile. */
+.inbox-remove-held {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1-5);
+  font-size: var(--font-size-sm);
+}
+
+.inbox-remove-held ul {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.inbox-remove-why {
+  margin: 0 0 var(--space-1);
+  color: var(--muted);
+}
+
 .inbox-ask-timer {
   display: flex;
   gap: var(--space-1);
@@ -3005,7 +3159,7 @@ kbd {
 }
 
 .session-window-name {
-  /* The title keeps its room: the chips beside it shrink first, so it doesn't shrink at all but stops at a share of the header. */
+  /* The title keeps its room: the chips beside it shrink first, and it stops at a share of the header. */
   flex: 0 0 auto;
   min-width: 0;
   /* Its limit, far wider than the chips'; past it, it ellipsises. */
@@ -3019,9 +3173,16 @@ kbd {
   white-space: nowrap;
 }
 
+/* A header holding the chat's controls too, still short of room once the chips have shrunk, ellipsises the
+   name rather than push Close out of the window. */
+.session-window-head:has(.chat-controls) .session-window-name {
+  flex-shrink: 1;
+}
+
 .session-window-where {
   display: inline-flex;
-  flex: 0 1 auto;
+  /* Far quicker to shrink than the name, so it gives way first. */
+  flex: 0 100 auto;
   min-width: var(--size-header-chip-min);
   align-items: center;
   gap: var(--space-1-25);
@@ -3061,7 +3222,8 @@ kbd {
 
 .session-nav-count {
   display: inline-flex;
-  flex: 0 1 auto;
+  /* As the branch chip: it gives way before the name. */
+  flex: 0 100 auto;
   min-width: var(--size-header-chip-min);
   overflow: hidden;
   align-items: center;
@@ -4110,11 +4272,6 @@ kbd {
   cursor: pointer;
 }
 
-.chat-agents-switch button {
-  font-size: var(--font-size-xs);
-  white-space: nowrap;
-}
-
 /* A message sent from the message box that the transcript doesn't show yet. */
 .chat-sent {
   display: flex;
@@ -4529,22 +4686,94 @@ kbd {
   }
 }
 
-/* Expand all and Collapse all, in the strip over the chat. */
+/*
+ * The chat's controls: its style, whose messages, and Expand all and Collapse all. They sit at the end of the
+ * window's tab row when it has one, else in its header beside the name, in the header's colours rather than the chat's.
+ */
+.chat-controls {
+  display: inline-flex;
+  flex: none;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.session-window-chat-controls {
+  display: contents;
+}
+
+.session-window-chat-controls .chat-style-switch {
+  margin-left: 0;
+  border-color: var(--border);
+}
+
+.session-window-chat-controls .chat-style-switch button {
+  color: var(--muted);
+}
+
+.session-window-chat-controls .chat-style-switch button:hover,
+.session-window-chat-controls .chat-style-switch button[aria-pressed='true'] {
+  color: var(--text);
+}
+
+.session-window-chat-controls .chat-style-switch button[aria-pressed='true'] {
+  background: var(--hover);
+}
+
 .chat-runs-actions {
   display: flex;
   gap: var(--space-1);
-  margin-left: auto;
 }
 
-.chat-runs-actions ~ .session-window-status {
-  margin-left: var(--space-2);
+/* Set to show on hover (Settings › Board › Agent tiles), they wait for the pointer, or the focus, in the header or
+   tab row that holds them; they always show by default. */
+.chat-runs-actions[data-shows='hover'] {
+  opacity: 0;
+  transition: opacity var(--motion-fast) var(--ease-out);
 }
 
-/* A strip short of room folds Expand all and Collapse all to their icons, which keep their tooltips and names. */
-@container (max-width: 520px) {
-  .chat-runs-label {
+:is(.session-window-head, .session-window-tab-row, .expanded-tile-head):is(:hover, :focus-within) .chat-runs-actions[data-shows='hover'] {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .chat-runs-actions[data-shows='hover'] {
+    opacity: 1;
+  }
+}
+
+/* The tab row: its tabs, and the chat's controls at its end. */
+.session-window-tab-row {
+  container-type: inline-size;
+  display: flex;
+  flex: none;
+  gap: var(--space-2);
+  align-items: center;
+  padding: var(--space-1-5) var(--space-3);
+  border-bottom: 1px solid var(--separator);
+  background: var(--panel);
+}
+
+.session-window-tab-row > .session-window-chat-controls[hidden] {
+  display: none;
+}
+
+/* A row short of room folds Expand all and Collapse all to their icons, which keep their tooltips and names. A header,
+   with its own controls beside them, folds them as it folds Minimise and Pop out (under 1400 px); an expanded tile's
+   header, as narrow as 640 px, always. */
+@container (max-width: 640px) {
+  .session-window-tab-row .chat-runs-label {
     display: none;
   }
+}
+
+@container (max-width: 1400px) {
+  .session-window-head .chat-runs-label {
+    display: none;
+  }
+}
+
+.expanded-tile-head .chat-runs-label {
+  display: none;
 }
 
 /* The chat and, under it in the status-line style, its live line over the message box. */
@@ -9881,10 +10110,10 @@ button.chat-chip[aria-expanded='true'] {
   container-type: inline-size;
 }
 
-/* With the merge gate's controls in it, a header short of room folds Minimise and Pop out to their icons,
-   which keep their tooltips and names; Delete and Close keep their words. */
+/* With the merge gate's controls or the chat's in it, a header short of room folds Minimise and Pop
+   out to their icons, which keep their tooltips and names; Delete and Close keep their words. */
 @container (max-width: 1400px) {
-  .session-window-head:has(.gate-controls) .session-window-folding-label {
+  .session-window-head:has(.gate-controls, .chat-controls) .session-window-folding-label {
     display: none;
   }
 }
@@ -10395,10 +10624,10 @@ button.chat-chip[aria-expanded='true'] {
 }
 
 .session-window-tabs {
-  flex: none;
-  padding: var(--space-1-5) var(--space-3) var(--space-1-5);
-  border-bottom-color: var(--separator);
-  background: var(--panel);
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border-bottom: 0;
 }
 
 .session-window-view {
@@ -15034,6 +15263,125 @@ button.steps-link-open:focus-visible {
 .quick-ask-answer span {
   color: var(--muted);
   font-weight: var(--weight-medium);
+}
+
+/* Claude's own question dialog in the quick ask: its header, "(any)", tick boxes, descriptions, and the line saying where the answer goes. */
+.quick-ask-header {
+  margin-right: var(--space-1-5);
+  color: var(--muted);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-semibold);
+  text-transform: uppercase;
+}
+
+.quick-ask-any {
+  color: var(--muted);
+  font-weight: var(--weight-medium);
+}
+
+.quick-ask-label {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+/* Only an option with a description grows: a plain option keeps the button's own height. */
+.quick-ask-label:has(> small) {
+  padding: var(--space-1) 0;
+}
+
+.quick-ask-label small {
+  color: var(--muted);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-medium);
+}
+
+.quick-ask-option[aria-checked='true'] {
+  border-color: var(--state-waiting);
+  background: var(--state-waiting-soft);
+  color: var(--state-waiting-ink);
+}
+
+.quick-ask-tick {
+  display: inline-flex;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--control-edge);
+  border-radius: var(--radius-xs);
+  background: var(--raised);
+}
+
+.quick-ask-option[aria-checked='true'] .quick-ask-tick {
+  border-color: var(--state-waiting);
+}
+
+.quick-ask-tick svg {
+  width: 11px;
+  height: 11px;
+}
+
+.quick-ask-where {
+  color: var(--muted);
+  font-size: var(--font-size-2xs);
+}
+
+.quick-ask-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-soft);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.quick-ask-note {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1-5);
+  align-items: center;
+  margin: 0;
+  color: var(--text-soft);
+  font-size: var(--font-size-sm);
+}
+
+.quick-ask-note[data-bad] {
+  color: var(--state-failed-ink);
+}
+
+/* Claude's plan approval in Needs you and the pane (P1): its title and first lines, read only. */
+.inbox-plan-text {
+  padding-left: var(--space-2-5);
+  border-left: 3px solid var(--border);
+  color: var(--text-soft);
+  font-size: var(--font-size-sm);
+}
+
+.inbox-plan-text:not([data-open]) {
+  overflow: hidden;
+  max-height: 120px;
+}
+
+.inbox-plan-title {
+  margin: 0;
+  color: var(--text);
+  font-weight: var(--weight-bold);
+}
+
+.inbox-plan-change {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 52px;
+  padding: var(--space-1-5) var(--space-2);
+  border: 1px solid var(--control-edge);
+  border-radius: var(--radius-item);
+  background: var(--raised);
+  color: var(--text);
+  font: inherit;
+  resize: vertical;
 }
 
 .gallery-quick-ask {

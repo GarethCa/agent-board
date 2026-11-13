@@ -1,10 +1,10 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { demoScripts } from './demo-scenarios.ts';
-import type { FakeSession } from './session.ts';
+import { PLAN_TOOL, type FakeSession } from './session.ts';
 
 /** The scripted runs every fake harness can replay. Pick one with FAKE_HARNESS_SCENARIO. */
-export const SCENARIOS = ['output', 'waiting', 'permission', 'two-permissions', 'long-permission', 'subagent', 'subagent-permission', 'subagent-ask', 'subagents-working', 'review', 'board', 'ask-plan', 'orchestrate', 'crash', 'rate-limit', 'markdown', 'emoji-link', 'ask-selection', 'ask-questions', 'background', 'busy', 'demo-plan', 'demo-implement', 'demo-review', 'demo-codex'] as const;
+export const SCENARIOS = ['output', 'waiting', 'permission', 'two-permissions', 'long-permission', 'subagent', 'subagent-permission', 'subagent-ask', 'subagents-working', 'review', 'board', 'ask-plan', 'orchestrate', 'crash', 'rate-limit', 'markdown', 'emoji-link', 'ask-selection', 'ask-questions', 'plan-mode', 'background', 'busy', 'demo-plan', 'demo-implement', 'demo-review', 'demo-codex'] as const;
 export type FakeScenario = (typeof SCENARIOS)[number];
 
 export function isScenario(name: string): name is FakeScenario {
@@ -160,6 +160,29 @@ const scripts: Record<FakeScenario, Script> = {
     if (answers === undefined) return session.end('prompt_input_exit');
     const picked = Object.values(answers)[0];
     await session.say(picked === undefined ? 'No answer came.' : `Going with ${picked}.`);
+    await session.stop();
+  },
+
+  /**
+   * Plans in plan mode and asks the user to approve its plan with Claude's `ExitPlanMode`, which needs permission and
+   * suggests switching to accept edits. Approved out of plan mode (a hook's allow with a `setMode` update, or a yes
+   * typed at its dialog): `Starting on the plan.` (after `⎿ Accepting edits` when the allow switched to that). A hook's
+   * plain allow leaves it in plan mode, where it can make no edits: `Still in plan mode, so I can make no edits.`.
+   * Denied: `Keeping on planning: <message>.` (Codex has no plan mode and only says so.)
+   */
+  async 'plan-mode'(session, prompt) {
+    await session.submit(prompt);
+    if (session.harness !== 'claude') {
+      await session.say('I have no plan mode here.');
+      return session.stop();
+    }
+    await session.say('I have a plan.');
+    const plan = '# Add a cache\n\n1. Add a `cache.ts` client\n2. Wrap `getProduct()` with a 5 minute TTL\n3. Test a hit and a miss';
+    session.enterPlanMode();
+    const approved = await session.runTool(PLAN_TOOL, { plan }, { plan }, true);
+    if (!approved) await session.say(`Keeping on planning: ${session.denyMessage ?? 'no reason given'}.`);
+    // An approval that left it in plan mode can't start: plan mode makes no edits.
+    else await session.say(session.permissionMode === 'plan' ? 'Still in plan mode, so I can make no edits.' : 'Starting on the plan.');
     await session.stop();
   },
 
@@ -464,6 +487,7 @@ const scripts: Record<FakeScenario, Script> = {
    * `Arrange a messy crew in columns` the same, with `--layout columns`.
    * `Arrange by itself, then start three` turns auto-arrange on and ends its turn; its next prompt starts workers `one`,
    * `two` and `three` with the CLI, ending on `Started three.`.
+   * `Finish: <summary>` sets that status with `--done` and ends on `Finished.`; `Ask to remove: <a>, <b>` asks the user to remove those agents with `ask_to_remove` and says the answer.
    * `Lead a crowded crew: <task>` starts a worker with a long name, a role and a model, sets its status line, and starts a reviewer of it, leaving both running.
    * `Print your board identity` echoes the board token. `Gate in the background` ends two turns, each followed by its
    * idle prompt, as a gate runs in its background, then writes its handover and runs `agent-board handoff`.
@@ -519,6 +543,21 @@ const scripts: Record<FakeScenario, Script> = {
     const askBack = /^Ask back: (.*)/.exec(prompt)?.[1];
     if (askBack !== undefined) {
       await session.say(askBack);
+      return session.stop();
+    }
+    // A worker that says its work is finished, so a remove ask lists it as one that goes on Allow.
+    const finish = /^Finish: (.*)/.exec(prompt)?.[1];
+    if (finish !== undefined) {
+      await session.runShell(`agent-board status set --done -- '${finish.replaceAll("'", `'\\''`)}'`);
+      await session.say('Finished.');
+      return session.stop();
+    }
+    // An orchestrator asking the user to remove tiles it didn't start, in one prompt, and saying the answer.
+    const remove = /^Ask to remove: (.*)/.exec(prompt)?.[1];
+    if (remove !== undefined) {
+      const agents = remove.split(',').map((name) => name.trim());
+      const answer = await session.callMcpTool('agent-board', 'ask_to_remove', { agents });
+      await session.say(answer?.text ?? 'There is no agent-board MCP server here.');
       return session.stop();
     }
     if (prompt === 'Lead a worker that asks back') {

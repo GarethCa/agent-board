@@ -66,6 +66,8 @@ import type {
   ItemRemovedEvent,
   ItemUpdatedEvent,
   PermissionDecision,
+  PromptAnswer,
+  RemoveAskResult,
   ScheduleSpec,
   SetupTool,
   SessionExitedEvent,
@@ -130,6 +132,7 @@ import type { Placement, Surface, WindowLayout } from '@agent-board/daemon/windo
 import type { Appearance } from '../shared/appearance';
 import type { Design } from '../shared/design';
 import type { DockMode } from '../shared/dock';
+import type { MenuBarCommand, MenuBarState } from '../shared/menu-bar';
 
 /** The app lost its connection to the daemon for this attachment; the session itself may still be running. */
 export interface SessionDetachedEvent {
@@ -885,7 +888,10 @@ export const AGENT_IPC = {
   resume: 'agent:resume',
   restart: 'agent:restart',
   decidePermission: 'agent:decidePermission',
+  decideRemove: 'agent:decideRemove',
   releasePermission: 'agent:releasePermission',
+  answerQuestion: 'agent:answerQuestion',
+  sendAnswers: 'agent:sendAnswers',
   link: 'agent:link',
   setSchedule: 'agent:setSchedule',
   markSeen: 'agent:markSeen',
@@ -984,8 +990,17 @@ export interface AgentsApi {
   restart(sessionId: string, force?: boolean): Promise<RestartAgentResult>;
   /** Allows or denies the agent's permission prompt `requestId`, while the inbox can still answer it. */
   decidePermission(sessionId: string, requestId: string, decision: PermissionDecision): Promise<void>;
+  /**
+   * The user's answer to the orchestrator's remove ask `askId`: Allow removes each tile it lists with its
+   * worktree, as Delete does, but a held-back one only when `include` ticks it; Deny removes nothing.
+   */
+  decideRemove(sessionId: string, askId: string, allow: boolean, include: string[]): Promise<RemoveAskResult>;
   /** Lets the harness ask in its terminal now, instead of when the hold on its prompt `requestId` lapses. Answers nothing. */
   releasePermission(sessionId: string, requestId: string): Promise<void>;
+  /** Keeps an answer (null clears it) to question `index` of Claude's dialog `requestId`, sending nothing yet. */
+  answerQuestion(sessionId: string, requestId: string, index: number, answer: PromptAnswer | null): Promise<void>;
+  /** Sends the answers kept on Claude's dialog `requestId` to it, as its Submit does. */
+  sendAnswers(sessionId: string, requestId: string): Promise<void>;
   /** Links the agent to an issue in its repo zone's tracker, or unlinks it with null. */
   link(sessionId: string, issueId: string | null): Promise<Agent>;
   /** Gives the agent a cron schedule, replacing any it had, or takes it away with null. */
@@ -1540,6 +1555,14 @@ export interface MinimisedWindow {
   title: string;
 }
 
+/** The menu bar (`main/app-menu.ts`): what the focused window can do, and the item picked in it. */
+export const MENU_BAR_IPC = {
+  /** renderer → main: `(MenuBarState)`, the window's keys, commands and selection, whenever they change or it gains the focus. */
+  report: 'menuBar:report',
+  /** main → renderer: `(MenuBarCommand)`, the item picked while this window had the focus. */
+  run: 'menuBar:run',
+} as const;
+
 export const SETUP_IPC = {
   check: 'setup:check',
   testNotification: 'setup:testNotification',
@@ -1633,6 +1656,12 @@ export interface AgentBoardApi {
     report(windows: readonly MinimisedWindow[]): void;
     /** Calls `listener` with the id of the window the Window menu picked. Returns the unsubscribe function. */
     onRestore(listener: (id: string) => void): () => void;
+  };
+  menuBar: {
+    /** Tells the menu bar what this window can do now. */
+    report(state: MenuBarState): void;
+    /** Calls `listener` with each menu bar item picked while this window has the focus. Returns the unsubscribe function. */
+    onRun(listener: (command: MenuBarCommand) => void): () => void;
   };
   setup: SetupApi;
   capture: CaptureApi;

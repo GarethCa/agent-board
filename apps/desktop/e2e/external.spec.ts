@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { test, connectedDaemonPid, launchApp, pickFolderNext, removeDataDir, tempDataDir, browseForZone } from './launch.ts';
 import { claudeInTerminal, tileAction, zones } from './agent-helpers.ts';
 import { scratch } from './scratch.ts';
-import { openSettings, settingsSection } from './settings-helpers.ts';
+import { openSettings, settingsSection, showTileParts } from './settings-helpers.ts';
 
 function writeStatus(repo: string, status: Record<string, unknown>): void {
   mkdirSync(join(repo, '.agent-board'), { recursive: true });
@@ -34,6 +34,7 @@ test('with global hooks on, claude sessions started in other terminals appear in
   const sessions: ChildProcessWithoutNullStreams[] = [];
   try {
     const window = await app.firstWindow();
+    await showTileParts(window, ['chips']);
     await connectedDaemonPid(window);
     // A repo zone, and a folder zone for the folder the session starts in: the folder zone is the one it goes in.
     await pickFolderNext(app, repo);

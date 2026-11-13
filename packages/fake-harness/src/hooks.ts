@@ -198,11 +198,32 @@ export function permissionDecision(outputs: HookOutput[]): PermissionDecision {
   return undefined;
 }
 
+/** The answers an allow of a question-tool call carries (`updatedInput.answers`), by question; none without them. */
+export function hookAnswers(outputs: HookOutput[]): Record<string, string> {
+  for (const output of outputs) {
+    const specific = output.hookSpecificOutput as { decision?: { behavior?: string; updatedInput?: { answers?: unknown } } } | undefined;
+    const answers = specific?.decision?.behavior === 'allow' ? specific.decision.updatedInput?.answers : undefined;
+    if (typeof answers === 'object' && answers !== null) {
+      return Object.fromEntries(Object.entries(answers).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
+    }
+  }
+  return {};
+}
+
+/** The message a deny carries, if any. */
+export function denyMessage(outputs: HookOutput[]): string | undefined {
+  for (const output of outputs) {
+    const specific = output.hookSpecificOutput as { decision?: { behavior?: string; message?: unknown } } | undefined;
+    if (specific?.decision?.behavior === 'deny' && typeof specific.decision.message === 'string') return specific.decision.message;
+  }
+  return undefined;
+}
+
 /** The permission updates an allow carries (`updatedPermissions`), as the harness would apply them. */
-export function permissionUpdates(outputs: HookOutput[]): { destination?: string }[] {
+export function permissionUpdates(outputs: HookOutput[]): { destination?: string; type?: string; mode?: string }[] {
   return outputs.flatMap((output) => {
     const specific = output.hookSpecificOutput as { decision?: { behavior?: string; updatedPermissions?: unknown } } | undefined;
     const updates = specific?.decision?.behavior === 'allow' ? specific.decision.updatedPermissions : undefined;
-    return Array.isArray(updates) ? (updates as { destination?: string }[]) : [];
+    return Array.isArray(updates) ? (updates as { destination?: string; type?: string; mode?: string }[]) : [];
   });
 }

@@ -15,7 +15,7 @@ export const WAKE_HINT = 'Start it again, carrying on its conversation';
  * it is mid-turn or waiting on you. Neither for an ended agent, which has Restart.
  */
 export function pauseControl(
-  agent: Pick<Agent, 'endedAt' | 'state' | 'ask' | 'plan' | 'permissions'>,
+  agent: Pick<Agent, 'endedAt' | 'state' | 'ask' | 'removeAsk' | 'plan' | 'permissions'>,
 ): { action: 'pause' | 'wake'; enabled: boolean; hint: string } | undefined {
   if (agent.state === 'hibernated') return { action: 'wake', enabled: true, hint: WAKE_HINT };
   if (agent.endedAt !== null) return undefined;

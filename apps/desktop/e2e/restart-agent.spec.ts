@@ -3,6 +3,7 @@ import { rmSync } from 'node:fs';
 import { agents, launch, setClickOpens, SHELL_ENV, spawnAgent, tile, tileAction } from './agent-helpers.ts';
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
 import { scratch } from './scratch.ts';
+import { showTileParts } from './settings-helpers.ts';
 
 const expandedTile = (page: Page) => page.getByTestId('expanded-tile');
 const liveSessions = (page: Page) => page.evaluate(() => window.agentBoard.sessions.list());
@@ -13,6 +14,7 @@ test('an agent that exits drops its pane into a shell in its worktree, and Resta
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, { ...env, ...SHELL_ENV });
   try {
+    await showTileParts(window, ['statePill']);
     await setClickOpens(window, 'Expand in place');
     await pickFolderNext(app, repo);
     await browseForZone(window);

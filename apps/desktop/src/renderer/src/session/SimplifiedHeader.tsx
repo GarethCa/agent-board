@@ -28,6 +28,8 @@ interface SimplifiedHeaderProps {
   nav?: WindowNav;
   /** Where the body puts its Chat | Timeline | Terminal switch. */
   onViewSlot(slot: HTMLElement | null): void;
+  /** Where the chat's controls go when they always show: by the name, out of the controls that wait for hover. */
+  onChatControlsSlot?(slot: HTMLElement | null): void;
   /** Shows the terminal, or from it the chat or timeline last shown: what ⌥⌘T does, set by the body. */
   terminalToggle: RefObject<(() => void) | null>;
   /** Whether the details beside the body are open, and how to change that. */
@@ -47,7 +49,7 @@ interface SimplifiedHeaderProps {
  * menu, as its tile's, with this window's rows and End agent… added; the window's Minimise, Pop out and Delete live
  * there or go with it.
  */
-export function SimplifiedHeader({ sessionId, agent, name, title, placement, nav, onViewSlot, terminalToggle, detailsOpen, onDetailsOpen, onClose, onPopOut, onPopIn, maximise }: SimplifiedHeaderProps) {
+export function SimplifiedHeader({ sessionId, agent, name, title, placement, nav, onViewSlot, onChatControlsSlot, terminalToggle, detailsOpen, onDetailsOpen, onClose, onPopOut, onPopIn, maximise }: SimplifiedHeaderProps) {
   const shows = useNeedsYouShows();
   const [ending, setEnding] = useState(false);
   const status = agent && humanStatus(agent, shows).status;
@@ -57,6 +59,7 @@ export function SimplifiedHeader({ sessionId, agent, name, title, placement, nav
       {nav && <ZonePopUp nav={nav} sessionId={sessionId} />}
       <SessionName agent={agent} name={name} title={title} />
       {status && <StatusMark status={status} />}
+      {agent && onChatControlsSlot && <span className="session-window-chat-controls" ref={onChatControlsSlot} />}
       <span className="session-window-head-fill" />
       <div className="session-window-controls" data-testid="session-window-controls">
         {/* Its merge gate stays a technical detail until the steps strip takes its place. */}

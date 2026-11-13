@@ -17,6 +17,7 @@ import {
   Copy,
   Ellipsis,
   Expand,
+  Eye,
   FileCheck,
   FileSearch,
   FileText,
@@ -49,6 +50,8 @@ import {
   RotateCcw,
   Rows3,
   Settings2,
+  UserRound,
+  LayoutTemplate,
   ShieldCheck,
   Sparkles,
   Spline,
@@ -74,6 +77,7 @@ import {
   ZONE_LAYOUT_CHOICES,
   zoneLayoutChoiceOf,
   type Agent,
+  type AgentState,
   type Effort,
   type ArrangeSpacing,
   type ExternalSession,
@@ -82,8 +86,9 @@ import {
   type Shell,
   type Zone,
   type ZoneBinding,
+  type NeedsYouShows,
   type ZoneLayoutChoice,
-  waitsOnUser,
+  waitsForYou,
 } from '@agent-board/daemon/protocol';
 import { isClosed, SPACING_GAPS } from '@agent-board/daemon/board-layout';
 import { startBlocked } from '@agent-board/daemon/review-doc';
@@ -265,14 +270,23 @@ export interface AgentTileMenuInput extends AgentMenuInput {
   related: readonly RelatedTile[];
   /** For a reviewer, the round it writes. */
   review: ReviewRound | undefined;
+  /** What the needs-you inbox lists, so the menu says Needs you of the agents its tile does. */
+  shows: NeedsYouShows;
 }
+
+/** Whether a live agent waits on the user, by the rule its tile and the needs-you inbox use. */
+const needsYou = ({ agent, shows }: Pick<AgentTileMenuInput, 'agent' | 'shows'>): boolean => agent.endedAt === null && waitsForYou(agent, shows);
+
+/** The rows of `entries`, at its top level, whose id is `id`. */
+const rowsWithId = (entries: readonly ModelEntry[], id: string): ModelEntry[] => entries.filter((entry) => entry !== 'separator' && !('heading' in entry) && entry.id === id);
 
 /**
  * The one step that leads an agent tile's menu, when it has one: the place to answer its question, Wake while it is
  * paused, or a reviewer's review once its doc is in. Each opens where to act, and does nothing for the user there.
  */
-function nextStep({ nodeId, agent, clickOpens, review, actions }: AgentTileMenuInput): ModelEntry[] {
-  if (agent.endedAt === null && (agent.state === 'needs-permission' || agent.permissions.length > 0 || waitsOnUser(agent)))
+function nextStep(input: AgentTileMenuInput): ModelEntry[] {
+  const { nodeId, agent, clickOpens, review, actions } = input;
+  if (needsYou(input))
     return [
       {
         id: 'go-to-question',
@@ -348,6 +362,22 @@ function arrangeEntries({ nodeId, agent, board, actions }: AgentTileMenuInput): 
   ];
 }
 
+/** Settings ▸: rename it, its schedule, its issue, its notifications and its reasoning. */
+function settingsEntries(agent: Agent, rename: () => void, actions: AgentTileMenuActions): ModelEntry[] {
+  return [
+    { id: 'rename', label: 'Rename', icon: <Pencil />, shortcut: keyText('tile.rename'), onSelect: rename },
+    { id: 'schedule', label: agent.schedule === null ? 'Schedule…' : 'Edit schedule…', icon: <Clock />, onSelect: () => actions.scheduleAgent(agent) },
+    { id: 'link-issue', label: agent.issue === null ? 'Link issue…' : 'Change issue…', icon: <Hash />, onSelect: () => actions.linkIssue(agent) },
+    {
+      id: 'mute',
+      label: agent.muted ? 'Unmute notifications' : 'Mute notifications',
+      icon: agent.muted ? <Bell /> : <BellOff />,
+      onSelect: () => actions.setMuted(agent.sessionId, !agent.muted),
+    },
+    reasoningEntry(agent, actions),
+  ];
+}
+
 /** Copy ▸: its branch name, worktree path and session id. */
 function copyEntries({ agent, board }: AgentTileMenuInput): ModelEntry[] {
   const copy = (id: string, label: string, text: string, what: string): ModelEntry => ({
@@ -379,18 +409,7 @@ export function agentTileMenu(input: AgentTileMenuInput): ModelEntry[] {
       id: 'settings',
       label: 'Settings',
       icon: <Settings2 />,
-      entries: [
-        { id: 'rename', label: 'Rename', icon: <Pencil />, shortcut: keyText('tile.rename'), onSelect: rename },
-        { id: 'schedule', label: agent.schedule === null ? 'Schedule…' : 'Edit schedule…', icon: <Clock />, onSelect: () => actions.scheduleAgent(agent) },
-        { id: 'link-issue', label: agent.issue === null ? 'Link issue…' : 'Change issue…', icon: <Hash />, onSelect: () => actions.linkIssue(agent) },
-        {
-          id: 'mute',
-          label: agent.muted ? 'Unmute notifications' : 'Mute notifications',
-          icon: agent.muted ? <Bell /> : <BellOff />,
-          onSelect: () => actions.setMuted(agent.sessionId, !agent.muted),
-        },
-        reasoningEntry(agent, actions),
-      ],
+      entries: settingsEntries(agent, rename, actions),
     },
     ...(review.length === 0 ? [] : [{ id: 'review', label: 'Review & gate', icon: <ShieldCheck />, entries: review }]),
     { id: 'arrange', label: 'Arrange', icon: <Layers />, entries: arrangeEntries(input) },
@@ -400,6 +419,163 @@ export function agentTileMenu(input: AgentTileMenuInput): ModelEntry[] {
     'separator',
     { id: 'delete', label: 'Delete agent', icon: <Trash2 />, danger: true, shortcut: keyText('tile.delete'), onSelect: () => actions.deleteAgent(agent.sessionId) },
   ];
+}
+
+/** What an agent tile's menu is shaped by under Classic: the six states, and Failed and Stopped, which lead with their own. */
+type TileMenuState = 'thinking' | 'needs-you' | 'waiting' | 'idle' | 'done' | 'paused' | 'failed' | 'stopped';
+
+const THINKING_STATES: ReadonlySet<AgentState> = new Set<AgentState>(['running', 'thinking', 'starting', 'handing-off', 'on-command']);
+
+/**
+ * What an agent that waits on something other than you waits on: the hint that names it, what shows it (absent, the
+ * agent itself opens), and the id of the body row that does the same, which the menu then leaves out.
+ */
+interface WaitsOn {
+  hint: string;
+  show?: () => void;
+  replaces?: string;
+}
+
+/** What the agent waits on, the first that holds; undefined when it waits on nothing. */
+function waitsOn({ agent, rounds, related, board, actions }: AgentTileMenuInput): WaitsOn | undefined {
+  if (agent.state === 'rate-limited') return { hint: 'Its usage limit' };
+  if (agent.state === 'scheduled') return { hint: 'Its next scheduled run', show: () => actions.scheduleAgent(agent), replaces: 'schedule' };
+  const latest = rounds.at(-1);
+  const reviewer = latest?.status === 'reviewing' ? related.find((tile) => tile.sessionId === latest.reviewer) : undefined;
+  if (reviewer !== undefined) return { hint: 'Its review', show: () => board.show(reviewer.sessionId), replaces: `show-${reviewer.sessionId}` };
+  const checking = agent.pullRequests.find((pr) => pr.state === 'open' && pr.checks === 'pending');
+  if (checking !== undefined) return { hint: `PR #${checking.number}'s checks`, show: () => actions.openPullRequest(agent, checking) };
+  const category = agent.workCategory;
+  if (category === null || (category.category !== 'waiting-on-others' && category.category !== 'in-review')) return undefined;
+  const on = category.waitingOn;
+  return { hint: on === null ? (category.label ?? 'Others') : on.ref === null ? on.who : `${on.who} · ${on.ref}` };
+}
+
+/** Which of its states an agent tile's menu is shaped by. */
+function tileMenuState(input: AgentTileMenuInput): TileMenuState {
+  const { agent } = input;
+  if (agent.state === 'hibernated') return 'paused';
+  if (agent.endedAt !== null) return agent.state === 'failed' ? 'failed' : agent.state === 'stopped-by-restart' ? 'stopped' : 'done';
+  if (needsYou(input)) return 'needs-you';
+  if (THINKING_STATES.has(agent.state)) return 'thinking';
+  if (agent.state === 'failed') return 'failed';
+  if (agent.workFinishedAt !== null) return 'done';
+  return waitsOn(input) === undefined ? 'idle' : 'waiting';
+}
+
+/** The mock's words for a row brought up to the top block, while it is enabled: a disabled one keeps its reason. */
+const TOP_HINTS: Record<string, string> = {
+  interrupt: 'Stops this turn; its session stays',
+  pause: 'Frees its memory; Wake starts it where it left off',
+  wake: 'Starts its session where it left off',
+  'open-review': 'Its review doc is in',
+};
+
+function withTopHint(entry: ModelEntry): ModelEntry {
+  if (entry === 'separator' || 'heading' in entry || !('onSelect' in entry) || entry.disabled === true) return entry;
+  const hint = TOP_HINTS[entry.id];
+  return hint === undefined ? entry : { ...entry, hint };
+}
+
+/**
+ * M3's first rows: one to three for what the agent is doing now, with the ids of the body rows they stand for. Each
+ * opens where to act or does only what it says: Interrupt and Pause are Run's own rows brought up, and none answers,
+ * approves or nudges the agent.
+ */
+function stateRows(input: AgentTileMenuInput, run: readonly ModelEntry[]): { rows: ModelEntry[]; replaces: string[] } {
+  const { nodeId, agent, clickOpens, review, actions } = input;
+  const open = () => (clickOpens === 'expand' ? actions.expand(nodeId) : actions.openAgent(agent));
+  const openRow = (hint?: string): ModelEntry => ({ id: 'open', label: 'Open', icon: <SquareArrowOutUpRight />, ...(hint === undefined ? {} : { hint }), onSelect: open });
+  const just = (rows: ModelEntry[]) => ({ rows: rows.map(withTopHint), replaces: [] });
+  switch (tileMenuState(input)) {
+    case 'thinking':
+      return just([{ id: 'watch', label: 'Watch it work', icon: <Eye />, hint: 'Opens its session; changes nothing', onSelect: open }, ...rowsWithId(run, 'interrupt')]);
+    case 'needs-you':
+      // Pause would put to sleep an agent that waits on you, so it is taken out of Run too.
+      return { rows: nextStep(input), replaces: ['pause'] };
+    case 'paused':
+      return just(nextStep(input));
+    case 'waiting': {
+      const on = waitsOn(input)!;
+      return { rows: [{ id: 'waits-on', label: 'Show what it waits on', icon: <Eye />, hint: on.hint, onSelect: on.show ?? open }], replaces: on.replaces === undefined ? [] : [on.replaces] };
+    }
+    case 'idle': {
+      const docIn = agent.reviewOf !== null && review?.status === 'ready' ? nextStep(input) : [];
+      return just([...docIn, openRow(), ...rowsWithId(run, 'pause')]);
+    }
+    case 'done': {
+      const [pr] = agent.pullRequests;
+      const finished: ModelEntry[] = [
+        ...(pr === undefined ? [] : [{ id: 'open-pr', label: `Open pull request #${pr.number}`, icon: <GitPullRequest />, hint: pr.title, onSelect: () => actions.openPullRequest(agent, pr) }]),
+        ...rowsWithId(reviewEntries(input), 'open-review'),
+      ];
+      return just(finished.length > 0 ? finished : [openRow()]);
+    }
+    case 'failed':
+      return just([openRow('Opens it, to see what failed')]);
+    case 'stopped':
+      return just(rowsWithId(run, 'resume'));
+  }
+}
+
+/**
+ * An agent tile's menu as the menu bar's Agent menu shows it: its Agent ▸ is "This agent" there, not an Agent inside
+ * Agent. The tile's own menu keeps Agent ▸.
+ */
+export function menuBarAgentEntries(entries: readonly ModelEntry[]): ModelEntry[] {
+  return entries.map((entry) => (entry !== 'separator' && !('heading' in entry) && entry.id === 'agent' && 'entries' in entry ? { ...entry, label: 'This agent' } : entry));
+}
+
+/** The menu without the rows `taken` names, at any depth: no heading left over nothing, no separator left at an end or doubled, no empty group. */
+function without(entries: readonly ModelEntry[], taken: ReadonlySet<string>): ModelEntry[] {
+  const kept = entries.flatMap((entry): ModelEntry[] => {
+    if (entry === 'separator' || 'heading' in entry) return [entry];
+    if (taken.has(entry.id)) return [];
+    if (!('entries' in entry) || entry.disabled === true) return [entry];
+    const rows = without(entry.entries, taken);
+    return rows.length === 0 ? [] : [{ ...entry, entries: rows }];
+  });
+  const tidy: ModelEntry[] = [];
+  for (const [index, entry] of kept.entries()) {
+    const next = kept[index + 1];
+    if (entry !== 'separator' && 'heading' in entry && (next === undefined || next === 'separator' || 'heading' in next)) continue;
+    if (entry === 'separator' && (tidy.length === 0 || tidy.at(-1) === 'separator')) continue;
+    tidy.push(entry);
+  }
+  while (tidy.at(-1) === 'separator') tidy.pop();
+  return tidy;
+}
+
+/**
+ * An agent tile's menu under Classic (M3), from its ⋯ and a right-click alike: one to three rows for what it is doing
+ * now, then Open, Pop out, Run ▸, Agent ▸ (Settings, Review & gate and Copy, under headings), Board ▸ (the tiles it is
+ * linked to, and Arrange), Ask Claude and Delete, with no row of the first block again. Ten rows at most; no row
+ * answers, approves or nudges the agent. Simplified keeps `agentTileMenu`.
+ */
+export function stateTileMenu(input: AgentTileMenuInput): ModelEntry[] {
+  const { nodeId, agent, clickOpens, rename, actions, board, related } = input;
+  const run = runEntries(agent, actions);
+  const first = stateRows(input, run);
+  const reviewGate = reviewGateEntries({ ...input, related: [] });
+  const shows = related.map((tile): ModelEntry => ({ id: `show-${tile.sessionId}`, label: tile.label, icon: <LocateFixed />, onSelect: () => board.show(tile.sessionId) }));
+  const body: ModelEntry[] = [
+    otherOpen(clickOpens, () => actions.expand(nodeId), () => actions.openAgent(agent)),
+    { id: 'pop-out', label: 'Pop out', icon: <SquareArrowOutUpRight />, onSelect: () => actions.popOutAgent(agent) },
+    'separator',
+    ...(run.length === 0 ? [] : [{ id: 'run', label: 'Run', icon: <Play />, entries: run }]),
+    {
+      id: 'agent',
+      label: 'Agent',
+      icon: <UserRound />,
+      entries: [{ heading: 'Settings' }, ...settingsEntries(agent, rename, actions), 'separator', { heading: 'Review & gate' }, ...reviewGate, 'separator', { heading: 'Copy' }, ...copyEntries(input)],
+    },
+    { id: 'board', label: 'Board', icon: <LayoutTemplate />, entries: [...shows, ...(shows.length > 0 ? ['separator' as const] : []), ...arrangeEntries(input)] },
+    'separator',
+    { id: 'ask', label: 'Ask Claude about it…', icon: <Sparkles />, shortcut: keyText('make.askClaude'), hint: 'Sends nothing until you press Ask', onSelect: board.askClaude },
+    'separator',
+    { id: 'delete', label: 'Delete agent', icon: <Trash2 />, danger: true, shortcut: keyText('tile.delete'), onSelect: () => actions.deleteAgent(agent.sessionId) },
+  ];
+  return [...first.rows, 'separator', ...without(body, new Set([...menuIds(first.rows), ...first.replaces]))];
 }
 
 /**

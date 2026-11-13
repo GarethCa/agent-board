@@ -29,7 +29,7 @@ import { run } from './board-helpers.ts';
 import { test, browseForZone, connectedDaemonPid, openAddZone, pickFolderNext, removeDataDir, tempDataDir } from './launch.ts';
 import { scratch } from './scratch.ts';
 import { clickClosing } from './windows.ts';
-import { openSettings, settingsSection } from './settings-helpers.ts';
+import { openSettings, settingsSection, showTileParts } from './settings-helpers.ts';
 
 /**
  * The v1 definition of done, walked end to end on the fakes: every line of it in one journey, on one
@@ -90,6 +90,7 @@ test('v1 definition of done: zones, tracker-linked Claude and Codex agents, inbo
   try {
     const first = await launch(dataDir, env);
     await listFinishedTurns(first.window);
+    await showTileParts(first.window, ['chips']);
     apps.push(first.app);
     const { app, window } = first;
     const daemonPid = await connectedDaemonPid(window);

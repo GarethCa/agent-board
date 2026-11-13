@@ -97,6 +97,10 @@ export interface FakeHarnessEnvOptions {
   hangTool?: boolean;
   /** Its Claude tool calls fail when they run, firing `PostToolUseFailure` in place of `PostToolUse`. Defaults to false. */
   toolFails?: boolean;
+  /** Claude's question dialog takes no answers from its PermissionRequest hook, only a typed line. Defaults to false. */
+  questionsKeepDialog?: boolean;
+  /** Claude's question dialog closes on its PermissionRequest hook's allow, but the call runs with no answers. Defaults to false. */
+  questionsDropAnswers?: boolean;
   /**
    * Take keys as they come rather than a line at a time, as the real TUIs do, so a line longer than a terminal's 1 KiB
    * line arrives; Claude then keeps only the bytes after the last whole KiB of a long line typed with no paste around it,
@@ -121,6 +125,13 @@ export interface FakeHarnessEnvOptions {
    * Down never moves its pointer. Defaults to false.
    */
   trustScreen?: boolean | 'late-start' | 'slow-prompt' | 'slow-redraw' | 'stuck-pointer';
+  /**
+   * A file of raw terminal bytes a Claude session writes to its terminal as it starts, before anything of its own: a
+   * start-up screen recorded from the real Claude Code (`fixtures/claude/tui/`), so what reads its screen reads what the
+   * real TUI draws, at the pace its `.json` beside it recorded. Nothing of its own is drawn over it until a prompt is
+   * typed (leave `promptBox` off).
+   */
+  startupScreen?: string;
   /**
    * Take a message typed while a turn runs at the turn's next step after a tool call, writing it to the transcript as a
    * `queued_command` attachment, as Claude Code 2.1 does (Claude only). Defaults to false: it is the next prompt, a
@@ -167,10 +178,13 @@ export function fakeHarnessEnv(options: FakeHarnessEnvOptions): NodeJS.ProcessEn
     FAKE_HARNESS_PROMPT_BOX: options.promptBox === 'spinner' ? 'spinner' : options.promptBox ? '1' : '0',
     FAKE_HARNESS_HANG_TOOL: options.hangTool ? '1' : '0',
     FAKE_HARNESS_TOOL_FAILS: options.toolFails ? '1' : '0',
+    FAKE_HARNESS_QUESTIONS_KEEP_DIALOG: options.questionsKeepDialog ? '1' : '0',
+    FAKE_HARNESS_QUESTIONS_DROP_ANSWERS: options.questionsDropAnswers ? '1' : '0',
     FAKE_HARNESS_RATE_LIMIT_SCREEN: options.rateLimitScreen ?? '',
     FAKE_HARNESS_QUEUE_MID_TURN: options.queueMidTurn ? '1' : '0',
     FAKE_HARNESS_RATE_LIMITS: options.rateLimits === undefined ? '' : JSON.stringify(options.rateLimits),
     FAKE_HARNESS_BACKLOG_LINES: String(options.backlogLines ?? 0),
+    FAKE_HARNESS_STARTUP_SCREEN: options.startupScreen ?? '',
     FAKE_HARNESS_TRUST_SCREEN: typeof options.trustScreen === 'string' ? options.trustScreen : options.trustScreen ? '1' : '0',
   };
 }

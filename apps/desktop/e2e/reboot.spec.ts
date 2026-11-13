@@ -4,7 +4,7 @@ import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { launch, screen, sessionWindow, SHELL_ENV, spawnAgent, tile, tileAction } from './agent-helpers.ts';
-import { test, connectedDaemonPid, killHard, launchApp, pickFolderNext, removeDataDir, stopDaemon, tempDataDir, browseForZone, newShell } from './launch.ts';
+import { test, connectedDaemonPid, runDesign, killHard, launchApp, pickFolderNext, removeDataDir, stopDaemon, tempDataDir, browseForZone, newShell } from './launch.ts';
 import { scratch } from './scratch.ts';
 
 const dockItem = (page: Page) => page.getByTestId('dock-item');
@@ -214,18 +214,22 @@ async function stoppedAgent(dir: string, repo: string, env: Record<string, strin
   return again.window;
 }
 
-test("a stopped agent's tile keeps its stopped pill, and Resume agent in its ⋯ menu carries it on", async () => {
+test("a stopped agent's tile says a restart stopped it, and Resume agent in its ⋯ menu carries it on", async () => {
   const apps: ElectronApplication[] = [];
   const dataDir = tempDataDir();
   const { dir, repo, env } = scratch('waiting');
   try {
     const window = await stoppedAgent(dir, repo, env, dataDir, apps);
-    const pill = tile(window).locator('.hybrid-tile-footer .ui-pill');
-    await expect(pill).toHaveText('stopped');
-    await expect(pill).toHaveAttribute('data-state', 'stopped-by-restart');
-    await tileAction(tile(window), 'Resume agent', 'Run');
+    await expect(tile(window)).toHaveAttribute('data-state', 'stopped-by-restart');
+    const now = tile(window).getByTestId('tile-description');
+    if (runDesign() !== 'simplified') {
+      await expect(now).toHaveText('Stopped by a restart · Resume carries it on');
+      await expect(tile(window).getByTestId('tile-state-word')).toHaveText('Needs you');
+    }
+    // Under Classic, Resume leads the menu of an agent a restart stopped; under Simplified it is in Run.
+    await tileAction(tile(window), 'Resume agent', runDesign() === 'simplified' ? 'Run' : undefined);
     await expect(tile(window)).not.toHaveAttribute('data-state', 'stopped-by-restart');
-    await expect(pill).not.toHaveText(/ended|stopped/);
+    await expect(now.filter({ hasText: 'Stopped by a restart' })).toHaveCount(0);
   } finally {
     for (const app of apps) await app.close().catch(() => {});
     await removeDataDir(dataDir);

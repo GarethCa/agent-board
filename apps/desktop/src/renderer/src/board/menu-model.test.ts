@@ -2,8 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { ZONE_COLORS, type Agent, type ExternalSession, type GateRun, type LibraryPrefab, type ReviewRound, type Shell, type Zone } from '@agent-board/daemon/protocol';
 import { keyText } from '../keys/registry';
 import { runGateShortcut } from '../session/window-keys';
-import { agentMenu, agentTileMenu, bindEntries, chipMenu, externalMenu, menuIds, projectContextMenu, projectMenu, shellMenu, tidyMenu, zoneMenu, zoneTabEntries, type AgentMenuInput, type AgentTileMenuInput, type ModelEntry, type ProjectContextMenuInput, type ZoneMenuInput, type ShellMenuInput, type TileBoardActions } from './menu-model';
+import { agentMenu, agentTileMenu, menuBarAgentEntries, stateTileMenu, bindEntries, chipMenu, externalMenu, menuIds, projectContextMenu, projectMenu, shellMenu, tidyMenu, zoneMenu, zoneTabEntries, type AgentMenuInput, type AgentTileMenuInput, type ModelEntry, type ProjectContextMenuInput, type ZoneMenuInput, type ShellMenuInput, type TileBoardActions } from './menu-model';
 import { galleryAgent } from './TileGallery';
+import type { MenuBarRow } from '../../../shared/menu-bar';
+import { menuBarRows, runRow } from '../keys/menu-bar';
 
 const AT = '2026-10-22T12:00:00.000Z';
 
@@ -141,7 +143,7 @@ function boardSpies(calls: [string, unknown[]][] = [], more: Partial<TileBoardAc
 }
 
 function tileInput(agent: Agent, more: Partial<AgentTileMenuInput> = {}): AgentTileMenuInput {
-  return { ...agentInput(agent), actions: spies(), board: boardSpies(), related: [], review: undefined, ...more };
+  return { ...agentInput(agent), actions: spies(), board: boardSpies(), related: [], review: undefined, shows: 'explicit', ...more };
 }
 
 /** The ids of a menu's top level alone. */
@@ -1937,5 +1939,201 @@ describe("a project's menus, under the Simplified design", () => {
     const entries = projectContextMenu(projectInput(repoZone, { noAgents: 'Still cloning' }));
     expect(row(entries, 'new-agent')).toMatchObject({ disabled: true, hint: 'Still cloning' });
     expect(entries.at(-1)).toMatchObject({ id: 'delete', label: 'Delete project…', danger: true });
+  });
+});
+
+describe("the menu bar's Agent and Project menus", () => {
+  // The paths a model menu's rows have in the menu bar: every row's, a swatch's as `row/value`; a slider has no native form.
+  const paths = (entries: readonly ModelEntry[], prefix = ''): string[] =>
+    entries.flatMap((entry) => {
+      if (entry === 'separator' || 'heading' in entry || 'min' in entry) return [];
+      const id = `${prefix}${entry.id}`;
+      if ('swatches' in entry) return [id, ...entry.swatches.map((swatch) => `${id}/${swatch.value}`)];
+      return 'entries' in entry ? [id, ...paths(entry.entries, `${id}/`)] : [id];
+    });
+  const rowPaths = (rows: readonly MenuBarRow[]): string[] => rows.flatMap((row) => (row === 'separator' || 'heading' in row ? [] : [row.id, ...rowPaths(row.entries ?? [])]));
+  const leaves = (rows: readonly MenuBarRow[]): string[] =>
+    rows.flatMap((row) => (row === 'separator' || 'heading' in row || !row.enabled ? [] : row.entries === undefined ? [row.id] : leaves(row.entries)));
+
+  it.each<[string, () => ModelEntry[]]>([
+    ['an agent tile', () => agentTileMenu(tileInput(running))],
+    ['an ended agent tile', () => agentTileMenu(tileInput(ended))],
+    ['a running agent tile under Classic (M3)', () => stateTileMenu(tileInput(running))],
+    ['an ended agent tile under Classic (M3)', () => stateTileMenu(tileInput(ended))],
+    ['a paused agent tile under Classic (M3)', () => stateTileMenu(tileInput({ ...galleryAgent('hibernated'), endedAt: AT }))],
+    ['a reviewer whose doc is in, under Classic (M3)', () => stateTileMenu(tileInput({ ...galleryAgent('idle'), reviewOf: 'impl' }, { review: round('ready') }))],
+    ['a repo zone', () => zoneMenu(zoneInput(repoZone))],
+    ['a group', () => zoneMenu(zoneInput({ ...group, userFolder: true }))],
+    ['a Simplified project', () => projectMenu(projectInput(repoZone))],
+  ])("%s: every row of its ⋯ menu, at the same path, and each one picked runs", (_name, menu) => {
+    const entries = menu();
+    const rows = menuBarRows(entries);
+    expect(rowPaths(rows)).toEqual(paths(entries));
+    for (const path of leaves(rows)) expect(runRow(entries, path), path).toBe(true);
+  });
+
+  it("names Classic's Agent ▸ This agent in the menu bar, not Agent inside Agent, and leaves the tile's menu as it is", () => {
+    const entries = stateTileMenu(tileInput(running));
+    const bar = menuBarRows(menuBarAgentEntries(entries));
+    expect(bar.find((each) => each !== 'separator' && !('heading' in each) && each.id === 'agent')).toMatchObject({ label: 'This agent' });
+    expect(rowPaths(bar)).toEqual(paths(entries));
+    expect(row(entries, 'agent').label).toBe('Agent');
+  });
+});
+
+describe("an agent tile's menu under Classic (M3): its first rows shaped by its state, then the trimmed body", () => {
+  const sub = (entries: readonly ModelEntry[], id: string) => (row(entries, id) as Extract<ModelEntry, { entries: unknown }>).entries;
+  /** The ids before the first separator: its top block. */
+  const top = (entries: readonly ModelEntry[]) => topIds(entries.slice(0, entries.indexOf('separator')));
+  const pr = { number: 44, title: 'Fix the flake', url: '', state: 'open', checks: 'passing' } as Agent['pullRequests'][number];
+  const idle: Agent = galleryAgent('idle');
+  const paused: Agent = { ...galleryAgent('hibernated'), endedAt: AT };
+  const asking: Agent = { ...galleryAgent('waiting'), ask: {} as Agent['ask'] };
+
+  it('leads a thinking agent with Watch it work and Interrupt, and drops Interrupt from Run', () => {
+    const entries = stateTileMenu(tileInput(running));
+    expect(top(entries)).toEqual(['watch', 'interrupt']);
+    expect(row(entries, 'watch')).toMatchObject({ label: 'Watch it work', hint: 'Opens its session; changes nothing' });
+    expect(row(entries, 'interrupt')).toMatchObject({ disabled: false });
+    expect(menuIds(sub(entries, 'run'))).not.toContain('interrupt');
+  });
+
+  it('leads an agent that needs you with Go to its question alone', () => {
+    expect(top(stateTileMenu(tileInput(asking)))).toEqual(['go-to-question']);
+    expect(top(stateTileMenu(tileInput({ ...galleryAgent('needs-permission'), permissions: [{}] as Agent['permissions'] })))).toEqual(['go-to-question']);
+  });
+
+  it('says Needs you of every agent its tile does: a flag, a steps card, and with the turns setting a finished turn', () => {
+    const flagged: Agent = { ...idle, flag: { to: 'user', reason: 'Look at this' } as Agent['flag'] };
+    const onSteps: Agent = { ...idle, stepsWait: { kind: 'todo' } as Agent['stepsWait'] };
+    const turn: Agent = { ...galleryAgent('waiting'), ledBy: null };
+    for (const agent of [flagged, onSteps]) {
+      const entries = stateTileMenu(tileInput(agent));
+      expect(top(entries)).toEqual(['go-to-question']);
+      // Never a Pause in reach that would put to sleep an agent waiting on you.
+      expect(menuIds(entries)).not.toContain('pause');
+      expect(menuIds(entries)).not.toContain('run/pause');
+      expect(topIds(agentTileMenu(tileInput(agent)))[0]).toBe('go-to-question');
+    }
+    const turnMenu = stateTileMenu(tileInput(turn, { shows: 'turns' }));
+    expect(top(turnMenu)).toEqual(['go-to-question']);
+    expect(menuIds(turnMenu)).not.toContain('run/pause');
+    expect(top(stateTileMenu(tileInput(turn, { shows: 'explicit' })))).not.toContain('go-to-question');
+  });
+
+  it('leads a waiting agent with Show what it waits on, which takes you to it', () => {
+    const calls: [string, unknown[]][] = [];
+    const reviewing = { ...round('reviewing'), reviewer: 'rev' };
+    const entries = stateTileMenu(tileInput(idle, { rounds: [reviewing], board: boardSpies(calls), related: [{ sessionId: 'rev', label: 'Show its reviewer' }] }));
+    expect(top(entries)).toEqual(['waits-on']);
+    expect(row(entries, 'waits-on')).toMatchObject({ label: 'Show what it waits on', hint: 'Its review' });
+    (row(entries, 'waits-on') as { onSelect(): void }).onSelect();
+    expect(calls).toEqual([['show', ['rev']]]);
+    const checks = stateTileMenu(tileInput({ ...idle, pullRequests: [{ ...pr, checks: 'pending' }] }));
+    expect(row(checks, 'waits-on')).toMatchObject({ hint: "PR #44's checks" });
+    const limited = stateTileMenu(tileInput({ ...galleryAgent('rate-limited'), harness: 'claude' }));
+    expect(row(limited, 'waits-on')).toMatchObject({ hint: 'Its usage limit' });
+    const named = { ...idle, workCategory: { category: 'waiting-on-others', label: null, waitingOn: { who: 'the release lead', ref: 'PR #46' }, setAt: AT, setBy: null } } as Agent;
+    expect(row(stateTileMenu(tileInput(named)), 'waits-on')).toMatchObject({ hint: 'the release lead · PR #46' });
+  });
+
+  it('shows its reviewer once, at the top, when it waits on its review', () => {
+    const entries = stateTileMenu(tileInput(idle, { rounds: [{ ...round('reviewing'), reviewer: 'rev' }], related: [{ sessionId: 'rev', label: 'Show its reviewer' }] }));
+    expect(menuIds(sub(entries, 'board'))).not.toContain('show-rev');
+  });
+
+  it("takes a scheduled agent to its schedule, which then isn't repeated in Agent", () => {
+    const actions = spies<AgentTileMenuInput['actions']>();
+    const entries = stateTileMenu(tileInput(galleryAgent('scheduled'), { actions }));
+    expect(row(entries, 'waits-on')).toMatchObject({ hint: 'Its next scheduled run' });
+    (row(entries, 'waits-on') as { onSelect(): void }).onSelect();
+    expect(actions.calls.map(([name]) => name)).toEqual(['scheduleAgent']);
+    expect(menuIds(sub(entries, 'agent'))).not.toContain('schedule');
+  });
+
+  it('leads an idle agent with Open and Pause, and drops Pause from Run', () => {
+    const actions = spies<AgentTileMenuInput['actions']>();
+    const entries = stateTileMenu(tileInput(idle, { actions }));
+    expect(top(entries)).toEqual(['open', 'pause']);
+    expect(menuIds(sub(entries, 'run'))).not.toContain('pause');
+    (row(entries, 'open') as { onSelect(): void }).onSelect();
+    expect(actions.calls.map(([name]) => name)).toEqual(['openAgent']);
+  });
+
+  it('leads a reviewer whose doc is in with Open review', () => {
+    const reviewer: Agent = { ...idle, reviewOf: 'impl' };
+    expect(top(stateTileMenu(tileInput(reviewer, { review: round('ready') })))).toEqual(['open-review', 'open', 'pause']);
+  });
+
+  it('leads a finished agent with its pull request and its review, and drops them from Agent', () => {
+    const entries = stateTileMenu(tileInput({ ...ended, pullRequests: [pr] }, { rounds: [round('ready')] }));
+    expect(top(entries)).toEqual(['open-pr', 'open-review']);
+    expect(row(entries, 'open-pr').label).toBe('Open pull request #44');
+    expect(menuIds(sub(entries, 'agent'))).not.toContain('open-pr');
+    expect(menuIds(sub(entries, 'agent'))).not.toContain('open-review');
+    expect(top(stateTileMenu(tileInput({ ...idle, workFinishedAt: AT, pullRequests: [pr] })))).toEqual(['open-pr']);
+    // Finished with neither, it leads with Open.
+    expect(top(stateTileMenu(tileInput({ ...ended, pullRequests: [] })))).toEqual(['open']);
+  });
+
+  it('leads a paused agent with Wake, a failed one with Open, and one a restart stopped with Resume', () => {
+    expect(top(stateTileMenu(tileInput(paused)))).toEqual(['wake']);
+    expect(top(stateTileMenu(tileInput({ ...galleryAgent('failed'), endedAt: AT })))).toEqual(['open']);
+    const stopped = stateTileMenu(tileInput({ ...galleryAgent('stopped-by-restart'), endedAt: AT }));
+    expect(top(stopped)).toEqual(['resume']);
+    expect(topIds(stopped)).not.toContain('run');
+  });
+
+  it("follows with M2's body: Open, Pop out, Run, Agent, Board, Ask Claude and Delete", () => {
+    const entries = stateTileMenu(tileInput(running, { related: [{ sessionId: 'x', label: 'Show x' }] }));
+    expect(topIds(entries)).toEqual(['watch', 'interrupt', 'expand', 'pop-out', 'run', 'agent', 'board', 'ask', 'delete']);
+    const agent = sub(entries, 'agent');
+    expect(agent.filter((entry) => entry !== 'separator' && 'heading' in entry)).toEqual([{ heading: 'Settings' }, { heading: 'Review & gate' }, { heading: 'Copy' }]);
+    expect(menuIds(agent)).toEqual(expect.arrayContaining(['rename', 'mute', 'reasoning', 'open-pr', 'start-review', 'run-gate', 'branch', 'session-id']));
+    expect(menuIds(sub(entries, 'board')).slice(0, 2)).toEqual(['show-x', 'front']);
+    expect(entries.at(-2)).toBe('separator');
+  });
+
+  it('never leaves a heading over nothing, nor two separators in a row', () => {
+    const entries = stateTileMenu(tileInput({ ...ended, ownsWorktree: false, pullRequests: [pr], reviewOf: null }, { rounds: [] }));
+    const agent = sub(entries, 'agent');
+    expect(agent.filter((entry) => entry !== 'separator' && 'heading' in entry)).toEqual([{ heading: 'Settings' }, { heading: 'Review & gate' }, { heading: 'Copy' }]);
+    for (const [index, entry] of agent.entries()) if (entry === 'separator') expect(agent[index + 1]).not.toBe('separator');
+  });
+
+  it('drops a heading whose group the top block emptied', () => {
+    // A finished reviewer with no pull request and no gate: Open review goes to the top, and Review & gate has nothing left.
+    const reviewer: Agent = { ...ended, reviewOf: 'impl', pullRequests: [], ownsWorktree: false };
+    const entries = stateTileMenu(tileInput(reviewer, { review: round('ready') }));
+    expect(top(entries)).toEqual(['open-review']);
+    const agent = sub(entries, 'agent');
+    expect(agent.filter((entry) => entry !== 'separator' && 'heading' in entry)).toEqual([{ heading: 'Settings' }, { heading: 'Copy' }]);
+    expect(agent.filter((entry, index) => entry === 'separator' && (index === 0 || agent[index + 1] === 'separator' || index === agent.length - 1))).toEqual([]);
+  });
+
+  it('has exactly ten rows in its fullest state, an idle reviewer whose doc is in', () => {
+    const entries = stateTileMenu(tileInput({ ...idle, reviewOf: 'impl' }, { review: round('ready') }));
+    expect(topIds(entries)).toHaveLength(10);
+  });
+
+  it('brings rows up with the words of the mock while they are enabled', () => {
+    expect(row(stateTileMenu(tileInput(running)), 'interrupt')).toMatchObject({ hint: 'Stops this turn; its session stays' });
+    expect(row(stateTileMenu(tileInput(idle)), 'pause')).toMatchObject({ hint: 'Frees its memory; Wake starts it where it left off' });
+    expect(row(stateTileMenu(tileInput(paused)), 'wake')).toMatchObject({ hint: 'Starts its session where it left off' });
+    expect(row(stateTileMenu(tileInput({ ...ended, pullRequests: [] }, { rounds: [round('ready')] })), 'open-review')).toMatchObject({ hint: 'Its review doc is in' });
+  });
+
+  it.each([
+    ['thinking', running],
+    ['needs you', asking],
+    ['idle', idle],
+    ['paused', paused],
+    ['done', { ...ended, pullRequests: [pr] }],
+    ['a rate-limited Claude agent', { ...galleryAgent('rate-limited'), harness: 'claude' } as Agent],
+  ])('has ten rows at most, none twice, when %s', (_name, agent) => {
+    const entries = stateTileMenu(tileInput(agent, { review: round('ready'), rounds: [round('ready')], related: [{ sessionId: 'x', label: 'Show x' }] }));
+    expect(topIds(entries).length).toBeLessThanOrEqual(10);
+    const ids = menuIds(entries).map((id) => id.split('/').at(-1));
+    expect(ids.length).toBe(new Set(ids).size);
   });
 });

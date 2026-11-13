@@ -555,7 +555,7 @@ describe('a plan an agent leaves instead of waiting on', () => {
   it('is not a call waiting on the user: its agent is not mid-turn for it, yet its plan still waits for review', () => {
     const { host } = asks();
     host.leavePlan('s1', plan);
-    const agent = { ask: null, plan: host.latestPlan('s1')!, state: 'idle' as const, endedAt: null, permissions: [] };
+    const agent = { ask: null, removeAsk: null, plan: host.latestPlan('s1')!, state: 'idle' as const, endedAt: null, permissions: [] };
     expect(waitsOnUser(agent)).toBe(false);
     expect(isMidTurn(agent)).toBe(false);
     expect(planPending(agent)).toBe(true);

@@ -201,6 +201,13 @@ test('on the timeline rail, a run of tool calls is one collapsed line that opens
     await expect(chat.getByTestId('chat-tool')).toHaveCount(0);
 
     const strip = sessionWindow(window);
+    // A plain agent's window has no tab row: the chat's controls are in its header, and the strip over the chat is left
+    // its pane and status.
+    const head = strip.locator('.session-window-head');
+    for (const name of ['Expand all', 'Collapse all']) await expect(head.getByRole('button', { name })).toBeVisible();
+    await expect(head.getByRole('group', { name: 'Chat style' })).toBeVisible();
+    await expect(strip.locator('.session-window-strip').getByRole('button', { name: 'Expand all' })).toHaveCount(0);
+    await expect(strip.locator('.session-window-strip').getByRole('group', { name: 'Chat style' })).toHaveCount(0);
     await strip.getByRole('button', { name: 'Expand all' }).click();
     await expect(chat.getByTestId('chat-tool')).toHaveCount(4);
     // Expand all again opens even a run closed by a click since it was last pressed.

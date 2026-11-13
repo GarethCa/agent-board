@@ -144,14 +144,14 @@ describe('an orchestrator in a group with no repo', () => {
     expect(crew).toMatchObject({ plainFolder: true, worktree: agent.worktree, branch: '', ownsWorktree: false });
   });
 
-  it('refuses a repo for a crew member in a zone bound to its own', async () => {
+  it('starts a crew member in the repo it names, in a zone bound to another', async () => {
     const { client, connection, token } = await lead();
     const bound = await client.call('zone.add', { path: tempRepo('bound'), name: 'bound', ...at });
-    await client.call('agent.setOrchestrate', { sessionId: (await client.call('agent.list'))[0]!.sessionId, scope: 'board' });
+    const elsewhere = tempRepo('elsewhere');
 
-    await expect(connection.call('orchestrator.spawn', { token, zoneId: bound.id, repo: tempRepo('elsewhere'), prompt: 'Go' })).rejects.toMatchObject({
-      message: expect.stringContaining('is bound to its own repo'),
-    });
+    const crew = await connection.call('orchestrator.spawn', { token, zoneId: bound.id, repo: elsewhere, prompt: 'Go' });
+
+    expect(crew).toMatchObject({ zoneId: bound.id, repoRoot: elsewhere, ownsWorktree: true });
   });
 
   it('refuses a repo that is not an absolute path, before running git anywhere', async () => {
@@ -183,6 +183,20 @@ describe('an orchestrator in a group with no repo', () => {
     const { crew, reviewer } = await reviewOfCrew(ctx, repo);
 
     expect(reviewer).toMatchObject({ repoRoot: repo, reviews: { branch: crew.branch } });
+  });
+
+  it('starts a reviewer of a crew member in that member’s repo, in a zone bound to another', async () => {
+    const ctx = await lead();
+    const bound = await ctx.client.call('zone.add', { path: tempRepo('bound'), name: 'bound', ...at });
+    const crew = await ctx.connection.call('orchestrator.spawn', { token: ctx.token, name: 'ledger', repo: tempRepo('bank'), prompt: 'Fix it' });
+    const session = await openBoardSession({ [BOARD_SOCKET_ENV]: ctx.daemon.socketPath, [BOARD_TOKEN_ENV]: ctx.token });
+    try {
+      const started = await newAgent(session, { prompt: 'Review it', name: 'review', role: 'reviewer', base: 'agent:ledger', zone: 'zone:bound' });
+      expect(started.json).toMatchObject({ repoRoot: crew.repoRoot, reviews: { branch: crew.branch } });
+      expect((await ctx.client.call('agent.list')).find((each) => each.name === 'review')).toMatchObject({ zoneId: bound.id });
+    } finally {
+      session.close();
+    }
   });
 
   it('starts a reviewer of a crew member in that member’s repo, not the group’s default', async () => {

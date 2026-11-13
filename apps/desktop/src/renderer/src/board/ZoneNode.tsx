@@ -16,6 +16,7 @@ import { ProjectWell } from './ProjectWell';
 import type { ClusterView, ShelfView } from './shelves';
 import { ClustersView, ShelvesView } from './ShelvesView';
 import { ZoneTodoBadge } from './items/ZoneTodoBadge';
+import { useMenuBarSection } from '../keys/menu-bar-bridge';
 import {
   MIN_ZONE_SIZE,
   TRACKER_PROVIDERS,
@@ -382,6 +383,7 @@ function ClassicZone({
   // Its New crew lists the library as it is now, and this zone is drawn only when something of its own changes.
   usePrefabs();
   const menu = zoneMenu({ zone, folded: foldedEntries, themeFill: themeFillOpacity(), rename: renaming.startSoon, actions: binding });
+  useMenuBarSection('project', selected === true, menu);
   return (
     <div
       className="zone"

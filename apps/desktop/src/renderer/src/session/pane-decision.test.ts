@@ -35,7 +35,7 @@ const prompt = (id: string, heldUntil: string | null = '2026-10-31T09:00:20Z'): 
   requestedAt: '2026-10-31T09:00:00Z',
   heldUntil,
   asksInTerminal: false,
-  sessionGrant: null, questions: null,
+  sessionGrant: null, dialog: null, plan: null, questions: null,
 });
 
 describe('paneDecision: a permission prompt', () => {

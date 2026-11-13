@@ -300,6 +300,105 @@ describe('fake claude', () => {
     await done;
   });
 
+  it("ask-questions: a hook's allow with answers in its updatedInput answers the dialog with them", async () => {
+    await recorder.close();
+    recorder = await startHookRecorder((event) =>
+      event.hook_event_name === 'PermissionRequest'
+        ? { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow', updatedInput: { answers: { 'Which cache should the build use?': 'In memory' } } } } }
+        : undefined,
+    );
+    // Interactive: its dialog reads a line, and a closed stdin would answer first.
+    const { child, done } = startFake('claude', { scenario: 'ask-questions', args: ['--settings', settings(), 'set up the build'] });
+    await untilStdout(child, 'Going with In memory.');
+    await untilEvents(recorder, 'Stop');
+    child.stdin.end();
+    await done;
+    expect(recorder.events.find((event) => event.hook_event_name === 'PostToolUse')).toMatchObject({
+      tool_input: { answers: { 'Which cache should the build use?': 'In memory' } },
+    });
+  });
+
+  it("ask-questions: with questionsKeepDialog its dialog drops the hook's answers and waits for a typed line", async () => {
+    await recorder.close();
+    recorder = await startHookRecorder((event) =>
+      event.hook_event_name === 'PermissionRequest'
+        ? { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow', updatedInput: { answers: { 'Which cache should the build use?': 'In memory' } } } } }
+        : undefined,
+    );
+    const { child, done } = startFake('claude', { scenario: 'ask-questions', env: { FAKE_HARNESS_QUESTIONS_KEEP_DIALOG: '1' }, args: ['--settings', settings(), 'set up the build'] });
+    const shown = untilStdout(child, 'Answer: ');
+    await untilEvents(recorder, 'PermissionRequest');
+    await shown;
+    const said = untilStdout(child, 'Going with Redis.');
+    child.stdin.write('1\n');
+    await said;
+    child.stdin.end();
+    await done;
+  });
+
+  it("ask-questions: with questionsDropAnswers the hook's allow closes its dialog but the call runs with no answers", async () => {
+    await recorder.close();
+    recorder = await startHookRecorder((event) =>
+      event.hook_event_name === 'PermissionRequest'
+        ? { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow', updatedInput: { answers: { 'Which cache should the build use?': 'In memory' } } } } }
+        : undefined,
+    );
+    const { child, done } = startFake('claude', { scenario: 'ask-questions', env: { FAKE_HARNESS_QUESTIONS_DROP_ANSWERS: '1' }, args: ['--settings', settings(), 'set up the build'] });
+    await untilStdout(child, 'No answer came.');
+    await untilEvents(recorder, 'Stop');
+    child.stdin.end();
+    await done;
+    expect(recorder.events.find((event) => event.hook_event_name === 'PostToolUse')).toMatchObject({ tool_input: { answers: {} } });
+  });
+
+  it('plan-mode: asks to approve its plan with ExitPlanMode, suggesting accept edits, and an allow with that switch starts on it', async () => {
+    await recorder.close();
+    recorder = await startHookRecorder((event) =>
+      event.hook_event_name === 'PermissionRequest'
+        ? { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow', updatedPermissions: [{ type: 'setMode', mode: 'acceptEdits', destination: 'session' }] } } }
+        : undefined,
+    );
+    const result = await runFake('claude', { scenario: 'plan-mode', args: ['-p', '--settings', settings(), 'plan a cache'] });
+    expect(result.stdout).toContain('Accepting edits');
+    expect(result.stdout).toContain('Starting on the plan.');
+    expect(recorder.events.find((event) => event.hook_event_name === 'PermissionRequest')).toMatchObject({
+      tool_name: 'ExitPlanMode',
+      tool_input: { plan: expect.stringContaining('# Add a cache') },
+      permission_suggestions: [{ type: 'setMode', mode: 'acceptEdits', destination: 'session' }],
+    });
+  });
+
+  it('plan-mode: an allow that sets the default mode starts on it approving each edit, and a plain allow leaves it in plan mode', async () => {
+    const allowing = (updatedPermissions?: object[]) => async () => {
+      await recorder.close();
+      recorder = await startHookRecorder((event) =>
+        event.hook_event_name === 'PermissionRequest'
+          ? { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow', ...(updatedPermissions ? { updatedPermissions } : {}) } } }
+          : undefined,
+      );
+      return runFake('claude', { scenario: 'plan-mode', args: ['-p', '--settings', settings(), 'plan a cache'] });
+    };
+    const each = await allowing([{ type: 'setMode', mode: 'default', destination: 'session' }])();
+    expect(each.stdout).toContain('Starting on the plan.');
+    expect(each.stdout).not.toContain('Accepting edits');
+    expect(recorder.events.filter((event) => event.hook_event_name === 'Stop').at(-1)).toMatchObject({ permission_mode: 'default' });
+
+    const plain = await allowing()();
+    expect(plain.stdout).toContain('Still in plan mode, so I can make no edits.');
+  });
+
+  it('plan-mode: a deny keeps it planning, with what to change', async () => {
+    await recorder.close();
+    recorder = await startHookRecorder((event) =>
+      event.hook_event_name === 'PermissionRequest'
+        ? { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'deny', message: 'Use the LRU first' } } }
+        : undefined,
+    );
+    const result = await runFake('claude', { scenario: 'plan-mode', args: ['-p', '--settings', settings(), 'plan a cache'] });
+    expect(result.stdout).toContain('Keeping on planning: Use the LRU first.');
+    expect(result.stdout).not.toContain('Accepting edits');
+  });
+
   it('permission: an allow carrying a session-scoped rule is remembered, and a plain allow is not', async () => {
     await recorder.close();
     recorder = await startHookRecorder((event) =>
@@ -463,6 +562,18 @@ describe('fake claude', () => {
     await untilStdout(child, RATE_LIMIT_MENU_TITLE, 5_000);
     child.kill();
     await done;
+  });
+
+  it("replays a recorded start-up screen at the pace its .json gives, before anything of its own", async () => {
+    const dir = tempDir('startup-screen-');
+    writeFileSync(join(dir, 'screen.bin'), 'loading|ready');
+    writeFileSync(join(dir, 'screen.json'), JSON.stringify({ chunks: [[0, 8], [600, 13]] }));
+    const { child, done } = startFake('claude', { scenario: 'output', args: ['do it'], env: { FAKE_HARNESS_STARTUP_SCREEN: join(dir, 'screen.bin') } });
+    const at = (text: string) => untilStdout(child, text).then(() => Date.now());
+    const [loading, ready] = await Promise.all([at('loading|'), at('ready')]);
+    child.kill();
+    await done;
+    expect(ready - loading).toBeGreaterThanOrEqual(500);
   });
 
   it('runs command hooks with the event JSON on stdin', async () => {

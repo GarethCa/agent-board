@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
-import { addWorktree, agentWorktreePath, removeWorktree, unsavedWork } from '../src/worktrees.ts';
+import { addWorktree, agentWorktreePath, localBaseBranch, removeWorktree, unsavedWork } from '../src/worktrees.ts';
 import { git, tempDataDir, tempRepo } from './helpers.ts';
 
 /** A repo and a worktree of it, in the folder an agent's would be in. */
@@ -104,5 +104,121 @@ describe('unsavedWork with ignoreBoardFiles', () => {
     git(worktree, 'add', 'notes.txt');
     git(worktree, 'commit', '-m', 'Local work');
     expect(await unsaved(true)).toBe('its branch crew-build has 1 commit no other branch has');
+  });
+});
+
+describe('localBaseBranch', () => {
+  const commit = (repo: string, message: string) => git(repo, '-c', 'user.name=T', '-c', 'user.email=t@e', 'commit', '-q', '--allow-empty', '-m', message);
+
+  /** A clone of a repo that has a branch `feature`, which the clone knows only as `origin/feature`. */
+  function cloned() {
+    const upstream = tempRepo('upstream');
+    git(upstream, 'checkout', '-q', '-b', 'feature');
+    commit(upstream, 'the feature');
+    git(upstream, 'checkout', '-q', '-');
+    const clone = join(tempDataDir(), 'clone');
+    git(upstream, 'clone', '-q', upstream, clone);
+    return { upstream, clone };
+  }
+
+  it('is the branch itself, when the repo has it', async () => {
+    const { clone } = cloned();
+    const main = git(clone, 'branch', '--show-current');
+    expect(await localBaseBranch(clone, main)).toBe(main);
+  });
+
+  it("is a local branch made at the remote's, for a branch the repo has only on origin, by either name", async () => {
+    const { upstream, clone } = cloned();
+    expect(await localBaseBranch(clone, 'origin/feature')).toBe('feature');
+    expect(git(clone, 'rev-parse', 'refs/heads/feature')).toBe(git(upstream, 'rev-parse', 'feature'));
+    expect(git(clone, 'rev-parse', '--abbrev-ref', 'feature@{upstream}')).toBe('origin/feature');
+    expect(await localBaseBranch(clone, 'feature')).toBe('feature');
+
+    const other = cloned();
+    expect(await localBaseBranch(other.clone, 'feature')).toBe('feature');
+  });
+
+  it('fetches a branch pushed since the repo last fetched', async () => {
+    const { upstream, clone } = cloned();
+    git(upstream, 'checkout', '-q', '-b', 'later');
+    commit(upstream, 'pushed later');
+    expect(await localBaseBranch(clone, 'later')).toBe('later');
+    expect(git(clone, 'rev-parse', 'refs/heads/later')).toBe(git(upstream, 'rev-parse', 'later'));
+  });
+
+  it("starts from the remote's tip, not the one the repo last fetched", async () => {
+    const { upstream, clone } = cloned();
+    git(upstream, 'checkout', '-q', 'feature');
+    commit(upstream, 'pushed since the clone');
+    expect(await localBaseBranch(clone, 'origin/feature')).toBe('feature');
+    expect(git(clone, 'rev-parse', 'refs/heads/feature')).toBe(git(upstream, 'rev-parse', 'feature'));
+  });
+
+  it("falls back on the remote's branch as the repo last fetched it, when the remote can't be reached", async () => {
+    const { upstream, clone } = cloned();
+    const known = git(upstream, 'rev-parse', 'feature');
+    git(clone, 'remote', 'set-url', 'origin', join(tempDataDir(), 'gone'));
+    expect(await localBaseBranch(clone, 'origin/feature')).toBe('feature');
+    expect(git(clone, 'rev-parse', 'refs/heads/feature')).toBe(known);
+  });
+
+  it("moves a local branch of that name that is behind the remote's up to it", async () => {
+    const { upstream, clone } = cloned();
+    git(clone, 'branch', '--quiet', 'feature', 'origin/feature');
+    git(upstream, 'checkout', '-q', 'feature');
+    commit(upstream, 'pushed since the clone');
+    expect(await localBaseBranch(clone, 'origin/feature')).toBe('feature');
+    expect(git(clone, 'rev-parse', 'refs/heads/feature')).toBe(git(upstream, 'rev-parse', 'feature'));
+  });
+
+  it("refuses a local branch of that name that has gone its own way, or is behind and checked out, and leaves it", async () => {
+    const { upstream, clone } = cloned();
+    git(clone, 'checkout', '-q', '-b', 'feature', 'origin/feature');
+    commit(clone, 'only here');
+    const mine = git(clone, 'rev-parse', 'feature');
+    await expect(localBaseBranch(clone, 'origin/feature')).rejects.toThrow(
+      'feature here is not origin/feature, and has commits it lacks: give --base feature to start from it, or update it',
+    );
+    expect(git(clone, 'rev-parse', 'refs/heads/feature')).toBe(mine);
+
+    git(clone, 'reset', '-q', '--hard', 'origin/feature');
+    git(upstream, 'checkout', '-q', 'feature');
+    commit(upstream, 'pushed since the clone');
+    await expect(localBaseBranch(clone, 'origin/feature')).rejects.toThrow('feature here is not origin/feature, and is checked out, so it is not moved');
+  });
+
+  it('makes or moves no local branch when the check refuses the commit', async () => {
+    const { upstream, clone } = cloned();
+    const seen: string[] = [];
+    const refuse = async (ref: string, name: string) => {
+      seen.push(`${name} ${ref}`);
+      throw new Error('refused');
+    };
+    await expect(localBaseBranch(clone, 'origin/feature', refuse)).rejects.toThrow('refused');
+    expect(seen).toEqual(['feature refs/remotes/origin/feature']);
+    expect(git(clone, 'branch', '--list', 'feature')).toBe('');
+
+    git(clone, 'branch', '--quiet', 'feature', 'origin/feature');
+    const before = git(clone, 'rev-parse', 'feature');
+    git(upstream, 'checkout', '-q', 'feature');
+    commit(upstream, 'pushed since the clone');
+    await expect(localBaseBranch(clone, 'origin/feature', refuse)).rejects.toThrow('refused');
+    expect(git(clone, 'rev-parse', 'refs/heads/feature')).toBe(before);
+  });
+
+  it('resolves one base for two spawns at once', async () => {
+    const { upstream, clone } = cloned();
+    expect(await Promise.all([localBaseBranch(clone, 'origin/feature'), localBaseBranch(clone, 'origin/feature'), localBaseBranch(clone, 'feature')])).toEqual([
+      'feature',
+      'feature',
+      'feature',
+    ]);
+    expect(git(clone, 'rev-parse', 'refs/heads/feature')).toBe(git(upstream, 'rev-parse', 'feature'));
+  });
+
+  it('says why there is none, when no remote has it either', async () => {
+    const { clone } = cloned();
+    await expect(localBaseBranch(clone, 'nope')).rejects.toThrow('clone has no branch nope');
+    await expect(localBaseBranch(tempRepo('alone'), 'nope')).rejects.toThrow('alone has no branch nope');
   });
 });

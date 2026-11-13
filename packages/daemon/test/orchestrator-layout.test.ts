@@ -8,7 +8,7 @@ import { CLUSTER_LABEL_SIZE } from '../src/board-arrange.ts';
 import { AGENT_TILE_SIZE, clearOf, overlaps as rectsOverlap, CREW_GAP, GRID_COLUMN as COLUMN, GRID_ORIGIN as FIRST, gridPoint, PERCH_ROOM, RAIL_GAP, ROW_STEP, sizedFootprint, SPACING_GAPS, TILE_GAP, tileSlot, ZONE_PADDING, type Rect } from '../src/board-layout.ts';
 import type { DaemonClient } from '../src/client.ts';
 import { daemonPaths } from '../src/paths.ts';
-import { lintLine } from '../src/zone-map.ts';
+import { lintLine, spareSlots } from '../src/zone-map.ts';
 import { AGENT_NOTE_SIZE, BOARD_ERROR, FOLDED_ZONE_SIZE, measuredText, RPC_ERROR, STICKY_SIZE, type Agent, type AgentUpdatedEvent, type ArrangeLayout, type BoardItem, type DaemonEvent, type ExpandedBox, type MeasuredBox, type Zone } from '../src/protocol.ts';
 import { connectTestClient, git, recordEvents, startTestDaemon, TEST_CLI_LAUNCHER, tempDataDir, tempRepo } from './helpers.ts';
 
@@ -298,6 +298,13 @@ describe('orchestrator.move', () => {
 
 describe('orchestrator.arrange', () => {
   /** A lead and its crew scattered about its zone: an implementer and its reviewer joined by an edge, and a third. */
+  /** Writes on each lane note among `parts`, as the user would in the app; returns their ids, sorted. */
+  async function editLaneNotes(client: DaemonClient, parts: readonly BoardItem[]): Promise<string[]> {
+    const notes = parts.filter((item) => String(item.data.arrange).endsWith('#note'));
+    for (const note of notes) await client.call('item.update', { id: note.id, data: { text: `mine: ${note.id}` } });
+    return notes.map((item) => item.id).sort();
+  }
+
   async function messyCrew(setup: Setup) {
     const me = await lead(setup, setup.zone.id);
     const spawn = (name: string) => me.connection.call('orchestrator.spawn', { token: me.token, name });
@@ -464,18 +471,40 @@ describe('orchestrator.arrange', () => {
     expect(sticky.x).toBe(rects.get('review')!.x + COLUMN);
   });
 
-  it('keeps what an arrange by issue made when arranging another way, lined up beside the crew, and the orchestrator may remove only its own link cards', async () => {
+  for (const by of ['role', 'state'] as const) {
+    it(`arranged by ${by} after by issue, leaves no lane label or unedited lane note behind, fits the zone to what is left, and makes them again by issue`, async () => {
+      const setup = await layoutDaemon();
+      const { me } = await messyCrew(setup);
+      await me.connection.call('orchestrator.arrange', { token: me.token, by: 'issue', layout: 'rows' });
+      const parts = async () => (await setup.client.call('item.list')).filter((item) => typeof item.data.arrange === 'string');
+      expect((await parts()).filter((item) => String(item.data.arrange).endsWith('#label'))).toHaveLength(2);
+      await me.connection.call('orchestrator.arrange', { token: me.token, by, layout: 'masonry' });
+      expect(await parts()).toEqual([]);
+      const map = await me.connection.call('orchestrator.map', { token: me.token });
+      expect(map.stranded).toEqual([]);
+      expect(spareSlots(map)).toEqual({ columns: 0, rows: 0 });
+      // By issue again: each lane's label and note again.
+      await me.connection.call('orchestrator.arrange', { token: me.token, by: 'issue', layout: 'rows' });
+      expect((await parts()).map((item) => String(item.data.arrange).replace(/^.*#/, '')).sort()).toEqual(['label', 'label', 'note', 'note']);
+    });
+  }
+
+  it('keeps a lane note someone edited when arranging another way, lined up beside the crew, and gives it back to its lane by issue; the orchestrator may remove only its own link cards', async () => {
     const setup = await layoutDaemon();
-    const { me } = await messyCrew(setup);
+    const { me, impl } = await messyCrew(setup);
     await me.connection.call('orchestrator.arrange', { token: me.token });
     const parts = async () => (await setup.client.call('item.list')).filter((item) => typeof item.data.arrange === 'string');
-    const before = (await parts()).map((item) => item.id).sort();
+    const note = (await parts()).find((item) => item.data.arrange === `agent:${impl.sessionId}#note`)!;
+    await setup.client.call('item.update', { id: note.id, data: { text: 'waiting on the design call' } });
     await me.connection.call('orchestrator.arrange', { token: me.token, by: 'role' });
-    expect((await parts()).map((item) => item.id).sort()).toEqual(before);
+    expect((await parts()).map((item) => item.id)).toEqual([note.id]);
     expectNoOverlap(await rectsIn(setup.client, setup.zone.id));
-    // Back by issue, each in its slot again.
-    await me.connection.call('orchestrator.arrange', { token: me.token });
-    expect((await parts()).map((item) => item.id).sort()).toEqual(before);
+    expect((await me.connection.call('orchestrator.map', { token: me.token })).stranded).toEqual([]);
+    // Back by issue, in its lane's slot again with its text, and the labels made again.
+    await me.connection.call('orchestrator.arrange', { token: me.token, by: 'issue' });
+    const again = await parts();
+    expect(again).toHaveLength(4);
+    expect(again.find((item) => item.id === note.id)?.data.text).toBe('waiting on the design call');
     const card = await setup.client.call('item.create', { kind: 'link', zoneId: setup.zone.id, x: 900, y: 500, width: 240, height: 96, data: { url: 'https://github.com/o/r/pull/9' } });
     await expect(me.connection.call('orchestrator.removeNote', { token: me.token, id: card.id })).rejects.toMatchObject({ code: BOARD_ERROR.outOfScope });
   });
@@ -697,7 +726,8 @@ describe('orchestrator.arrange', () => {
     const { me } = await messyCrew(setup);
     await me.connection.call('orchestrator.arrange', { token: me.token });
     const parts = async () => (await setup.client.call('item.list')).filter((item) => typeof item.data.arrange === 'string');
-    const before = (await parts()).map((item) => item.id).sort();
+    // Notes someone wrote on: kept, and parked, as an arrange by role draws no lanes.
+    const before = await editLaneNotes(setup.client, await parts());
     const web = (await setup.client.call('zone.list')).find((zone) => zone.id === setup.zone.id)!;
     // Web just wide enough for the crew by role (three columns and the rail's between impl and review), and another zone
     // just right of it: nothing fits beside.
@@ -744,7 +774,7 @@ describe('orchestrator.arrange', () => {
     const { me } = await messyCrew(setup);
     await me.connection.call('orchestrator.arrange', { token: me.token });
     const parts = async () => (await setup.client.call('item.list')).filter((item) => typeof item.data.arrange === 'string');
-    const before = (await parts()).map((item) => item.id).sort();
+    const before = await editLaneNotes(setup.client, await parts());
     // Room in web to lay the crew out round what stays, as an arrange leaves it only as big as its crew needs.
     const arranged = (await setup.client.call('zone.list')).find((zone) => zone.id === setup.zone.id)!;
     await setup.client.call('zone.update', { id: arranged.id, x: arranged.x, y: arranged.y, width: arranged.width, height: arranged.height + 600 });
@@ -1707,12 +1737,18 @@ describe('arranging a unit of work with a ticket and a pull request', () => {
     expectNoOverlap(rects);
     expect(review.reviews?.branch).toBe(impl.branch);
 
-    // Arranged again, any way, it makes none and leaves the label and sticky as they are.
+    // Arranged again, any way, it makes no PR card: by issue it leaves the label and note as they are, by role it
+    // draws no lanes and so has neither, and back by issue it makes them again.
     const ids = made.map((item) => item.id).sort();
-    for (const by of ['role', 'issue'] as const) {
-      await me.connection.call('orchestrator.arrange', { token: me.token, by });
-      expect((await parts()).map((item) => item.id).sort()).toEqual(ids);
-    }
+    await me.connection.call('orchestrator.arrange', { token: me.token, by: 'issue' });
+    expect((await parts()).map((item) => item.id).sort()).toEqual(ids);
+    await me.connection.call('orchestrator.arrange', { token: me.token, by: 'role' });
+    expect(await parts()).toEqual([]);
+    await me.connection.call('orchestrator.arrange', { token: me.token, by: 'issue' });
+    expect((await parts()).map((item) => [item.kind, item.data.arrange]).sort()).toEqual([
+      ['agent-note', 'issue:ACME-199#note'],
+      ['text', 'issue:ACME-199#label'],
+    ]);
     expect((await setup.client.call('item.list')).filter((item) => item.kind === 'link').map((item) => item.id)).toEqual([users.id]);
   });
 });
@@ -1742,7 +1778,7 @@ function overlapping(a: Zone, b: Zone): boolean {
 }
 
 describe('orchestrator.addClock and removeClock', () => {
-  it('puts a clock in its scope, marked as its own: messaging a worker beside its tile, or starting fresh agents in its zone; another zone is refused, and logged', async () => {
+  it("puts a clock on the board, marked as its own: messaging a worker beside its tile, or starting fresh agents in any zone; messaging an agent outside its scope is refused, and logged", async () => {
     const setup = await layoutDaemon();
     const me = await lead(setup, setup.zone.id);
     const worker = await me.connection.call('orchestrator.spawn', { token: me.token, name: 'worker' });
@@ -1754,10 +1790,10 @@ describe('orchestrator.addClock and removeClock', () => {
     const fresh = await me.connection.call('orchestrator.addClock', { token: me.token, data: { cron: '@daily', does: 'fresh', prompt: 'Sweep' } });
     expect(fresh).toMatchObject({ zoneId: setup.zone.id, data: { does: 'fresh', agent: null } });
 
+    const away = await me.connection.call('orchestrator.addClock', { token: me.token, zoneId: setup.other.id, data: { cron: '@daily', does: 'fresh', prompt: 'Go' } });
+    expect(away).toMatchObject({ zoneId: setup.other.id, data: { does: 'fresh', agent: null } });
+
     await expect(me.connection.call('orchestrator.addClock', { token: me.token, data: { cron: '@daily', agent: elsewhere.sessionId, prompt: 'Go' } })).rejects.toMatchObject({
-      code: BOARD_ERROR.outOfScope,
-    });
-    await expect(me.connection.call('orchestrator.addClock', { token: me.token, zoneId: setup.other.id, data: { cron: '@daily', does: 'fresh', prompt: 'Go' } })).rejects.toMatchObject({
       code: BOARD_ERROR.outOfScope,
     });
     expect(await lastLine(setup.client)).toMatchObject({ action: 'add-clock', outcome: 'refused' });
@@ -1766,6 +1802,7 @@ describe('orchestrator.addClock and removeClock', () => {
     const users = await setup.client.call('clock.add', { place: { zoneId: setup.zone.id, x: 0, y: 900 }, data: { prompt: 'Mine' } });
     await expect(me.connection.call('orchestrator.removeClock', { token: me.token, id: users.id })).rejects.toMatchObject({ code: BOARD_ERROR.outOfScope });
     await me.connection.call('orchestrator.removeClock', { token: me.token, id: fresh.id });
+    await me.connection.call('orchestrator.removeClock', { token: me.token, id: away.id });
     expect((await setup.client.call('item.list')).filter((item) => item.kind === 'clock').map((item) => item.id).sort()).toEqual([messaging.id, users.id].sort());
   });
 

@@ -15,6 +15,7 @@ const agent = (sessionId: string, fields: Partial<Agent> = {}): Agent =>
     roleName: null,
     orchestrate: null,
     spawnedBy: null,
+    orphanedFrom: null,
     permissions: [],
     ask: null,
     plan: null,

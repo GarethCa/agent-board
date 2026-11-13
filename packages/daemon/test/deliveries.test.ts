@@ -761,8 +761,15 @@ describe('an answer that waited its turn', () => {
     const { deliveries, writes, shown } = setup([row('a')]);
     shown.state = 'waiting';
     const questions = [{ question: 'Which cache?', header: 'Cache', options: [{ label: 'Redis', description: '' }], multiSelect: false }];
-    shown.permissions = [{ id: 'q', toolName: 'AskUserQuestion', toolInput: { questions }, subagent: null, requestedAt: '2026-10-09T10:00:00.000Z', heldUntil: null, asksInTerminal: true, sessionGrant: null, questions }];
+    shown.permissions = [{ id: 'q', toolName: 'AskUserQuestion', toolInput: { questions }, subagent: null, requestedAt: '2026-10-09T10:00:00.000Z', heldUntil: null, asksInTerminal: true, sessionGrant: null, questions, dialog: null, plan: null }];
 
+    // Read only (no dialog the board can answer): only its terminal answers it.
+    await expect(deliveries.answer('a', 'Redis')).rejects.toMatchObject({ message: 'a is asking you questions: answer them in its terminal' });
+    const held = { ...shown.permissions[0]!, heldUntil: '2026-10-10T10:00:00.000Z', dialog: { answers: [null], sentAt: null, keptOpen: false } };
+    shown.permissions = [held];
+    await expect(deliveries.answer('a', 'Redis')).rejects.toMatchObject({ message: 'a is asking you questions: answer them on the board or in its terminal' });
+    // Sent from the board already: the board can't answer it again.
+    shown.permissions = [{ ...held, heldUntil: null, dialog: { answers: [{ option: 0 }], sentAt: '2026-10-09T10:01:00.000Z', keptOpen: false } }];
     await expect(deliveries.answer('a', 'Redis')).rejects.toMatchObject({ message: 'a is asking you questions: answer them in its terminal' });
     expect(writes).toEqual([]);
   });

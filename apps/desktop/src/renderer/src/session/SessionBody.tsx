@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronsDownUp, ChevronsUpDown, ClipboardList, FileText, GitPullRequest, Globe, SquareCheckBig, SquareTerminal } from 'lucide-react';
+import { ClipboardList, FileText, GitPullRequest, Globe, SquareCheckBig, SquareTerminal } from 'lucide-react';
 import type { PaneLayout } from '@agent-board/daemon/pane-layout';
 import { OWN_SURFACE } from '@agent-board/daemon/window-layout';
 import type { Agent, PullRequest, Shell, ShellOwner } from '@agent-board/daemon/protocol';
@@ -21,8 +21,8 @@ import { stepsWaitKey } from '../../../shared/needs-you';
 import { paneDecision, showsStepsStrip, useDeferredDecisions } from './pane-decision';
 import type { RunsChoice, RunsMode } from './chat';
 import { useChatTheme } from './chat-theme';
-import { ChatAgentsSwitch } from './ChatAgentsFilter';
-import { ChatStyleSwitch } from './ChatStyleSwitch';
+import { ChatControls } from './ChatControls';
+import { useChatRunsShow } from '../board/view-settings';
 import { ShellPanes } from './ShellPanes';
 import { TerminalPane, type AttachState, type PaneStatus } from './TerminalPane';
 import { composerBlock } from './composer-block';
@@ -87,6 +87,12 @@ interface SessionBodyProps {
   controlsSlot?: HTMLElement | null;
   /** The controls in that slot take no more room than icons: an expanded tile's header, which is as narrow as 640 px. */
   compactControls?: boolean;
+  /**
+   * Where the chat's controls go while it shows (its style, whose messages, Expand all and Collapse all): the window's
+   * tab row, or its header (null until it is drawn). Under Simplified the header's is the view slot, where they go
+   * before the Chat | Timeline | Terminal switch.
+   */
+  chatControlsSlot: HTMLElement | null;
 }
 
 /**
@@ -106,6 +112,7 @@ export function SessionBody({
   terminalToggle,
   shelves = false,
   controlsSlot,
+  chatControlsSlot,
   compactControls = false,
 }: SessionBodyProps) {
   const agent = content.kind === 'session' ? content.agent : undefined;
@@ -265,9 +272,21 @@ export function SessionBody({
   // shell tab it reads Terminal, which is what shows; pressing Chat brings the agent's own tab forward.
   const viewSwitch = agent && !headerSwitch && <Segmented<SessionView> className="session-view-switch" aria-label="View" value={chat ? 'chat' : 'terminal'} onChange={switchView} options={VIEW_OPTIONS} />;
   // In the header, the three views, always there: Terminal reads as picked while a shell tab shows, as it is what shows.
+  // The chat's controls, while it shows. The style switch is the header's Chat | Timeline | Terminal under Simplified.
+  const runsShow = useChatRunsShow();
+  const chatControls = chat && agent && <ChatControls sessionId={agent.sessionId} styleSwitch={!headerSwitch} runsShow={runsShow} onRuns={pressRuns} />;
+  // Under Simplified, set to show on hover and with no tab row, they share the view slot, before the switch, in one
+  // portal so their order holds.
+  const chatInViewSlot = viewSlot != null && chatControlsSlot === viewSlot;
   const headerViewSwitch =
     agent && viewSlot
-      ? createPortal(<Segmented<SessionView> className="session-header-view-switch" aria-label="View" value={chat ? pickedView : 'terminal'} onChange={switchView} options={HEADER_VIEW_OPTIONS} />, viewSlot)
+      ? createPortal(
+          <>
+            {chatInViewSlot && chatControls}
+            <Segmented<SessionView> className="session-header-view-switch" aria-label="View" value={chat ? pickedView : 'terminal'} onChange={switchView} options={HEADER_VIEW_OPTIONS} />
+          </>,
+          viewSlot,
+        )
       : null;
   // A split window's panes have strips of their own; the switch ends the one holding the agent's own tab.
   const split = panes !== undefined && panes.panes.length > 1;
@@ -362,18 +381,6 @@ export function SessionBody({
               shell
             </span>
           )}
-          {chat && !headerSwitch && <ChatStyleSwitch />}
-          {chat && agent && <ChatAgentsSwitch sessionId={agent.sessionId} />}
-          {chat && (
-            <span className="chat-runs-actions">
-              <Button variant="ghost" size="xs" icon={<ChevronsUpDown />} onClick={() => pressRuns('expanded')} tooltip="Open every call and run of calls" aria-label="Expand all">
-                <span className="chat-runs-label">Expand all</span>
-              </Button>
-              <Button variant="ghost" size="xs" icon={<ChevronsDownUp />} onClick={() => pressRuns('collapsed')} tooltip="Close every call and run of calls" aria-label="Collapse all">
-                <span className="chat-runs-label">Collapse all</span>
-              </Button>
-            </span>
-          )}
           {astray && (
             <Tag tone="warning" className="session-window-astray" data-testid="session-window-astray">
               {astray}
@@ -415,6 +422,7 @@ export function SessionBody({
       </div>
       {panes?.closing && <CloseTabDialog surface={panes.closing} onAnswer={panes.confirmClose} />}
       {headerViewSwitch}
+      {chatControlsSlot && !chatInViewSlot && chatControls && createPortal(chatControls, chatControlsSlot)}
     </div>
     </WebLinkContext.Provider>
   );

@@ -25,11 +25,14 @@ test('a Claude agent runs in its own worktree, its tile follows it running → w
     await expect(tile(first.window)).toContainText('Pick a database');
     await expect(tile(first.window)).toHaveAttribute('data-harness', 'claude');
     const [agent] = await agents(first.window);
-    await expect(tile(first.window)).toContainText(agent!.branch);
     expect(agent!.worktree.startsWith(join(dir, 'worktrees'))).toBe(true);
     expect(existsSync(agent!.worktree)).toBe(true);
     await expect(tile(first.window)).toHaveAttribute('data-state', 'waiting', { timeout: TURN_MS });
     await expect(tile(first.window)).toHaveCSS('outline-color', 'rgb(247, 103, 7)');
+    // Its branch row is dropped at rest: its hover card names the branch.
+    await tile(first.window).hover();
+    await expect(first.window.locator('.ui-hover-card')).toContainText(`Branch: ${agent!.branch}`);
+    await first.window.mouse.move(0, 0);
     // Spawned starting, its first prompt queued; starting until that prompt, typed at it once its session was up, went
     // up, before it waited.
     const before = await recordedStates(first.window);

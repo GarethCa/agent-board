@@ -166,8 +166,12 @@ export async function shootSimplifiedNotes(appearanceTheme: string, scheme: 'lig
       { zoneId: zone!.id, sessionId: lead!.sessionId },
     );
     await expect(window.getByTestId('agent-note')).toHaveCount(3);
+    // The zone grows round its moved crew and the notes take their size after they mount: fit the view to the board they
+    // settle at, not to one still on its way (the other shots wait for this too).
+    await nodesStill(window);
     await window.getByRole('button', { name: /^Fit view/ }).click();
     await viewSettled(window);
+    await nodesStill(window);
     await pinRandomText(window);
     const restorePointer = await ignorePointer(window);
     await settle(window);

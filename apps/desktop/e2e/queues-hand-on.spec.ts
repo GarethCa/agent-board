@@ -2,7 +2,7 @@ import { expect, type Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
 import type { Agent, BoardItem, QueueData, QueueView } from '@agent-board/daemon/protocol';
 import { launch, spawnAgent, tile } from './agent-helpers.ts';
-import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
+import { browseForZone, pickFolderNext, removeDataDir, runDesign, tempDataDir, test } from './launch.ts';
 import { scratch } from './scratch.ts';
 
 // Part of a queue's life that reaches agents: the user hands a job to an idle agent (only what they write is typed),
@@ -70,8 +70,6 @@ test('a waiting job is handed to an idle agent with only the words the user send
     await expect(dialog).toBeHidden();
 
     await expect.poll(async () => (await readQueue(page, queue.id)).jobs[0]).toMatchObject({ text: 'Fix the login', state: 'taken', takenBy: { sessionId: agent.sessionId } });
-    const ticket = tile(page).and(page.locator(`[data-session-id="${agent.sessionId}"]`)).getByTestId('tile-ticket');
-    await expect(ticket).toContainText('Fix the login');
     await expect(card(page, 'Backlog').locator('.listcard-row').first()).toContainText('impl-4');
 
     // A waiting row dragged onto an agent at work does nothing: a working agent takes no drop.
@@ -81,6 +79,15 @@ test('a waiting job is handed to an idle agent with only the words the user send
     await expect.poll(async () => (await page.evaluate(() => window.agentBoard.agents.list())).find((each) => each.sessionId === agent.sessionId)?.state).not.toMatch(/idle|waiting/);
     await row.dragTo(tileOf(agent));
     await expect(dialog).toBeHidden();
+
+    // A Classic tile drops its chips at rest, the ticket among them, and its hover card lists the job; the calm tile shows its ticket.
+    const taker = tileOf(agent);
+    if (runDesign() === 'simplified') await expect(taker.getByTestId('tile-ticket')).toContainText('Fix the login');
+    else {
+      await expect(taker.getByTestId('tile-ticket')).toHaveCount(0);
+      await taker.hover();
+      await expect(page.locator('.ui-hover-card')).toContainText('Its job from “Backlog”: Fix the login');
+    }
 
     // Dragged onto an idle agent, Hand on opens with that agent chosen.
     const idle = await spawn(page, 'Read the CONTRIBUTING file', 'impl-5');

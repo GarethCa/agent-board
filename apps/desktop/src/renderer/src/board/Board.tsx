@@ -271,6 +271,7 @@ import type { SheetContext } from '../keys/cheat-sheet';
 import { useCheatSheet } from '../keys/CheatSheet';
 import { keyText } from '../keys/registry';
 import { useEscStep } from '../keys/esc-ladder';
+import { useMenuBarKey, useMenuBarWhen } from '../keys/menu-bar-bridge';
 import { centreOf } from '../geometry';
 import { useZoneResize } from './use-zone-resize';
 import { useMeasuredBoxes } from './measured-boxes';
@@ -2161,6 +2162,8 @@ function BoardView() {
     moveTilesTo(moving.filter((node) => arranged.tiles.has(node.id)), arranged.tiles, null);
     freeOverlaps([...arranged.tiles.keys()]);
   }, [moveTilesTo, saveZoneLayout, tidySizeOf]);
+  // Picked in the menu bar it runs as from the board's menu, with its ⇧L behind Extended shortcuts or not.
+  useMenuBarKey('edit.arrangeBoard', arrangeBoard);
 
   /**
    * Puts board objects back as an undo or redo has them, through the board's own actions: an item or connector made
@@ -2346,6 +2349,11 @@ function BoardView() {
     },
     [setNodes, saveLayout],
   );
+
+  // What the menu bar enables: the board's keys, the selection's, and Swap Arrow Direction's.
+  useMenuBarWhen('board', true);
+  useMenuBarWhen('selection', nodes.some((node) => node.selected === true) || selectedConnectors.size > 0);
+  useMenuBarWhen('arrows', selectedConnectors.size > 0);
 
   const editing = useEditing({
     loaded,

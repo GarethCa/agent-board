@@ -7,6 +7,7 @@ import { rmSync } from 'node:fs';
 import { agents, LONG_MODEL, launch, narrowBy, pickInChip, startBadgedAgent, sessionWindow, startCrowdedAgent, tile, TURN_MS, zoneNamed } from './agent-helpers.ts';
 import { test, browseForZone, pickFolderNext, removeDataDir, tempDataDir } from './launch.ts';
 import { scratch } from './scratch.ts';
+import { showTileParts } from './settings-helpers.ts';
 
 /** Whether `inner`'s box lies within `outer`'s, on both axes, once it has settled. */
 async function expectWithin(inner: Locator, outer: Locator, what: string): Promise<void> {
@@ -45,6 +46,7 @@ test('a crowded tile’s footer, narrowed, stays on one line, folds the rest int
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env);
   try {
+    await showTileParts(window, ['chips']);
     await pickFolderNext(app, repo);
     await browseForZone(window);
     await startCrowdedAgent(window);
@@ -93,6 +95,7 @@ test('a PR chip arriving in a crowded tile’s footer moves nothing: the name, b
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, { ...env, AGENT_BOARD_GH: github.gh, AGENT_BOARD_PULL_REQUEST_POLL_MS: '200' });
   try {
+    await showTileParts(window, ['chips', 'branchAlways']);
     await pickFolderNext(app, repo);
     await browseForZone(window);
     await startBadgedAgent(window);

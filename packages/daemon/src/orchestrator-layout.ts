@@ -1488,16 +1488,17 @@ export function layoutHandlers<Context extends BoardConnection>({
           leadNotes: leadNotes.map((item) => ({ id: item.id, size: { width: item.width, height: item.height } })),
         });
         const { positions } = arranged;
-        // By issue, each cluster takes its parts, re-anchoring a note whose cluster's key changed. Arranged another way,
-        // what an arrange by issue made is kept, parked beside the crew, until it is again; so is a sticky someone edited
-        // whose cluster has gone. The rest of what is left over goes.
+        // By issue, each cluster takes its parts, re-anchoring a note whose cluster's key changed. Arranged another way, no
+        // lanes are drawn, so no lane keeps its label or note. A note someone edited is kept, parked beside the
+        // crew, until an arrange by issue gives it back to its lane; so is one whose cluster has gone. The rest of what is
+        // left over goes, the next arrange by issue making it again.
         const { matched, left } = clusters ? matchParts(arranged.clusters, parts) : { matched: new Map<string, BoardItem>(), left: [...parts.values()] };
         for (const cluster of arranged.clusters) {
           const slot = `${cluster.key}${CLUSTER_NOTE_SLOT}`;
           const note = byHand.get(slot);
           if (!matched.has(slot) && note !== undefined) matched.set(slot, note);
         }
-        const toPark = clusters ? left.filter((item) => String(item.data.arrange).endsWith(CLUSTER_NOTE_SLOT) && edited(item)) : left;
+        const toPark = left.filter((item) => String(item.data.arrange).endsWith(CLUSTER_NOTE_SLOT) && edited(item));
         const parkKeys = [...new Set(toPark.map((item) => clusterKeyOf(String(item.data.arrange))))];
         const placedRects = [
           ...tiles.map((tile) => sizedFootprint(positions.get(tile.id)!, tile.size ?? AGENT_TILE_SIZE)),
@@ -1568,9 +1569,9 @@ export function layoutHandlers<Context extends BoardConnection>({
         const used = await placeClusters(me, zone.id, arranged.clusters, matched, standing);
         // A part its cluster no longer has (another cluster's) goes.
         for (const item of matched.values()) if (!used.has(item)) await call('item.delete', { id: item.id });
-        // A sticky someone edited is never deleted: parked if there is room, else left where it is.
-        for (const item of left) if (!toPark.includes(item)) await call('item.delete', { id: item.id });
       }
+      // A note someone edited is never deleted: parked if there is room, else left where it is.
+      for (const item of left) if (!toPark.includes(item)) await call('item.delete', { id: item.id });
       for (const cluster of parked) {
         const spots = { label: cluster.labelAt, note: cluster.noteAt };
         for (const [part, at] of Object.entries(spots)) {

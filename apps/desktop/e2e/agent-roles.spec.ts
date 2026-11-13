@@ -8,12 +8,14 @@ import { join } from 'node:path';
 import { agents, launch, pickInChip, screen, tile, zoneNamed } from './agent-helpers.ts';
 import { test, browseForZone, pickFolderNext, removeDataDir, tempDataDir } from './launch.ts';
 import { scratch } from './scratch.ts';
+import { showTileParts } from './settings-helpers.ts';
 
 test('a zone’s role template starts a reviewer on a detached checkout of the branch it reviews, and the tiles show model and role', async () => {
   const { dir, repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env);
   try {
+    await showTileParts(window, ['chips', 'branchAlways']);
     await pickFolderNext(app, repo);
     await browseForZone(window);
     const zone = zoneNamed(window, 'monorepo');
@@ -93,6 +95,7 @@ test('an agent started in a named role shows the name on its badge, and its zone
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env);
   try {
+    await showTileParts(window, ['chips']);
     await pickFolderNext(app, repo);
     await browseForZone(window);
     const zone = zoneNamed(window, 'monorepo');
@@ -135,6 +138,7 @@ test('the Orchestrator role in New agent adds a Checkout row and fills the task 
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env);
   try {
+    await showTileParts(window, ['chips']);
     await pickFolderNext(app, repo);
     await browseForZone(window);
     const zone = zoneNamed(window, 'monorepo');

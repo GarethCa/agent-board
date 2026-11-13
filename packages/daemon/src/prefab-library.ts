@@ -227,12 +227,14 @@ export function createPrefabLibrary(db: DatabaseSync): PrefabLibrary {
           const token = optionalStringParam(fields, 'token');
           const repo = optionalStringParam(fields, 'repo');
           const issueId = optionalStringParam(fields, 'issueId');
+          const description = optionalStringParam(fields, 'description');
           const agent = await spawn(
             {
               ...(token === undefined ? {} : { token }),
               ...(zoneId === undefined ? {} : { zoneId }),
               ...(repo === undefined ? {} : { repo }),
               ...(issueId === undefined ? {} : { issueId }),
+              ...(description === undefined ? {} : { description }),
               prompt: firstPrompt,
               harness: first.harness,
               ...(first.model === null ? {} : { model: first.model }),

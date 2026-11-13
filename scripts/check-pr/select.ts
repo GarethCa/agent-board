@@ -29,6 +29,7 @@ export const SCANNERS: ReadonlyArray<{ tests: readonly string[]; globs: readonly
       'apps/desktop/src/renderer/src/chrome/drag-regions.test.ts',
       'apps/desktop/src/renderer/src/demo/demo-mode.test.ts',
       'apps/desktop/src/renderer/src/board/board-background.test.ts',
+      'apps/desktop/src/renderer/src/board/hybrid-tile-body.test.ts',
     ],
     // The `shared/` theme sources are a full gate today (`FULL_GATE_GLOBS`); the glob takes effect when that narrows.
     globs: ['apps/desktop/src/renderer/**/*.{css,ts,tsx}', 'apps/desktop/src/shared/{themes,theme-pack-tokens,design,colour}.ts'],
@@ -38,6 +39,7 @@ export const SCANNERS: ReadonlyArray<{ tests: readonly string[]; globs: readonly
   { tests: ['scripts/release-public/leak-rules.test.ts'], globs: 'always', why: 'the release leak rules' },
   { tests: ['packages/daemon/src/import-meta-glob.test.ts'], globs: ['{apps,packages}/*/src/**/*.{ts,tsx}'], why: 'source files' },
   { tests: ['scripts/worker-hooks/status-hook.test.ts', 'scripts/worker-hooks/test-budget.test.ts'], globs: ['.claude/worker-hooks/**'], why: 'the worker hooks it runs' },
+  { tests: ['packages/daemon/test/recorded-startup-screens.test.ts'], globs: ['fixtures/claude/tui/**'], why: "Claude Code's start-up screens it replays" },
   { tests: ['scripts/gate-stamp/stamp.test.ts'], globs: ['scripts/**/*.{ts,sh}'], why: 'the scripts it scans for a writer of green stamps' },
 ];
 
