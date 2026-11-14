@@ -79,7 +79,7 @@ export function MemoryGallery() {
     <section className="listcard-gallery" data-testid="memory-gallery" aria-label="Memory">
       <div className="listcard-gallery-row">
         <div style={card} data-testid="memory-gallery-card">
-          <MemoryCardView title="api memory" scope="Zone · api" zoneColor={ZONE} entries={ENTRIES} readers={READERS.memory} now={NOW} onAdd={noop} onOpen={noop} fresh="e2" />
+          <MemoryCardView title="api memory" scope="Zone · api" zoneColor={ZONE} entries={ENTRIES} readers={READERS.memory} now={NOW} onAdd={noop} onOpen={noop} />
         </div>
         <div style={card} data-testid="memory-gallery-empty">
           <MemoryCardView title="web memory" scope="Board" entries={[]} now={NOW} onAdd={noop} onOpen={noop} />

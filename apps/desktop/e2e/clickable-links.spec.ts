@@ -20,9 +20,9 @@ test('the clickable links switch is on, offers to restart running Claude agents 
     // Started with the setting on.
     expect(await startedWithLinks()).toBe(true);
 
-    const settings = await openSettings(window, 'agents.links');
-    const links = settingsSection(settings, 'Links').getByRole('switch', { name: 'Clickable links from Claude' });
-    const offer = settings.getByTestId('clickable-links-restart');
+    let settings = await openSettings(window, 'agents.links');
+    let links = settingsSection(settings, 'Links').getByRole('switch', { name: 'Clickable links from Claude' });
+    let offer = settings.getByTestId('clickable-links-restart');
     await expect(links).toBeChecked();
     await expect(offer).toHaveCount(0);
 
@@ -31,6 +31,14 @@ test('the clickable links switch is on, offers to restart running Claude agents 
     await expect(links).not.toBeChecked();
     await expect(offer).toContainText('1 running Claude agent started with it');
     expect((await agents(window))[0]!.endedAt).toBeNull();
+
+    // The offer is worked out from the agents, so it is there again when Settings closes and opens.
+    await settings.close();
+    settings = await openSettings(window, 'agents.links');
+    links = settingsSection(settings, 'Links').getByRole('switch', { name: 'Clickable links from Claude' });
+    offer = settings.getByTestId('clickable-links-restart');
+    await expect(links).not.toBeChecked();
+    await expect(offer).toContainText('1 running Claude agent started with it');
 
     // Later drops the offer without touching the agent.
     await offer.getByRole('button', { name: 'Later' }).click();
@@ -53,6 +61,31 @@ test('the clickable links switch is on, offers to restart running Claude agents 
     }).toBe(true);
     await expect.poll(startedWithLinks).toBe(false);
     expect((await agents(window))[0]!.endedAt).toBeNull();
+  } finally {
+    await app.close().catch(() => {});
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the user's own FORCE_HYPERLINK shows the switch locked, set in their environment, with nothing to restart", async () => {
+  const { dir, repo, env } = scratch('waiting');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, { ...env, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0', FORCE_HYPERLINK: '1' });
+  try {
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await spawnAgent(window, 'monorepo', 'Pick a database');
+    await expect(tile(window)).toHaveAttribute('data-state', 'waiting');
+    // Its own value went through, so the setting gave it nothing.
+    expect((await agents(window))[0]!.clickableLinks).toBe(false);
+
+    const settings = await openSettings(window, 'agents.links');
+    const links = settingsSection(settings, 'Links').getByRole('switch', { name: 'Clickable links from Claude' });
+    await expect(links).toBeChecked();
+    await expect(links).toBeDisabled();
+    await expect(settings.getByTestId('clickable-links-environment')).toContainText('Set in your environment');
+    await expect(settings.getByTestId('clickable-links-restart')).toHaveCount(0);
   } finally {
     await app.close().catch(() => {});
     await removeDataDir(dataDir);

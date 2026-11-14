@@ -146,12 +146,15 @@ export function launchApp(dataDir: string, env: Record<string, string> = {}, arg
   if (design !== undefined) writeFileSync(join(dataDir, 'design.json'), JSON.stringify({ design }));
   if (technical !== undefined) writeFileSync(join(dataDir, 'technical.json'), JSON.stringify({ technical }));
   if (dock !== undefined) writeFileSync(join(dataDir, 'dock.json'), JSON.stringify({ dock }));
+  // global-setup.ts scrubbed the run's env; this keeps a board's session variables out even if a spec set them.
+  const base = scrubBoardSessionEnv({ ...process.env });
+  // A developer's own `FORCE_HYPERLINK` would lock the clickable links setting; a spec that wants one passes it in `env`.
+  delete base.FORCE_HYPERLINK;
   const launched = electron.launch({
     // Linux test machines draw with no GPU: Chromium gives WebGL its software renderer only when asked.
     args: [...(process.platform === 'linux' ? ['--enable-unsafe-swiftshader'] : []), ...args, appEntry],
     env: {
-      // global-setup.ts scrubbed the run's env; this keeps a board's session variables out even if a spec set them.
-      ...scrubBoardSessionEnv({ ...process.env }),
+      ...base,
       AGENT_BOARD_DATA_DIR: dataDir,
       AGENT_BOARD_HOOK_SHIM: join(dataDir, 'bin', 'agent-board-hook'),
       // Notifications are recorded in the main process (see notifications.spec.ts), never shown by the OS.

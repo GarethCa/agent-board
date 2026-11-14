@@ -36,7 +36,7 @@ const theirs = (act: () => void) => (event: MouseEvent) => {
  * An agent's line on its stack's card: its role (or its name, unless the card's title is it), its status in a word, and
  * what it asks or is doing, unless that only says the word again.
  */
-function MemberLine({ agent, title, stage, shows }: { agent: Agent; title: string; stage: ShelfStage; shows: NeedsYouShows }) {
+export function MemberLine({ agent, title, stage, shows }: { agent: Agent; title: string; stage: ShelfStage; shows: NeedsYouShows }) {
   const face = calmFace(agent, shows);
   // On To do, an agent at its prompt with no turn ended hasn't started, though the six words would call it Done.
   const notStarted = stage === 'todo' && face.status === 'done' && agent.finishedAt === null && agent.endedAt === null;

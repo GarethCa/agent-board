@@ -122,6 +122,77 @@ test('Save and ⌘S never write over a version the agent saved while the user wa
   });
 });
 
+test('a long Markdown document reads with its contents rail, its findings fold and open, and it reopens where the reader left it, its findings still open', async () => {
+  await withApp(async (window) => {
+    const agent = await spawn(window, 'Doc: plan.md');
+    await expect(agentTile(window, agent).getByTestId('tile-docs')).toHaveText('1 doc');
+    const sections = Array.from({ length: 12 }, (_, at) => `## Step ${at + 1}\n\n${'Merge it once the gate is green, then tell the team. '.repeat(12)}\n`);
+    const long = ['# Release 1.4 plan', '', '## Findings', '', '1. **[blocker] The pin bump breaks the build.** It needs the new lockfile.', '2. [minor] A typo in the notes.', '', ...sections].join('\n');
+    const path = join((await latest(window, agent)).worktree, 'plan.md');
+    writeFileSync(path, long);
+    await agentTile(window, agent).getByTestId('tile-docs').click();
+    const body = docView(window).getByTestId('doc-body');
+    const rail = docView(window).getByTestId('reading-rail');
+    const blocker = body.locator('#read-finding-the-pin-bump-breaks-the-build');
+    const minor = body.locator('#read-finding-a-typo-in-the-notes');
+    await expect(body).toContainText('Step 12');
+    await expect(rail).toContainText('Findings');
+    await expect(docView(window).getByTestId('doc-time-left')).toHaveText(/min read$/);
+
+    // Open all opens every finding; Fold all folds them again.
+    await body.getByRole('button', { name: 'Open all' }).click();
+    await expect(blocker).toHaveAttribute('open', '');
+    await expect(minor).toHaveAttribute('open', '');
+    await body.getByRole('button', { name: 'Fold all' }).click();
+    await expect(blocker).not.toHaveAttribute('open');
+    await expect(minor).not.toHaveAttribute('open');
+
+    // ⌘F on words in a folded finding opens it.
+    await body.focus();
+    await window.keyboard.press('ControlOrMeta+f');
+    await window.getByTestId('find-field').fill('new lockfile');
+    await expect(window.getByTestId('find-count')).toHaveText('1 of 1');
+    await expect(blocker).toHaveAttribute('open', '');
+    await window.getByTestId('find-field').press('Escape');
+
+    // From the end of the page, a finding's row in the rail opens it and goes to it.
+    await body.evaluate((scroller) => (scroller.scrollTop = scroller.scrollHeight));
+    await expect(minor).not.toBeInViewport();
+    await rail.getByRole('button', { name: /A typo in the notes/ }).click();
+    await expect(minor).toHaveAttribute('open', '');
+    await expect(minor).toBeInViewport();
+
+    // ⌘\ hides the rail, and shows it again.
+    await body.focus();
+    await window.keyboard.press('ControlOrMeta+Backslash');
+    await expect(rail).toHaveCount(0);
+    await window.keyboard.press('ControlOrMeta+Backslash');
+    await expect(rail).toBeVisible();
+
+    // The agent writes it again: the open findings stay open.
+    writeFileSync(path, `${long}\n## Step 13\n\nOne more.\n`);
+    await expect(body).toContainText('One more.');
+    await expect(blocker).toHaveAttribute('open', '');
+    await expect(minor).toHaveAttribute('open', '');
+
+    // Scrolled down, the head offers the way back up.
+    const top = await body.evaluate((scroller) => {
+      scroller.scrollTop = scroller.scrollHeight / 2;
+      return scroller.scrollTop;
+    });
+    expect(top).toBeGreaterThan(0);
+    await expect(docView(window).getByRole('button', { name: 'Back to the top' })).toBeVisible();
+
+    // Closed and opened again, it is where it was.
+    await sessionWindow(window).getByRole('button', { name: 'Close session window' }).click();
+    await expect(sessionWindow(window)).toHaveCount(0);
+    await agentTile(window, agent).getByTestId('tile-docs').click();
+    await expect(body).toContainText('Step 13');
+    await expect.poll(() => body.evaluate((scroller) => scroller.scrollTop)).toBeCloseTo(top, -1);
+    await expect(blocker).toHaveAttribute('open', '');
+  });
+});
+
 test('esc leaves Edit with nothing written, and an HTML document is view-only with comments for the agent', async () => {
   await withApp(async (window) => {
     const agent = await spawn(window, 'Doc: notes/plan.md');
@@ -180,7 +251,10 @@ test('Markdown in an expanded tile selects with a mouse drag and copies, and onl
     await expect(body.getByRole('heading', { name: 'Order' })).toBeVisible();
 
     // A real drag over a paragraph selects its text, and does not move the tile.
-    const paragraph = body.getByText('Merge the flake fix first');
+    // The text itself, not the decision card lifted from it.
+    const text = body.locator('.doc-read:not(.doc-read-card)');
+    const paragraph = text.getByText('Merge the flake fix first');
+    await paragraph.scrollIntoViewIfNeeded();
     const tileBefore = await settledBox(expanded);
     const box = (await paragraph.boundingBox())!;
     await drag(window, { x: box.x + 1, y: box.y + box.height / 2 }, { x: box.x + box.width - 1, y: box.y + box.height / 2 });
@@ -195,7 +269,7 @@ test('Markdown in an expanded tile selects with a mouse drag and copies, and onl
     await expect.poll(() => app.evaluate(({ clipboard }) => clipboard.readText())).toBe(selected);
 
     // A double-click or a click and hold on the text opens nothing; the Edit button does.
-    await body.getByText('Merge the flake fix first').dblclick({ position: { x: 4, y: 4 } });
+    await paragraph.dblclick({ position: { x: 4, y: 4 } });
     await body.click({ delay: 800 });
     await expect(view).toHaveAttribute('data-mode', 'read');
     await view.getByRole('button', { name: 'Edit' }).click();
@@ -293,7 +367,7 @@ test('⌘F in a Markdown document opens a find bar with a count; ↵ and ⇧↵ 
     const agent = await spawn(window, 'Doc: plan.md');
     await agentTile(window, agent).getByTestId('tile-docs').click();
     const body = docView(window).getByTestId('doc-body');
-    await expect(body).toContainText('Release 1.4 plan');
+    await expect(body).toContainText('Merge the flake fix first');
     await expect(window.getByTestId('find-bar')).toHaveCount(0);
 
     await body.click();

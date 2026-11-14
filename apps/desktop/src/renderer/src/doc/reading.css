@@ -1,0 +1,575 @@
+/*
+ * A long document's reading view (ReadingView.tsx): the hairline, the rail at the left and one column of type set to
+ * read. `.doc-read` is the Markdown in it (and Edit's preview); the chat keeps `.chat-md`.
+ */
+
+.read-view {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--window-bg);
+  color: var(--window-ink);
+}
+
+.read-progress {
+  position: relative;
+  flex: none;
+  height: 2px;
+  background: var(--window-line);
+}
+
+.read-progress i,
+.read-bar i {
+  position: absolute;
+  inset: 0;
+  background: var(--window-focus);
+  transform: scaleX(var(--read-fraction));
+  transform-origin: left;
+  transition: transform var(--motion-fast);
+}
+
+.read-body {
+  display: grid;
+  flex: 1;
+  grid-template-columns: minmax(0, 1fr);
+  min-height: 0;
+}
+
+.read-view[data-rail] .read-body {
+  grid-template-columns: minmax(176px, 232px) minmax(0, 1fr);
+}
+
+.read-scroll {
+  position: relative;
+  min-height: 0;
+  overflow-y: auto;
+  outline: none;
+  scroll-padding-top: var(--space-4);
+}
+
+/* The rail */
+
+.read-rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 0;
+  padding: var(--space-3-5) var(--space-2-5);
+  overflow-y: auto;
+  border-right: 1px solid var(--window-line);
+  background: var(--window-chrome);
+}
+
+.read-meter {
+  display: grid;
+  gap: var(--space-1-5);
+  padding: var(--space-1) var(--space-2) var(--space-2-5);
+  border-bottom: 1px solid var(--window-line);
+}
+
+.read-meter-top {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  color: var(--window-ink-soft);
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.read-meter-top b {
+  color: var(--window-ink);
+  font-weight: var(--weight-bold);
+}
+
+.read-bar {
+  position: relative;
+  height: 4px;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: var(--window-line);
+}
+
+.read-list,
+.read-sub {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.read-item {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  gap: var(--space-2);
+  align-items: start;
+  width: 100%;
+  padding: var(--space-1-5) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-item);
+  background: transparent;
+  color: var(--window-ink-soft);
+  font: inherit;
+  font-size: var(--font-size-sm-plus);
+  line-height: var(--leading-snug);
+  text-align: left;
+  cursor: pointer;
+}
+
+.read-item:hover,
+.read-item:focus-visible {
+  background: var(--window-line);
+  color: var(--window-ink);
+  outline: none;
+}
+
+.read-item[aria-current] {
+  background: var(--window-raised);
+  color: var(--window-ink);
+  font-weight: var(--weight-semibold);
+}
+
+.read-mark {
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  margin-top: var(--space-px);
+  border: 1.5px solid var(--window-edge);
+  border-radius: var(--radius-pill);
+}
+
+.read-item[aria-current] .read-mark {
+  border-color: var(--window-focus);
+}
+
+.read-item[data-read] .read-mark {
+  border-color: var(--window-focus);
+  background: var(--window-focus);
+}
+
+/* A tick, drawn as two sides of a box turned. */
+.read-item[data-read] .read-mark::after {
+  width: 6px;
+  height: 3px;
+  border: solid var(--on-accent);
+  border-width: 0 0 1.5px 1.5px;
+  content: '';
+  transform: rotate(-45deg) translate(0, -1px);
+}
+
+.read-up {
+  margin-left: var(--space-1);
+  color: var(--window-ink-soft);
+  font-size: var(--font-size-badge);
+  font-weight: var(--weight-regular);
+}
+
+.read-sub {
+  margin: 0 0 var(--space-1) var(--space-5-5);
+}
+
+.read-sub .read-item {
+  grid-template-columns: 8px minmax(0, 1fr);
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--font-size-sm);
+}
+
+.read-item-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.read-dot {
+  width: 7px;
+  height: 7px;
+  margin-top: var(--space-1-25);
+  border-radius: var(--radius-pill);
+  background: var(--window-ink-soft);
+}
+
+.read-dot[data-sev='blocker'] {
+  background: var(--window-danger);
+}
+
+.read-dot[data-sev='major'] {
+  background: var(--window-warning);
+}
+
+.read-rail-foot {
+  margin-top: auto;
+  padding: var(--space-2);
+  border-top: 1px solid var(--window-line);
+  color: var(--window-ink-soft);
+  font-size: var(--font-size-xs);
+  line-height: var(--leading-roomy);
+}
+
+/* The column */
+
+.read-col {
+  display: grid;
+  gap: var(--space-read-block);
+  align-content: start;
+  max-width: var(--measure-read);
+  margin: 0 auto;
+  padding: var(--space-7) var(--space-7) var(--space-30);
+}
+
+.read-decision {
+  display: grid;
+  gap: var(--space-2-5);
+  padding: var(--space-4) var(--space-4-5) var(--space-3-5);
+  border: 1px solid var(--read-card-edge);
+  border-radius: var(--radius-card);
+  background: var(--read-card);
+}
+
+.read-decision-top {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2-5);
+  align-items: center;
+}
+
+.read-decision .eyebrow {
+  color: var(--window-ink-soft);
+  font-size: var(--font-size-badge);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+}
+
+.read-verdict {
+  display: inline-flex;
+  gap: var(--space-1-5);
+  align-items: center;
+  height: 24px;
+  padding: 0 var(--space-2-25);
+  border-radius: var(--radius-pill);
+  background: var(--window-line);
+  color: var(--window-ink-soft);
+  font-size: var(--font-size-sm-plus);
+  font-weight: var(--weight-bold);
+}
+
+.read-verdict::before {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-pill);
+  background: currentcolor;
+  content: '';
+}
+
+.read-verdict[data-tone='waiting'] {
+  background: var(--window-notice);
+  color: var(--window-warning);
+}
+
+.read-verdict[data-tone='failed'] {
+  background: var(--window-danger-soft);
+  color: var(--window-danger);
+}
+
+.read-verdict[data-tone='ok'] {
+  color: var(--window-live);
+}
+
+.read-decision-time {
+  margin-left: auto;
+  color: var(--window-ink-soft);
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.read-decision-src {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2-5);
+  align-items: center;
+  padding-top: var(--space-2-25);
+  border-top: 1px solid var(--window-line);
+  color: var(--window-ink-soft);
+  font-size: var(--font-size-sm);
+}
+
+.read-decision-src a,
+.doc-read a,
+.findings-tools button {
+  color: var(--read-link);
+  text-decoration: none;
+}
+
+.read-decision-src a {
+  font-weight: var(--weight-semibold);
+}
+
+.read-decision-src a:hover,
+.doc-read a:hover,
+.findings-tools button:hover {
+  text-decoration: underline;
+}
+
+/* The document, set to read */
+
+.doc-read {
+  color: var(--window-ink);
+  font-size: var(--font-size-read);
+  font-variant-ligatures: common-ligatures;
+  line-height: var(--leading-read);
+  /* A board node (an expanded tile) is user-select: none; the document still selects and copies there. */
+  user-select: text;
+}
+
+.doc-read > * {
+  margin: 0;
+}
+
+.doc-read > * + * {
+  margin-top: var(--space-read-block);
+}
+
+.doc-read :is(p, li) {
+  overflow-wrap: anywhere;
+}
+
+.doc-read h1 {
+  font-size: var(--font-size-3xl);
+  font-weight: var(--weight-heavy);
+  letter-spacing: var(--tracking-tight);
+  line-height: var(--leading-read-heading);
+  text-wrap: balance;
+}
+
+.doc-read h2 {
+  padding-top: var(--space-read-h2-pad);
+  font-size: var(--font-size-read-h2);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-read-h2);
+  line-height: var(--leading-read-heading);
+  text-wrap: balance;
+}
+
+.doc-read > h2:not(:first-child) {
+  margin-top: var(--space-read-h2);
+}
+
+.doc-read h3 {
+  font-size: var(--font-size-read-h3);
+  font-weight: var(--weight-bold);
+}
+
+.doc-read > h3:not(:first-child) {
+  margin-top: var(--space-read-h3);
+}
+
+.doc-read :is(ul, ol) {
+  display: grid;
+  gap: var(--space-read-item);
+  margin-bottom: 0;
+  padding-left: var(--space-read-indent);
+}
+
+.doc-read li > :is(ul, ol) {
+  margin-top: var(--space-read-item);
+}
+
+.doc-read strong {
+  font-weight: var(--weight-bold);
+}
+
+.doc-read code {
+  padding: var(--space-read-code-y) var(--space-read-code-x);
+  border-radius: var(--radius-sm);
+  background: var(--window-raised);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-read-code);
+  overflow-wrap: anywhere;
+}
+
+.doc-read pre {
+  padding: var(--space-3) var(--space-3-5);
+  overflow-x: auto;
+  border-radius: var(--radius-lg);
+  background: var(--window-chrome);
+}
+
+.doc-read pre code {
+  padding: 0;
+  background: none;
+  overflow-wrap: normal;
+}
+
+.doc-read blockquote {
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--window-edge);
+  color: var(--window-ink-soft);
+}
+
+.doc-read hr {
+  border: 0;
+  border-top: 1px solid var(--window-line);
+}
+
+.read-table {
+  margin-inline: calc(var(--space-3) * -1);
+  padding-inline: var(--space-3);
+  overflow-x: auto;
+}
+
+.doc-read table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-read-table);
+  line-height: var(--leading-roomy);
+}
+
+.doc-read :is(th, td) {
+  padding: var(--space-1-75) var(--space-2-5);
+  border-bottom: 1px solid var(--window-line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.doc-read th {
+  color: var(--window-ink-soft);
+  font-size: var(--font-size-badge);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+}
+
+.doc-read td:first-child {
+  color: var(--window-ink);
+}
+
+/* A finding's severity, as a chip in its state's colour. */
+.doc-read .sev {
+  display: inline-flex;
+  align-items: center;
+  height: var(--size-pill);
+  margin-right: var(--space-1);
+  padding: 0 var(--space-1-75);
+  border-radius: var(--radius-key);
+  background: var(--window-line);
+  color: var(--window-ink-soft);
+  font-size: var(--font-size-xs);
+  font-style: normal;
+  font-weight: var(--weight-bold);
+  vertical-align: 2px;
+}
+
+.doc-read .sev[data-sev='blocker'] {
+  background: var(--window-danger-soft);
+  color: var(--window-danger);
+}
+
+.doc-read .sev[data-sev='major'] {
+  background: var(--window-notice);
+  color: var(--window-warning);
+}
+
+.findings-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  color: var(--window-ink-soft);
+  font-size: var(--font-size-sm-plus);
+}
+
+.doc-read > .findings-tools + .findings {
+  margin-top: var(--space-2);
+}
+
+.doc-read > .findings-tools {
+  margin-top: var(--space-read-findings);
+}
+
+.findings-tools button {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-weight: var(--weight-semibold);
+  cursor: pointer;
+}
+
+.doc-read .findings {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.doc-read details.finding {
+  border: 1px solid var(--read-card-edge);
+  border-radius: var(--radius-xl);
+  background: var(--read-card);
+}
+
+.doc-read details.finding > summary {
+  position: relative;
+  padding: var(--space-2-5) var(--space-3-5) var(--space-2-5) var(--space-9);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-read-card);
+  list-style: none;
+  cursor: pointer;
+}
+
+.doc-read details.finding > summary::-webkit-details-marker {
+  display: none;
+}
+
+/* The chevron: two sides of a box, turned to point right, and down when open. */
+.doc-read details.finding > summary::before {
+  position: absolute;
+  top: 17px;
+  left: 15px;
+  width: 6px;
+  height: 6px;
+  border: solid var(--window-ink-soft);
+  border-width: 0 1.5px 1.5px 0;
+  content: '';
+  transform: rotate(-45deg);
+  transition: transform var(--motion-fast);
+}
+
+.doc-read details.finding[open] > summary::before {
+  top: 15px;
+  transform: rotate(45deg);
+}
+
+.doc-read details.finding > summary:focus-visible {
+  border-radius: var(--radius-xl);
+  outline: 2px solid var(--window-focus);
+  outline-offset: -2px;
+}
+
+.doc-read .finding-body {
+  display: grid;
+  gap: var(--space-read-finding);
+  padding: 0 var(--space-4) var(--space-3-5) var(--space-9);
+}
+
+.doc-read .finding-body > * {
+  margin: 0;
+}
+
+/* Text lifted onto the decision card: the reading type, a little smaller. */
+.doc-read-card {
+  font-size: var(--font-size-lg);
+  line-height: var(--leading-read-card);
+}
+
+.doc-read-card :is(ul, ol) {
+  padding-left: var(--space-5);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .read-progress i,
+  .read-bar i,
+  .doc-read details.finding > summary::before {
+    transition: none;
+  }
+}

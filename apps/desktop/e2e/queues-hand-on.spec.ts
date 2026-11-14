@@ -76,7 +76,8 @@ test('a waiting job is handed to an idle agent with only the words the user send
     await page.keyboard.press('Escape');
     const tileOf = (of: Agent) => tile(page).and(page.locator(`[data-session-id="${of.sessionId}"]`));
     const row = card(page, 'Backlog').locator('.listcard-row[data-draggable]').first();
-    await expect.poll(async () => (await page.evaluate(() => window.agentBoard.agents.list())).find((each) => each.sessionId === agent.sessionId)?.state).not.toMatch(/idle|waiting/);
+    // As the board sees it, which may hear of the change after the daemon: the drop reads the board's agents.
+    await expect(tileOf(agent)).not.toHaveAttribute('data-state', /^(idle|waiting)$/);
     await row.dragTo(tileOf(agent));
     await expect(dialog).toBeHidden();
 
@@ -91,7 +92,7 @@ test('a waiting job is handed to an idle agent with only the words the user send
 
     // Dragged onto an idle agent, Hand on opens with that agent chosen.
     const idle = await spawn(page, 'Read the CONTRIBUTING file', 'impl-5');
-    await expect.poll(async () => (await page.evaluate(() => window.agentBoard.agents.list())).find((each) => each.sessionId === idle.sessionId)?.state).toMatch(/idle|waiting/);
+    await expect(tileOf(idle)).toHaveAttribute('data-state', /^(idle|waiting)$/);
     await row.dragTo(tileOf(idle));
     await expect(dialog).toContainText('Hand “Write the docs” to an agent');
     await expect(dialog.getByRole('radio', { name: /impl-5/ })).toBeChecked();

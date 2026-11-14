@@ -4,7 +4,7 @@ import { handoffLine } from './handoff-text.ts';
 import { refOf } from './crew-flags.ts';
 import { markSender } from './sender-marker.ts';
 import { invalidParams } from './params.ts';
-import { questionPrompt, type Agent, type Harness, type PermissionPrompt } from './protocol.ts';
+import { FIRST_PROMPT, questionPrompt, type Agent, type Harness, type PermissionPrompt } from './protocol.ts';
 import type { RunStart } from './schedules.ts';
 import { CONTINUE, readRateLimitScreen } from './rate-limit-screen.ts';
 import { answerInput, draftAfterInput, oneLine, pastePieces, promptRows, submittedText } from './terminal-input.ts';
@@ -45,11 +45,21 @@ const NOT_UP_FIRST_REASON = `${NOT_UP_REASON}: its first prompt goes first`;
 /** Why what was queued for an agent not up yet is handed back as the daemon closes (`handBackQueued`). */
 const CLOSED_REASON = 'the daemon shut down before it was up';
 
-/** Why what waited for an agent's turn to end is handed back as the daemon closes (`handBackQueued`). */
+/** Why what waited for an agent's turn to end is handed back as the daemon closes, with no store to keep it (`handBackQueued`). */
 const CLOSED_IN_TURN_REASON = 'the daemon shut down before its turn ended';
 
 /** How many more times Enter is pressed before what was typed is called not sent. */
 const SUBMIT_RETRIES = 2;
+
+/**
+ * How many more times Enter is pressed on a first prompt: a new agent's harness, loading on a busy machine, may take
+ * a minute or two to take it, and nobody waits on its answer meanwhile. With each wait capped at `MAX_SUBMIT_WAITS`
+ * confirm times, that is about two minutes at the default confirm time.
+ */
+const FIRST_PROMPT_SUBMIT_RETRIES = 5;
+
+/** The longest wait for a turn to start after one press of Enter, in confirm times: the backoff stops doubling there. */
+const MAX_SUBMIT_WAITS = 10;
 
 /** The key that closes a TUI's menu, picking none of its rows. */
 const ESCAPE = '\x1b';
@@ -62,9 +72,9 @@ const MENU_CLOSES = 3;
  * never started a turn; the user typed there meanwhile; a turn started before Enter was pressed; or it moved on (a
  * permission prompt, a question).
  */
-const whyGaveUp = (now: PromptNow): string =>
+const whyGaveUp = (now: PromptNow, retries = SUBMIT_RETRIES): string =>
   now === 'at-prompt'
-    ? `no turn started on it after ${SUBMIT_RETRIES + 1} presses of Enter`
+    ? `no turn started on it after ${retries + 1} presses of Enter`
     : now === 'typing'
       ? 'you typed at its prompt meanwhile'
       : now === 'working'
@@ -76,10 +86,41 @@ const whyGaveUp = (now: PromptNow): string =>
  * start, and `settled` how it went once typed (whether its turn started), or that it was handed back instead: `why`
  * says why, when no turn started on it.
  */
-export interface AfterTurn {
-  text: string;
+export interface AfterTurn extends WaitingMessage {
   typing(): void;
   settled(started: boolean, why?: string): void;
+}
+
+/** What a message waiting for an agent's turn to end is, as its store keeps it. */
+export interface WaitingMessage {
+  text: string;
+  /** The agent that sent it, which is told if it is never delivered; none for the user's own. */
+  from?: string;
+  /**
+   * For a notice the board types itself (that a message to another agent was not delivered): the agent it is about. A
+   * notice that can't be typed is dropped, never handed back: nobody sent it.
+   */
+  about?: string;
+  /** For a notice: how many messages it says were not delivered, one if not given. */
+  lost?: number;
+}
+
+/** A message kept in the store, waiting for the agent `sessionId`'s turn to end: `id` is its place in the store. */
+export interface KeptWaiting extends WaitingMessage {
+  id: number;
+  sessionId: string;
+}
+
+/**
+ * Where the messages waiting for agents' turns to end are kept (`queueAfterTurn`), so they outlive the daemon: each is
+ * added as it is queued and removed once it is typed, handed back or dropped.
+ */
+export interface WaitingStore {
+  /** Keeps `message` for the agent, and returns its id. */
+  add(sessionId: string, message: WaitingMessage): number;
+  remove(id: number): void;
+  /** Everything kept, oldest first. */
+  all(): KeptWaiting[];
 }
 
 /** Why a message queued in a turn its rate limit stopped was given up on: Enter there may pick from Claude's menu. */
@@ -164,10 +205,11 @@ interface DeliveryOptions<Row extends DeliveryRow> {
   /** Tells every client the agent changed. */
   announce(sessionId: string): void;
   /**
-   * What was sent to the agent before it was up (`what`: `A message`, `A scheduled run`), as `text`, was never typed,
-   * and why: its sender heard it was queued, so it is handed back for the user to see and resend.
+   * What was sent to the agent before it was up or mid-turn (`what`: `A message`, `A scheduled run`), as `text`, was
+   * never typed, and why: its sender heard it was queued, so it is handed back, to the agent that sent it (`from`), or
+   * else for the user to see and resend.
    */
-  undelivered(sessionId: string, what: string, text: string, reason: string): void;
+  undelivered(sessionId: string, what: string, text: string, reason: string, from?: string): void;
   /**
    * What was typed at the agent's prompt (`what`) was given up on, no Enter starting a turn on it, and why: the user is
    * told, as only their Send or Clear moves it on (in its terminal, with `inTerminal`, as the board's Send refuses a
@@ -175,6 +217,8 @@ interface DeliveryOptions<Row extends DeliveryRow> {
    */
   notSent?(sessionId: string, what?: string, why?: string, inTerminal?: boolean): void;
   log(message: string): void;
+  /** Where the messages waiting for a turn to end are kept across restarts; in memory only without. */
+  waiting?: WaitingStore;
   clock?: Clock;
   /** How long Enter first gets to start a turn (`DEFAULT_SUBMIT_CONFIRM_MS`). */
   submitConfirmMs?: number;
@@ -254,11 +298,35 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
    * What was queued for agents not up yet and not yet typed or handed back (`queueOrHandBack`), oldest first: whichever
    * comes first, its typing starting, its queue settling or the daemon closing (`handBackQueued`), takes each one.
    */
-  const queuedItems = new Set<{ sessionId: string; what: string; text: string; trail?: SendTrail }>();
+  const queuedItems = new Set<{ sessionId: string; what: string; text: string; trail?: SendTrail; from?: string }>();
   /** The trail of the message a paused agent is being woken with, for its first prompt to carry on (`firstPrompt`). */
   const wakeTrails = new Map<string, SendTrail>();
-  /** Per agent mid-turn when they came, the messages waiting for its turn to end, oldest first (`queueAfterTurn`). */
-  const afterTurn = new Map<string, AfterTurn[]>();
+  /** The agent that sent the message a paused agent is being woken with: told, not the user, if it is never typed. */
+  const wakeSenders = new Map<string, string>();
+  /**
+   * Per agent mid-turn when they came, the messages waiting for its turn to end, oldest first (`queueAfterTurn`), each
+   * with its id in the store (`waiting`), if kept there.
+   */
+  const afterTurn = new Map<string, (AfterTurn & { keptAs?: number })[]>();
+  /** Takes `item` out of the store, if it is kept there. */
+  const unkeep = (item: { keptAs?: number }) => {
+    if (item.keptAs === undefined) return;
+    options.waiting?.remove(item.keptAs);
+    delete item.keptAs;
+  };
+  // What the daemon before this one kept waiting: typed once each agent is ready again. Its store forgets what was kept
+  // for an agent as it is deleted, so no agent is looked up here, before the host that finds them is up.
+  for (const kept of options.waiting?.all() ?? []) {
+    const { id, sessionId, ...message } = kept;
+    const restored = {
+      ...message,
+      keptAs: id,
+      typing: () => options.log(`a message kept for ${sessionId} over a restart is being typed`),
+      settled: (started: boolean, why?: string) =>
+        options.log(`a message kept for ${sessionId} over a restart: ${started ? 'turn started on it' : (why ?? 'no turn started on it')}`),
+    };
+    afterTurn.set(sessionId, [...(afterTurn.get(sessionId) ?? []), restored]);
+  }
   /** Agents one of whose messages waiting for its turn to end is being typed now. */
   const typingAfterTurn = new Set<string>();
 
@@ -321,9 +389,14 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
    * gets one Enter, which queues what was typed for after its turn, as the user's own would; no turn starts on it
    * now, so none is waited for, and `queue` keeps it for the turn's end to check on. Unless the turn starts, `gaveUp`
    * says what then: after the last press, or on finding the prompt typed at, or moved on (or working, without `queue`)
-   * before the first (nothing was submitted).
+   * before the first (nothing was submitted). It presses `retries` more times after the first, the wait doubling up to
+   * `MAX_SUBMIT_WAITS` confirm times.
    */
-  const pressEnter = async (sessionId: string, gaveUp: (now: PromptNow) => boolean, queue?: () => void): Promise<boolean> => {
+  const pressEnter = async (
+    sessionId: string,
+    gaveUp: (now: PromptNow) => boolean,
+    { queue, retries = SUBMIT_RETRIES }: { queue?: () => void; retries?: number } = {},
+  ): Promise<boolean> => {
     for (let attempt = 0; ; attempt += 1) {
       // The daemon closed meanwhile: its database with it.
       if (closed) return false;
@@ -335,9 +408,9 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
         queue();
         return true;
       }
-      if (now !== 'at-prompt' || attempt > SUBMIT_RETRIES) return gaveUp(now);
+      if (now !== 'at-prompt' || attempt > retries) return gaveUp(now);
       if (attempt > 0) options.log(`pressing Enter again at ${sessionId}'s prompt: no turn started`);
-      if (await enterSubmits(sessionId, confirmMs * 2 ** attempt)) return true;
+      if (await enterSubmits(sessionId, confirmMs * Math.min(2 ** attempt, MAX_SUBMIT_WAITS))) return true;
     }
   };
 
@@ -366,10 +439,19 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
    * line by throwing. With `midTurn`, as for the user's answers, a turn under way takes it as queued (`pressEnter`).
    */
   const typeInput = (sessionId: string, line: string, what: string, stillReady: () => string | undefined = () => undefined, midTurn = false) =>
-    inTurn(sessionId, () => typeNow(sessionId, line, what, stillReady, midTurn));
+    inTurn(sessionId, () => typeNow(sessionId, line, what, stillReady, { midTurn }));
 
-  /** Types `line` at the agent's prompt now and submits it, as `typeInput` does once its turn in the queue comes. */
-  const typeNow = async (sessionId: string, line: string, what: string, stillReady: () => string | undefined, midTurn: boolean): Promise<Typed> => {
+  /**
+   * Types `line` at the agent's prompt now and submits it, as `typeInput` does once its turn in the queue comes,
+   * pressing Enter `retries` more times while no turn starts (`pressEnter`).
+   */
+  const typeNow = async (
+    sessionId: string,
+    line: string,
+    what: string,
+    stillReady: () => string | undefined,
+    { midTurn = false, retries = SUBMIT_RETRIES }: { midTurn?: boolean; retries?: number } = {},
+  ): Promise<Typed> => {
     const reason = unsent.has(sessionId) ? UNSENT_REASON : stillReady();
     if (reason !== undefined) return { typed: false, reason };
     await typeAndSettle(sessionId, line);
@@ -388,13 +470,17 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
         count: (before?.count ?? 0) + 1,
       });
     };
-    const sent = await pressEnter(sessionId, (now) => {
-      why = whyGaveUp(now);
-      options.log(`${what} to ${sessionId} was typed at its prompt but not sent: ${why}`);
-      // A session that has ended has no prompt to hold it: kept, it would stop whatever its next session is sent.
-      if (getRow(sessionId)?.ended_at === null) setUnsent(sessionId, { what, lines }, why);
-      return false;
-    }, midTurn ? queue : undefined);
+    const sent = await pressEnter(
+      sessionId,
+      (now) => {
+        why = whyGaveUp(now, retries);
+        options.log(`${what} to ${sessionId} was typed at its prompt but not sent: ${why}`);
+        // A session that has ended has no prompt to hold it: kept, it would stop whatever its next session is sent.
+        if (getRow(sessionId)?.ended_at === null) setUnsent(sessionId, { what, lines }, why);
+        return false;
+      },
+      { ...(midTurn ? { queue } : {}), retries },
+    );
     return { typed: true, sent, ...(inTurn ? { inTurn } : {}), ...(why === undefined ? {} : { why }) };
   };
 
@@ -517,8 +603,16 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
    * never typed: the sender has heard it was queued, so it is never dropped unsaid. `notTyped` hears why too: a
    * scheduled run's clock, whose run would otherwise wait on a turn that never starts.
    */
-  const queueOrHandBack = (sessionId: string, line: string, what: string, text: string, trail?: SendTrail, notTyped?: (reason: string) => void) => {
-    const item = { sessionId, what, text, ...(trail === undefined ? {} : { trail }) };
+  const queueOrHandBack = (
+    sessionId: string,
+    line: string,
+    what: string,
+    text: string,
+    trail?: SendTrail,
+    notTyped?: (reason: string) => void,
+    from?: string,
+  ) => {
+    const item = { sessionId, what, text, ...(trail === undefined ? {} : { trail }), ...(from === undefined ? {} : { from }) };
     queuedItems.add(item);
     void queueUntilUp(sessionId, line, what, () => {
       queuedItems.delete(item);
@@ -529,7 +623,7 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
         // The daemon closing handed it back already.
         if (!queuedItems.delete(item)) return;
         trailTyped(trail, typed);
-        options.undelivered(sessionId, what, text, typed.reason);
+        options.undelivered(sessionId, what, text, typed.reason, from);
         notTyped?.(typed.reason);
       })
       .catch((error: Error) => options.log(`could not keep ${what} for ${sessionId}, never delivered: ${error.message}`));
@@ -537,7 +631,8 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
 
   /**
    * Hands back everything waiting for the agent's turn to end (`undelivered`), and why: its sender heard it was queued,
-   * so it is never dropped unsaid. Nothing is handed back for an agent deleted meanwhile, which has nowhere to show it.
+   * so it is never dropped unsaid. Nothing is handed back for an agent deleted meanwhile, which has nowhere to show it,
+   * nor a board notice (`about`), which nobody sent.
    */
   const handBackAfterTurn = (sessionId: string, reason: string) => {
     const items = afterTurn.get(sessionId);
@@ -545,7 +640,9 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
     afterTurn.delete(sessionId);
     for (const item of items) {
       try {
-        options.undelivered(sessionId, 'A message', item.text, reason);
+        unkeep(item);
+        if (item.about === undefined) options.undelivered(sessionId, 'A message', item.text, reason, item.from);
+        else options.log(`a notice for ${sessionId} about ${item.about} was dropped, never typed: ${reason}`);
       } catch (error) {
         options.log(`could not keep a message for ${sessionId}, never delivered: ${(error as Error).message}`);
       }
@@ -559,7 +656,7 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
   };
 
   /** `answer`, telling `trail` of each step but a refusal, which `answer` tells it of. */
-  const answerWith = async (sessionId: string, text: string, paste: boolean, trail: SendTrail | undefined): Promise<Answered> => {
+  const answerWith = async (sessionId: string, text: string, paste: boolean, trail: SendTrail | undefined, from?: string): Promise<Answered> => {
     // A pause under way ends first: the message then wakes the agent, never typed into a terminal that is going.
     const pausing = options.pausing(sessionId);
     if (pausing !== undefined) await pausing;
@@ -569,9 +666,11 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
       const row = getRow(sessionId)!;
       // Its first prompt, typed once its session is up, carries on this message's trail.
       if (trail !== undefined) wakeTrails.set(sessionId, trail);
+      if (from !== undefined) wakeSenders.set(sessionId, from);
       const woken = relaunch(row, text, 'to wake it for a message', row.harness_session_id);
       if (!woken.started) {
         wakeTrails.delete(sessionId);
+        wakeSenders.delete(sessionId);
         throw invalidParams(`${agent.name} can't be woken: ${woken.reason}`);
       }
       trail?.('waking it with it, to be typed once its session is up');
@@ -588,7 +687,7 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
     const line = paste ? answerInput(text, true) : inputFor(sessionId, answerInput(text));
     if (notUp.has(sessionId)) {
       trail?.('queued until its session is up');
-      queueOrHandBack(sessionId, line, 'A message', text, trail);
+      queueOrHandBack(sessionId, line, 'A message', text, trail, undefined, from);
       return { queued: true };
     }
     const whyNot = () => {
@@ -612,17 +711,18 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
 
   /**
    * Hands back everything still queued for agents not up yet and not being typed (`undelivered`), as the daemon
-   * closes: kept, it shows with Resend once the daemon is back, where the queue itself would go with the daemon's
-   * memory. Call before the database closes. One that can't be kept is logged, never holding up the rest.
+   * closes: kept, it is shown once the daemon is back, where the queue itself would go with the daemon's memory. Call
+   * before the database closes. One that can't be kept is logged, never holding up the rest. What waits for a turn to
+   * end stays in its store (`waiting`), for the next daemon to type; without a store, it is handed back too.
    */
   const handBackQueued = () => {
-    for (const sessionId of [...afterTurn.keys()]) handBackAfterTurn(sessionId, CLOSED_IN_TURN_REASON);
+    if (options.waiting === undefined) for (const sessionId of [...afterTurn.keys()]) handBackAfterTurn(sessionId, CLOSED_IN_TURN_REASON);
     const items = [...queuedItems];
     queuedItems.clear();
-    for (const { sessionId, what, text, trail } of items) {
+    for (const { sessionId, what, text, trail, from } of items) {
       trail?.(`handed back: ${CLOSED_REASON}`);
       try {
-        options.undelivered(sessionId, what, text, CLOSED_REASON);
+        options.undelivered(sessionId, what, text, CLOSED_REASON, from);
       } catch (error) {
         options.log(`could not keep ${what} for ${sessionId}, never delivered: ${(error as Error).message}`);
       }
@@ -641,7 +741,12 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
 
     /** Forgets the deleted agent's hand-offs still landing, and its unsent or queued message. */
     forget(sessionId: string) {
-      for (const item of afterTurn.get(sessionId) ?? []) item.settled(false, 'its agent was deleted');
+      // Its Enter loop stops now, not after its wait: what is queued behind it, a relaunch's first prompt too, goes on.
+      submitting.get(sessionId)?.();
+      for (const item of afterTurn.get(sessionId) ?? []) {
+        unkeep(item);
+        item.settled(false, 'its agent was deleted');
+      }
       afterTurn.delete(sessionId);
       handingOff.delete(sessionId);
       unsent.delete(sessionId);
@@ -763,7 +868,16 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
      * with it.
      */
     ended(sessionId: string, byShutdown = false) {
-      handBackAfterTurn(sessionId, byShutdown ? CLOSED_IN_TURN_REASON : 'its session ended before its turn did');
+      submitting.get(sessionId)?.();
+      // The daemon going away: what waits for its turn stays in its store, to be typed once the agent is resumed.
+      // One whose text went in has left it already (`deliverAfterTurn`): typed once, never twice.
+      if (byShutdown && options.waiting !== undefined) {
+        for (const item of afterTurn.get(sessionId) ?? []) {
+          item.settled(false, item.keptAs === undefined ? 'typed as the daemon shut down, before its turn was seen' : `kept: ${CLOSED_IN_TURN_REASON}`);
+        }
+      } else {
+        handBackAfterTurn(sessionId, byShutdown ? CLOSED_IN_TURN_REASON : 'its session ended before its turn did');
+      }
       queued.delete(sessionId);
       interruptedWith.delete(sessionId);
       setUnsent(sessionId, undefined);
@@ -883,6 +997,8 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
       setUnsent(sessionId, undefined);
       const trail = wakeTrails.get(sessionId);
       wakeTrails.delete(sessionId);
+      const from = wakeSenders.get(sessionId);
+      wakeSenders.delete(sessionId);
       const settled = ready.then(
         (up) => up,
         () => false,
@@ -903,9 +1019,9 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
             if (reason === undefined) trail?.('typing at its prompt, its session up');
             return reason;
           };
-          const typed = await typeNow(sessionId, inputFor(sessionId, answerInput(prompt, true)), 'Its first prompt', stillUp, false);
+          const typed = await typeNow(sessionId, inputFor(sessionId, answerInput(prompt, true)), FIRST_PROMPT, stillUp, { retries: FIRST_PROMPT_SUBMIT_RETRIES });
           trailTyped(trail, typed);
-          if (!typed.typed) options.undelivered(sessionId, 'Its first prompt', prompt, typed.reason);
+          if (!typed.typed) options.undelivered(sessionId, FIRST_PROMPT, prompt, typed.reason, from);
         } finally {
           typingFirst.delete(sessionId);
         }
@@ -951,8 +1067,39 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
      * in memory: as the daemon closes, it is handed back as not delivered (`handBackQueued`).
      */
     queueAfterTurn(sessionId: string, item: AfterTurn) {
-      afterTurn.set(sessionId, [...(afterTurn.get(sessionId) ?? []), item]);
+      const { text, from, about, lost } = item;
+      const keptAs = options.waiting?.add(sessionId, {
+        text,
+        ...(from === undefined ? {} : { from }),
+        ...(about === undefined ? {} : { about }),
+        ...(lost === undefined ? {} : { lost }),
+      });
+      afterTurn.set(sessionId, [...(afterTurn.get(sessionId) ?? []), { ...item, ...(keptAs === undefined ? {} : { keptAs }) }]);
       announce(sessionId);
+    },
+
+    /**
+     * Drops the board notices waiting for the agent that are `about` another (`AfterTurn.about`), but one being typed
+     * now: a newer one, or the agent's own new message to it, says what they said. Resolves with how many messages the
+     * notices that went said were not delivered (`lost`).
+     */
+    dropNotices(sessionId: string, about: string): number {
+      const items = afterTurn.get(sessionId);
+      if (items === undefined) return 0;
+      const typingNow = typingAfterTurn.has(sessionId) ? items[0] : undefined;
+      const dropped = items.filter((item) => item.about === about && item !== typingNow);
+      if (dropped.length === 0) return 0;
+      let lost = 0;
+      for (const item of dropped) {
+        unkeep(item);
+        item.settled(false, 'dropped: a newer message to the same agent says what it said');
+        lost += item.lost ?? 1;
+      }
+      const kept = items.filter((item) => !dropped.includes(item));
+      if (kept.length === 0) afterTurn.delete(sessionId);
+      else afterTurn.set(sessionId, kept);
+      announce(sessionId);
+      return lost;
     },
 
     /**
@@ -978,11 +1125,18 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
         if (now?.[0] !== item) return false;
         if (now.length === 1) afterTurn.delete(sessionId);
         else afterTurn.set(sessionId, now.slice(1));
+        unkeep(item);
         return true;
+      };
+      /** Why not now, or nothing as its text goes in: out of the store then, so a restart before its turn is seen never types it twice. */
+      const ready = () => {
+        const reason = stillReady(sessionId, true);
+        if (reason === undefined) unkeep(item);
+        return reason;
       };
       typingAfterTurn.add(sessionId);
       item.typing();
-      void typeInput(sessionId, inputFor(sessionId, answerInput(item.text)), 'A message', () => stillReady(sessionId, true))
+      void typeInput(sessionId, inputFor(sessionId, answerInput(item.text)), 'A message', ready)
         .then(
           (typed) => {
             if (!typed.typed) {
@@ -997,7 +1151,7 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
             options.log(`could not type a waiting message at ${sessionId}: ${error.message}`);
             if (!take()) return;
             // The error itself is for the log: the user is told plainly.
-            options.undelivered(sessionId, 'A message', item.text, 'it could not be typed');
+            if (item.about === undefined) options.undelivered(sessionId, 'A message', item.text, 'it could not be typed', item.from);
             item.settled(false, 'it could not be typed');
           },
         )
@@ -1017,11 +1171,12 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
      * Sends `text` as the agent's next message. A paused agent is woken with it as its first message (held until its
      * harness starts, never typed into a terminal still starting), carrying on its conversation. One whose session isn't
      * up yet gets it once it is, after its first prompt (`queueUntilUp`): resolves at once, `queued`. Resolves with how
-     * it went (`Answered`): one typed whose Enter started no turn is the agent's unsent message, and says why.
+     * it went (`Answered`): one typed whose Enter started no turn is the agent's unsent message, and says why. `from`,
+     * the agent that sent it, is told instead of the user if one queued is never typed.
      */
-    async answer(sessionId: string, text: string, paste = false, trail?: SendTrail): Promise<Answered> {
+    async answer(sessionId: string, text: string, paste = false, trail?: SendTrail, from?: string): Promise<Answered> {
       try {
-        return await answerWith(sessionId, text, paste, trail);
+        return await answerWith(sessionId, text, paste, trail, from);
       } catch (error) {
         trail?.(`not typed: ${(error as Error).message}`);
         throw error;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { NOTIFY_WHEN, needsYouShowsFrom, showsInFrontSwitch } from './notify-when';
+import { mutedAgentsText, NOTIFY_WHEN, needsYouShowsFrom, showsInFrontSwitch } from './notify-when';
 
 describe('Notify me when', () => {
   it('offers explicit requests first, then finished turns too, as the words say', () => {
@@ -18,5 +18,11 @@ describe('Notify me when', () => {
   it('draws the in-front switch only with technical details shown', () => {
     expect(showsInFrontSwitch(true)).toBe(true);
     expect(showsInFrontSwitch(false)).toBe(false);
+  });
+});
+
+describe('Muted agents', () => {
+  it('reads None, then counts the agents', () => {
+    expect([0, 1, 2].map(mutedAgentsText)).toEqual(['None', '1 agent', '2 agents']);
   });
 });

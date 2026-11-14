@@ -7,6 +7,7 @@ import { foldAgentMessages, senderLook, type SenderLook } from './agent-message'
 import { agentAtWork, chatItems, type RunsChoice } from './chat';
 import { holdAgentMessages, setIncludeAgents, useIncludeAgents } from './chat-filter';
 import { liveCallId, liveState } from './chat-live';
+import { stillFollowing } from './chat-follow';
 import { ChatSettingContext, MessageText, useChatSetting, type ChatSetting } from './chat-parts';
 import { useChatStyle, type ChatStyle } from './chat-style';
 import { ChatStream, LiveCard, RailLive, StatusLine } from './ChatStreams';
@@ -14,8 +15,6 @@ import { TimelineLive, TimelineRail } from './TimelineRail';
 import { sentLabel, sentMessages, settle, useSentMessages, type SentMessage } from './sent-messages';
 import { useLiveAgents } from './use-live-board';
 import { useTranscript } from './use-transcript';
-/** How close to the bottom, in pixels, still counts as reading the latest: new messages then scroll into view. */
-const STICK_DISTANCE = 48;
 
 interface ChatViewProps {
   agent: Agent;
@@ -53,6 +52,8 @@ export function ChatView({ agent, active, onShowTerminal, runs, onOpenLink, onOp
   // The conversation's scroller, once it shows.
   const [log, setLog] = useState<HTMLDivElement | null>(null);
   const atBottom = useRef(true);
+  // Where the last scroll left it: a scroll up from there is the reader's.
+  const lastTop = useRef(0);
   // The agent re-renders this on every hook; the items change only with the transcript.
   const items = useMemo(() => (transcript?.status === 'ok' ? chatItems(transcript.entries) : []), [transcript]);
   // What was sent from the message box, shown until the transcript shows it, then swapped for its copy in one render.
@@ -104,14 +105,36 @@ export function ChatView({ agent, active, onShowTerminal, runs, onOpenLink, onOp
   useLayoutEffect(() => {
     if (log && atBottom.current) log.scrollTop = log.scrollHeight;
   }, [log, transcript, waiting, active, live?.kind, style, rail]);
-  // And while it shrinks, as when the Captain's For you is dragged taller: a resize moves no scroll position.
+  // And while it shrinks, as when the Captain's For you is dragged taller, or what it holds grows after it is drawn, as
+  // when a live row gains its button: a resize moves no scroll position.
   useEffect(() => {
     if (!log) return;
-    const observer = new ResizeObserver(() => {
+    const follow = () => {
       if (atBottom.current) log.scrollTop = log.scrollHeight;
+    };
+    const sizes = new ResizeObserver(follow);
+    sizes.observe(log);
+    for (const child of log.children) sizes.observe(child);
+    // A row's words or parts changed deep in the log, which can make it longer before any box it watches resizes. It
+    // follows once a frame, however many changes a streamed reply makes in it.
+    let frame: number | undefined;
+    const children = new MutationObserver((records) => {
+      for (const record of records) {
+        if (record.type !== 'childList' || record.target !== log) continue;
+        for (const row of record.addedNodes) if (row instanceof Element) sizes.observe(row);
+        for (const row of record.removedNodes) if (row instanceof Element) sizes.unobserve(row);
+      }
+      frame ??= requestAnimationFrame(() => {
+        frame = undefined;
+        follow();
+      });
     });
-    observer.observe(log);
-    return () => observer.disconnect();
+    children.observe(log, { childList: true, subtree: true, characterData: true });
+    return () => {
+      if (frame !== undefined) cancelAnimationFrame(frame);
+      sizes.disconnect();
+      children.disconnect();
+    };
   }, [log]);
 
   if (transcript?.status === 'unsupported') {
@@ -166,7 +189,8 @@ export function ChatView({ agent, active, onShowTerminal, runs, onOpenLink, onOp
         aria-label={`Conversation with ${name}`}
         onScroll={(event) => {
           const element = event.currentTarget;
-          atBottom.current = element.scrollHeight - element.scrollTop - element.clientHeight < STICK_DISTANCE;
+          atBottom.current = stillFollowing(atBottom.current, element, lastTop.current);
+          lastTop.current = element.scrollTop;
         }}
       >
         {transcript?.earlier && <p className="chat-turn-notice">Earlier messages are in the terminal.</p>}

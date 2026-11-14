@@ -6,6 +6,7 @@
 import { systemClock, type Clock } from './clock.ts';
 import { agentRefOf, type Agent, type AgentState } from './protocol.ts';
 import type { RunStart } from './schedules.ts';
+import { flagLeadOf } from './ticket-tiles.ts';
 
 /**
  * States of a live agent at its prompt: only these are worth asking the deliveries about. `scheduled` is an agent with
@@ -102,11 +103,13 @@ export function createCrewFlags(options: CrewFlagOptions): CrewFlags {
 
   return {
     observe(agent) {
-      const { flag, spawnedBy } = agent;
-      if (flag?.to === 'orchestrator' && spawnedBy !== null && told.get(agent.sessionId) !== flag.id) pending.set(agent.sessionId, spawnedBy);
+      const { flag } = agent;
+      // A helper's flag goes to its ticket's chat, whoever started it.
+      const leadId = flagLeadOf(agent);
+      if (flag?.to === 'orchestrator' && leadId !== null && told.get(agent.sessionId) !== flag.id) pending.set(agent.sessionId, leadId);
       else pending.delete(agent.sessionId);
       if (flag === null) told.delete(agent.sessionId);
-      if (spawnedBy !== null && pending.has(agent.sessionId)) gather(spawnedBy);
+      if (leadId !== null && pending.has(agent.sessionId)) gather(leadId);
       tell(agent.sessionId);
     },
     close() {

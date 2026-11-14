@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { fakeHarnessEnv } from '@agent-board/fake-harness';
 import { createFakeTracker, createMemoryCredentialStore } from '@agent-board/tracker/testing';
+import type { DaemonClient } from '../src/client.ts';
 import { RPC_ERROR, type HookEvent } from '../src/protocol.ts';
 import { connectTestClient, git, recordEvents, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
 
@@ -26,9 +27,19 @@ async function agentDaemon() {
   return { client, recorder: recordEvents(client), scratchDir };
 }
 
-/** The command line the session with `pid` runs. */
-function commandOf(pid: number): string {
-  return execFileSync('ps', ['-ww', '-o', 'command=', '-p', String(pid)], { encoding: 'utf8' });
+/** Resolves once the agent's session has fired `SessionStart`. */
+function sessionStarted(recorder: ReturnType<typeof recordEvents>, sessionId: string) {
+  return recorder.waitFor((e): e is HookEvent => e.type === 'hook' && e.sessionId === sessionId && e.event === 'SessionStart');
+}
+
+/**
+ * The command line the agent's session runs. Read once it has started: before that the harness may still be between
+ * execs (`env` starting `node`), where `ps` shows only `(env)`.
+ */
+async function commandOf(client: DaemonClient, recorder: ReturnType<typeof recordEvents>, sessionId: string): Promise<string> {
+  await sessionStarted(recorder, sessionId);
+  const session = (await client.call('session.list')).find((s) => s.id === sessionId)!;
+  return execFileSync('ps', ['-ww', '-o', 'command=', '-p', String(session.pid)], { encoding: 'utf8' });
 }
 
 /** Adds a commit on a new branch `name`, leaving the repo on its first branch. */
@@ -59,9 +70,7 @@ describe('zone-less agents', () => {
     expect(agent).toMatchObject({ zoneId: null, repoRoot: repo, position: { x: 500, y: 600 }, name: 'Tidy up' });
     expect(agent.worktree).not.toContain(repo);
     expect(git(agent.worktree, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe(agent.branch);
-    await recorder.waitFor(
-      (e): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'SessionStart',
-    );
+    await sessionStarted(recorder, agent.sessionId);
     expect((await client.call('zone.recentFolders')).map((folder) => folder.path)).toContain(repo);
   });
 
@@ -129,10 +138,9 @@ describe('zone-less agents', () => {
     for (const agent of [empty, missing]) {
       expect(agent).toMatchObject({ description: '', state: 'idle' });
       // Its session has started (its hook arrived) but it has nothing to run.
-      await recorder.waitFor((e): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'SessionStart');
+      const command = await commandOf(client, recorder, agent.sessionId);
       expect((await client.call('agent.list')).find((a) => a.sessionId === agent.sessionId)?.state).toBe('idle');
-      const session = (await client.call('session.list')).find((s) => s.id === agent.sessionId);
-      expect(commandOf(session!.pid)).not.toContain(' -- ');
+      expect(command).not.toContain(' -- ');
     }
   });
 
@@ -147,23 +155,21 @@ describe('zone-less agents', () => {
   });
 
   it('run the model asked for, and keep it', async () => {
-    const { client } = await agentDaemon();
+    const { client, recorder } = await agentDaemon();
 
     const agent = await client.call('agent.spawn', { zoneId: null, repo: { path: tempRepo() }, prompt: 'Go', model: 'haiku', position: at, ...SIZE });
 
     expect(agent.model).toBe('haiku');
-    const [session] = await client.call('session.list');
-    expect(commandOf(session!.pid)).toContain('--model haiku');
+    expect(await commandOf(client, recorder, agent.sessionId)).toContain('--model haiku');
   });
 
   it('run at the reasoning effort asked for, and keep it', async () => {
-    const { client } = await agentDaemon();
+    const { client, recorder } = await agentDaemon();
 
     const agent = await client.call('agent.spawn', { zoneId: null, repo: { path: tempRepo() }, prompt: 'Go', effort: 'high', position: at, ...SIZE });
 
     expect(agent.effort).toBe('high');
-    const [session] = await client.call('session.list');
-    expect(commandOf(session!.pid)).toContain('--effort high');
+    expect(await commandOf(client, recorder, agent.sessionId)).toContain('--effort high');
   });
 
   it('refuse a reasoning effort the harness does not take', async () => {

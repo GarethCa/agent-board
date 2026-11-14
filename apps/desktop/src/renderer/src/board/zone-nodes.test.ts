@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Zone } from '@agent-board/daemon/protocol';
-import { withSavedLayout, withZone, withoutZone } from './zone-nodes';
+import { droppedLayout, withSavedLayout, withZone, withoutZone } from './zone-nodes';
 import { zoneNode } from './ZoneNode';
 
 const zone = (id: string, overrides: Partial<Zone> = {}): Zone => ({
@@ -75,5 +75,17 @@ describe('withSavedLayout', () => {
     const resized = withSavedLayout({ ...node, position: { x: 7, y: 9 } }, layout, { move: false });
     expect(resized).toMatchObject({ position: { x: 7, y: 9 }, width: 500, height: 300 });
     expect(resized.data.zone).toMatchObject(layout);
+  });
+});
+
+describe('droppedLayout', () => {
+  const drawn = { ...zoneNode(zone('z', { x: 24, y: 160 })), width: 900, height: 700 };
+
+  it("lands a dragged zone where the drag's last change put it, though the board has not drawn it there yet", () => {
+    expect(droppedLayout(drawn, { x: 24, y: 280 })).toEqual({ x: 24, y: 280, width: 900, height: 700 });
+  });
+
+  it('lands it as drawn when the drag put it nowhere new', () => {
+    expect(droppedLayout(drawn, undefined)).toEqual({ x: 24, y: 160, width: 900, height: 700 });
   });
 });

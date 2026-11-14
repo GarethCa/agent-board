@@ -190,6 +190,7 @@ export const KEYS = [
   { id: 'window.send', label: 'Send the message box to the agent', section: 'window', scope: 'window', status: 'today', keys: [{ text: '↵' }] },
   { id: 'window.saveDoc', label: 'Save the document you are editing, and tell its agent', section: 'window', scope: 'window', status: 'new', keys: [{ mod: 'command', key: 's', text: 'S' }] },
   { id: 'window.find', label: 'Find in the document or web page you are reading', section: 'window', scope: 'window', status: 'new', keys: [{ mod: 'window', code: 'KeyF', text: 'F' }] },
+  { id: 'window.readingRail', label: 'Show or hide the contents rail of the document you are reading', section: 'window', scope: 'window', status: 'new', keys: [{ mod: 'command', key: '\\' }] },
   { id: 'window.leaveDocEdit', label: 'Leave Edit in a document, dropping what is unsaved', section: 'window', scope: 'window', status: 'new', keys: [{ key: 'Escape', text: 'esc' }] },
   // The way out of a terminal, which owns every other key, Esc included: to the header, then Esc as anywhere else.
   { id: 'window.jumpOut', label: 'Leave the terminal for the header of its window or expanded tile', section: 'window', scope: 'terminal-safe', status: 'new', keys: [{ mod: 'window', code: 'KeyJ', text: 'J' }] },

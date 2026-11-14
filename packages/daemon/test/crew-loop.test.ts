@@ -164,7 +164,6 @@ function startCrew(board: ReturnType<typeof crewBoard>, prefab = pair(), started
 const userAccess = {
   caller: () => ({ sessionId: 'user', name: 'the user', zoneId: null, repoRoot: '', agent: null }),
   logged: (_me: unknown, _action: unknown, _entry: unknown, act: () => unknown) => Promise.resolve().then(act),
-  reachesAgent: () => true,
 } as unknown as OrchestratorAccess;
 const NO_CONNECTION = {} as never;
 
@@ -276,6 +275,12 @@ describe('a running crew', () => {
     expect(board.loop.list()[0]!.reviewers.map((each) => [each.sessionId, each.round])).toEqual([
       ['reviewer-1', 1],
       ['reviewer-2', 2],
+    ]);
+    // As each was started, for its role's template sent again: none for an agent that is no crew's reviewer.
+    expect([board.loop.reviewOf('reviewer-1'), board.loop.reviewOf('reviewer-2'), board.loop.reviewOf('impl-1')]).toEqual([
+      { round: 1, previous: null },
+      { round: 2, previous: kept },
+      undefined,
     ]);
     await board.review('reviewer-2', APPROVE);
     expect(board.loop.list()[0]!.stopped).toBe('ready-to-merge');

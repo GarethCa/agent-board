@@ -93,3 +93,80 @@ test('a zone on Lanes by ticket lays its agents out by the rule; a tile dragged 
     removeDataDir(dataDir);
   }
 });
+
+test("a zone on Spine leaves the user's own agents where they are, even on a Tidy, until the user drags one in; then it lays them out as bands", async () => {
+  const { repo, env } = scratch('output');
+  const dataDir = tempDataDir();
+  const { app, window: page } = await launch(dataDir, env);
+  try {
+    await listFinishedTurns(page);
+    await pickFolderNext(app, repo);
+    await browseForZone(page);
+    const [zone] = await zones(page);
+    for (const [prompt, position] of [
+      // Both in view, as each is dragged.
+      ['Pick a cache', { x: 560, y: 260 }],
+      ['Resize images', { x: 40, y: 140 }],
+    ] as const) {
+      await page.evaluate(
+        async ({ zoneId, prompt, position }) => {
+          const result = await window.agentBoard.agents.spawn({ zoneId, prompt, position, cols: 100, rows: 30 });
+          if (result.status !== 'started') throw new Error(result.message);
+        },
+        { zoneId: zone!.id, prompt, position },
+      );
+    }
+    await untilStarted(page);
+    await expect.poll(async () => (await agents(page)).length, { timeout: 30_000 }).toBe(2);
+    await untilStill(async () => JSON.stringify(await places(page)));
+    const started = await places(page);
+
+    await zoneNamed(page, 'monorepo').getByRole('button', { name: 'Tidy and spacing' }).click();
+    const menu = page.getByRole('menu');
+    await menu.getByRole('menuitemradio', { name: /^Spine/ }).click();
+    await expect(menu).toBeHidden();
+    await expect.poll(async () => (await zones(page))[0]!.layoutRule).toBe('spine');
+    // The user started both, so neither picking Spine nor a Tidy moves them. Tidy is taken from ⋯, which always has it.
+    const tidy = async () => {
+      await zoneNamed(page, 'monorepo').getByRole('button', { name: 'Zone options' }).click();
+      await page.getByRole('menu').getByRole('menuitem', { name: /^Tidy/ }).first().click();
+      await untilStill(async () => JSON.stringify(await places(page)));
+    };
+    await untilStill(async () => JSON.stringify(await places(page)));
+    expect(await places(page)).toEqual(started);
+    await tidy();
+    expect(await places(page)).toEqual(started);
+
+    // Dragged, with nothing laid out yet, one joins: it is laid out as the zone's first band, with no pin.
+    const resize = named(page, 'Resize images');
+    const resizeHead = centreOf(await settledBox(resize.locator('.hybrid-tile-head')));
+    await drag(page, resizeHead, { x: resizeHead.x + 48, y: resizeHead.y + 32 });
+    await expect.poll(async () => (await places(page))['Resize images']).not.toEqual(started['Resize images']);
+    await untilStill(async () => JSON.stringify(await places(page)));
+    await expect.poll(async () => (await zones(page))[0]!.handPlaced).toEqual([]);
+    await expect(resize.getByTestId('tile-hand-placed')).toHaveCount(0);
+    const first = (await places(page))['Resize images']!;
+    expect((await places(page))['Pick a cache']).toEqual(started['Pick a cache']);
+
+    // Dropped on that band, the other joins as the next band down the column; the zone hugs them.
+    const cache = named(page, 'Pick a cache');
+    const cacheHead = centreOf(await settledBox(cache.locator('.hybrid-tile-head')));
+    const band = centreOf(await settledBox(resize.locator('.hybrid-tile-head')));
+    await drag(page, cacheHead, { x: band.x + 40, y: band.y + 20 });
+    await expect.poll(async () => (await places(page))['Pick a cache']!.x).toBe(first.x);
+    await untilStill(async () => JSON.stringify(await places(page)));
+    const laidOut = await places(page);
+    expect(laidOut['Resize images']).toEqual(first);
+    expect(laidOut['Pick a cache']!.y).toBeGreaterThan(first.y);
+    expect((await zones(page))[0]!.width).toBeLessThan(zone!.width);
+    // Joined, they are laid out afresh by a Tidy, in the order they started: the first started on top.
+    await tidy();
+    const tidied = await places(page);
+    const at = (place: { x: number; y: number } | null | undefined) => ({ x: place!.x, y: place!.y });
+    expect(at(tidied['Pick a cache'])).toEqual(at(first));
+    expect(at(tidied['Resize images'])).toEqual(at(laidOut['Pick a cache']));
+  } finally {
+    await app.close();
+    removeDataDir(dataDir);
+  }
+});

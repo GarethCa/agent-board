@@ -75,12 +75,21 @@ test('M puts a memory at the pointer ready to type; it remembers what is typed, 
     await expect.poll(async () => (await storedMemory(dataDir)).entries.filter((entry) => entry.file).map(({ key, text }) => ({ key, text }))).toEqual([{ key: 'How we test', text: '# Testing\n\nRerun a flaky test once.' }]);
     // Added, it opens to write on.
     await expect(full.getByRole('article', { name: 'How we test' }).getByRole('textbox', { name: 'Document text' })).toBeFocused();
-    // The card lists every entry under its section's head: the document, then the facts, the one just edited first. It scrolls what its size doesn't show.
-    await expect(card.locator('.listcard-row')).toHaveCount(3);
-    await expect(card.locator('.memory-doc-row')).toContainText('How we test');
-    await expect(card.locator('.listcard-row')).toContainText(['How we test', 'Wednesdays', 'Staging is down']);
     await window.keyboard.press('Escape');
     await expect(full).toBeHidden();
+    // The card lists its entries under each section's head. The facts' section is open, as the user typed a fact in the
+    // card's box, so what they type lands in sight, though its rows may leave no room for the document's.
+    const docsHead = card.getByRole('button', { name: /^Docs/ });
+    const factsHead = card.getByRole('button', { name: /^Facts/ });
+    await expect(factsHead).toHaveAttribute('aria-expanded', 'true');
+    await expect(factsHead).toContainText('Facts · 2');
+    for (const text of ['Wednesdays', 'Staging is down']) await expect(card.locator('.listcard-row', { hasText: text })).toBeVisible();
+    // A click on its head folds it, and the document's section, which fits now, opens.
+    await factsHead.click();
+    await expect(factsHead).toHaveAttribute('aria-expanded', 'false');
+    await expect(docsHead).toHaveAttribute('aria-expanded', 'true');
+    await expect(card.locator('.listcard-row')).toHaveCount(1);
+    await expect(card.locator('.memory-doc-row')).toContainText('How we test');
 
     // Folded, it is its brain icon with its count; a click opens its peek beside it, with every entry to search.
     await card.locator('.listcard-title').click();

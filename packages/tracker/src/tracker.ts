@@ -42,8 +42,26 @@ export interface TrackerProject {
 export interface IssueListOptions {
   /** At most this many issues; providers cap it at their own page size. */
   limit?: number;
-  /** Only issues in this project (a `TrackerProject.id`), for a tracker that has projects. */
+  /** Only issues in this project (an `IssueFilters` project's `id`), for a tracker that has projects. */
   project?: string;
+  /** Only issues in this milestone (a `TrackerMilestone.id`): one of `project`'s, or of the scope's own. */
+  milestone?: string;
+}
+
+/** A stage of a project, or of a scope: a Linear project milestone, a GitHub milestone. */
+export interface TrackerMilestone {
+  id: string;
+  name: string;
+}
+
+/** What a scope's issues can be narrowed to, for an issue picker. */
+export interface IssueFilters {
+  /** The scope's open projects, most recently updated first, each with its milestones. */
+  projects: { id: string; name: string; milestones: TrackerMilestone[] }[];
+  /** The scope's own open milestones, outside any project: a GitHub repo's, when its projects can't be read. */
+  milestones: TrackerMilestone[];
+  /** Why `projects` is empty, if the tracker could not read them: `project-scope`, gh's login may not read projects. */
+  missing?: 'project-scope';
 }
 
 /** A URL to attach to an issue, such as a pull request. */
@@ -71,6 +89,8 @@ export interface Tracker {
   projects?(scope: string): Promise<TrackerProject[]>;
   /** The project with that ID, if it is one of the scope's (open or not); only for a tracker that has projects. */
   getProject?(scope: string, id: string): Promise<TrackerProject | undefined>;
+  /** What the scope's issues can be narrowed to, for a tracker that has projects or milestones. */
+  issueFilters?(scope: string): Promise<IssueFilters>;
   /** Open issues in the scope (or in `options.project`), most recently updated first. */
   listIssues(scope: string, options?: IssueListOptions): Promise<TrackerIssue[]>;
   /** Issues in the scope (or in `options.project`) matching `text`, open or not, best match first. */

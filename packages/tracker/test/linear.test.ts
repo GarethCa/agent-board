@@ -11,10 +11,10 @@ import { trackerContract } from './contract.ts';
  */
 const fixtures = JSON.parse(readFileSync(RECORDED_LINEAR_FIXTURES, 'utf8')) as {
   source: string;
-  subject: { scope: string; knownIssue: TrackerIssue; searchTerm: string; project?: string };
+  subject: { scope: string; knownIssue: TrackerIssue; searchTerm: string; project?: string; milestone?: string };
   interactions: HttpInteraction[];
 };
-const { scope, knownIssue, searchTerm, project } = fixtures.subject;
+const { scope, knownIssue, searchTerm, project, milestone } = fixtures.subject;
 
 /** A Linear tracker answered from the fixtures, and the headers of every request it sent. */
 function replayed(credential = 'lin_api_test') {
@@ -36,7 +36,7 @@ trackerContract(`Linear (${fixtures.source})`, () => ({ ...fixtures.subject, tra
 
 /** A tracker that answers every request with `body`, and the bodies it was sent. */
 function recording(body: unknown) {
-  const sent: { query: string; variables: { filter: Record<string, unknown> } }[] = [];
+  const sent: { query: string; variables: { filter: Record<string, unknown>; first?: number } }[] = [];
   const tracker = createLinearTracker({
     credential: 'lin_api_x',
     fetch: async (_url, init) => {
@@ -109,6 +109,43 @@ describe('the Linear tracker, projects', () => {
     }
   });
 
+  it("lists a team's open projects with their milestones, for the issue picker", async () => {
+    const milestone = { id: '7c1d2e3f-0000-4000-8000-00000000000b', name: 'Beta' };
+    const { tracker, sent } = recording({
+      data: { projects: { nodes: [{ id: PROJECT_ID, name: 'agent-board v1', projectMilestones: { nodes: [milestone] } }] } },
+    });
+    expect(await tracker.issueFilters!('ACME')).toEqual({
+      projects: [{ id: PROJECT_ID, name: 'agent-board v1', milestones: [milestone] }],
+      milestones: [],
+    });
+    expect(sent[0]?.query).toContain('projectMilestones');
+    // Linear scores nested pages by multiplying them, and refuses a query over 10,000 points.
+    const milestonesPage = Number(/projectMilestones\(first: (\d+)\)/.exec(sent[0]!.query)?.[1]);
+    expect(sent[0]!.variables.first! * (milestonesPage * 1.2 + 2)).toBeLessThan(5_000);
+    expect(sent[0]?.variables.filter).toEqual({
+      accessibleTeams: { some: { key: { eq: 'ACME' } } },
+      status: { type: { nin: ['completed', 'canceled'] } },
+    });
+  });
+
+  it("limits a team's issues to a project's milestone, when asked", async () => {
+    const MILESTONE_ID = '7c1d2e3f-0000-4000-8000-00000000000b';
+    const list = recording({ data: { issues: { nodes: [] } } });
+    await list.tracker.listIssues('ACME', { project: PROJECT_ID, milestone: MILESTONE_ID });
+    expect(list.sent[0]?.variables.filter).toEqual({
+      team: { key: { eq: 'ACME' } },
+      project: { id: { eq: PROJECT_ID } },
+      projectMilestone: { id: { eq: MILESTONE_ID } },
+      state: { type: { nin: ['completed', 'canceled'] } },
+    });
+    const search = recording({ data: { searchIssues: { nodes: [] } } });
+    await search.tracker.searchIssues('ACME', 'zone', { milestone: MILESTONE_ID });
+    expect(search.sent[0]?.variables.filter).toEqual({
+      team: { key: { eq: 'ACME' } },
+      projectMilestone: { id: { eq: MILESTONE_ID } },
+    });
+  });
+
   it('asks for no project unless it is given one', async () => {
     const list = recording({ data: { issues: { nodes: [] } } });
     await list.tracker.listIssues('ACME');
@@ -122,6 +159,15 @@ describe.skipIf(project === undefined)('the recorded project calls', () => {
     const asked = (text: string) => fixtures.interactions.find((i) => JSON.stringify(i.request.body).includes(text));
     expect(asked('projects(filter')).toBeDefined();
     expect(asked('"project":{"id":{"eq":"' + project + '"}}')).toBeDefined();
+  });
+});
+
+// And the milestone calls once it has been run against a project with a milestone.
+describe.skipIf(milestone === undefined)('the recorded milestone calls', () => {
+  it("list the projects' milestones and the issues of one, as the provider asks for them", async () => {
+    const filters = await replayed().tracker.issueFilters!(scope);
+    expect(filters.projects.find((p) => p.id === project)?.milestones.map((m) => m.id)).toContain(milestone);
+    await expect(replayed().tracker.listIssues(scope, { project, milestone })).resolves.toBeDefined();
   });
 });
 

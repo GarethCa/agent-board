@@ -60,6 +60,8 @@ const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}
   plainFolder: false,
   spawnedBy: null,
   orphanedFrom: null,
+  ticket: null,
+  ticketChat: false,
   ledBy: null,
   startup: null,
   hooksSilent: false,

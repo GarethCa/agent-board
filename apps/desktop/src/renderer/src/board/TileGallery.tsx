@@ -153,6 +153,8 @@ export const galleryAgent = (state: AgentState): Agent => ({
   plainFolder: false,
   spawnedBy: null,
   orphanedFrom: null,
+  ticket: null,
+  ticketChat: false,
   ledBy: null,
   unsent: null,
   untypedPrompt: null,

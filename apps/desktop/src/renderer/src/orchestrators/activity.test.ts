@@ -42,6 +42,7 @@ describe('activityText', () => {
     expect(activityText(line({ action: 'add-note', targetName: 'note “Ship it”' }))).toBe('added note “Ship it”');
     expect(activityText(line({ action: 'edit-note', targetName: 'note “Ship it”' }))).toBe('edited note “Ship it”');
     expect(activityText(line({ action: 'remove-note', targetName: 'note “Ship it”' }))).toBe('removed note “Ship it”');
+    expect(activityText(line({ action: 'pass', targetName: 'document “Release plan”' }))).toBe('passed document “Release plan”');
   });
 
   it('says what it drew: the shapes it added, changed or removed, and the connectors it made between two of them', () => {

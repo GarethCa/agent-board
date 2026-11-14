@@ -1,8 +1,11 @@
-import type { Agent, AgentAsk, AskAnswer, AskQuestion } from '@agent-board/daemon/protocol';
+import type { Agent, AgentAsk, AskAnswer, AskQuestion, PermissionPrompt, PromptDialog, PromptQuestion } from '@agent-board/daemon/protocol';
 import { AGENT_TILE_SIZE } from '@agent-board/daemon/board-layout';
+import { PlanPromptRow } from '../inbox/PlanPromptRow';
 import { PopoverPreview } from '../ui';
+import { DialogNote } from './DialogQuickAsk';
 import { HybridTile } from './HybridTile';
 import { QuickAsk, type QuickAskActions } from './QuickAsk';
+import { dialogAsk, type DialogPrompt } from './quick-ask';
 import { galleryAgent } from './TileGallery';
 
 const AT = '2026-01-01T00:00:00.000Z';
@@ -67,6 +70,111 @@ export function QuickAskGallery() {
         <figure key={name} className="gallery-quick-ask-cell">
           <PopoverPreview className="quick-ask-popover" aria-label={name}>
             <QuickAsk name={asker} ask={data} at={at} onAt={() => {}} actions={ACTIONS} still />
+          </PopoverPreview>
+          <figcaption>{name}</figcaption>
+        </figure>
+      ))}
+    </section>
+  );
+}
+
+const CACHE: PromptQuestion = {
+  question: 'Which cache should the product pages use?',
+  header: 'Cache',
+  options: [
+    { label: 'Redis', description: 'Shared across the three web nodes' },
+    { label: 'In-memory LRU', description: 'One per node, gone on a restart' },
+  ],
+  multiSelect: false,
+};
+const SCOPE: PromptQuestion = {
+  question: 'Which pages should it cover?',
+  header: 'Scope',
+  options: [
+    { label: 'Product', description: '' },
+    { label: 'Category', description: '' },
+    { label: 'Search', description: '' },
+    { label: 'Checkout', description: 'Prices change here most' },
+  ],
+  multiSelect: true,
+};
+
+const PLAN = [
+  '# Add Redis in front of getProduct()',
+  '',
+  '1. Add a `cache.ts` client, its address from `REDIS_URL`',
+  '2. Wrap `getProduct()`, with a 5 minute TTL',
+  '3. Drop the entry when a product is saved',
+  '4. Roll out behind the `product-cache` flag, on one node first',
+  '',
+  'The tests use an in-memory stand-in, so none needs Redis.',
+].join('\n');
+
+/** Claude's prompt as the daemon keeps it: its questions and the dialog's answers so far, or its plan. */
+const claudePrompt = (fields: Partial<PermissionPrompt>): PermissionPrompt => ({
+  id: 'gallery-prompt',
+  toolName: 'AskUserQuestion',
+  toolInput: {},
+  subagent: null,
+  requestedAt: AT,
+  heldUntil: AT,
+  asksInTerminal: true,
+  sessionGrant: null,
+  questions: null,
+  dialog: null,
+  plan: null,
+  ...fields,
+});
+const dialogPrompt = (questions: PromptQuestion[], dialog: Partial<PromptDialog> = {}) =>
+  claudePrompt({ questions, toolInput: { questions }, dialog: { answers: questions.map(() => null), sentAt: null, keptOpen: false, ...dialog } }) as DialogPrompt;
+const PLAN_PROMPT = claudePrompt({ id: 'gallery-plan', toolName: 'ExitPlanMode', toolInput: { plan: PLAN }, plan: PLAN, sessionGrant: 'all edits' });
+const PLANNER: Agent = { ...galleryAgent('waiting'), sessionId: 'gallery-planner', name: 'Pick a cache', permissions: [PLAN_PROMPT], ask: null, muted: false };
+
+/** Claude's own dialog, open beside its tile at a question (`at`), as the board can answer it. */
+const DIALOG_OPEN: { name: string; prompt: DialogPrompt; at: number }[] = [
+  { name: 'Dialog: one question', prompt: dialogPrompt([CACHE]), at: 0 },
+  { name: 'Dialog: several to tick', prompt: dialogPrompt([CACHE, SCOPE], { answers: [{ option: 0 }, { options: [0, 2] }] }), at: 1 },
+  { name: 'Dialog: Other, in your words', prompt: dialogPrompt([CACHE, SCOPE], { answers: [{ text: 'Redis, but only for the product pages' }, null] }), at: 0 },
+];
+
+/** What becomes of its answers once sent: Claude takes them, or keeps its dialog open for its terminal. */
+const DIALOG_AFTER: { name: string; prompt: DialogPrompt }[] = [
+  { name: 'Dialog: sent', prompt: dialogPrompt([CACHE], { answers: [{ option: 0 }], sentAt: AT }) },
+  { name: 'Dialog: kept open', prompt: dialogPrompt([CACHE], { answers: [{ option: 0 }], sentAt: AT, keptOpen: true }) },
+];
+
+const DIALOG_ACTIONS: QuickAskActions = { answer: () => {}, send: () => {}, toTerminal: () => {} };
+
+/** The quick ask on Claude's own question dialog, open, sent and kept open, and its plan approval, for the visual shots. */
+export function QuickAskDialogGallery() {
+  return (
+    <section className="gallery-quick-ask" data-testid="quick-ask-dialog-gallery">
+      {DIALOG_OPEN.map(({ name, prompt, at }) => (
+        <figure key={name} className="gallery-quick-ask-cell">
+          <PopoverPreview className="quick-ask-popover" aria-label={name}>
+            <QuickAsk name="Pick a cache" ask={dialogAsk(prompt)} at={at} onAt={() => {}} actions={DIALOG_ACTIONS} still dialog />
+          </PopoverPreview>
+          <figcaption>{name}</figcaption>
+        </figure>
+      ))}
+      {DIALOG_AFTER.map(({ name, prompt }) => (
+        <figure key={name} className="gallery-quick-ask-cell">
+          <PopoverPreview className="quick-ask-popover" aria-label={name}>
+            <DialogNote prompt={prompt} onOpen={() => {}} />
+          </PopoverPreview>
+          <figcaption>{name}</figcaption>
+        </figure>
+      ))}
+      {[
+        { name: 'Plan approval', read: false },
+        { name: 'Plan approval: the plan read', read: true },
+      ].map(({ name, read }) => (
+        <figure key={name} className="gallery-quick-ask-cell">
+          {/* As a row of Needs you, in its popover. */}
+          <PopoverPreview className="gallery-quick-ask-plan" aria-label={name}>
+            <div className="inbox-item">
+              <PlanPromptRow agent={PLANNER} prompt={PLAN_PROMPT} plan={PLAN} onOpen={() => {}} read={read} />
+            </div>
           </PopoverPreview>
           <figcaption>{name}</figcaption>
         </figure>

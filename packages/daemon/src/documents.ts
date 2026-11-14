@@ -3,8 +3,8 @@
 // rewrite by the agent is a new version. The user's edits to a Markdown document are written to the file, and the agent is told what
 // changed, typed at its prompt once it is ready for its next message, as a crew flag is (`crew-flags.ts`).
 import { createHash, randomUUID } from 'node:crypto';
-import { readFileSync, statSync } from 'node:fs';
-import { basename, isAbsolute, relative } from 'node:path';
+import { copyFileSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { basename, isAbsolute, join, relative } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { boardCaller, isOwnLiveSession, type BoardCallerSources, type BoardConnection } from './board.ts';
 import { systemClock, type Clock } from './clock.ts';
@@ -46,6 +46,11 @@ export interface DocumentHostOptions {
   tell(sessionId: string, text: string): Promise<RunStart>;
   /** Puts a card for the document beside its agent's tile on the board. */
   addCard(document: DocumentSummary): Promise<void>;
+  /**
+   * The folder a passed document's file is kept in (`<keptDir>/<document id>/`) when the worktree it is in goes with
+   * its old holder. Unset, the file goes with that worktree.
+   */
+  keptDir?: string;
   log(message: string): void;
   clock?: Clock;
 }
@@ -71,15 +76,29 @@ export interface DocumentHost {
    * documents, the write is the user's next version, not an agent's rewrite. The agent is told by the plan's answer.
    */
   userWrote(sessionId: string, path: string): void;
-  /** Types `text` at the agent's prompt once it is ready for its next message, with what else waits for it (a plan's decision). */
-  tell(sessionId: string, text: string): void;
+  /**
+   * Types `text` at the agent's prompt once it is ready for its next message, with what else waits for it (a plan's
+   * decision), then calls `typed`. Held in memory only: a caller that must outlive a restart keeps it until `typed`.
+   */
+  tell(sessionId: string, text: string, typed?: () => void): void;
   /** The user's comments on the document, for its agent. */
   comment(documentId: string, text: string): void;
   /** Looks at every live agent's documents' files for a rewrite. */
   poll(): void;
   /** Hears an agent changed: back at its prompt, it is told what is waiting for it. */
   observe(agent: Agent): void;
-  /** The agent is being deleted: its documents go with it. */
+  /**
+   * Gives the document to the agent `to`, which holds it from now on: it goes with `to`, not its old holder. It is still
+   * the same file (`keepFilesIn` copies it once that file's worktree goes). Throws `invalidParams` if `to` shows that
+   * file already.
+   */
+  pass(documentId: string, to: string): DocumentSummary;
+  /**
+   * The worktree of the agent `sessionId` is about to be removed: a document another agent holds there (one passed on)
+   * is copied to `keptDir` first, and is that copy from then on. Only its file: what it links to stays behind.
+   */
+  keepFilesIn(sessionId: string, worktree: string): void;
+  /** The agent is being deleted: its documents go with it, and the files kept for them. */
   forget(sessionId: string): void;
   handlers<Context extends BoardConnection>(sources: BoardCallerSources & { agents: Pick<AgentHost, 'get'> }): RpcHandlers<DocumentMethods, Context>;
   /** Starts looking at the files every `DOCUMENT_POLL_MS`. */
@@ -162,9 +181,10 @@ export function createDocumentHost(options: DocumentHostOptions): DocumentHost {
   const reshow = db.prepare('UPDATE documents SET shown_at = ?, title = ?, title_given = ? WHERE id = ?');
   const rewrite = db.prepare('UPDATE documents SET version = version + 1, written_at = ?, written_by = ?, hash = ?, title = ? WHERE id = ?');
   const deleteOf = db.prepare('DELETE FROM documents WHERE session_id = ?');
+  const give = db.prepare('UPDATE documents SET session_id = ?, path = ? WHERE id = ?');
 
-  /** Per agent, the messages still to type at its prompt, oldest first. */
-  const pending = new Map<string, string[]>();
+  /** Per agent, the messages still to type at its prompt, oldest first, each with who hears it was typed. */
+  const pending = new Map<string, { text: string; typed?: () => void }[]>();
   /** The agents being typed to now. */
   const typing = new Set<string>();
   /** Each document's file's stat (modified time and size), as last looked at: the poll reads only a file that changed. */
@@ -199,21 +219,22 @@ export function createDocumentHost(options: DocumentHostOptions): DocumentHost {
     const told = [...messages];
     typing.add(sessionId);
     options
-      .tell(sessionId, told.join('\n\n'))
+      .tell(sessionId, told.map((message) => message.text).join('\n\n'))
       .then(
         (start) => {
           if (!start.started) return;
           const left = (pending.get(sessionId) ?? []).slice(told.length);
           if (left.length === 0) pending.delete(sessionId);
           else pending.set(sessionId, left);
+          for (const message of told) message.typed?.();
         },
         (error: unknown) => options.log(`could not tell ${agent.name} what waits for it at its prompt: ${(error as Error).message}`),
       )
       .finally(() => typing.delete(sessionId));
   };
 
-  const queue = (sessionId: string, message: string) => {
-    pending.set(sessionId, [...(pending.get(sessionId) ?? []), message]);
+  const queue = (sessionId: string, text: string, typed?: () => void) => {
+    pending.set(sessionId, [...(pending.get(sessionId) ?? []), { text, ...(typed === undefined ? {} : { typed }) }]);
     tellWaiting(sessionId);
   };
 
@@ -338,7 +359,7 @@ export function createDocumentHost(options: DocumentHostOptions): DocumentHost {
       changed(sessionId);
     },
 
-    tell: (sessionId, text) => queue(sessionId, text),
+    tell: (sessionId, text, typed) => queue(sessionId, text, typed),
 
     comment(documentId, text) {
       const document = row(documentId);
@@ -365,8 +386,39 @@ export function createDocumentHost(options: DocumentHostOptions): DocumentHost {
       if (pending.has(agent.sessionId)) tellWaiting(agent.sessionId);
     },
 
+    pass(documentId, to) {
+      const document = row(documentId);
+      if (selectByPath.get(to, document.path) !== undefined) throw invalidParams(`${options.agent(to)?.name ?? to} shows ${basename(document.path)} already`);
+      give.run(to, document.path, document.id);
+      changed(document.session_id);
+      changed(to);
+      return toSummary(row(documentId));
+    },
+
+    keepFilesIn(sessionId, worktree) {
+      if (options.keptDir === undefined) return;
+      const root = realPath(worktree);
+      for (const document of selectAll.all() as unknown as DocumentRow[]) {
+        if (document.session_id === sessionId || !isInside(root, document.path)) continue;
+        const folder = join(options.keptDir, document.id);
+        try {
+          mkdirSync(folder, { recursive: true });
+          const path = join(realPath(folder), basename(document.path));
+          copyFileSync(document.path, path);
+          give.run(document.session_id, path, document.id);
+          seenStat.delete(document.id);
+          changed(document.session_id);
+        } catch (error) {
+          options.log(`could not keep the file of document ${document.id} (${document.path}) before its worktree went: ${(error as Error).message}`);
+        }
+      }
+    },
+
     forget(sessionId) {
-      for (const document of host.list(sessionId)) seenStat.delete(document.id);
+      for (const document of host.list(sessionId)) {
+        seenStat.delete(document.id);
+        if (options.keptDir !== undefined) rmSync(join(options.keptDir, document.id), { recursive: true, force: true });
+      }
       deleteOf.run(sessionId);
       listed.delete(sessionId);
       pending.delete(sessionId);

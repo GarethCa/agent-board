@@ -4,7 +4,7 @@ export { Dialog } from './Dialog';
 export { EditableName, MENU_FOCUS_RETURN_MS, RenameButton, useRenaming, type Renaming } from './EditableName';
 export { useSlowClickRename } from './slow-click';
 export { EmptyState } from './EmptyState';
-export { Checkbox, Choice, Choices, ErrorText, Field, Fieldset, Hint, Input, Radio, Select, Swatch, SwatchRadio, Switch, Textarea } from './Field';
+export { Checkbox, Choice, Choices, ErrorText, Field, Fieldset, Hint, Input, Radio, Readout, Select, Swatch, SwatchRadio, Switch, Textarea } from './Field';
 export { Badge, FlowPill, Kbd, SectionLabel, Shortcut, StatusPill, Tag } from './Label';
 export { ContextMenu, Menu, MenuPreview, type MenuAction, type MenuEntry, type MenuHeading, type Submenu, type SwatchRow } from './Menu';
 export { AnchoredPopover, Popover, PopoverPreview, type Measured } from './Popover';

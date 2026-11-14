@@ -395,7 +395,23 @@ describe('orchestrating from the command line', () => {
     expect(await purposeOf(prefab.started[0]!.name)).toBe('Tidies up');
   });
 
+  it("gives a running agent a role, and with --send-template the role's template too, saying when the role has none", async () => {
+    const { env, web } = await board();
+    expect(await run(env, 'new', '--zone', ref('zone', web.id), '--name', 'worker', '--', 'Print your board identity')).toMatchObject({ code: 0 });
+    expect(await run(env, 'wait', 'worker')).toMatchObject({ code: 0 });
+
+    expect(await run(env, 'role', 'worker', 'reviewer')).toMatchObject({ code: 0, out: expect.stringMatching(/^Gave the role reviewer: /) });
+    const sent = await run(env, 'role', 'worker', 'implementer', '--send-template', '--json');
+    expect(sent).toMatchObject({ code: 0 });
+    expect(JSON.parse(sent.out)).toMatchObject({ role: 'implementer', template: expect.stringMatching(/^(started|queued-.+|waking)$/) });
+    expect(await run(env, 'role', 'worker', 'designer', '--send-template')).toMatchObject({
+      code: 0,
+      out: expect.stringMatching(/^Gave the role designer; the role has no template, so nothing was sent: /),
+    });
+  });
+
   it('checks each command’s options before it connects', async () => {
+    expect(await run({}, 'role', 'agent:1234', '--clear', '--send-template')).toMatchObject({ code: 2, err: expect.stringContaining('drop --send-template') });
     expect(await run({}, 'send', 'agent:1234', '--remove', 'hi')).toMatchObject({ code: 2, err: expect.stringContaining('--remove is not an option of send') });
     expect(await run({}, 'tree', '--progress', '5')).toMatchObject({ code: 2, err: expect.stringContaining('--progress is only for `status set`') });
     expect(await run({}, 'watch', '--since', '12')).toMatchObject({ code: 2, err: expect.stringContaining('--since takes a line\'s cursor') });

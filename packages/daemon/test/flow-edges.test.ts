@@ -623,32 +623,41 @@ describe('pausing, manual edges and queueing', () => {
   });
 
   /**
-   * Two agents and an edge out of A whose script marks `started` (outside the worktree) and then takes a second: long
-   * enough to change the edge while it is being checked. It passes once `ready` is in A's worktree.
+   * Two agents and an edge out of A whose script fails at once until `ready` is in A's worktree. Then it marks `started`
+   * and waits for the test to `release` it (both files outside the worktree), so the edge can be changed while it is
+   * being checked, however slowly the check started.
    */
   async function slowCheck() {
     const { client, recorder } = await flowDaemon(tempDataDir(), 0, { flowRecheckMs: 100 });
     const { a, b } = await twoAgents(client, recorder);
-    const started = join(tempDataDir(), 'started');
-    const command = `touch '${started}'; sleep 1; test -f ready`;
+    const dir = tempDataDir();
+    const started = join(dir, 'started');
+    const go = join(dir, 'go');
+    // Never waits for ever: a test that fails before its release leaves no check running.
+    const command = `test -f ready || exit 1; touch '${started}'; end=$(($(date +%s) + 30)); while [ ! -f '${go}' ] && [ $(date +%s) -lt $end ]; do sleep 0.05; done`;
     const edge = await client.call('flowEdge.create', { from: a.sessionId, to: b.sessionId, conditions: [{ kind: 'script', command }] });
     await approveAll(client, edge.id);
-    /** Resolves once a check of the script has started. */
-    const checkStarted = async () => {
-      rmSync(started, { force: true });
-      await expect.poll(() => existsSync(started), { timeout: 5_000 }).toBe(true);
+    /** Resolves once a check that will pass has started: it waits for `release`. */
+    const checkStarted = () => expect.poll(() => existsSync(started), { timeout: 5_000 }).toBe(true);
+    /** Answers A and resolves once its turn has ended: its Stop, which hands off along the edge, has landed. */
+    const answered = async (text: string) => {
+      const since = recorder.events.length;
+      await client.call('agent.answer', { sessionId: a.sessionId, text });
+      await recorder.waitFor((e): e is HookEvent => e.type === 'hook' && e.sessionId === a.sessionId && e.event === 'Stop', since);
     };
-    return { client, recorder, a, b, edge, checkStarted };
+    /** Lets the check waiting, and every check after it, pass. */
+    const release = () => writeFileSync(go, '');
+    return { client, recorder, a, b, edge, checkStarted, release, answered };
   }
 
   it('holds, not delivers, a hand-off whose check passes after the edge was paused mid-check', async () => {
-    const { client, recorder, a, edge, checkStarted } = await slowCheck();
+    const { client, recorder, a, edge, checkStarted, release, answered } = await slowCheck();
     writeFileSync(join(a.worktree, 'ready'), '');
-    const checking = checkStarted();
-    await client.call('agent.answer', { sessionId: a.sessionId, text: 'Ship it' });
-    await checking;
+    await answered('Ship it');
+    await checkStarted();
 
     await client.call('flowEdge.update', { id: edge.id, paused: true });
+    release();
 
     const held = await untilEdge(recorder, edge.id, (e) => e.held !== null);
     expect(held).toMatchObject({ deliveries: 0, held: { reason: 'the edge was paused while it was checked' } });
@@ -659,13 +668,13 @@ describe('pausing, manual edges and queueing', () => {
   });
 
   it('skips a hand-off whose check passes after the edge was made manual mid-check', async () => {
-    const { client, recorder, a, edge, checkStarted } = await slowCheck();
+    const { client, recorder, a, edge, checkStarted, release, answered } = await slowCheck();
     writeFileSync(join(a.worktree, 'ready'), '');
-    const checking = checkStarted();
-    await client.call('agent.answer', { sessionId: a.sessionId, text: 'Ship it' });
-    await checking;
+    await answered('Ship it');
+    await checkStarted();
 
     await client.call('flowEdge.update', { id: edge.id, trigger: 'manual' });
+    release();
 
     const skipped = await untilEdge(recorder, edge.id, (e) => e.history[0]?.kind === 'skipped');
     expect(skipped).toMatchObject({ deliveries: 0, held: null });
@@ -673,15 +682,18 @@ describe('pausing, manual edges and queueing', () => {
   });
 
   it('keeps holding a hand-off whose recheck passes after the edge was paused mid-check', async () => {
-    const { client, recorder, a, edge, checkStarted } = await slowCheck();
+    const { client, recorder, a, edge, checkStarted, release } = await slowCheck();
     await client.call('agent.answer', { sessionId: a.sessionId, text: 'Ship it' });
     await untilEdge(recorder, edge.id, (e) => e.held?.reason === 'exited 1');
     writeFileSync(join(a.worktree, 'ready'), '');
     await checkStarted();
 
     await client.call('flowEdge.update', { id: edge.id, paused: true });
+    // The pause's own update came before its answer: the next one is the recheck's, once it has passed.
+    const paused = recorder.events.length;
+    release();
+    await recorder.waitFor((e): e is FlowEdgeUpdatedEvent => e.type === 'flowEdge.updated' && e.edge.id === edge.id, paused);
 
-    await new Promise((resolve) => setTimeout(resolve, 1_500));
     expect((await client.call('flowEdge.list'))[0]).toMatchObject({ deliveries: 0, paused: true, held: { name: 'final message' } });
     await client.call('flowEdge.update', { id: edge.id, paused: false });
     await untilEdge(recorder, edge.id, (e) => e.deliveries === 1 && e.held === null);
@@ -821,7 +833,7 @@ describe('held payloads', () => {
 
   it('keeps a copy by default, and delivers the plan as it was when A handed off', async () => {
     const { client, recorder, a, b, edge, held } = await heldPlan();
-    expect(await client.call('settings.get')).toEqual({ heldPayloads: 'copy', claudePath: '', codexPath: '', compactWindow: 0, clickableLinks: true, needsYouShows: 'explicit', notifications: true, notifyInFront: false, arrangeSpacing: 'roomy', keepWebLogins: true, defaultEffort: null, roleEfforts: {} });
+    expect(await client.call('settings.get')).toEqual({ heldPayloads: 'copy', claudePath: '', codexPath: '', compactWindow: 0, clickableLinks: true, clickableLinksFromEnvironment: null, needsYouShows: 'explicit', notifications: true, notifyInFront: false, arrangeSpacing: 'roomy', keepWebLogins: true, defaultEffort: null, roleEfforts: {} });
     expect(held.held).toMatchObject({ name: 'plan.md', copy: true });
     const before = recorder.events.length;
     writeFileSync(join(a.worktree, 'plan.md'), 'Second plan\n');

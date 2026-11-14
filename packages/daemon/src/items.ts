@@ -46,6 +46,7 @@ import type { RpcHandlers, RpcMethodError } from './rpc.ts';
 import { checkMemoryData, checkQueueData } from './memory-queue.ts';
 import { checkStepsData } from './steps.ts';
 import { checkTodoData } from './todos.ts';
+import { STAGE_BOARD_KIND, stageBoardDataProblem } from './stage-board.ts';
 import { zoneIdParam } from './tile-position.ts';
 
 type ItemMethods = Pick<DaemonMethods, Extract<keyof DaemonMethods, `item.${string}` | `image.${string}`>>;
@@ -155,6 +156,10 @@ const KIND_DATA: Record<BoardItemKind, (data: Record<string, unknown>) => void> 
   memory: (data) => checkMemoryData(data),
   queue: (data) => checkQueueData(data),
   todo: (data) => checkTodoData(data),
+  stages: (data) => {
+    const problem = stageBoardDataProblem(data);
+    if (problem !== null) throw invalidParams(problem);
+  },
   // The rest of a crew card's data is the board's own, written from its crew (`crew-cards.ts`).
   crew: (data) => {
     if (typeof data.crewId !== 'string') throw invalidParams("a crew card's crewId must be a string");
@@ -224,6 +229,7 @@ const KIND_DATA: Record<BoardItemKind, (data: Record<string, unknown>) => void> 
     // Missing on a clock made before it.
     if (data.hibernate !== undefined) checkBoolean(owner, data, 'hibernate');
     if (data.startsAgent !== undefined) checkBoolean(owner, data, 'startsAgent');
+    if (data.tucked !== undefined) checkBoolean(owner, data, 'tucked');
     for (const key of ['modeSetBy', 'stoppedBy']) {
       if (data[key] != null && !isClockMark(data[key])) throw invalidParams(`a clock's ${key} must be { sessionId, name, why, at } or null`);
     }
@@ -332,6 +338,7 @@ export function itemHandlers<Context>(
   const remove = db.prepare('DELETE FROM board_items WHERE id = ?');
   const unenrichedLinks = db.prepare("SELECT id FROM board_items WHERE kind = 'link' AND json_extract(data, '$.domain') IS NULL");
   const zoneOrigin = db.prepare('SELECT x, y FROM zones WHERE id = ?');
+  const stageBoardIn = db.prepare('SELECT id FROM board_items WHERE kind = ? AND zone_id = ? AND id != ?');
 
   const get = (id: string): BoardItem => {
     const row = selectOne.get(id) as ItemRow | undefined;
@@ -345,6 +352,12 @@ export function itemHandlers<Context>(
     const zone = zoneOrigin.get(zoneId) as { x: number; y: number } | undefined;
     if (zone === undefined) throw invalidParams(`no zone ${zoneId}`);
     return zone;
+  };
+
+  /** Checks a stage board goes in a zone, and in one that has none yet: a zone has at most one. */
+  const checkStageBoardPlace = (id: string, zoneId: string | null) => {
+    if (zoneId === null) throw invalidParams('a stage board belongs in a zone');
+    if (stageBoardIn.get(STAGE_BOARD_KIND, zoneId, id) !== undefined) throw invalidParams(`zone ${zoneId} already has a stage board`);
   };
 
   /** Checks the stored images an item's data refers to are there. */
@@ -397,6 +410,7 @@ export function itemHandlers<Context>(
       const id = fields.id === undefined ? randomUUID() : stringParam(fields, 'id');
       if (!CLIENT_ID.test(id)) throw invalidParams('an item id is letters, digits and -, at most 64');
       if (selectOne.get(id) !== undefined) throw invalidParams(`board item ${id} already exists`);
+      if (kind === STAGE_BOARD_KIND) checkStageBoardPlace(id, zoneId);
       insert.run(
         id,
         kind as BoardItemKind,
@@ -419,6 +433,7 @@ export function itemHandlers<Context>(
       let { x, y } = item;
       const zoneId = has('zoneId') ? zoneIdParam(fields) : item.zoneId;
       if (zoneId !== item.zoneId) {
+        if (item.kind === STAGE_BOARD_KIND) checkStageBoardPlace(item.id, zoneId);
         // Moved to another zone: the same place on the board, in the new zone's terms.
         const from = originOf(item.zoneId);
         const to = originOf(zoneId);

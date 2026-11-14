@@ -27,7 +27,6 @@ import {
   type Zone,
   BOARD_ERROR,
   type ClockStatus,
-  handStartedReason,
 } from './protocol.ts';
 import { boardCaller, isOwnLiveSession, type BoardCallerSources, type BoardConnection } from './board.ts';
 import type { OrchestratorAccess } from './orchestrators.ts';
@@ -607,11 +606,10 @@ export function createClockHost(options: ClockHostOptions): ClockHost {
 
     orchestratorHandlers<Context extends BoardConnection>(access: OrchestratorAccess, zones: () => Zone[]): RpcHandlers<OrchestratorClockMethods, Context> {
       const outOfScope = (message: string) => new RpcMethodError(BOARD_ERROR.outOfScope, message);
-      /** The agent `sessionId` names, which `me` may act on. */
-      const reachable = (me: Parameters<OrchestratorAccess['reachesAgent']>[0], sessionId: string) => {
+      /** The agent `sessionId` names: any agent on the board. */
+      const reachable = (sessionId: string) => {
         const agent = agents.get(sessionId);
         if (agent === undefined) throw invalidParams(`no agent ${sessionId}`);
-        if (!access.reachesAgent(me, agent)) throw outOfScope(handStartedReason(agent.name));
         return agent;
       };
       return {
@@ -623,11 +621,11 @@ export function createClockHost(options: ClockHostOptions): ClockHost {
             if (!isObject(p.data)) throw invalidParams('data must be an object');
             const data = { ...newClockData(), ...withTemplate(p, p.data as Partial<ClockData>) };
             if (typeof data.prompt !== 'string' || data.prompt.trim() === '') throw invalidParams('give the clock its prompt');
-            if (data.handoffTo !== null && data.result === 'handoff') reachable(me, data.handoffTo);
+            if (data.handoffTo !== null && data.result === 'handoff') reachable(data.handoffTo);
             let item: BoardItem;
             if (data.does === 'message' && (data.agent !== null || data.startsAgent !== true)) {
               if (data.agent === null) throw invalidParams('give the agent the clock messages');
-              const agent = reachable(me, data.agent);
+              const agent = reachable(data.agent);
               item = await add(data, { beside: agent.sessionId });
               entry.detail = `${cronWords(data.cron)}, messaging ${agent.name}`;
             } else {

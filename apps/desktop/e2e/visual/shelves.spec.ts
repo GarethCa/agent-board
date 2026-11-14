@@ -5,7 +5,7 @@ import type { Agent } from '@agent-board/daemon/protocol';
 import { closeAgent, launch, windowKey } from '../agent-helpers.ts';
 import { makeRepo, pinPaths, pinRandomLooks, scenarioPicker, stillBoard } from '../demo-board.ts';
 import { removeDataDir, tempDataDir, test } from '../launch.ts';
-import { RENDER_ARGS, RENDER_ENV, VIEWPORT, settle } from '../render.ts';
+import { RENDER_ARGS, RENDER_ENV, VIEWPORT, pinNow, settle } from '../render.ts';
 import { scratch } from '../scratch.ts';
 import { SHOT, needsBaselines, THEMES } from './shared.ts';
 
@@ -24,6 +24,35 @@ const QUIET = ['Pick a cache for search', 'Pick a cache for images', 'Pick a cac
 const REVIEW = ['Fix checkout flake', 'Add invoice export', 'Tighten the auth check', 'Trim the bundle', 'Retry failed webhooks', 'Paginate the orders list'];
 const TO_DO = ['Audit log', 'Search facets', 'Rate-limit headers', 'Docs sweep', 'Invite flow'];
 const DONE = ['Dark theme', 'Login copy', 'Avatar upload', 'Health check'];
+
+/** The ring a jump draws round the tile it comes to, as `watchPulse` saw it. */
+type Pulse = { id?: string; over: boolean; observer: MutationObserver };
+
+/** Watches for the ring a jump draws round the tile it comes to, which goes again after a moment. */
+async function watchPulse(page: Page) {
+  await page.evaluate(() => {
+    const observer = new MutationObserver((records) => {
+      for (const { target, oldValue } of records) {
+        const id = (target as HTMLElement).dataset.id;
+        if (oldValue === null) Object.assign(pulse, { id, over: false });
+        else if (id === pulse.id) pulse.over = true;
+      }
+    });
+    const pulse: Pulse = { over: false, observer };
+    pulse.observer.observe(document.body, { subtree: true, attributeFilter: ['data-pulse'], attributeOldValue: true });
+    (window as unknown as { pulse: Pulse }).pulse = pulse;
+  });
+}
+
+/** Waits for the jump's ring to go, then draws it again, still, so the shot has it however slow the machine is. */
+async function holdPulse(page: Page) {
+  await expect.poll(() => page.evaluate(() => (window as unknown as { pulse: Pulse }).pulse.over), { message: 'the jump pulsed its tile' }).toBe(true);
+  await page.evaluate(() => {
+    const { pulse } = window as unknown as { pulse: Pulse };
+    pulse.observer.disconnect();
+    document.querySelector(`.react-flow__node[data-id="${CSS.escape(pulse.id!)}"]`)!.setAttribute('data-pulse', '');
+  });
+}
 
 async function seedShelvedZone(page: Page, dir: string, github: ReturnType<typeof createFakeGitHub>): Promise<string> {
   const repo = makeRepo(dir, 'web-app');
@@ -124,7 +153,11 @@ test('a zone of about 30 agents on status shelves (at a glance, a stack fanned o
   );
   try {
     await page.setViewportSize(VIEWPORT);
+    // A tile shows how long its agent has been in its state: the clock holds at the start of seeding, so a slow seed
+    // never turns "just now" into "1 min".
+    const seededAt = new Date();
     const zoneId = await seedShelvedZone(page, dir, github);
+    await pinNow(page, seededAt);
     await page.evaluate((id) => window.agentBoard.zones.configure(id, { layoutMode: 'shelves' }), zoneId);
     await expect(page.getByTestId('shelves')).toHaveCount(1);
     for (const { design, theme, name } of combos) {
@@ -148,6 +181,7 @@ test('a zone of about 30 agents on status shelves (at a glance, a stack fanned o
       // A jump to an agent that needs you fans its stack out, and comes to it.
       await page.keyboard.press(windowKey('k'));
       await page.getByTestId('spotlight').getByRole('combobox').fill(NEEDS_YOU[1]!);
+      await watchPulse(page);
       await page.keyboard.press('Enter');
       // Its stack of three, open: the three tiles fanned out below the shelves, the rest of the zone stepped back.
       const stack = page.getByTestId('shelf-stack').filter({ hasText: NEEDS_YOU[0]! });
@@ -158,7 +192,9 @@ test('a zone of about 30 agents on status shelves (at a glance, a stack fanned o
       await stillBoard(page);
       await pinRandomLooks(page);
       await pinPaths(page);
+      await holdPulse(page);
       await expect.soft(page.locator('.board')).toHaveScreenshot(`${name}-fanned.png`, SHOT);
+      await page.locator('.react-flow__node[data-pulse]').evaluate((node) => node.removeAttribute('data-pulse'));
       await page.keyboard.press('Escape');
 
       // Done, shown as chips.

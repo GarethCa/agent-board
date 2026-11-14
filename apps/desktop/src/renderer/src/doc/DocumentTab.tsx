@@ -12,6 +12,7 @@ import { Markdown } from '../session/Markdown';
 import { documentSurfaceOf } from '../session/tabs';
 import { Button, ErrorText, Segmented, Tag, Textarea, type SegmentedOption } from '../ui';
 import { useAction } from '../use-action';
+import { ReadingView, type ReadingStatus } from './ReadingView';
 import { changedLineCount, docMeta, docTypeTag, editHint } from './doc-view';
 
 const openLink = (url: string) => void window.agentBoard.trackers.openLink(url).catch(() => {});
@@ -66,6 +67,7 @@ interface DocumentTabProps {
 export function DocumentTab({ agent, document, visible, onFocus, onPaneKey }: DocumentTabProps) {
   const [mode, setMode] = useState<DocMode>('read');
   const [draft, setDraft] = useState<{ text: string; from: string; base: number }>();
+  const [reading, setReading] = useState<ReadingStatus>();
   const editing = mode === 'edit' && draft !== undefined;
   const { content, problem } = useDocText(document, editing);
   const save = useAction();
@@ -122,6 +124,7 @@ export function DocumentTab({ agent, document, visible, onFocus, onPaneKey }: Do
   const text = content?.text ?? null;
   // Markdown being read; an HTML document's page finds in itself (PlanPage).
   const find = useFindKey(() => viewer.current, visible && markdown && !editing && text !== null);
+  const showsReading = markdown && !editing && text !== null;
   return (
     <div className="doc-viewer" ref={viewer} data-testid="document-view" data-mode={mode} data-format={document.format} data-unsaved={changed > 0 ? JSON.stringify(documentSurfaceOf(document)) : undefined}>
       <header className="doc-head">
@@ -137,8 +140,21 @@ export function DocumentTab({ agent, document, visible, onFocus, onPaneKey }: Do
             <Tag title={markdown ? 'It is outside its agent’s worktree, so it is edited there' : undefined}>view only</Tag>
           )}
           <span className="review-meta" data-testid="doc-meta">
+            {showsReading && reading && (
+              <>
+                <span className="read-left" data-testid="doc-time-left">
+                  {reading.label}
+                </span>
+                {' · '}
+              </>
+            )}
             {docMeta(document, agent.name)} · <code>{document.path}</code>
           </span>
+          {showsReading && reading?.scrolled && (
+            <Button size="sm" variant="ghost" onClick={reading.toTop}>
+              Back to the top
+            </Button>
+          )}
         </div>
       </header>
       {find.finding > 0 && <FindBar finder={finder} focusSignal={find.finding} onClose={find.close} />}
@@ -167,7 +183,7 @@ export function DocumentTab({ agent, document, visible, onFocus, onPaneKey }: Do
               onChange={(event) => setDraft({ ...draft, text: event.target.value })}
             />
             <div className="doc-render doc-markdown" aria-label="Preview">
-              <Markdown text={draft.text} onOpenLink={openLink} />
+              <Markdown text={draft.text} variant="read" onOpenLink={openLink} />
             </div>
           </div>
           <footer className="doc-edit-bar" data-dirty={changed > 0 || undefined}>
@@ -188,9 +204,16 @@ export function DocumentTab({ agent, document, visible, onFocus, onPaneKey }: Do
       ) : text === null ? (
         <p className="review-meta doc-reading">{content === undefined && problem === undefined ? 'Reading it…' : ''}</p>
       ) : markdown ? (
-        <div className="doc-render doc-markdown" data-testid="doc-body" data-current={current || undefined}>
-          <Markdown text={text} onOpenLink={openLink} />
-        </div>
+        <ReadingView
+          key={document.path}
+          text={text}
+          title={document.title}
+          path={document.path}
+          onOpenLink={openLink}
+          onStatus={setReading}
+          testId="doc-body"
+          current={current}
+        />
       ) : (
         <>
           <PlanPage key={`${document.id}:${document.version}`} html={text} visible={visible} onFocus={onFocus} onPaneKey={onPaneKey} />

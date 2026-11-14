@@ -39,7 +39,7 @@ const NO_ROWS: readonly ModelEntry[] = [];
  * many of its agents need the user and a count of the rest. Every control of the Classic zone's tab is in its ⋯ and its
  * right-click menu, from the menu model; a double-click on the name still renames it.
  */
-export function ProjectWell({ data: { zone, tileCount = 0, resizeMin, shelves, clusters }, selected, positionAbsoluteX, positionAbsoluteY, width, height }: NodeProps<ZoneNodeType>) {
+export function ProjectWell({ data: { zone, tileCount = 0, resizeMin, shelves, clusters, stageBoard }, selected, positionAbsoluteX, positionAbsoluteY, width, height }: NodeProps<ZoneNodeType>) {
   const saveLayout = useContext(SaveZoneLayoutContext);
   const resize = useContext(ZoneResizeContext);
   const rows = leastZoneSize(tileCount, { width: width ?? 0, height: height ?? 0 }, zoneGrid(zone.spacing));
@@ -77,6 +77,7 @@ export function ProjectWell({ data: { zone, tileCount = 0, resizeMin, shelves, c
     // A well with no fill of its own is drawn untinted, so its slider starts from none.
     themeFill: 0,
     rename: renaming.startSoon,
+    stageBoard,
     actions: { ...binding, newAgent, newShell, pickTracker, bind, cancelClone, addIssue },
   };
   // The menu bar's Project menu, while it is selected.

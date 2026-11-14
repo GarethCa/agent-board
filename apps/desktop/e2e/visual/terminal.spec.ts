@@ -32,6 +32,17 @@ async function shoot(app: ElectronApplication, terminal: Locator, size?: { width
   return Buffer.from(png, 'base64');
 }
 
+/**
+ * The row and column of `terminal`'s cursor, from the box xterm keeps its typing in, which it moves to the cursor as
+ * it reads the shell's output (before it draws it, with either renderer). `run` only types, so a shot waits on this.
+ */
+const cursorAt = (terminal: Locator) =>
+  terminal.locator('.xterm-helper-textarea').evaluate((box: HTMLElement) => {
+    const px = (value: string) => parseFloat(value) || 0;
+    const { left, top, width, height } = box.style;
+    return px(width) === 0 || px(height) === 0 ? undefined : { row: Math.round(px(top) / px(height)), column: Math.round(px(left) / px(width)) };
+  });
+
 /** The same render profile as the WebGL shots, but a window that paints as a Retina display does: the real ratio, not an emulated one. */
 const RETINA_ARGS = RENDER_ARGS.filter((arg) => arg !== '--disable-gpu' && !arg.startsWith('--force-device-scale-factor'));
 
@@ -60,6 +71,7 @@ for (const { renderer, env, args, match } of RENDERERS) {
         "clear; for n in 1 2 3; do printf '\\033[48;2;55;55;55m\\033[38;2;255;255;255m %-48s\\033[0m\\n' \"a message the user typed, row $n\"; done; " +
           "printf '\\n  plain text after it, and \\033[32mgreen\\033[0m, \\033[1mbold\\033[0m and \\033[31mred\\033[0m\\n\\033[?25l'",
       );
+      await expect.poll(() => cursorAt(terminal), { message: 'the shell ran it and printed its prompt' }).toEqual({ row: 5, column: 2 });
       await settledBox(tile);
       if (renderer === 'webgl') await expectSharp(terminal, { soft: true });
       let restorePointer = await ignorePointer(window);

@@ -13,3 +13,6 @@ export function needsYouShowsFrom(value: string): NeedsYouShows {
 
 /** Whether "Also while agent-board is in front" is drawn: only with technical details shown. */
 export const showsInFrontSwitch = (technical: boolean): boolean => technical;
+
+/** The Muted agents row's reading: "None", "1 agent", "2 agents". */
+export const mutedAgentsText = (muted: number): string => (muted === 0 ? 'None' : `${muted} agent${muted === 1 ? '' : 's'}`);

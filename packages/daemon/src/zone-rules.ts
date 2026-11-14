@@ -7,9 +7,10 @@
 
 import { isClosed, tileSizeKey } from './board-layout.ts';
 import type { Clock } from './clock.ts';
-import type { DaemonCall } from './orchestrator-layout.ts';
-import type { Agent, BoardItem, DaemonEvent, DaemonMethods, FlowEdge, Shell, Zone } from './protocol.ts';
+import { spineViewKey, type DaemonCall } from './orchestrator-layout.ts';
+import { startedByHand, type Agent, type BoardItem, type DaemonEvent, type DaemonMethods, type FlowEdge, type Shell, type Zone } from './protocol.ts';
 import type { RpcHandlers } from './rpc.ts';
+import { STAGE_BOARD_KIND } from './stage-board.ts';
 import type { ZoneTable } from './zones.ts';
 
 /** How long after the last change a zone waits to be laid out again: a burst of changes is laid out once. */
@@ -25,12 +26,34 @@ interface Seen {
 /** The tiles, zones and edges, as the rules last heard them, by key. */
 export type RuleInputs = Map<string, Seen>;
 
-const agentInputs = (agent: Agent): Seen => ({
-  zoneId: agent.zoneId,
-  shape: JSON.stringify([agent.name, agent.issue, agent.role, agent.reviewOf, agent.reviews, agent.spawnedBy, agent.branch, isClosed(agent)]),
-});
+/**
+ * What an agent's place in a rule's layout depends on. In a Spine zone (`spines`), where an agent the user started by hand
+ * is held where it is until the user drags it onto the layout, that agent's place is one too: the drop is what lets it join.
+ */
+const agentInputs = (agent: Agent, spines: ReadonlySet<string> = new Set()): Seen => {
+  const held = agent.zoneId !== null && spines.has(agent.zoneId) && startedByHand(agent);
+  return {
+    zoneId: agent.zoneId,
+    shape: JSON.stringify([
+      agent.name,
+      agent.issue,
+      agent.role,
+      agent.reviewOf,
+      agent.reviews,
+      agent.spawnedBy,
+      agent.branch,
+      isClosed(agent),
+      ...(held ? [agent.position?.x, agent.position?.y] : []),
+    ]),
+  };
+};
 const shellInputs = (shell: Shell): Seen => ({ zoneId: shell.zoneId, shape: JSON.stringify([shell.name]) });
 const clockInputs = (item: BoardItem): Seen => ({ zoneId: item.zoneId, shape: JSON.stringify([item.width, item.height, item.rotation]) });
+/** A stage board is in the rule's way where it is, at its size, and takes the agents it holds out of the rule's hands. */
+const stageInputs = (item: BoardItem): Seen => ({ zoneId: item.zoneId, shape: JSON.stringify([item.x, item.y, item.width, item.height, item.data]) });
+/** What the rule lays out by of an item, for the kinds it reads: an agent's clock, and a stage board. */
+const itemInputs = (item: BoardItem): Seen | null =>
+  item.kind === 'clock' ? clockInputs(item) : item.kind === STAGE_BOARD_KIND ? stageInputs(item) : null;
 const zoneInputs = (zone: Zone): Seen => ({
   zoneId: zone.id,
   shape: JSON.stringify([zone.layoutRule, zone.spacing, zone.width, zone.folded, zone.handPlaced]),
@@ -50,11 +73,11 @@ function heard(inputs: RuleInputs, key: string, now: Seen | undefined): (string 
  * The zones `event` changes what a rule lays out by in, as `inputs` last heard them (which it updates): `'all'` for a
  * change that may reach any zone (an edge between two agents, or a tile it never heard of going).
  */
-export function zonesChangedBy(event: DaemonEvent, inputs: RuleInputs): string[] | 'all' {
+export function zonesChangedBy(event: DaemonEvent, inputs: RuleInputs, spines?: ReadonlySet<string>): string[] | 'all' {
   const zones = (changed: (string | null)[]) => changed.filter((zoneId) => zoneId !== null);
   switch (event.type) {
     case 'agent.updated':
-      return zones(heard(inputs, tileSizeKey('agent', event.agent.sessionId), agentInputs(event.agent)));
+      return zones(heard(inputs, tileSizeKey('agent', event.agent.sessionId), agentInputs(event.agent, spines)));
     case 'agent.removed': {
       const key = tileSizeKey('agent', event.sessionId);
       return inputs.has(key) ? zones(heard(inputs, key, undefined)) : 'all';
@@ -66,9 +89,12 @@ export function zonesChangedBy(event: DaemonEvent, inputs: RuleInputs): string[]
       const key = tileSizeKey('shell', event.shellId);
       return inputs.has(key) ? zones(heard(inputs, key, undefined)) : [];
     }
-    case 'item.updated':
-      // Of the board's items, only a clock an agent made is laid out with its crew; the rest are in the way, wherever.
-      return event.item.kind === 'clock' ? zones(heard(inputs, `item:${event.item.id}`, clockInputs(event.item))) : [];
+    case 'item.updated': {
+      // Of the board's items, only a clock an agent made is laid out with its crew, and a stage board holds agents out of
+      // it; the rest are in the way, wherever.
+      const seen = itemInputs(event.item);
+      return seen === null ? [] : zones(heard(inputs, `item:${event.item.id}`, seen));
+    }
     case 'item.removed': {
       const key = `item:${event.id}`;
       return inputs.has(key) ? zones(heard(inputs, key, undefined)) : [];
@@ -124,6 +150,8 @@ export interface ZoneRules {
 
 export function createZoneRules({ call, zones: marks, clock, log }: ZoneRulesOptions): ZoneRules {
   const inputs: RuleInputs = new Map();
+  /** The zones on Spine, as last heard. */
+  const spines = new Set<string>();
   const due = new Set<string>();
   let everyZone = false;
   let cancel: (() => void) | undefined;
@@ -146,6 +174,21 @@ export function createZoneRules({ call, zones: marks, clock, log }: ZoneRulesOpt
     }
   };
 
+  /** Forgets what Spine kept for a zone that left it (or went): its bands' places, and the clocks it set aside. */
+  const leftSpine = async (zoneId: string) => {
+    await call('view.set', { key: spineViewKey(zoneId), value: null });
+    for (const item of await call('item.list', undefined)) {
+      if (item.zoneId === zoneId && item.kind === 'clock' && item.data.tucked === true) await call('item.update', { id: item.id, data: { tucked: false } });
+    }
+  };
+
+  /** Notes whether `zone` (or the zone `id`, gone) is on Spine, forgetting its Spine state once it leaves. */
+  const heardSpine = (id: string, zone: Zone | undefined) => {
+    const was = spines.delete(id);
+    if (zone?.layoutRule === 'spine') spines.add(id);
+    else if (was) void leftSpine(id).catch((error: unknown) => log(`could not forget the Spine layout of a zone: ${(error as Error).message}`));
+  };
+
   const settle = () => {
     cancel?.();
     cancel = clock.setTimer(() => void layOut().catch((error: unknown) => log(`could not lay out the zones by their rules: ${(error as Error).message}`)), RULE_SETTLE_MS);
@@ -157,7 +200,9 @@ export function createZoneRules({ call, zones: marks, clock, log }: ZoneRulesOpt
       const seen = tileSeenBy(event);
       if (seen !== undefined) marks.tileSeen(seen.key, seen.zoneId);
       if (!started) return;
-      const changed = zonesChangedBy(event, inputs);
+      if (event.type === 'zone.updated') heardSpine(event.zone.id, event.zone);
+      if (event.type === 'zone.removed') heardSpine(event.id, undefined);
+      const changed = zonesChangedBy(event, inputs, spines);
       if (changed === 'all') everyZone = true;
       else if (changed.length === 0) return;
       else for (const zoneId of changed) due.add(zoneId);
@@ -172,9 +217,13 @@ export function createZoneRules({ call, zones: marks, clock, log }: ZoneRulesOpt
         call('flowEdge.list', undefined),
       ]);
       for (const zone of zones) inputs.set(`zone:${zone.id}`, zoneInputs(zone));
-      for (const agent of agents) inputs.set(tileSizeKey('agent', agent.sessionId), agentInputs(agent));
+      for (const zone of zones) if (zone.layoutRule === 'spine') spines.add(zone.id);
+      for (const agent of agents) inputs.set(tileSizeKey('agent', agent.sessionId), agentInputs(agent, spines));
       for (const shell of shells) if (shell.owner === null) inputs.set(tileSizeKey('shell', shell.id), shellInputs(shell));
-      for (const item of items) if (item.kind === 'clock') inputs.set(`item:${item.id}`, clockInputs(item));
+      for (const item of items) {
+        const seen = itemInputs(item);
+        if (seen !== null) inputs.set(`item:${item.id}`, seen);
+      }
       for (const edge of edges) inputs.set(`edge:${edge.id}`, edgeInputs(edge));
       started = true;
       everyZone = true;

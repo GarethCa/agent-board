@@ -1,8 +1,8 @@
 // Keeping the board's zone nodes in step with the daemon's zone events: zones now change by themselves, as a
 // clone runs, finishes or fails.
-import type { Node } from '@xyflow/react';
+import type { Node, XYPosition } from '@xyflow/react';
 import type { Zone, ZoneLayout } from '@agent-board/daemon/protocol';
-import { isZone } from './tiles';
+import { isZone, layoutOf } from './tiles';
 import { zoneNode, type ZoneNodeType } from './ZoneNode';
 
 /**
@@ -44,4 +44,13 @@ export function withSavedLayout(node: ZoneNodeType, layout: ZoneLayout, { move =
  */
 export function withoutZone<N extends Node>(nodes: N[], id: string): N[] {
   return nodes.filter((node) => node.id !== id && node.parentId !== id);
+}
+
+/**
+ * Where a dragged zone lands: `drawn`, its node as last drawn, at `placed`, where the drag's last change put it
+ * (snapped, and under the pointer). The board may not have drawn that change yet when the drag ends: a busy window
+ * draws a drag's moves behind the pointer.
+ */
+export function droppedLayout(drawn: ZoneNodeType, placed: XYPosition | undefined): ZoneLayout {
+  return layoutOf(placed === undefined ? drawn : { ...drawn, position: placed });
 }

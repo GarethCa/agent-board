@@ -1,6 +1,6 @@
 // Orchestrators (ADR-0011): agents that start, message, watch and close other agents through the board CLI and
-// MCP. Every agent's live session may; none outranks another, and none reaches an agent the user started by hand. Every
-// control call names the orchestrator by its board token, is checked at that call, and is logged, done or refused.
+// MCP. Every agent's live session may, on any agent but itself; none outranks another. Removing one it didn't start
+// asks the user. Every control call names the orchestrator by its board token, is checked at that call, and is logged, done or refused.
 import { closeSync, openSync, readSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
@@ -36,6 +36,7 @@ import {
   WAIT_STATES,
   type Agent,
   type AgentState,
+  type ClosedKept,
   type CrewEvent,
   type CrewEventKind,
   type DaemonEvent,
@@ -46,6 +47,7 @@ import {
   type Harness,
   type OrchestratorAction,
   type OrchestratorActivity,
+  type GivenRole,
   type OrchestratorSent,
   type PullRequest,
   type RemoveAskResult,
@@ -53,11 +55,12 @@ import {
   type SendDelivery,
   type WaitState,
   type Zone,
-  handStartedReason,
+  startedByHand,
 } from './protocol.ts';
 import type { LayoutMethods } from './orchestrator-layout.ts';
 import { RpcMethodError, type RpcHandlers } from './rpc.ts';
 import { keptAll, type RemoveAskEnd, type RemoveAskStore } from './remove-asks.ts';
+import { flagLeadOf, helpersOf } from './ticket-tiles.ts';
 import { isWorking } from './turn-status.ts';
 
 /** The orchestrator methods but the layout commands, which `orchestrator-layout.ts` handles. */
@@ -76,6 +79,7 @@ type OrchestratorMethods = Omit<
   | 'orchestrator.crews'
   | 'orchestrator.stopCrew'
   | 'orchestrator.crewRound'
+  | 'orchestrator.passItem'
 >;
 
 /** The terminal an orchestrator's agent starts in, before any client attaches and resizes it. */
@@ -130,6 +134,7 @@ const LOGGED_METHODS: Partial<Record<DaemonMethod, OrchestratorAction>> = {
   'orchestrator.addNote': 'add-note',
   'orchestrator.editNote': 'edit-note',
   'orchestrator.removeNote': 'remove-note',
+  'orchestrator.passItem': 'pass',
   'orchestrator.addShape': 'add-shape',
   'orchestrator.addDiagram': 'add-diagram',
   'orchestrator.editShape': 'edit-shape',
@@ -193,7 +198,7 @@ export interface OrchestratorHostOptions extends BoardCallerSources {
   db: DatabaseSync;
   agents: Pick<
     AgentHost,
-    'get' | 'list' | 'announce' | 'handCrew' | 'removedOrchestrator' | 'fallbackOwner' | 'spawn' | 'answer' | 'interrupt' | 'setEffort' | 'setRole' | 'continueOnCredits' | 'resume' | 'stop' | 'pause' | 'finalMessage' | 'waitsAtPrompt' | 'setStatus' | 'clearFlag' | 'sendUnsent' | 'clearUnsent' | 'queueAfterTurn' | 'deliverAfterTurn'
+    'get' | 'list' | 'announce' | 'handCrew' | 'removedOrchestrator' | 'fallbackOwner' | 'spawn' | 'answer' | 'interrupt' | 'setEffort' | 'setRole' | 'roleTemplate' | 'continueOnCredits' | 'resume' | 'stop' | 'pause' | 'finalMessage' | 'waitsAtPrompt' | 'setStatus' | 'clearFlag' | 'sendUnsent' | 'clearUnsent' | 'queueAfterTurn' | 'dropNotices' | 'deliverAfterTurn'
   >;
   zones: () => Zone[];
   flowEdges: Pick<FlowEdgeHost, 'create' | 'get' | 'link' | 'remove'>;
@@ -202,10 +207,17 @@ export interface OrchestratorHostOptions extends BoardCallerSources {
    * forced as the user's Delete takes them, unless `forceReviewers` is false: then one with unsaved work refuses it.
    */
   deleteAgent(sessionId: string, why: string, forceReviewers?: boolean): Promise<void>;
+  /**
+   * Takes the agent off the board, its reviewers first, as a close does: its worktree and branch go with it unless
+   * they hold unsaved work, the board's own files aside. Resolves with what stayed and why, or null if nothing did.
+   */
+  closeAgent(sessionId: string, why: string): Promise<ClosedKept | null>;
   /** The remove asks orchestrators wait on the user for. */
   removeAsks: Pick<RemoveAskStore, 'ask'>;
   /** How long an agent may answer a message from another: an hour by default. */
   replyWindowMs?: number;
+  /** A crew's reviewer's round and last review, for its role's template; undefined for no crew's reviewer. */
+  crewReview?: (sessionId: string) => { round: number; previous: string | null } | undefined;
   broadcast(event: DaemonEvent): void;
   log(message: string): void;
 }
@@ -226,8 +238,6 @@ export interface OrchestratorAccess {
   caller(method: DaemonMethod, params: Record<string, unknown>, connection: BoardConnection): Orchestrator;
   /** Runs `act` as `me` doing `action`, logging it done or refused with what `entry` holds by then. */
   logged<T>(me: Orchestrator, action: OrchestratorAction, entry: ActivityEntry, act: () => Promise<T> | T): Promise<T>;
-  /** Whether `me` may act on `agent`: itself, or one an agent started (the user's side: any). */
-  reachesAgent(me: Orchestrator, agent: Agent): boolean;
   /** Whether `me` made what `madeBy` names, or an agent of its crew did; the user's side made everything. */
   madeByCrew(me: Orchestrator, madeBy: string | null): boolean;
   /**
@@ -246,8 +256,6 @@ export interface OrchestratorHost {
   mayOrchestrate(sessionId: string): boolean;
   /** Whether the session acts for the user (`BoardCaller.side`). */
   actsForUser(sessionId: string): boolean;
-  /** Whether the agent `sessionId` may send to `to` as a reply: `to` messaged it, within the window (`reply-paths.ts`). */
-  repliesTo(sessionId: string, to: unknown): boolean;
   /**
    * Throws `outOfScope` unless the agent `from` may name `to` in a hand-off with no edge: as for `send`, any
    * agent an agent started, but not itself.
@@ -340,8 +348,8 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
   /** Each wait's check, run on every agent update. */
   const waiters = new Set<{ check(): void; finish(timedOut: boolean): void }>();
   /**
-   * Per agent, the agents that sent it a message it could not answer otherwise (one the user started): it may send
-   * back to each for a while, and do nothing else to it. Kept in memory: a daemon restart forgets them.
+   * Per agent, the agents that sent it a message: what it sends back to each for a while is marked a reply, not a
+   * message of its own. Kept in memory: a daemon restart forgets them.
    */
   const replies = createReplyPaths({
     ...(options.replyWindowMs === undefined ? {} : { windowMs: options.replyWindowMs }),
@@ -472,25 +480,6 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
     return asOrchestrator(agent);
   };
 
-  /**
-   * The agent answering, on a `send` to an agent that messaged it (`repliesTo`) and that it may not steer (one the user
-   * started); else undefined, and the send is an orchestrator's as any other. It may only send: checked as every send
-   * is, but for whom it goes to.
-   */
-  const replier = (params: Record<string, unknown>, connection: BoardConnection): Actor | undefined => {
-    const token = optionalStringParam(params, 'token');
-    if (token === undefined) return undefined;
-    const caller = boardCaller(options, token, connection);
-    if (caller.side !== 'agent' || !repliesTo(caller.tileId, params.sessionId)) return undefined;
-    const agent = agents.get(caller.tileId)!;
-    const to = agents.get(params.sessionId as string);
-    if (to !== undefined && maySteer(agent, to)) return undefined;
-    return { sessionId: agent.sessionId, name: agent.name };
-  };
-
-  /** Whether `agent` may send to `to` without a reply path: `to` is another agent, one an agent started. */
-  const maySteer = (agent: Agent, to: Agent): boolean => to.sessionId !== agent.sessionId && crewStarted(to);
-
   /** Whether `me` started `agent` (the user's side starts the user's own agents, so none). */
   const startedBy = (me: Orchestrator, agent: Agent): boolean => me.agent !== null && agent.spawnedBy === me.agent.sessionId;
 
@@ -511,20 +500,11 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
   };
 
   /**
-   * Whether `agent` is one an agent started (its starter removed since, too): every agent reaches each of those on the
-   * board. The user's own, started by hand, no agent reaches.
-   */
-  const crewStarted = (agent: Agent): boolean => agent.spawnedBy !== null || agent.orphanedFrom !== null;
-
-  /**
-   * Throws unless `me` may act on `agent`: one an agent started, anywhere on the board, and not itself. The user's side
-   * reaches every agent. No agent outranks another, so looking and steering are checked alike.
+   * Throws unless `me` may act on `agent`: any agent on the board, the user's own too, but itself. No agent outranks
+   * another, so looking and steering are checked alike. Removing one it didn't start asks the user (`askRemove`).
    */
   const checkTarget = (me: Orchestrator, agent: Agent) => {
     if (agent.sessionId === me.agent?.sessionId) throw outOfScope('that is you: an agent acts on other agents, never itself');
-    if (me.agent !== null && !crewStarted(agent)) {
-      throw outOfScope(handStartedReason(agent.name));
-    }
   };
   const checkSteerable = checkTarget;
   /** Throws unless `me` may ask the user to remove `agent`: any tile but its own, the user's too, as the user decides. */
@@ -572,16 +552,25 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
   };
 
   /**
+   * What a Delete of `agent` takes first, with what each is to it: its reviewers, and, for a ticket's chat, the ticket's
+   * helpers. `all` is the board's agents.
+   */
+  const goesWith = (agent: Agent, all: readonly Agent[]): { agent: Agent; as: string }[] => [
+    ...all.filter((each) => each.reviewOf === agent.sessionId).map((each) => ({ agent: each, as: 'reviewer' })),
+    ...(agent.ticketChat ? helpersOf(all, agent.sessionId).filter((each) => each.reviewOf !== agent.sessionId).map((each) => ({ agent: each, as: 'helper' })) : []),
+  ];
+
+  /**
    * Why a remove ask holds `agent` back unless the user ticks it, or null: it is held for itself (`ownHold`),
-   * or a reviewer of it is. A Delete takes its reviewers first, so a reviewer `batch` leaves out would go with it, and
-   * one in `batch` held back may stay, which keeps `agent` too.
+   * or one that goes with it (a reviewer of it, a helper of its ticket) is. A Delete takes those first, so one `batch`
+   * leaves out would go with it, and one in `batch` held back may stay, which keeps `agent` too.
    */
   const heldBack = (agent: Agent, batch: ReadonlySet<string>, all: readonly Agent[]): string | null => {
     const own = ownHold(agent, batch, all);
     if (own !== null) return own;
-    for (const reviewer of all.filter((each) => each.reviewOf === agent.sessionId)) {
-      if (!batch.has(reviewer.sessionId)) return `its reviewer ${reviewer.name} would go with it`;
-      if (ownHold(reviewer, batch, all) !== null) return `its reviewer ${reviewer.name} is held back`;
+    for (const { agent: other, as } of goesWith(agent, all)) {
+      if (!batch.has(other.sessionId)) return `its ${as} ${other.name} would go with it`;
+      if (ownHold(other, batch, all) !== null) return `its ${as} ${other.name} is held back`;
     }
     return null;
   };
@@ -589,9 +578,10 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
   /**
    * What the user allowed of `requesterId`'s remove ask, removed: each tile checked again as it is now (still
    * there, still one the requester reaches, and held back only if the user ticked it), then deleted as the user's own
-   * Delete takes it, never forced. Reviewers first, as a Delete of the tile they review would take them anyway. A tile
-   * whose reviewer in the ask stayed, stays: its Delete would take the reviewer the user kept. One whose reviewer the
-   * ask left out takes it along (the user ticked it, told so), unforced: a reviewer with unsaved work keeps them both.
+   * Delete takes it, never forced. Reviewers and a ticket's helpers first, as a Delete of the tile they review, or of
+   * their ticket's chat, would take them anyway. A tile whose reviewer or helper in the ask stayed, stays: its Delete
+   * would take the one the user kept. One whose reviewer or helper the ask left out takes it along (the user ticked it,
+   * told so), unforced: one with unsaved work keeps them both.
    */
   const removeAllowed = async (requesterId: string, tiles: readonly RemoveAskTile[], end: RemoveAskEnd): Promise<RemoveAskResult> => {
     if (end === null) return keptAll(tiles, 'denied', 'the ask was withdrawn before the user answered: the call waiting on it ended, or your next turn began');
@@ -604,18 +594,18 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
     const ticked = new Set(end.include);
     const batch = new Set(tiles.map((tile) => tile.sessionId));
     const all = agents.list();
-    const reviewersOf = new Map<string, Agent[]>();
-    for (const each of all) if (each.reviewOf != null) reviewersOf.set(each.reviewOf, [...(reviewersOf.get(each.reviewOf) ?? []), each]);
-    const reviews = new Set(all.filter((each) => each.reviewOf != null).map((each) => each.sessionId));
+    // Those that go with another's Delete go first: reviewers, and helpers of a ticket whose chat is there.
+    const chats = new Set(all.filter((each) => each.ticketChat).map((each) => each.sessionId));
+    const goesFirst = new Set(all.filter((each) => each.reviewOf != null || (each.ticket !== null && chats.has(each.ticket))).map((each) => each.sessionId));
     const result: RemoveAskResult = { outcome: 'allowed', removed: [], kept: [] };
-    const order = [...tiles].sort((a, b) => Number(reviews.has(b.sessionId)) - Number(reviews.has(a.sessionId)));
+    const order = [...tiles].sort((a, b) => Number(goesFirst.has(b.sessionId)) - Number(goesFirst.has(a.sessionId)));
     for (const tile of order) {
       const agent = agents.get(tile.sessionId);
       if (agent === undefined) {
         result.kept.push({ sessionId: tile.sessionId, name: tile.name, why: 'it was gone already' });
         continue;
       }
-      const reviewers = (reviewersOf.get(agent.sessionId) ?? []).filter((reviewer) => agents.get(reviewer.sessionId) !== undefined);
+      const taken = goesWith(agent, all).filter((each) => agents.get(each.agent.sessionId) !== undefined);
       const why = (() => {
         try {
           checkAskable(me, agent);
@@ -624,25 +614,25 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
         }
         const held = heldBack(agent, batch, all);
         if (held !== null && !ticked.has(agent.sessionId)) return `held back: ${held}`;
-        const stays = reviewers.find((reviewer) => batch.has(reviewer.sessionId));
-        return stays === undefined ? undefined : `its reviewer ${stays.name} stays, and its Delete would take it`;
+        const stays = taken.find((each) => batch.has(each.agent.sessionId));
+        return stays === undefined ? undefined : `its ${stays.as} ${stays.agent.name} stays, and its Delete would take it`;
       })();
       if (why !== undefined) {
         result.kept.push({ sessionId: agent.sessionId, name: agent.name, why });
         continue;
       }
       try {
-        // Its reviewers unforced: one the ask left out goes with it only if it has no unsaved work.
+        // Its reviewers and helpers unforced: one the ask left out goes with it only if it has no unsaved work.
         await options.deleteAgent(agent.sessionId, `the user's remove, as orchestrator ${requester.name} asked (agent:${requester.sessionId})`, false);
         result.removed.push({ sessionId: agent.sessionId, name: agent.name });
         record(me, 'remove', { on: agentTarget(agent), detail: 'the user allowed it' });
       } catch (error) {
         result.kept.push({ sessionId: agent.sessionId, name: agent.name, why: (error as Error).message });
       }
-      // A reviewer the ask left out goes first, so it may be gone even if the tile it reviews refused: say so either way.
-      for (const reviewer of reviewers) if (agents.get(reviewer.sessionId) === undefined) result.removed.push({ sessionId: reviewer.sessionId, name: reviewer.name });
+      // One the ask left out goes first, so it may be gone even if the tile it goes with refused: say so either way.
+      for (const { agent: other } of taken) if (agents.get(other.sessionId) === undefined) result.removed.push({ sessionId: other.sessionId, name: other.name });
     }
-    // In the order asked, as the prompt listed them; a reviewer the ask left out, at the end.
+    // In the order asked, as the prompt listed them; a reviewer or helper the ask left out, at the end.
     const at = new Map(tiles.map((tile, index) => [tile.sessionId, index]));
     const place = (sessionId: string) => at.get(sessionId) ?? tiles.length;
     result.removed.sort((a, b) => place(a.sessionId) - place(b.sessionId));
@@ -692,7 +682,7 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
    * once its turn started, so its flag is seen to; not by a message still queued, which answers nothing yet.
    */
   const sentTo = (to: Agent, sender: Agent | null, delivery: SendDelivery): OrchestratorSent => {
-    if (delivery === 'started' && to.flag !== null && to.spawnedBy === sender?.sessionId) return { ...agents.clearFlag(to.sessionId), delivery };
+    if (delivery === 'started' && to.flag !== null && sender !== null && flagLeadOf(to) === sender.sessionId) return { ...agents.clearFlag(to.sessionId), delivery };
     return { ...agents.get(to.sessionId)!, delivery };
   };
 
@@ -700,6 +690,17 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
   const checkText = (text: string) => {
     const why = orchestratorTextRefusal(text);
     if (why !== undefined) throw invalidParams(`an orchestrator may not send this text: ${why}`);
+  };
+
+  /** Refuses `text` to `to` unless a send could deliver it: its text, and an agent not ended or waiting on the user. */
+  const checkSendable = (to: Agent, text: string) => {
+    checkText(text);
+    if (to.endedAt !== null && to.state !== 'hibernated') throw invalidParams(`${to.name} has ended`);
+    if (to.permissions.length > 0 || to.state === 'needs-permission') {
+      throw invalidParams(`${to.name} needs the user's permission first`);
+    }
+    // Waiting on the user mid-turn: what was typed would be queued into that turn, not answer it.
+    if (waitsOnUser(to)) throw invalidParams(`${to.name} is waiting on the user's answer to its question or plan`);
   };
 
   /**
@@ -775,7 +776,6 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
     access: {
       caller: orchestrator,
       logged,
-      reachesAgent: (me, agent) => me.agent === null || agent.sessionId === me.agent.sessionId || crewStarted(agent),
       madeByCrew: (me, madeBy) => me.agent === null || inCrewOf(me.agent, madeBy),
       mayTakeOver(me, madeBy) {
         if (me.agent === null || madeBy === null) return false;
@@ -786,7 +786,6 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
     logActivity: record,
     mayOrchestrate,
     actsForUser,
-    repliesTo,
 
     checkHandoffTarget(from, to) {
       checkSteerable(asOrchestrator(agentNamed(from)), agentNamed(to));
@@ -831,7 +830,7 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
     },
 
     handlers<Context extends BoardConnection>(): RpcHandlers<OrchestratorMethods, Context> {
-      return {
+      const own: RpcHandlers<OrchestratorMethods, Context> = {
         'orchestrator.spawn': async (params, connection) => {
           const p = paramsObject(params);
           const me = orchestrator('orchestrator.spawn', p, connection);
@@ -875,6 +874,8 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
                 baseBranch,
                 issueId: optionalStringParam(p, 'issueId'),
                 purpose: optionalStringParam(p, 'description'),
+                ticketChat: optionalBooleanParam(p, 'ticketChat'),
+                ticket: optionalStringParam(p, 'ticket'),
                 prompt,
                 ...SPAWN_SIZE,
               },
@@ -893,65 +894,44 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
           const p = paramsObject(params);
           const submit = optionalBooleanParam(p, 'submit') === true;
           const clear = optionalBooleanParam(p, 'clear') === true;
-          // An answer to an agent that messaged it reaches one it couldn't steer (and needs no orchestrating), as nothing
-          // else does: it opens a message alone, never what sits at the agent's prompt.
-          const reply = submit || clear ? undefined : replier(p, connection);
-          const me = reply === undefined ? orchestrator('orchestrator.send', p, connection) : undefined;
+          const me = orchestrator('orchestrator.send', p, connection);
           const entry: Entry = { detail: askedText(p) };
-          return logged(me ?? reply!, 'send', entry, async (): Promise<OrchestratorSent> => {
+          return logged(me, 'send', entry, async (): Promise<OrchestratorSent> => {
             if ((submit && clear) || ((submit || clear) && p.text !== undefined)) throw invalidParams('give one of text, submit and clear');
             const text = submit || clear ? '' : stringParam(p, 'text');
             const to = agentNamed(stringParam(p, 'sessionId'));
             entry.on = agentTarget(to);
-            // Any agent may message the Captain, and a crew member the agent that started it, though the user started
-            // that one: a message only, so `--submit`, `--clear` and every other command on it are still checked as steering.
-            const messageOnly =
-              !submit && !clear && me?.agent != null && me.agent.sessionId !== to.sessionId && (to.master || me.agent.spawnedBy === to.sessionId);
-            if (me !== undefined && !messageOnly) checkSteerable(me, to);
-            // Waking it is steering it: the user paused it, and only they wake it.
-            if (messageOnly && !maySteer(me!.agent!, to) && to.state === 'hibernated') {
-              throw outOfScope(`${to.name} is paused: only the user wakes it`);
-            }
+            checkSteerable(me, to);
             if (clear) return { ...agents.clearUnsent(to.sessionId, false), delivery: 'cleared' };
-            if (submit) return submitUnsent(me!, to);
-            checkText(text);
-            if (to.endedAt !== null && to.state !== 'hibernated') throw invalidParams(`${to.name} has ended`);
-            if (to.permissions.length > 0 || to.state === 'needs-permission') {
-              throw invalidParams(`${to.name} needs the user's permission first`);
-            }
-            // Waiting on the user mid-turn: what was typed would be queued into that turn, not answer it.
-            if (waitsOnUser(to)) throw invalidParams(`${to.name} is waiting on the user's answer to its question or plan`);
+            if (submit) return submitUnsent(me, to);
+            checkSendable(to, text);
             const midTurn = !SENDABLE_STATES.has(to.state);
-            // A message an agent sent lets the receiver answer it (an answer opens nothing back), and one that couldn't
-            // otherwise is told how. Not its own crew, which answers in its turn's last message.
-            const sender = me?.agent ?? null;
+            // A message an agent sent lets the receiver answer it (an answer opens nothing back). Not its own crew, which
+            // answers in its turn's last message. The Captain hears from leads all over the board: it is told who each
+            // message is from, as it can answer any of them.
+            const sender = me.agent;
             const opens = sender !== null && !inCrewOf(sender, to.spawnedBy);
-            // The Captain hears from leads all over the board: it is told who each message is from, as it can answer
-            // any of them.
-            const hint =
-              sender === null || !opens
-                ? ''
-                : !maySteer(to, sender)
-                  ? sendTrailer(sender.name, refOf(sender), true)
-                  : to.master
-                    ? sendTrailer(sender.name, refOf(sender), false)
-                    : '';
+            const hint = sender !== null && opens && to.master ? sendTrailer(sender.name, refOf(sender), false) : '';
             // Who sent it heads it (ADR-0023), as the receiver's transcript holds it as the user's: a reply when it answers
             // a message from the receiver, or its crew member's flag or question.
-            const from = reply ?? sender;
             const answers =
-              reply !== undefined ||
-              (sender !== null && (repliesTo(sender.sessionId, to.sessionId) || (to.flag?.to === 'orchestrator' && to.spawnedBy === sender.sessionId)));
-            const typed = from === null ? `${text}${hint}` : markSender(answers ? 'reply' : 'send', from.name, refOf(from), `${text}${hint}`);
+              sender !== null && (repliesTo(sender.sessionId, to.sessionId) || (to.flag?.to === 'orchestrator' && flagLeadOf(to) === sender.sessionId));
+            const typed = sender === null ? `${text}${hint}` : markSender(answers ? 'reply' : 'send', sender.name, refOf(sender), `${text}${hint}`);
             // An agent is busy much of the time, and what it is sent is mostly news for it: kept until its turn ends,
             // never typed into that turn, so its end is never taken for the reply's. Sent between turns while
             // others still wait for it, it goes behind them.
             // Each step of its delivery is logged with a time, by a short id and its length: never what it says, which
             // may be secret.
             const logSend = sendTrail(options.log, to.sessionId, text.length);
+            // One that never arrives goes back to the agent that sent it, never to the user, who didn't. Sending again
+            // says what a lost one said: a notice still waiting that one to the same agent was lost goes. It goes even if
+            // this send is then refused (the agent can't be woken, or no turn starts on it): the refusal tells the sender.
+            const fromAgent = sender?.sessionId;
+            if (fromAgent !== undefined) agents.dropNotices(fromAgent, to.sessionId);
             if (midTurn || to.messagesWaiting > 0) {
               agents.queueAfterTurn(to.sessionId, {
                 text: typed,
+                ...(fromAgent === undefined ? {} : { from: fromAgent }),
                 typing: () => {
                   logSend('typing at its prompt, its turn ended');
                   awaitingTurn.add(to.sessionId);
@@ -968,7 +948,7 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
             awaitingTurn.add(to.sessionId);
             let answered: Answered;
             try {
-              answered = await agents.answer(to.sessionId, typed, false, logSend);
+              answered = await agents.answer(to.sessionId, typed, false, logSend, fromAgent);
             } catch (error) {
               awaitingTurn.delete(to.sessionId);
               throw error;
@@ -1156,15 +1136,36 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
         'orchestrator.giveRole': (params, connection) => {
           const p = paramsObject(params);
           const me = orchestrator('orchestrator.giveRole', p, connection);
+          const sendTemplate = optionalBooleanParam(p, 'sendTemplate') === true;
           const entry: Entry = { detail: '' };
-          return logged(me, 'role', entry, () => {
+          return logged(me, 'role', entry, async (): Promise<GivenRole> => {
             const agent = agentNamed(stringParam(p, 'sessionId'));
             entry.on = agentTarget(agent);
             const role = p.role === null ? null : stringParam(p, 'role');
-            entry.detail = role ?? 'no role';
+            entry.detail = `${role ?? 'no role'}${sendTemplate ? ', with its template' : ''}`;
+            const itself = agent.sessionId === me.agent?.sessionId;
             // Its own tile's role is its own to say, as its status is; any other agent's is steering that agent.
-            if (agent.sessionId !== me.agent?.sessionId) checkSteerable(me, agent);
-            return agents.setRole(agent.sessionId, role);
+            if (!itself) checkSteerable(me, agent);
+            // A message to itself would be typed into its own turn: it reads its role's template with `roles` instead.
+            if (itself && sendTemplate) throw invalidParams('a role template is sent to another agent, never to yourself: read yours with `agent-board roles`');
+            // Only when asked: a role can always change without a word to the agent.
+            if (!sendTemplate) return agents.setRole(agent.sessionId, role);
+            if (role === null) throw invalidParams('taking the role away sends no template: give a role to send its template');
+            const template = agents.roleTemplate(agent.sessionId, role, options.crewReview?.(agent.sessionId));
+            // Refused before the role changes: a template that can't be sent leaves the agent as it was.
+            if (template !== '') checkSendable(agent, template);
+            const given = agents.setRole(agent.sessionId, role);
+            if (template === '') return { ...given, template: 'none' };
+            // Sent as any message from this caller is, with its checks, its sender's heading and its own log line.
+            const send = { ...(typeof p.token === 'string' ? { token: p.token } : {}), sessionId: agent.sessionId, text: template };
+            try {
+              const { delivery } = await own['orchestrator.send'](send, connection);
+              // A message's text is never a clear.
+              return { ...agents.get(agent.sessionId)!, template: delivery as Exclude<SendDelivery, 'cleared'> };
+            } catch (error) {
+              if (!(error instanceof RpcMethodError)) throw error;
+              throw new RpcMethodError(error.code, `${given.name} has the role now, but its template wasn't sent: ${error.message}`);
+            }
           });
         },
 
@@ -1251,15 +1252,14 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
               throw invalidParams(`${to.name} is in ${from.name}'s crew, below an agent it would get: hand ${from.name}'s crew to an orchestrator outside it, or to one ${from.name} started`);
             }
             // What moves is the crew alone, agents an agent started: `from` and the taker may be the user's own, as the
-            // Captain is. An agent never hands its crew to one the user started by hand: each crew member's needs-you
-            // would then be typed at that agent's prompt, which no agent may reach.
+            // Captain is. Handed to one the user started by hand, each crew member's needs-you comes to that agent, typed
+            // at its prompt once it is ready for it (`crew-flags.ts`), never while the user types there.
             if (me.agent !== null) {
               const mine = me.agent.sessionId;
               if (mine === to.sessionId) {
                 const refusal = live === undefined ? undefined : takeOverRefusal(live);
                 if (refusal !== undefined) throw outOfScope(refusal);
               } else if (mine !== from.sessionId) throw outOfScope('an agent hands over only its own crew, or takes over one whose session has ended');
-              else checkTarget(me, to);
             }
             const moved = handOverRows(from.sessionId, to.sessionId);
             for (const id of moved.crew) agents.announce(id);
@@ -1284,7 +1284,36 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
             const agent = agentNamed(stringParam(p, 'sessionId'));
             entry.on = agentTarget(agent);
             checkSteerable(me, agent);
-            if (!remove) return agents.stop(agent.sessionId, actedBy(me, 'close'));
+            if (!remove) {
+              // Closing takes the tile off the board: one the user started by hand goes only if they say so.
+              if (me.agent !== null && startedByHand(agent)) {
+                throw outOfScope(
+                  `${agent.name} was started by the user: closing it would take it off the board. Ask the user to remove ` +
+                    'it instead (agent-board close <ref…> --remove --ask, or ask_to_remove): they allow or deny it.',
+                );
+              }
+              // Its reviewers go with it: never one the user started by hand.
+              for (const reviewer of agents.list().filter((each) => each.reviewOf === agent.sessionId)) {
+                if (me.agent !== null && startedByHand(reviewer)) {
+                  throw outOfScope(
+                    `${agent.name} has a reviewer the user started (${reviewer.name}): closing it would take that off the ` +
+                      'board too. Ask the user to remove it instead (agent-board close <ref…> --remove --ask, or ask_to_remove).',
+                  );
+                }
+              }
+              // A ticket's chat closes its helpers with it (but its reviewers, above): only ones you started yourself.
+              const helpers = helpersOf(agents.list(), agent.sessionId).filter((each) => each.reviewOf !== agent.sessionId && !startedBy(me, each));
+              if (me.agent !== null && helpers.length > 0) {
+                throw outOfScope(
+                  `${agent.name} is a ticket's chat with a helper you did not start (${helpers.map((each) => each.name).join(', ')}): ` +
+                    'closing it would take that off the board too. Ask the user to remove it instead (agent-board close <ref…> ' +
+                    '--remove --ask, or ask_to_remove): they allow or deny it, and its helpers with it.',
+                );
+              }
+              const kept = await options.closeAgent(agent.sessionId, actedBy(me, 'close'));
+              if (kept !== null) entry.detail = `kept its worktree and branch: ${kept.why}`;
+              return kept;
+            }
             // The user's side removes any agent, as the user does in the app; never forced, so unsaved work stands.
             if (me.agent === null) {
               await options.deleteAgent(agent.sessionId, actedBy(me, 'remove'));
@@ -1302,6 +1331,15 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
               throw outOfScope(
                 `${agent.name} has a reviewer you did not start (${reviewers.map((each) => each.name).join(', ')}): ` +
                   'removing it would remove that too. Close it instead, and leave removing it to the user.',
+              );
+            }
+            // A ticket's chat takes its helpers with it, as it does its reviewers: only ones you started yourself.
+            const helpers = helpersOf(agents.list(), agent.sessionId).filter((each) => !startedBy(me, each));
+            if (helpers.length > 0) {
+              throw outOfScope(
+                `${agent.name} is a ticket's chat with a helper you did not start (${helpers.map((each) => each.name).join(', ')}): ` +
+                  'removing it would remove that too. Ask the user to remove it instead (agent-board close <ref…> --remove ' +
+                  '--ask, or ask_to_remove): they allow or deny it, and its helpers with it.',
               );
             }
             await options.deleteAgent(agent.sessionId, actedBy(me, 'remove'));
@@ -1388,6 +1426,7 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
           return rows.map(toActivity);
         },
       };
+      return own;
     },
   };
 }

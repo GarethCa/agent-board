@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { historyPlace, layoutChoiceStep, nudgeMove, resizeMove, tileMoveStep, tileStepAction } from './hand-moves';
+import { historyPlace, layoutChoiceStep, nudgeMove, resizeMove, tileMoveStep, tileStepAction, zoneTidy } from './hand-moves';
 
 describe('the user moving a tile by hand', () => {
   it('counts a nudge as a move by hand', () => {
@@ -32,6 +32,10 @@ describe('the history of a layout rule', () => {
       ['tile:agent:a', { type: 'tile', move: { zoneId: 'z1', x: 1, y: 2 } }, null],
       ['tile:shell:b', { type: 'tile', move: { zoneId: 'z1', x: 3, y: 4 } }, null],
     ]);
+  });
+
+  it('records picking Spine the same way: it is a rule too', () => {
+    expect(layoutChoiceStep('z1', 'free', 'spine', false, places)).toHaveLength(3);
   });
 
   it('records leaving a rule too', () => {
@@ -78,5 +82,27 @@ describe('the history of a tile moved by hand', () => {
     const move = { zoneId: 'z2', x: 0, y: 0 };
     expect(tileStepAction({ type: 'tile', move, handPlaced: false }, 'z1')).toEqual({ kind: 'move', move });
     expect(tileStepAction({ type: 'tile', move }, undefined)).toEqual({ kind: 'move', move });
+  });
+});
+
+describe('a Tidy of a zone', () => {
+  const saved = Promise.resolve({ id: 'z1' } as never);
+  const calls = () => {
+    const made: unknown[][] = [];
+    return { made, zones: { followRule: (...args: unknown[]) => (made.push(args), saved) } };
+  };
+
+  it('has the daemon lay a Spine zone out afresh, which is the only call to ask for that', () => {
+    const { made, zones } = calls();
+    expect(zoneTidy({ id: 'z1', layoutMode: 'free', layoutRule: 'spine' }, zones)).toEqual({ kind: 'byRule', saved });
+    expect(made).toEqual([['z1', [], true]]);
+  });
+
+  it('tidies a free zone into rows itself, and leaves one laid out by another rule, shelves or clusters alone', () => {
+    const { made, zones } = calls();
+    expect(zoneTidy({ id: 'z1', layoutMode: 'free', layoutRule: 'off' }, zones)).toEqual({ kind: 'rows' });
+    expect(zoneTidy({ id: 'z1', layoutMode: 'free', layoutRule: 'lanes' }, zones)).toBeUndefined();
+    expect(zoneTidy({ id: 'z1', layoutMode: 'shelves', layoutRule: 'spine' }, zones)).toBeUndefined();
+    expect(made).toEqual([]);
   });
 });

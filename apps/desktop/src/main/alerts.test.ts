@@ -61,6 +61,8 @@ const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}
   plainFolder: false,
   spawnedBy: null,
   orphanedFrom: null,
+  ticket: null,
+  ticketChat: false,
   ledBy: null,
   startup: null,
   hooksSilent: false,
@@ -333,10 +335,19 @@ describe('agent notifications for every finished turn too', () => {
     // The user's own edit of it is the same request.
     alerts.updated(agent('a', 'waiting', { plan: { ...plan, id: 'p2', version: 3, author: 'user' } }));
     alerts.updated(agent('a', 'running', { plan: { ...plan, decision: { outcome: 'approved', comments: '', decidedAt: '' } } }));
+    // A plan left has no expiry: the user's edits of it, one after another, are still the same request.
+    const left = { ...plan, id: 'p4', version: 4, expiresAt: null, left: true };
+    alerts.updated(agent('a', 'idle', { plan: left }));
+    alerts.updated(agent('a', 'idle', { plan: { ...left, id: 'p5', version: 5, author: 'user' } }));
+    alerts.updated(agent('a', 'idle', { plan: { ...left, id: 'p6', version: 6, author: 'user' } }));
+    // The agent's own next version is news.
+    alerts.updated(agent('a', 'idle', { plan: { ...left, id: 'p7', version: 7 } }));
 
     expect(notifications).toEqual([
       { sessionId: 'a', kind: 'asks', name: 'Agent a', title: 'Agent a asks you', ask: { askId: 'q1', question: 'Which cache should the product pages use?', options: ['Redis', 'CDN only'] }, body: 'Which cache should the product pages use? (Redis · CDN only)' },
       { sessionId: 'a', kind: 'plan', name: 'Agent a', title: 'Agent a has a plan to review', body: 'Cache product pages in Redis · v2' },
+      { sessionId: 'a', kind: 'plan', name: 'Agent a', title: 'Agent a has a plan to review', body: 'Cache product pages in Redis · v4' },
+      { sessionId: 'a', kind: 'plan', name: 'Agent a', title: 'Agent a has a plan to review', body: 'Cache product pages in Redis · v7' },
     ]);
   });
 

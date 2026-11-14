@@ -134,17 +134,17 @@ describe('the board MCP over HTTP', () => {
     expect(await client.call('clockTemplate.list', {})).toEqual([]);
   });
 
-  it('keeps an agent to what its session may do: a control tool on an agent the user started by hand is refused', async () => {
+  it('keeps an agent to what its session may do: removing an agent it did not start is refused', async () => {
     const { client, agentWithToken, post } = await httpDaemon();
     const { token } = await agentWithToken('one');
     const two = await agentWithToken('two');
 
     const called = await post(
-      { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'close', arguments: { agent: `agent:${two.agent.sessionId.slice(0, 4)}` } } },
+      { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'close', arguments: { agent: `agent:${two.agent.sessionId.slice(0, 4)}`, remove: true } } },
       { authorization: `Bearer ${token}` },
     );
     const reply = JSON.parse(/^data: (.*)$/m.exec(await called.text())![1]!);
-    expect(reply.result).toMatchObject({ isError: true, content: [{ text: expect.stringMatching(/started by hand/) }] });
+    expect(reply.result).toMatchObject({ isError: true, content: [{ text: expect.stringMatching(/ask_to_remove|--remove --ask/) }] });
     expect((await client.call('agent.list')).find((a) => a.sessionId === two.agent.sessionId)!.endedAt).toBeNull();
   });
 

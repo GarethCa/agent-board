@@ -125,6 +125,23 @@ function buildMismatch(status: DaemonStatusValue): status is Extract<DaemonStatu
  * sessions are stopped by the restart, and the board offers to resume them.
  */
 function BuildMismatch({ app, health }: { app: BuildInfo; health: DaemonHealth }) {
+  return (
+    <div className="build-mismatch ui-island" role="alert" data-testid="build-mismatch">
+      <span>
+        The daemon is from build {describeBuild(health.build)}, but this app is {describeBuild(app)}. Restart it to open
+        the board: its agents and shells stop, and you can resume them there.
+      </span>
+      <RestartDaemon label="Restart daemon" variant="primary" />
+    </div>
+  );
+}
+
+/**
+ * Restarts the daemon as this app's build. It asks first without `force`, so a daemon with live sessions says how many
+ * and the button turns to Restart anyway or Cancel: the restart ends them. Once it is back every window reloads, as
+ * each holds state from the old daemon; main reloads the others.
+ */
+export function RestartDaemon({ label, variant = 'secondary' }: { label: string; variant?: 'primary' | 'secondary' }) {
   /** Live sessions the daemon reported when asked to restart, which a forced restart would end. */
   const [liveSessions, setLiveSessions] = useState<number>();
   const restart = useAction();
@@ -132,23 +149,18 @@ function BuildMismatch({ app, health }: { app: BuildInfo; health: DaemonHealth }
     restart.run(async () => {
       const result = await window.agentBoard.restartDaemon(force);
       if (result.status === 'sessions-live') return setLiveSessions(result.liveSessions);
-      // Every view holds state from the old daemon, so start afresh.
       location.reload();
     });
 
   return (
-    <div className="build-mismatch ui-island" role="alert" data-testid="build-mismatch">
-      <span>
-        The daemon is from build {describeBuild(health.build)}, but this app is {describeBuild(app)}. Restart it to open
-        the board: its agents and shells stop, and you can resume them there.
-      </span>
+    <>
       {liveSessions === undefined ? (
-        <Button size="sm" variant="primary" loading={restart.busy} onClick={() => restartDaemon(false)}>
-          Restart daemon
+        <Button size="sm" variant={variant} loading={restart.busy} onClick={() => restartDaemon(false)}>
+          {label}
         </Button>
       ) : (
         <>
-          <span>Restarting it ends {runningSessions(liveSessions)}.</span>
+          <span className="ui-readout-value">Restarting it ends {runningSessions(liveSessions)}.</span>
           <Button size="sm" variant="danger" loading={restart.busy} onClick={() => restartDaemon(true)}>
             Restart anyway
           </Button>
@@ -158,6 +170,6 @@ function BuildMismatch({ app, health }: { app: BuildInfo; health: DaemonHealth }
         </>
       )}
       {restart.error && <ErrorText>{restart.error}</ErrorText>}
-    </div>
+    </>
   );
 }

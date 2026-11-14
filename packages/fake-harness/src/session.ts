@@ -48,6 +48,18 @@ function runFullscreen(sessionId: string): Fullscreen {
   return { leave, noResumeHint: () => (resumeHint = false) };
 }
 
+/** With `FAKE_HARNESS_WRITE_ON_STOP`, writes that file as the session is stopped (a hangup or terminate signal), then exits. */
+function writeOnStop(): void {
+  const late = process.env.FAKE_HARNESS_WRITE_ON_STOP ?? '';
+  if (late === '') return;
+  for (const signal of ['SIGHUP', 'SIGTERM'] as const) {
+    process.on(signal, () => {
+      writeFileSync(resolve(late), 'written as it stopped\n');
+      process.exit(128 + constants.signals[signal]);
+    });
+  }
+}
+
 /**
  * Stops the terminal echoing what is typed while the session runs, as the real TUIs (which read their keys raw) don't
  * echo it: a demo's screen shows each prompt once, as its own `>` line, and not the board's typing of it, paste
@@ -346,6 +358,7 @@ export class FakeSession {
     // Like the real TUIs: Ctrl-C (SIGINT, or \x03 through a PTY) interrupts a turn; twice at the prompt exits.
     // Print and exec modes keep the default and die.
     if (dialect.interactive) process.on('SIGINT', () => this.onCtrlC());
+    if (dialect.interactive) writeOnStop();
     if (dialect.interactive && dialect.harness === 'claude' && process.env.FAKE_HARNESS_FULLSCREEN === '1') this.fullscreen = runFullscreen(dialect.sessionId);
   }
 

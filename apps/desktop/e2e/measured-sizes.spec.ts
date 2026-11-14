@@ -10,13 +10,17 @@ import { scratch } from './scratch.ts';
 // An orchestrator's arrange sizes each lane's note to what the app measures its text at, not to the daemon's estimate,
 // and its zone map knows the board was measured.
 
-/** The board token of the agent `sessionId`, which the fake harness prints when asked for its identity. */
+/**
+ * The board token of the agent `sessionId`, which the fake harness prints when asked for its identity. Only a token's
+ * own characters are read: attached late, the snapshot ends the screen with cursor moves, not a new line, so the shell
+ * call's line (`identity:$AGENT_BOARD_IDENTITY:end`) runs on into the printed token.
+ */
 async function tokenOf(client: DaemonClient, sessionId: string): Promise<string> {
   let text = '';
   const printed = new Promise<string>((resolve) =>
     client.onEvent((event) => {
       if ((event.type === 'session.snapshot' || event.type === 'session.output') && event.sessionId === sessionId) text += event.data;
-      const token = /identity:(.*):end\r\n/.exec(text)?.[1];
+      const token = /identity:([\w-]+):end/.exec(text)?.[1];
       if (token !== undefined) resolve(token);
     }),
   );

@@ -147,6 +147,32 @@ describe('documents an agent shows the user', () => {
     expect(told).toHaveLength(1);
   });
 
+  it('says a message it tells is typed only once the agent took it, not while it is busy', async () => {
+    let ready = false;
+    const { host, told, agent } = documents({ state: 'running', tell: () => (ready ? { started: true } : { started: false, reason: 'it is working', busy: true }) });
+    let typed = 0;
+
+    host.tell('s1', 'The user approved your plan.', () => typed++);
+    await settle();
+    expect(typed).toBe(0);
+
+    // At its prompt, but the harness doesn't take it yet.
+    Object.assign(agent, { state: 'idle' });
+    host.observe(agent);
+    await settle();
+    expect(told).toEqual(['The user approved your plan.']);
+    expect(typed).toBe(0);
+
+    ready = true;
+    host.observe(agent);
+    await settle();
+    expect(typed).toBe(1);
+
+    host.observe(agent);
+    await settle();
+    expect(typed).toBe(1);
+  });
+
   it('refuses to save over a rewrite the user hasn’t seen, unless they keep theirs', () => {
     const { host, file, agentWrites } = documents();
     const path = file('plan.md', 'v1\n');

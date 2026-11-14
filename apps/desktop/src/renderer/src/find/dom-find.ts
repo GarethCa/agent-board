@@ -52,6 +52,18 @@ export function stepIndex(index: number, total: number, step: FindStep): number 
   return (index + (step === 'next' ? 1 : -1) + total) % total;
 }
 
+/** A `<details>`, or anything that folds as one does. */
+interface Folding {
+  tagName: string;
+  open?: boolean;
+  parentElement: Folding | null;
+}
+
+/** Opens every closed `<details>` round `element`, so a match in a folded part shows before it is scrolled to. */
+export function unfold(element: Folding | null): void {
+  for (let at = element; at !== null; at = at.parentElement) if (at.tagName === 'DETAILS' && at.open === false) at.open = true;
+}
+
 /** What each open finder has found: the document's two highlights are drawn from all of them, so one finder never wipes another's. */
 const shown = new Map<object, { all: Range[]; active: Range[] }>();
 
@@ -100,7 +112,9 @@ export function domFinder(getRoot: () => Element | null): Finder {
           index = stepIndex(index, ranges.length, step);
         }
         show();
-        ranges[index]?.startContainer.parentElement?.scrollIntoView({ block: 'center' });
+        const at = ranges[index]?.startContainer.parentElement ?? null;
+        unfold(at);
+        at?.scrollIntoView({ block: 'center' });
         return Promise.resolve({ active: ranges.length === 0 ? 0 : index + 1, total: ranges.length });
       } catch (error) {
         return Promise.reject(error instanceof Error ? error : new Error(String(error)));

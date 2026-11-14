@@ -2,19 +2,21 @@ import { describe, expect, it } from 'vitest';
 import { CREW_FLAG_GATHER_MS, createCrewFlags } from '../src/crew-flags.ts';
 import type { Agent, AgentFlag, AgentState } from '../src/protocol.ts';
 import type { RunStart } from '../src/schedules.ts';
+import { flagLeadOf } from '../src/ticket-tiles.ts';
 import { createFakeClock } from './fake-clock.ts';
 
 const LEAD = 'lead-0000-0000';
 
 /** The little of an agent crew flags read. */
-function agentOf(sessionId: string, fields: { state?: AgentState; flag?: Pick<AgentFlag, 'id' | 'reason'> | null; spawnedBy?: string | null; name?: string }): Agent {
-  const { state = 'idle', flag = null, spawnedBy = null, name = sessionId } = fields;
+function agentOf(sessionId: string, fields: { state?: AgentState; flag?: Pick<AgentFlag, 'id' | 'reason'> | null; spawnedBy?: string | null; ticket?: string | null; name?: string }): Agent {
+  const { state = 'idle', flag = null, spawnedBy = null, ticket = null, name = sessionId } = fields;
   return {
     sessionId,
     name,
     state,
     endedAt: null,
     spawnedBy,
+    ticket,
     flag: flag === null ? null : { ...flag, at: '2026-11-12T00:00:00.000Z', via: null, to: 'orchestrator' },
   } as Agent;
 }
@@ -27,7 +29,7 @@ function board(leadState: AgentState) {
   let answer: () => Promise<RunStart> = () => Promise.resolve({ started: true });
   const flags = createCrewFlags({
     agent: (sessionId) => agents.get(sessionId),
-    crewOf: (sessionId) => [...agents.values()].filter((agent) => agent.spawnedBy === sessionId),
+    crewOf: (sessionId) => [...agents.values()].filter((agent) => flagLeadOf(agent) === sessionId),
     tell: (_sessionId, text) => {
       told.push(text);
       return answer();
@@ -46,6 +48,9 @@ function board(leadState: AgentState) {
     answerWith: (next: () => Promise<RunStart>) => (answer = next),
     /** A crew member of the lead raising a flag. */
     flag: (sessionId: string, reason: string) => set(agentOf(sessionId, { spawnedBy: LEAD, flag: { id: nextId++, reason }, name: `crew ${sessionId}` })),
+    /** A helper of the lead's ticket, started by `spawnedBy`, raising a flag. */
+    helperFlag: (sessionId: string, reason: string, spawnedBy: string | null) =>
+      set(agentOf(sessionId, { spawnedBy, ticket: LEAD, flag: { id: nextId++, reason }, name: `helper ${sessionId}` })),
     close: () => flags.close(),
     /** The lead moving to `state`. */
     lead: (state: AgentState) => set(agentOf(LEAD, { state, name: 'lead' })),
@@ -96,6 +101,17 @@ describe('crew flags', () => {
     expect(b.told).toHaveLength(1);
     expect(b.told[0]).toContain('needs you: PR #12 is ready for review');
     expect(b.told[0]).toContain('needs you: asks: Postgres or SQLite?');
+  });
+
+  it("gather a ticket's helpers' flags into one message to its chat, whoever started each", async () => {
+    const b = board('idle');
+    b.helperFlag('builder', 'PR #12 is ready for review', LEAD);
+    b.helperFlag('deeper', 'asks: which colour?', 'builder');
+    b.helperFlag('outside', 'Blocked on the fixture', null);
+    b.clock.advance(CREW_FLAG_GATHER_MS);
+    await settle();
+    expect(b.told).toHaveLength(1);
+    for (const reason of ['PR #12 is ready for review', 'asks: which colour?', 'Blocked on the fixture']) expect(b.told[0]).toContain(`needs you: ${reason}`);
   });
 
   it('wait for a lead mid-turn to end it, then tell every flag raised meanwhile as one message', async () => {

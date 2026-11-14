@@ -28,6 +28,8 @@ function asks(db = memoryDb(), worktree?: string) {
   const changes: [string, boolean][] = [];
   const placed: string[] = [];
   const told: [string, string][] = [];
+  /** Says each told message was typed at its agent's prompt. */
+  const typed: (() => void)[] = [];
   const cards: { sessionId: string; ask: AgentAsk; ended: { at: string; how: StepsAskEnd } | null }[] = [];
   const ended: [string, StepsAskEnd][] = [];
   const host = createAskHost({
@@ -36,14 +38,17 @@ function asks(db = memoryDb(), worktree?: string) {
     changed: (sessionId, began) => changes.push([sessionId, began]),
     touched: (sessionId) => placed.push(sessionId),
     worktree: () => worktree,
-    told: (sessionId, text) => told.push([sessionId, text]),
+    told: (sessionId, text, done) => {
+      told.push([sessionId, text]);
+      typed.push(done);
+    },
     toCard: (sessionId, ask, end) => {
       cards.push({ sessionId, ask, ended: end });
       return Promise.resolve({ id: `card-${cards.length}` } as BoardItem);
     },
     cardEnded: (cardId, end) => ended.push([cardId, end.how]),
   });
-  return { db, clock, changes, placed, told, cards, ended, host };
+  return { db, clock, changes, placed, told, typed, cards, ended, host };
 }
 
 function memoryDb(): DatabaseSync {
@@ -569,6 +574,75 @@ describe('a plan an agent leaves instead of waiting on', () => {
     await Promise.resolve();
     expect(host.latestPlan('s1')).toMatchObject({ left: false, decision: { outcome: 'withdrawn' } });
     expect(told).toEqual([['s1', '[agent-board] Plan v1 was withdrawn before the user decided: your session ended. Present it again.']]);
+  });
+
+  it('stays with an agent stopped to come back, as for a restart, and is decided for it meanwhile', async () => {
+    const { host, told } = asks();
+    const left = host.leavePlan('s1', plan);
+    host.end('s1', true);
+    expect(host.latestPlan('s1')).toMatchObject({ left: true, decision: null });
+    host.decide('s1', left.id, 'approved', '');
+    await Promise.resolve();
+    expect(told).toEqual([['s1', '[agent-board] The user approved plan v1. Go ahead with it.']]);
+  });
+
+  it('survives a daemon restart: the next daemon waits on it, the user’s edit and all, and tells the agent', async () => {
+    const db = memoryDb();
+    const before = asks(db);
+    const left = before.host.leavePlan('s1', plan);
+    const held = before.host.presentPlan('s2', plan, never()).catch((error: unknown) => error);
+    const edited = before.host.edit('s1', left.id, '# Cache\n\n1. Redis, warmed.\n');
+    before.host.close();
+    await held;
+    expect(before.told).toEqual([]);
+
+    const after = asks(db);
+    // A plan a call waited on is withdrawn, as no call waits on it now.
+    expect(after.host.latestPlan('s2')!.decision).toMatchObject({ outcome: 'withdrawn' });
+    after.host.resume();
+    expect(after.host.latestPlan('s1')).toMatchObject({ id: edited.id, version: 2, left: true, decision: null });
+    expect(after.changes).toEqual([['s1', true]]);
+
+    after.host.decide('s1', edited.id, 'approved', '');
+    await Promise.resolve();
+    expect(after.told).toHaveLength(1);
+    expect(after.told[0]![1]).toMatch(/^\[agent-board\] The user approved plan v2, their edit of your v1\./);
+  });
+
+  it('waits after a restart on the latest of two versions left undecided', () => {
+    const db = memoryDb();
+    const before = asks(db);
+    const left = before.host.leavePlan('s1', plan);
+    const edited = before.host.edit('s1', left.id, '# Cache\n\n1. Redis, warmed.\n');
+    before.host.close();
+    // As if the edit's two writes had not been one.
+    db.prepare('UPDATE plans SET outcome = NULL, decided_at = NULL WHERE id = ?').run(left.id);
+
+    const after = asks(db);
+    after.host.resume();
+    expect(() => after.host.decide('s1', left.id, 'approved', '')).toThrow();
+    expect(after.host.decide('s1', edited.id, 'approved', '')).toMatchObject({ version: 2 });
+  });
+
+  it('tells after a restart a decision the agent was not yet told, and not one it was', async () => {
+    const db = memoryDb();
+    const before = asks(db);
+    before.host.decide('s1', before.host.leavePlan('s1', plan).id, 'rejected', 'Not now');
+    before.host.decide('s2', before.host.leavePlan('s2', plan).id, 'approved', '');
+    await Promise.resolve();
+    expect(before.told).toHaveLength(2);
+    // Only s2's was typed before the daemon went.
+    before.typed[1]!();
+    before.host.close();
+
+    const after = asks(db);
+    after.host.resume();
+    expect(after.told).toEqual([['s1', '[agent-board] The user rejected plan v1. Don\'t carry it out.\n\nTheir comments:\nNot now']]);
+    after.typed[0]!();
+
+    const again = asks(db);
+    again.host.resume();
+    expect(again.told).toEqual([]);
   });
 
   it('logs what goes wrong in telling the agent instead of dropping it', async () => {

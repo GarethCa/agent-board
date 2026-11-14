@@ -61,20 +61,26 @@ function rosterLine(member: PrefabMember, builder: PrefabMember | undefined): st
 
 /**
  * The member whose branch the crew's reviewers review: the one that starts on the prompt, or, in a crew with a lead, the
- * first member the lead starts that isn't a reviewer.
+ * first member the lead starts that isn't a reviewer. A ticket's chat builds when it starts no builder of its own.
  */
 function crewBuilder(prefab: CrewPrefab): PrefabMember | undefined {
+  const first = prefab.members.find((member) => member.starts === 'prompt');
   const lead = prefab.members.some((member) => member.starts === 'lead');
-  if (!lead) return prefab.members.find((member) => member.starts === 'prompt');
-  return prefab.members.find((member) => member.starts === 'lead' && !REVIEWER_ROLES.includes(member.role as never));
+  if (!lead) return first;
+  const started = prefab.members.find((member) => member.starts === 'lead' && !REVIEWER_ROLES.includes(member.role as never));
+  return started ?? (prefab.onBoard === 'ticket' ? first : undefined);
 }
 
 /** What a lead's first message adds after the task: the crew it may start, and when to stop. */
 function leadBrief(prefab: CrewPrefab): string {
   const crew = prefab.members.filter((member) => member.starts === 'lead');
   const builder = crewBuilder(prefab);
+  const opening =
+    prefab.onBoard === 'ticket'
+      ? "You are this ticket's chat: you run its work, and each agent you start is its helper, whose questions and flags come to you. Start each helper when its work is ready, with the command shown:"
+      : `You lead a crew from the ${prefab.name} prefab. Start each member when its work is ready, with the command shown:`;
   return [
-    `You lead a crew from the ${prefab.name} prefab. Start each member when its work is ready, with the command shown:`,
+    opening,
     ...crew.map((member) => rosterLine(member, builder)),
     `Run at most ${prefab.roundLimit} review ${prefab.roundLimit === 1 ? 'round' : 'rounds'}, then stop and ask the user.`,
   ].join('\n');
@@ -208,6 +214,7 @@ export function createPrefabLibrary(db: DatabaseSync): PrefabLibrary {
               ...(first.role === null ? {} : { role: first.role }),
               ...(first.name === null ? {} : { name: first.name }),
               ...(first.template === null ? {} : { template: first.template }),
+              ...(prefab.onBoard === 'ticket' ? { ticketChat: true } : {}),
             },
             connection,
           );

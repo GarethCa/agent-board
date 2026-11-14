@@ -1,6 +1,6 @@
 import { expect, type Page } from '@playwright/test';
 import { launch, windowKey } from './agent-helpers.ts';
-import { test, tempDataDir, removeDataDir } from './launch.ts';
+import { connectedDaemonPid, test, tempDataDir, removeDataDir } from './launch.ts';
 import { isSettingsWindow, openSettings, settingsSection } from './settings-helpers.ts';
 import { SETTINGS_CONTROLS, SETTINGS_GROUPS, sectionOf, type SettingsControl } from '../src/renderer/src/chrome/settings-ia.ts';
 
@@ -222,6 +222,33 @@ test('Esc closes the Settings window at once, but only leaves a text field being
     await expect(path).toHaveValue('/usr/local/bin/claude-fake');
     await press(settings);
     await closed();
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+  }
+});
+
+test('Restart in Advanced › Background service brings the daemon back, and its row and the board show the new one', async () => {
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, {});
+  try {
+    const oldPid = await connectedDaemonPid(window);
+    // Opened on another pane, then moved to this one while open: the reload must come back here, not to the first.
+    await openSettings(window, 'alerts.notifications');
+    const settings = await openSettings(window, 'advanced.service');
+    const service = settingsSection(settings, 'Background service');
+    const details = service.getByTestId('daemon-details');
+    await expect(details).toContainText(`pid ${oldPid}`);
+
+    // No session is live, so it restarts without asking.
+    await service.getByRole('button', { name: 'Restart' }).click();
+
+    // Settings reloads on the pane it showed, with the new daemon's pid; the board reloads onto it too.
+    await expect(settingsSection(settings, 'Background service').getByTestId('daemon-details')).toContainText(/pid \d+/);
+    await expect(settingsSection(settings, 'Background service').getByTestId('daemon-details')).not.toContainText(`pid ${oldPid}`);
+    await expect(settings.getByRole('main', { name: 'Advanced' })).toBeVisible();
+    await expect(window.getByTestId('daemon-status')).not.toHaveAttribute('data-pid', String(oldPid));
+    expect(await connectedDaemonPid(window)).not.toBe(oldPid);
   } finally {
     await app.close();
     await removeDataDir(dataDir);

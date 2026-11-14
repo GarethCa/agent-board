@@ -12,13 +12,13 @@ const openLink = (url: string) => void window.agentBoard.trackers.openLink(url).
 /**
  * "‹agent› has a plan for you": its title and first lines, Read the plan to show it all, read only, and Claude's
  * choices. No, keep planning… opens a field for what to change. `onOpen` opens the agent, where its terminal has the
- * choices the hook can't give.
+ * choices the hook can't give. `read` shows the whole plan from the start, as Read the plan does.
  */
-export function PlanPromptRow({ agent, prompt, plan, onOpen }: { agent: Agent; prompt: PermissionPrompt; plan: string; onOpen?(): void }) {
+export function PlanPromptRow({ agent, prompt, plan, onOpen, read = false }: { agent: Agent; prompt: PermissionPrompt; plan: string; onOpen?(): void; read?: boolean }) {
   const state = usePermissionDecision(agent, prompt);
   const { busy, armed, decide, error } = state;
   const off = busy || !armed;
-  const [all, setAll] = useState(false);
+  const [all, setAll] = useState(read);
   const [changing, setChanging] = useState(false);
   const [words, setWords] = useState('');
   const title = planTitle(plan);

@@ -39,7 +39,7 @@ import { EmptyState } from './EmptyState';
 import { Island, IslandSeparator, ToolButton } from './Island';
 import { PanelRow } from './PanelRow';
 import { Section as PanelSection } from './Section';
-import { Checkbox, Choice, Choices, ErrorText, Field, Fieldset, Hint, Input, Radio, Select, Swatch, SwatchRadio, Switch, Textarea } from './Field';
+import { Checkbox, Choice, Choices, ErrorText, Field, Fieldset, Hint, Input, Radio, Readout, Select, Swatch, SwatchRadio, Switch, Textarea } from './Field';
 import { Badge, FlowPill, Kbd, SectionLabel, Shortcut, StatusPill, Tag } from './Label';
 import { MenuPreview, type MenuEntry } from './Menu';
 import { PopoverPreview } from './Popover';
@@ -536,6 +536,34 @@ function StateGrid<Row extends string, Column extends string>({
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+/**
+ * Readouts, a section of the component gallery that the gallery page puts last: a section added above the tile
+ * galleries moves every tile shot down, and the move changes how their labels and icons are drawn.
+ */
+export function ReadoutGallery() {
+  return (
+    <div className="component-gallery">
+      <Section id="readouts" title="Readouts">
+        <div className="component-gallery-columns">
+          <Readout label="Muted agents" hint="A readout names a reading that is not a control.">
+            2 agents
+          </Readout>
+          <Readout
+            label="Background service"
+            end={
+              <Button size="sm" variant="secondary">
+                Restart
+              </Button>
+            }
+          >
+            Build 0000000 · daemon 0.0.0 · pid 1000
+          </Readout>
+        </div>
+      </Section>
     </div>
   );
 }

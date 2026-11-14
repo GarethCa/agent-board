@@ -8,6 +8,7 @@ import type {
 import type { ItemChange } from '../../../../preload/api';
 import { centreOf, contains, rotatedBounds, type Rect } from '../../geometry';
 import { completeShapeData } from './text-style';
+import type { StageBoardView } from '../stage-boards';
 
 export const ITEM_NODE_PREFIX = 'item:';
 
@@ -15,18 +16,25 @@ export const ITEM_NODE_PREFIX = 'item:';
 export type ItemNodeTypeName = `${typeof ITEM_NODE_PREFIX}${BoardItemKind}`;
 export const itemNodeType = (kind: BoardItemKind): ItemNodeTypeName => `${ITEM_NODE_PREFIX}${kind}`;
 
+/** The clocks a Spine zone's "+N" chip stands for: how many, and when each runs, in the order they were set aside. */
+export interface MoreClocks {
+  count: number;
+  names: string[];
+}
+
 /**
- * A board item's node. `editing` opens it ready to type, as a note the user has just made is. Each kind has its own
- * node type, so its own node component.
+ * A board item's node. `editing` opens it ready to type, as a note the user has just made is. `more` makes a clock its
+ * zone's "+N" chip, standing for the clocks set aside. `stages` is a stage board's stages, as drawn (`withStageBoards`). Each kind has its own node type, so its own node component.
  */
-export type ItemNodeType = Node<{ item: BoardItem; editing?: boolean }, ItemNodeTypeName>;
+export type ItemNodeType = Node<{ item: BoardItem; editing?: boolean; more?: MoreClocks; stages?: StageBoardView }, ItemNodeTypeName>;
 
 /**
  * Items draw over zones (0) and tiles (1), except the kinds that frame things: a shape draws over its zone but under
- * the tiles. Among themselves they keep the order of the board's nodes: by `z`.
+ * the tiles, and so does a stage board, whose Doing tiles are drawn on it. Among themselves they keep the order of the
+ * board's nodes: by `z`.
  */
 const ITEM_Z_INDEX = 2;
-const BELOW_TILES: readonly BoardItemKind[] = ['shape'];
+const BELOW_TILES: readonly BoardItemKind[] = ['shape', 'stages'];
 
 export const isItemNode = (node: Node): node is ItemNodeType => node.id.startsWith(ITEM_NODE_PREFIX);
 

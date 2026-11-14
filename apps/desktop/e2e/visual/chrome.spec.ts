@@ -614,13 +614,17 @@ test('the compact window setting: Off by default, then a custom window with its 
   }
 });
 
-/** The Settings window on each of its seven groups' pages, and searching, light and dark. */
+/** The Settings window on each of its seven groups' pages, the Background service row with its Restart, and searching, light and dark. */
 for (const { theme, suffix } of [
   { theme: 'light', suffix: '' },
   { theme: 'dark', suffix: '-dark' },
 ] as const) {
   test(`the Settings window on each group, ${theme}`, async () => {
-    const shots = [...SETTINGS_GROUPS.map((group) => `settings-window-${group.id}${suffix}`), `settings-window-search${suffix}`];
+    const shots = [
+      ...SETTINGS_GROUPS.map((group) => `settings-window-${group.id}${suffix}`),
+      `settings-window-advanced-service${suffix}`,
+      `settings-window-search${suffix}`,
+    ];
     needsBaselines(...shots);
     const dataDir = tempDataDir();
     const appearance: Record<string, string> = theme === 'dark' ? { AGENT_BOARD_APPEARANCE: 'dark' } : {};
@@ -638,6 +642,16 @@ for (const { theme, suffix } of [
         await expect.soft(settings.locator('body')).toHaveScreenshot(`settings-window-${group.id}${suffix}.png`, SHOT);
         await restorePointer();
       }
+
+      // Advanced › Background service, below the fold on its group's page: its reading, Restart and hint.
+      await openSettings(window, 'advanced.service');
+      const service = settings.locator('#settings-section-advanced-service');
+      await expect(service.getByRole('button', { name: 'Restart' })).toBeVisible();
+      await pinRandomText(settings);
+      const restoreServicePointer = await ignorePointer(settings);
+      await settle(settings);
+      await expect.soft(service).toHaveScreenshot(`settings-window-advanced-service${suffix}.png`, SHOT);
+      await restoreServicePointer();
 
       // Searching: the sidebar filtered to what holds "path", the page those sections with the matches highlighted.
       await settings.getByRole('searchbox', { name: 'Search settings' }).fill('path');

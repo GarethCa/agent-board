@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Step, StepsData, StepsWho } from '@agent-board/daemon/protocol';
-import { sendsWithWords, stepRows, stepsView, turnSection, zoomLook, type StepsLookup } from './steps-view';
+import { fullSections, kindMarked, settledSteps, yoursText, sendsWithWords, stepRows, stepsView, turnSection, zoomLook, type StepsLookup } from './steps-view';
 
 const USER: StepsWho = { kind: 'user' };
 const agent = (name: string): StepsWho => ({ kind: 'agent', sessionId: `s-${name}`, name });
@@ -176,5 +176,55 @@ describe('⌘↵ in a words answer', () => {
     const sent = card([answered], { sent: { at: '2026-11-04T11:00:00.000Z', answers: {} } });
     expect(sendsWithWords(sent, live, words.id, 'Ship it')).toBe(false);
     expect(sendsWithWords(sent, live, words.id, 'Hold it')).toBe(true);
+  });
+});
+
+describe('a steps card in full', () => {
+  const text = (sections: ReturnType<typeof fullSections>) => sections.map((section) => [section.title, ...section.steps.map((each) => `${each.place} ${each.step.text}`)]);
+
+  it('lists what is left under each section, then every finished step under Done, in place order', () => {
+    const steps = [
+      step({ text: 'Freeze', section: 'Prepare', done: stamp() }),
+      step({ text: 'Smoke-test', section: 'Release', done: stamp() }),
+      step({ text: 'Merge #214', section: 'Release' }),
+      step({ text: 'Patch or minor?', kind: 'one', section: 'Release', choices: ['patch', 'minor'], answer: { value: { one: 1 }, ...stamp() } }),
+      step({ text: 'Post notes', section: 'After' }),
+    ];
+    expect(text(fullSections(stepsView(card(steps), live)))).toEqual([
+      ['Release', '3 Merge #214'],
+      ['After', '5 Post notes'],
+      ['Done', '1 Freeze', '2 Smoke-test', '4 Patch or minor?'],
+    ]);
+  });
+
+  it('keeps a step ticked or unticked while it is open where it was, till the view opens again', () => {
+    const steps = [step({ text: 'Freeze', section: 'Prepare', done: stamp() }), step({ text: 'Tag', section: 'Release' }), step({ text: 'Push', section: 'Release' })];
+    const settled = settledSteps(stepsView(card(steps), live));
+    const ticked = [{ ...steps[0]!, done: null }, { ...steps[1]!, done: stamp() }, steps[2]!];
+    const view = stepsView(card(ticked), live);
+    expect(text(fullSections(view, settled))).toEqual([['Release', '2 Tag', '3 Push'], ['Done', '1 Freeze']]);
+    // Each shows its new state in place.
+    expect(fullSections(view, settled).flatMap((section) => section.steps.map((each) => each.state))).toEqual(['done', 'later', 'yours']);
+    // Opened again, it sorts afresh.
+    expect(text(fullSections(view, settledSteps(view)))).toEqual([['Prepare', '1 Freeze'], ['Release', '3 Push'], ['Done', '2 Tag']]);
+  });
+
+  it('with no headings, its open steps under no head, and no Done when none is finished', () => {
+    const steps = [step({ text: 'Freeze', done: stamp() }), step({ text: 'Tag' })];
+    expect(text(fullSections(stepsView(card(steps), live)))).toEqual([
+      [null, '2 Tag'],
+      ['Done', '1 Freeze'],
+    ]);
+    expect(text(fullSections(stepsView(card([step({ text: 'Tag' })]), live)))).toEqual([[null, '1 Tag']]);
+  });
+
+  it('says how many steps are the user\'s, as the card\'s foot does', () => {
+    expect(yoursText(stepsView(card([step({ text: 'Merge' }), step({ text: 'Tag' }), step({ text: 'Freeze', done: stamp() })]), live))).toBe('Yours: 2 left');
+    expect(yoursText(stepsView(card([step({ text: 'Freeze', done: stamp() })]), live))).toBeNull();
+  });
+
+  it("marks a question's kind beside it, not a to-do's, whose round state dot already says it is one", () => {
+    expect(kindMarked('todo')).toBe(false);
+    expect(['one', 'any', 'yes-no', 'order', 'words'].map((kind) => kindMarked(kind as Step['kind']))).toEqual([true, true, true, true, true]);
   });
 });

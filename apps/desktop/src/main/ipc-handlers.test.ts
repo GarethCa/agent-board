@@ -71,7 +71,7 @@ describe('the channels main handles', () => {
     ['web tabs', () => registerWebTabIpc({ isBoard: () => false, isSettings: () => false, keepLogins: async () => true }), ['web-tab:back', 'web-tab:cancelHandOff', 'web-tab:clearData', 'web-tab:close', 'web-tab:dismissOffered', 'web-tab:dismissPasskey', 'web-tab:find', 'web-tab:focus', 'web-tab:focusWindow', 'web-tab:forget', 'web-tab:forward', 'web-tab:handOff', 'web-tab:load', 'web-tab:open', 'web-tab:openInBrowser', 'web-tab:openOffered', 'web-tab:openPlan', 'web-tab:reload', 'web-tab:setBounds', 'web-tab:stopFind', 'web-tab:typing']],
     ['settings window', () => registerSettingsWindow({ open: () => { throw new Error('no window in a unit test'); }, board: () => undefined }), ['setup:openSettings', 'setup:takeSettingsPane']],
     ['overview window', () => registerOverviewWindow({ open: () => { throw new Error('no window in a unit test'); }, board: () => undefined, view: { get: async () => undefined, set: async () => {} } }), ['overview:markSeen', 'overview:seen']],
-    ['trackers', registerTrackerIpc, ['tracker:connect', 'tracker:disconnect', 'tracker:issues', 'tracker:openLink', 'tracker:projects', 'tracker:scopes', 'tracker:status']],
+    ['trackers', registerTrackerIpc, ['tracker:connect', 'tracker:disconnect', 'tracker:issueFilters', 'tracker:issues', 'tracker:openLink', 'tracker:projects', 'tracker:scopes', 'tracker:status']],
   ])('%s', (_name, register, channels) => {
     expect(registered(register)).toEqual(channels);
   });
@@ -122,6 +122,8 @@ describe('what a pass-through sends the daemon', () => {
     registered(registerZoneIpc);
     expect(await invoke('zone:configure', 'z1', { layoutRule: 'lanes' })).toMatchObject({ method: 'zone.configure', params: { id: 'z1', layoutRule: 'lanes' } });
     expect(await invoke('zone:followRule', 'z1', ['agent:a'])).toEqual({ method: 'zone.followRule', params: { id: 'z1', tiles: ['agent:a'] } });
+    // A Tidy: laid out afresh.
+    expect(await invoke('zone:followRule', 'z1', [], true)).toEqual({ method: 'zone.followRule', params: { id: 'z1', tiles: [], reflow: true } });
   });
 
   it('passes the flow edge settings through the settings methods', async () => {

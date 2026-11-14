@@ -66,6 +66,7 @@ describe('the crew prefab library', () => {
       ['Implementer + code + design reviewers', true],
       ['Spike + reviewer', true],
       ['Lead and crew', true],
+      ['Ticket', true],
     ]);
 
     const saved = await setup.client.call('orchestrator.savePrefab', { text: prefabFile(pair()) });
@@ -129,7 +130,7 @@ describe('the crew prefab library', () => {
   it('is changed by the user or any agent, with no role, and each change is logged', async () => {
     const setup = await prefabDaemon();
     const boardLead = await lead(setup);
-    expect((await boardLead.connection.call('orchestrator.prefabs', { token: boardLead.token })).prefabs).toHaveLength(5);
+    expect((await boardLead.connection.call('orchestrator.prefabs', { token: boardLead.token })).prefabs).toHaveLength(6);
     await boardLead.connection.call('orchestrator.savePrefab', { token: boardLead.token, text: prefabFile(pair()) });
     await boardLead.connection.call('orchestrator.removePrefab', { token: boardLead.token, name: 'Pair' });
     const [removed, saved] = await setup.client.call('orchestrator.activity', { orchestratorId: boardLead.agent.sessionId, limit: 2 });

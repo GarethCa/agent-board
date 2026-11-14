@@ -74,8 +74,7 @@ async function untilEdge(recorder: Setup['recorder'], id: string, match: (edge: 
 type Side = { token: string; connection: Awaited<ReturnType<typeof connectTestClient>> };
 
 /**
- * Starts `name` as the user does, or as the agent `by` does (`orchestrator.spawn`), in `zoneId`: one an agent started is
- * one any agent may name, as none the user started by hand.
+ * Starts `name` as the user does, or as the agent `by` does (`orchestrator.spawn`), in `zoneId`.
  */
 async function started(setup: Setup, name: string, by: Side | undefined, zoneId: string, rest: { prompt?: string; harness?: Harness }) {
   const { client } = setup;
@@ -314,7 +313,7 @@ describe('handing off explicitly', () => {
     const setup = await handoffDaemon();
     const impl = await agentSide(setup, 'impl');
     const { agent: a, token, connection } = impl;
-    // An agent names one another agent started, never one the user started by hand: it starts its reviewer itself.
+    // It starts its reviewer itself.
     const b = await receiver(setup, 'review', 'claude', { by: impl });
 
     const handedFirst = setup.recorder.events.length;
@@ -437,23 +436,23 @@ describe('handing off explicitly', () => {
     expect(await isEnded(impl.agent)).toBe(true);
   });
 
-  it('refuses to name an agent the user started by hand, and hands off to one an agent started in another zone', async () => {
+  it('hands off to an agent the user started by hand, and to one an agent started in another zone', async () => {
     const setup = await handoffDaemon();
     const impl = await agentSide(setup, 'impl');
     const { agent: a, token, connection } = impl;
     const elsewhere = await setup.client.call('zone.add', { path: tempRepo('elsewhere'), x: 4000, y: 0, name: 'elsewhere' });
     const far = await setup.client.call('agent.spawn', { zoneId: elsewhere.id, name: 'far', ...SIZE });
-    await expect(connection.call('board.handoff', { token, to: far.sessionId, message: 'hi' })).rejects.toMatchObject({
-      code: BOARD_ERROR.outOfScope,
-      message: expect.stringMatching(/far is one the user started by hand/),
-    });
-    expect(await setup.client.call('flowEdge.list')).toEqual([]);
+    const [toFar] = await connection.call('board.handoff', { token, to: far.sessionId, message: 'hi' });
+    expect(toFar).toMatchObject({ to: far.sessionId });
 
     const reached = await receiver(setup, 'reached', 'claude', { by: impl, zoneId: elsewhere.id });
     const [handed] = await connection.call('board.handoff', { token, to: reached.sessionId, message: 'Over to you' });
     expect(handed).toMatchObject({ to: reached.sessionId, outcome: 'delivered' });
     await setup.recorder.waitForText(reached.sessionId, 'Hand-off from impl (its message): Over to you');
-    expect((await setup.client.call('flowEdge.list')).map((edge) => [edge.from, edge.to])).toEqual([[a.sessionId, reached.sessionId]]);
+    expect((await setup.client.call('flowEdge.list')).map((edge) => [edge.from, edge.to])).toEqual([
+      [a.sessionId, far.sessionId],
+      [a.sessionId, reached.sessionId],
+    ]);
   });
 
   it("skips a final-message edge it gives no message, since its last final message is from an earlier turn; a manual or paused one too", async () => {
@@ -1060,13 +1059,14 @@ describe('an answer queued in a turn that does not end on its Stop', () => {
   ])('is kept unsent when the board interrupts a Codex turn, %s', async (_how, prompt) => {
     // A turn held open until the interrupt, so no hook's start-up speed decides whether it is still under way.
     const { setup, b, edge } = await queuedIn(prompt, 'codex', 'Working until interrupted.');
+    const interrupted = setup.recorder.events.length;
     await setup.client.call('agent.interrupt', { sessionId: b.sessionId });
-    await setup.recorder.waitForText(b.sessionId, 'Interrupted');
-    // Its Interrupt hook lands after the board's interrupt.
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
-    expect(setup.recorder.events.filter((e): e is AgentUpdatedEvent => e.type === 'agent.updated' && e.agent.sessionId === b.sessionId).at(-1)!.agent).toMatchObject({
-      unsent: 'A message',
-    });
+    // Its hooks land after the board's interrupt, each in its own process: wait for them, however slow they start. The
+    // daemon takes each hook in as it tells clients of it, so what it answers next is after them all.
+    const landed = (name: string) => setup.recorder.waitFor((e): e is HookEvent => e.type === 'hook' && e.sessionId === b.sessionId && e.event === name, interrupted);
+    await landed('Interrupt');
+    if (prompt.endsWith('Stop in flight')) await landed('Stop');
+    expect((await setup.client.call('agent.list')).find((agent) => agent.sessionId === b.sessionId)).toMatchObject({ unsent: 'A message' });
     expect((await setup.client.call('flowEdge.send', { id: edge.id })).lastDelivery).toMatchObject({
       delivered: false,
       reason: 'a message typed at its prompt was never sent',

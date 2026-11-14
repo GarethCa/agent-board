@@ -8,6 +8,7 @@ import type { Agent, NeedsYouShows } from '@agent-board/daemon/protocol';
 import { isLead } from '@agent-board/daemon/work-units';
 import { agentNoteData } from './items/agent-note';
 import { isItemNode } from './items/items';
+import { stagedTile } from './stage-boards';
 import type { TileNodeType } from './tile';
 import { AGENT_TILE_SIZE, CHIP_SIZE } from '@agent-board/daemon/board-layout';
 import type { Rect } from '../geometry';
@@ -140,12 +141,12 @@ export function withShelves(
 
 /**
  * Whether `node` is a session tile drawn where its zone's layout puts it, not at its saved place: in a zone on shelves or
- * in clusters. Nothing may save such a tile's place from where it is drawn (an align, a drop onto it).
+ * in clusters, or on a stage board. Nothing may save such a tile's place from where it is drawn (an align, a drop onto it).
  */
 export function laidOutTile(node: BoardNode, nodes: readonly BoardNode[]): boolean {
   if (!isSessionTile(node) || node.parentId === undefined) return false;
   const zone = nodes.find((each): each is ZoneNodeType => each.id === node.parentId && isZone(each));
-  return zone !== undefined && zone.data.zone.layoutMode !== 'free';
+  return (zone !== undefined && zone.data.zone.layoutMode !== 'free') || stagedTile(node, nodes);
 }
 
 /** How to show an agent folded out of sight: its zone and stack, whether Done must be shown first, and what to bring into view. */

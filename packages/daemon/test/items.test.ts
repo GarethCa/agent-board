@@ -289,3 +289,37 @@ describe('agent notes', () => {
     await expect(client.call('item.create', note({ ...written, editedByUser: 'yes' }))).rejects.toThrow(/agent note's editedByUser/);
   });
 });
+
+describe('stage boards', () => {
+  const stages = (zoneId: string | null, data: Record<string, unknown> = { joined: [], left: [] }): CreateItemParams => ({
+    kind: 'stages',
+    zoneId,
+    x: 40,
+    y: 40,
+    width: 1134,
+    height: 92,
+    data,
+  });
+
+  it('keeps one in a zone, with the agents dragged in and out of it', async () => {
+    const client = await connectTestClient(await startTestDaemon());
+    const zone = await client.call('zone.add', { path: tempRepo(), x: 0, y: 0 });
+    const board = await client.call('item.create', stages(zone.id));
+    expect(board).toMatchObject({ kind: 'stages', zoneId: zone.id, data: { joined: [], left: [] } });
+    const joined = await client.call('item.update', { id: board.id, data: { joined: ['h'] } });
+    expect(joined.data).toEqual({ joined: ['h'], left: [] });
+  });
+
+  it('refuses a second in one zone, one on the bare board, and lists that are not of session ids', async () => {
+    const client = await connectTestClient(await startTestDaemon());
+    const repo = tempRepo();
+    const zone = await client.call('zone.add', { path: repo, x: 0, y: 0 });
+    const other = await client.call('zone.add', { path: repo, x: 2000, y: 0 });
+    await client.call('item.create', stages(zone.id));
+    await expect(client.call('item.create', stages(zone.id))).rejects.toThrow(/already has a stage board/);
+    await expect(client.call('item.create', stages(null))).rejects.toThrow(/stage board belongs in a zone/);
+    await expect(client.call('item.create', stages(other.id, { joined: 'a' }))).rejects.toThrow(/stage board's joined/);
+    const second = await client.call('item.create', stages(other.id));
+    await expect(client.call('item.update', { id: second.id, zoneId: zone.id })).rejects.toThrow(/already has a stage board/);
+  });
+});

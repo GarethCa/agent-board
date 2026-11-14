@@ -1,4 +1,4 @@
-import { memo, type ReactNode } from 'react';
+import { createContext, memo, useContext, type ReactNode } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { createLowlight } from 'lowlight';
@@ -19,6 +19,8 @@ import swift from 'highlight.js/lib/languages/swift';
 import typescript from 'highlight.js/lib/languages/typescript';
 import xml from 'highlight.js/lib/languages/xml';
 import yaml from 'highlight.js/lib/languages/yaml';
+import { remarkFindings } from '../doc/remark-findings';
+import { FindingsTools } from '../doc/FindingsTools';
 
 /**
  * The languages a code block is highlighted in: what agents mostly write here, bundled with the app (each grammar is a
@@ -52,6 +54,11 @@ function languageOf(code: Element): string | undefined {
 
 interface MarkdownProps {
   text: string;
+  /**
+   * `chat` (the default) is a message's density. `read` is a document's: headings get ids and findings fold (see
+   * remarkFindings), styled as `.doc-read`. `card` is the reading styles alone, for text lifted from a document.
+   */
+  variant?: 'chat' | 'read' | 'card';
   /** Opens an https link in the OS browser. */
   onOpenLink(url: string): void;
 }
@@ -62,24 +69,59 @@ interface MarkdownProps {
  * image shows only its alt text, and only an https link is a link, opened in the OS browser. Memoised on its text: a
  * long transcript re-renders only what changed.
  */
-export const Markdown = memo(function Markdown({ text, onOpenLink }: MarkdownProps) {
-  const components: Components = {
-    a: ({ href, children }) => <Link href={href} onOpenLink={onOpenLink}>{children}</Link>,
-    img: ({ alt }) => (alt ? <span className="chat-md-image">{alt}</span> : null),
-    pre: ({ children }) => <pre className="chat-md-code">{children}</pre>,
-    // A task list's boxes show what is done; they aren't for ticking here.
-    input: ({ type, checked }) => (type === 'checkbox' ? <input type="checkbox" disabled checked={checked} /> : null),
-  };
+export const Markdown = memo(function Markdown({ text, onOpenLink, variant = 'chat' }: MarkdownProps) {
+  // The components are the same objects every render: a new one is a new element type, which would remount (and so
+  // refold) every finding whenever the text changed.
   return (
-    <div className="chat-md">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} skipHtml components={components}>
-        {text}
-      </ReactMarkdown>
-    </div>
+    <OpenLink.Provider value={onOpenLink}>
+      <div className={variant === 'chat' ? 'chat-md' : variant === 'read' ? 'doc-read' : 'doc-read doc-read-card'}>
+        <ReactMarkdown
+          remarkPlugins={variant === 'read' ? READ_PLUGINS : CHAT_PLUGINS}
+          rehypePlugins={[rehypeHighlight]}
+          skipHtml
+          components={variant === 'read' ? READ_COMPONENTS : CHAT_COMPONENTS}
+        >
+          {text}
+        </ReactMarkdown>
+      </div>
+    </OpenLink.Provider>
   );
 });
 
-function Link({ href, onOpenLink, children }: { href: string | undefined; onOpenLink(url: string): void; children: ReactNode }) {
+/** How a link in the Markdown opens: the OS browser, as the Markdown's owner says. */
+const OpenLink = createContext<(url: string) => void>(() => {});
+
+const CHAT_COMPONENTS: Components = {
+  a: ({ href, children }) => <Link href={href}>{children}</Link>,
+  img: ({ alt }) => (alt ? <span className="chat-md-image">{alt}</span> : null),
+  pre: ({ children }) => <pre className="chat-md-code">{children}</pre>,
+  // A task list's boxes show what is done; they aren't for ticking here.
+  input: ({ type, checked }) => (type === 'checkbox' ? <input type="checkbox" disabled checked={checked} /> : null),
+};
+
+const READ_COMPONENTS: Components = {
+  ...CHAT_COMPONENTS,
+  div: ({ node, className, children, ...rest }) =>
+    className === 'findings-tools' ? (
+      <FindingsTools count={Number(node?.properties.dataCount ?? 0)} />
+    ) : (
+      <div className={className} {...rest}>
+        {children}
+      </div>
+    ),
+  // A wide table scrolls sideways in its own box, not the page.
+  table: ({ children }) => (
+    <div className="read-table">
+      <table>{children}</table>
+    </div>
+  ),
+};
+
+const CHAT_PLUGINS = [remarkGfm];
+const READ_PLUGINS = [remarkGfm, remarkFindings];
+
+function Link({ href, children }: { href: string | undefined; children: ReactNode }) {
+  const onOpenLink = useContext(OpenLink);
   if (href === undefined || !href.startsWith('https://')) return <>{children}</>;
   return (
     <a

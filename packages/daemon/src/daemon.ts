@@ -40,6 +40,7 @@ import { createGateHost } from './gates.ts';
 import { createAskHost } from './asks.ts';
 import { createRemoveAskStore } from './remove-asks.ts';
 import { createDocumentHost } from './documents.ts';
+import { createItemOwners } from './item-owners.ts';
 import { createStepsHost } from './steps.ts';
 import { createMemoryQueueHost, type MemoryQueueHost } from './memory-queue.ts';
 import { createCrewFlags } from './crew-flags.ts';
@@ -53,6 +54,7 @@ import { adoptLoginShellPath } from './login-path.ts';
 import { migrate, schemaVersion as readSchemaVersion } from './migrate.ts';
 import { daemonPaths, prepareSocketDir } from './paths.ts';
 import {
+  AGENT_ERROR,
   DAEMON_VERSION,
   DOCUMENT_CARD_SIZE,
   PLAN_CARD_SIZE,
@@ -60,8 +62,10 @@ import {
   PROTOCOL_VERSION,
   lineSplitter,
   waitsForYou,
+  type Agent,
   type BoardItem,
   type BuildInfo,
+  type ClosedKept,
   type DaemonEvent,
   type DaemonHealth,
   type DaemonMethods,
@@ -91,7 +95,7 @@ import { createRoleTemplates } from './role-templates.ts';
 import { createReviewHost } from './reviews.ts';
 import { createSelectionAsks } from './selection-asks.ts';
 import { createBoardMaster } from './master.ts';
-import { handleRpcLine, type RpcHandlers } from './rpc.ts';
+import { handleRpcLine, RpcMethodError, type RpcHandlers } from './rpc.ts';
 import { createClockHost } from './clocks.ts';
 import { createClockTemplateHost } from './clock-templates.ts';
 import { createSettings, defaultEffort } from './settings.ts';
@@ -104,6 +108,7 @@ import { watchPullRequests } from './pull-requests.ts';
 import { createPullRequestLookup } from './agent-pull-requests.ts';
 import { pullRequestTabHandlers } from './pull-request-tabs.ts';
 import { createTrackerHost, trackerHandlers, type TrackerFactory } from './trackers.ts';
+import { flagLeadOf, helpersOf } from './ticket-tiles.ts';
 import { setupHandlers } from './setup-checks.ts';
 import { viewStateHandlers } from './view-state.ts';
 import { createZoneSources, type ZoneSources } from './zone-sources.ts';
@@ -393,9 +398,10 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       onOutput: (sessionId) => agents.onOutput(sessionId),
       onExit: (session) => {
         agents.onExit(session);
-        // After the agent reads as ended, so what it is told of a plan it left waits for it to be resumed.
-        asks.end(session.id);
         const keepsWork = session.stoppedByRestart || (agents.get(session.id)?.hibernated ?? null) !== null;
+        // After the agent reads as ended, so what it is told of a plan it left waits for it to be resumed. One coming
+        // back keeps a plan it left waiting for the user.
+        asks.end(session.id, keepsWork);
         reviews.onExit(session.id, keepsWork);
         // The jobs it took go back on their queues, unless it is coming back.
         void late.memoryQueue?.sessionEnded(session.id, keepsWork).catch((error: unknown) => log(`could not put back the jobs ${session.id} held: ${(error as Error).message}`));
@@ -538,7 +544,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     const settings = createSettings(db, (now, was) => {
       if (now.heldPayloads === 'path' && was.heldPayloads !== 'path') flowEdges.dropCopies();
       broadcast({ type: 'settings.updated', settings: now });
-    });
+    }, options.agentEnv ?? process.env);
     // Where `claude` and `codex` are, as absolute paths: what agents launch and onboarding checks. Looked for now, in the
     // background: a start or a Restart waits for it only if it is still running (and finds nothing yet).
     const harnessEnv = options.agentEnv ?? process.env;
@@ -592,7 +598,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       addCard: (sessionId) => addPlanCard(sessionId),
       wrote: (sessionId, path) => documents.userWrote(sessionId, path),
       // The decision on a plan left with the command line is typed at the agent's prompt as a document's edit is.
-      told: (sessionId, text) => documents.tell(sessionId, text),
+      told: (sessionId, text, typed) => documents.tell(sessionId, text, typed),
       // Put on the board, or ended half-answered: an ask becomes a steps card, which its Send answers while it waits.
       toCard: (sessionId, ask, ended) => steps.fromAsk(sessionId, ask, ended),
       cardEnded: (cardId, ended) => {
@@ -609,6 +615,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       agent: (sessionId) => agents.get(sessionId),
       tell: (sessionId, text) => agents.tell(sessionId, text),
       addCard: (document) => addDocumentCard(document),
+      keptDir: join(options.dataDir, 'documents'),
       log,
     });
     const agents = createAgentHost({
@@ -655,6 +662,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       },
       onTurnCut: (sessionId, why) => clocks.turnCut(sessionId, why),
       endTabs: (sessionId) => shells.deleteOwned(sessionId),
+      beforeWorktreeRemoved: (sessionId, worktree) => documents.keepFilesIn(sessionId, worktree),
       onBranchChanged: (sessionId) => void pullRequests.refresh(sessionId),
       onTurnBoundary: (sessionId) => {
         flowEdges.turnBoundary(sessionId);
@@ -668,6 +676,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         asks.forget(sessionId);
         removeAsks.drop(sessionId);
         removeDocumentCards(sessionId).catch((error: unknown) => log(`could not take ${sessionId}'s document and plan cards off the board: ${(error as Error).message}`));
+        itemOwners.agentRemoved(sessionId).catch((error: unknown) => log(`could not take ${sessionId}'s notes off the board: ${(error as Error).message}`));
         documents.forget(sessionId);
         selectionAsks.forget(sessionId);
         clocks.agentRemoved(sessionId);
@@ -774,6 +783,55 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     const zones = zoneHandlers<unknown>(db, zoneTable, trackers, (zoneId) =>
       agents.dismissStartsIn(zoneId),
     );
+    // A ticket's chat goes after its helpers, on the app's Delete and an agent's remove alike. Unforced, none goes while
+    // the chat or a helper has unsaved work, so a removal never stops halfway.
+    const withHelpers = async (sessionId: string, unforced: boolean, remove: (id: string) => Promise<unknown>): Promise<void> => {
+      const helpers = helpersOf(agents.list(), sessionId);
+      if (unforced && helpers.length > 0) {
+        for (const agent of [...helpers, agents.get(sessionId)]) {
+          if (agent?.ownsWorktree !== true) continue;
+          const reason = await unsavedWork(agent.repoRoot, agent.worktree, agent.ownedBranch);
+          if (reason !== undefined) throw new RpcMethodError(AGENT_ERROR.unsavedWork, `${agent.name}: ${reason}`);
+        }
+      }
+      for (const helper of helpers) if (agents.get(helper.sessionId) !== undefined) await remove(helper.sessionId);
+      await remove(sessionId);
+    };
+    /**
+     * Ends the agent, then says what unsaved work its own worktree holds (but for the board's files: a review, a
+     * handover), if any. Ended first, so nothing it writes after the check is lost with its worktree.
+     */
+    const endThenCheck = async (sessionId: string, why: string): Promise<string | undefined> => {
+      const agent = agents.get(sessionId);
+      if (agent === undefined) return undefined;
+      if (agent.endedAt === null) await agents.stop(sessionId, why);
+      return agent.ownsWorktree ? unsavedWork(agent.repoRoot, agent.worktree, agent.ownedBranch, { ignoreBoardFiles: true }) : undefined;
+    };
+    /**
+     * Closes a ticket's chat after its helpers (but its own reviewers, which its close takes), or none of them. Each
+     * helper, and the chat too with `checkChat`, is checked for unsaved work (but the board's files, as a close checks)
+     * while it runs, then ended and checked again, so nothing written as it stopped is lost: one with some refuses the
+     * close before any agent goes. The helpers then go, clean, and `closeChat` closes the chat.
+     */
+    const withHelpersClosed = async (sessionId: string, why: string, checkChat: boolean, closeChat: () => Promise<void>): Promise<void> => {
+      const helpers = helpersOf(agents.list(), sessionId).filter((helper) => helper.reviewOf !== sessionId);
+      if (helpers.length > 0) {
+        const chat = agents.get(sessionId);
+        const checked = checkChat && chat !== undefined ? [...helpers, chat] : helpers;
+        const refuse = async (unsaved: (agent: Agent) => Promise<string | undefined>) => {
+          for (const agent of checked) {
+            const reason = await unsaved(agent);
+            if (reason !== undefined) throw new RpcMethodError(AGENT_ERROR.unsavedWork, agent === chat ? reason : `${agent.name}: ${reason}`);
+          }
+        };
+        await refuse(async (agent) => (agent.ownsWorktree ? unsavedWork(agent.repoRoot, agent.worktree, agent.ownedBranch, { ignoreBoardFiles: true }) : undefined));
+        await refuse((agent) => endThenCheck(agent.sessionId, why));
+        for (const { sessionId: id } of helpers) {
+          if (agents.get(id) !== undefined) await reviews.deleteAgent(id, why, () => agents.delete(id, why, true).then(() => null));
+        }
+      }
+      await closeChat();
+    };
     const orchestrators = createOrchestratorHost({
       db,
       sessions,
@@ -781,14 +839,31 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       shells,
       zones: () => zoneTable.list(),
       flowEdges,
-      // As `agent.delete` without force: its reviewers go first (forced, unless `forceReviewers` is false).
-      deleteAgent: async (sessionId, why, forceReviewers) => {
-        await reviews.deleteAgent(sessionId, why, () => agents.delete(sessionId, why, false).then(() => null), forceReviewers);
+      // As `agent.delete` without force: its reviewers go first (forced, unless `forceReviewers` is false), and a
+      // ticket's chat after its helpers.
+      deleteAgent: (sessionId, why, forceReviewers) =>
+        withHelpers(sessionId, true, (id) => reviews.deleteAgent(id, why, () => agents.delete(id, why, false).then(() => null), forceReviewers)),
+      // As the crew's close below, but unsaved work keeps the worktree and branch rather than the agent. A ticket's
+      // chat closes after its helpers, as it is removed after them.
+      closeAgent: async (sessionId, why) => {
+        let closed: ClosedKept | null = null;
+        await withHelpersClosed(sessionId, why, false, async () => {
+          const agent = agents.get(sessionId);
+          const unsaved = await endThenCheck(sessionId, why);
+          const keep = unsaved !== undefined;
+          await reviews.deleteAgent(sessionId, why, () => agents.delete(sessionId, why, true, keep, keep).then(() => null));
+          if (!keep || agent === undefined) return;
+          log(`kept ${agent.name}'s worktree ${agent.worktree} and branch ${agent.ownedBranch} at its close: ${unsaved}`);
+          closed = { worktree: agent.worktree, branch: agent.ownedBranch, why: unsaved };
+        });
+        return closed;
       },
       removeAsks,
       broadcast,
       log,
       ...(options.replyWindowMs === undefined ? {} : { replyWindowMs: options.replyWindowMs }),
+      // The crews are made after: only read once the daemon serves calls.
+      crewReview: (sessionId) => crews.reviewOf(sessionId),
     });
     listeners.push((event) => orchestrators.onEvent(event));
     listeners.push((event) => clocks.onEvent(event));
@@ -802,17 +877,15 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       deliver: (from, to, name, text) => agents.deliver(from, to, name, text),
       flag: (sessionId, reason) => void agents.flag(sessionId, reason, null),
       clearFlag: (sessionId) => void agents.clearFlag(sessionId),
-      // As `agent.delete`, its reviewers first, checked for unsaved work as it is, but for the board's own files (a
-      // review, a handover), which a reviewer's checkout and a merged builder's worktree hold. Any other change, or a
-      // commit no branch or remote has, keeps it, and the crew says so.
-      close: async (sessionId, why) => {
-        const agent = agents.get(sessionId);
-        if (agent?.ownsWorktree === true) {
-          const reason = await unsavedWork(agent.repoRoot, agent.worktree, agent.ownedBranch, { ignoreBoardFiles: true });
+      // As `agent.delete`, its reviewers first, ended and then checked for unsaved work (`endThenCheck`). Any change but
+      // the board's own files, or a commit no branch or remote has, keeps it (ended), and the crew says so.
+      // A ticket's chat closes after its helpers, as the orchestrators' close does.
+      close: (sessionId, why) =>
+        withHelpersClosed(sessionId, why, true, async () => {
+          const reason = await endThenCheck(sessionId, why);
           if (reason !== undefined) throw new Error(reason);
-        }
-        await reviews.deleteAgent(sessionId, why, () => agents.delete(sessionId, why, agent?.ownsWorktree === true).then(() => null));
-      },
+          await reviews.deleteAgent(sessionId, why, () => agents.delete(sessionId, why, true).then(() => null));
+        }),
       news: (sessionId, kind, detail) => orchestrators.crewNews(sessionId, kind, detail),
       dir: join(paths.dataDir, 'crews'),
       changed: (crewId) => late.crewCards?.changed(crewId),
@@ -823,7 +896,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     // A crew member's flag goes to its orchestrator, typed at its prompt.
     const crewFlags = createCrewFlags({
       agent: (sessionId) => agents.get(sessionId),
-      crewOf: (sessionId) => agents.list().filter((agent) => agent.spawnedBy === sessionId),
+      crewOf: (sessionId) => agents.list().filter((agent) => flagLeadOf(agent) === sessionId),
       tell: (sessionId, text) => agents.tell(sessionId, text),
       log,
     });
@@ -904,6 +977,15 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       },
       { images, sweeper, linkCards, log },
     );
+    // What each agent holds on the board, which goes with it unless passed on.
+    const itemOwners = createItemOwners({
+      db,
+      access: orchestrators.access,
+      call: async (method, params) => handlers[method](params as never, DAEMON_ITSELF) as never,
+      agents,
+      documents,
+      log,
+    });
     const handlers: RpcHandlers<DaemonMethods, SessionSubscriber & BoardConnection> = {
       'daemon.health': (): DaemonHealth => ({
         version: DAEMON_VERSION,
@@ -1003,6 +1085,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         zones: zoneTable,
         warn: log,
       }),
+      ...itemOwners.handlers<SessionSubscriber & BoardConnection>(),
       ...captures.handlers,
       ...measures.handlers,
       ...roleTemplates.defaultRoleHandlers<SessionSubscriber & BoardConnection>(orchestrators.access, () => zoneTable.list()),
@@ -1026,10 +1109,15 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       ...memoryQueue.handlers<SessionSubscriber & BoardConnection>(),
       ...todos.handlers<SessionSubscriber & BoardConnection>(),
       ...usage.handlers<SessionSubscriber & BoardConnection>(),
-      // Its reviewers go first, and the rounds it reviewed say it has gone, each told to every client.
-      'agent.delete': (params, context) => {
-        const sessionId = stringParam(paramsObject(params), 'sessionId');
-        return reviews.deleteAgent(sessionId, "the app's agent.delete", async () => agentHandlers(agents)['agent.delete'](params, context));
+      // Its reviewers go first, and the rounds it reviewed say it has gone, each told to every client; a ticket's chat
+      // goes after its helpers, each deleted as it is asked to be.
+      'agent.delete': async (params, context) => {
+        const p = paramsObject(params);
+        const sessionId = stringParam(p, 'sessionId');
+        await withHelpers(sessionId, p.force !== true && p.keepWorktree !== true, (id) =>
+          reviews.deleteAgent(id, "the app's agent.delete", async () => agentHandlers(agents)['agent.delete']({ ...p, sessionId: id }, context)),
+        );
+        return null;
       },
       ...reviews.handlers<SessionSubscriber>(),
       ...gates.handlers<SessionSubscriber>(),
@@ -1042,10 +1130,13 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         githubRepo: (sessionId) => githubRepo(repoZoneTracker(sessionId)),
         pullRequests: (sessionId) => pullRequests.get(sessionId),
         refreshPullRequests: (sessionId) => pullRequests.refresh(sessionId),
-        // Merged: nothing of its work is lost, so nothing stops it short. Its reviewers go first, as with `agent.delete`.
+        // Merged: nothing of its work is lost, so nothing stops it short. Its reviewers go first, as with `agent.delete`;
+        // a ticket's chat after its helpers, whose work was not merged with it, so none goes while one holds unsaved work.
         deleteAgent: async (sessionId, keep) => {
           const why = "the merge gate's cleanup after its merge";
-          await reviews.deleteAgent(sessionId, why, () => agents.delete(sessionId, why, true, keep.worktree, keep.branch).then(() => null));
+          await withHelpersClosed(sessionId, why, false, () =>
+            reviews.deleteAgent(sessionId, why, () => agents.delete(sessionId, why, true, keep.worktree, keep.branch).then(() => null)).then(() => {}),
+          );
         },
         comment: (issue, body) => trackers.comment(issue, body),
         recordPullRequest: (sessionId, pr) => {
@@ -1112,6 +1203,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     listeners.push((event) => {
       if (event.type === 'agent.removed') void memoryQueue.releaseGone(event.sessionId).catch((error: unknown) => log(`could not put back the jobs ${event.sessionId} held: ${(error as Error).message}`));
     });
+    void itemOwners.sweep().catch((error: unknown) => log(`could not take the notes of agents gone off the board: ${(error as Error).message}`));
     void memoryQueue.releaseGone().catch((error: unknown) => log(`could not put back the jobs of agents gone: ${(error as Error).message}`));
     void crewCards.load().catch((error: unknown) => log(`could not read the crews' cards: ${(error as Error).message}`));
     // No ask's call outlives the daemon: a card still marked as waited on says its ask stopped.
@@ -1174,6 +1266,8 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       if (event.type === 'agent.updated') documents.observe(event.agent);
     });
     documents.start();
+    // Plans left with the command line, and what their agents were not told yet of them, from before a restart.
+    asks.resume();
 
     const guardedHandlers = guardBoardCallers(handlers, orchestrators);
     const server = createServer((socket) => {

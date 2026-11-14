@@ -64,6 +64,7 @@ describe("an agent's menu", () => {
       'expand', 'pop-out', 'pause', 'rename', 'schedule', 'link-issue', 'mute',
       'reasoning', 'reasoning/default', 'reasoning/low', 'reasoning/medium', 'reasoning/high', 'reasoning/xhigh', 'reasoning/max',
       'role', 'role/none', 'role/orchestrator', 'role/implementer', 'role/reviewer', 'role/follow-up-reviewer',
+      'role/with-template', 'role/with-template/send-orchestrator', 'role/with-template/send-implementer', 'role/with-template/send-reviewer', 'role/with-template/send-follow-up-reviewer',
       'start-review', 'run-gate', 'delete',
     ]);
   });
@@ -88,7 +89,7 @@ describe("an agent's menu", () => {
     const roleRow = (agent: Agent, actions = spies<AgentMenuInput['actions']>()) => row(agentMenu(agentInput(agent, { actions })), 'role') as Sub;
     const ticked = (sub: Sub) => (sub.entries as { label?: string; icon?: { type: unknown } }[]).filter((entry) => entry.icon?.type === Check).map((entry) => entry.label);
     const none = roleRow({ ...running, role: null, roleName: null });
-    expect(none).toMatchObject({ label: 'Role', detail: 'None', entries: [{ heading: 'Only its role changes; it carries on' }, ...['None', 'Orchestrator', 'Implementer', 'Reviewer', 'Follow-up reviewer'].map((label) => ({ label }))] });
+    expect(none).toMatchObject({ label: 'Role', detail: 'None', entries: [{ heading: 'Only its role changes; it carries on' }, ...['None', 'Orchestrator', 'Implementer', 'Reviewer', 'Follow-up reviewer'].map((label) => ({ label })), 'separator', { label: 'With its template' }] });
     expect(ticked(none)).toEqual(['None']);
     expect(ticked(roleRow({ ...running, role: 'reviewer', roleName: null }))).toEqual(['Reviewer']);
     const lead = roleRow({ ...running, role: 'custom', roleName: 'orchestrator' });
@@ -107,6 +108,16 @@ describe("an agent's menu", () => {
       ['setRole', [running.sessionId, 'orchestrator']],
       ['setRole', [running.sessionId, null]],
       ['setRole', [running.sessionId, 'follow-up-reviewer']],
+    ]);
+    // With its template ▸ gives the same roles, its own custom one too, and asks for the template to be sent; None has none to send.
+    type Row = { id?: string; label?: string; onSelect?(): void; entries?: Row[] };
+    const withTemplate = (agent: Agent, spy = spies<AgentMenuInput['actions']>()) => (roleRow(agent, spy).entries as Row[]).find((entry) => entry.id === 'with-template')!.entries!;
+    expect(withTemplate({ ...running, role: 'custom', roleName: 'designer' }).flatMap((entry) => (entry.id === undefined ? [] : [entry.label]))).toEqual(['Orchestrator', 'Implementer', 'Reviewer', 'Follow-up reviewer', 'designer']);
+    const sends = spies<AgentMenuInput['actions']>();
+    for (const id of ['send-orchestrator', 'send-implementer']) withTemplate(running, sends).find((entry) => entry.id === id)!.onSelect!();
+    expect(sends.calls).toEqual([
+      ['setRole', [running.sessionId, 'orchestrator', true]],
+      ['setRole', [running.sessionId, 'implementer', true]],
     ]);
   });
 
@@ -188,6 +199,8 @@ describe("an agent tile's menu, grouped", () => {
       'settings', 'settings/rename', 'settings/schedule', 'settings/link-issue', 'settings/mute',
       'settings/reasoning', 'settings/reasoning/default', 'settings/reasoning/low', 'settings/reasoning/medium', 'settings/reasoning/high', 'settings/reasoning/xhigh', 'settings/reasoning/max',
       'settings/role', 'settings/role/none', 'settings/role/orchestrator', 'settings/role/implementer', 'settings/role/reviewer', 'settings/role/follow-up-reviewer',
+      'settings/role/with-template', 'settings/role/with-template/send-orchestrator', 'settings/role/with-template/send-implementer', 'settings/role/with-template/send-reviewer',
+      'settings/role/with-template/send-follow-up-reviewer',
       'review', 'review/open-pr', 'review/start-review', 'review/run-gate',
       'arrange', 'arrange/front', 'arrange/forward', 'arrange/backward', 'arrange/back', 'arrange/align',
       'ask',
@@ -355,12 +368,14 @@ describe("a zone's ⋯ menu", () => {
       'tidy',
       'spacing',
       'spacing/layout-free',
+      'spacing/layout-spine',
       'spacing/layout-lanes',
       'spacing/layout-shelves',
       'spacing/layout-clusters',
       'spacing/spacing-compact',
       'spacing/spacing-normal',
       'spacing/spacing-roomy',
+      'stage-board',
       'fold',
       'rename',
       'colour',
@@ -451,6 +466,21 @@ describe("a zone's tab chips, folded into ⋯", () => {
   });
 });
 
+describe("a zone's Add stage board", () => {
+  it('adds one, and is there but not to choose while the zone has one', () => {
+    const actions = spies<ZoneMenuInput['actions']>();
+    const add = row(zoneMenu(zoneInput(repoZone, { actions })), 'stage-board') as { disabled: boolean; onSelect(): void };
+    expect(add).toMatchObject({ label: 'Add stage board', disabled: false });
+    add.onSelect();
+    expect(actions.calls).toEqual([['addStageBoard', [repoZone]]]);
+    expect(row(zoneMenu({ ...zoneInput(repoZone), stageBoard: true }), 'stage-board')).toMatchObject({ disabled: true, hint: expect.stringMatching(/has one already/) });
+  });
+
+  it('is not offered in a zone laid out by status, whose shelves say the same', () => {
+    for (const layoutMode of ['shelves', 'clusters'] as const) expect(menuIds(zoneMenu(zoneInput({ ...repoZone, layoutMode })))).not.toContain('stage-board');
+  });
+});
+
 describe("a zone's tab menus", () => {
   it('disables every Tidy on status shelves, saying why: it would move the tiles folded into stacks', () => {
     const shelved = { ...repoZone, layoutMode: 'shelves' as const };
@@ -462,21 +492,25 @@ describe("a zone's tab menus", () => {
     const ruled = { ...repoZone, layoutRule: 'lanes' as const };
     expect(row(tidyMenu(ruled, undefined, spies()), 'tidy')).toMatchObject({ disabled: true, hint: 'The zone lays its tiles out by its rule' });
     expect(row(zoneMenu(zoneInput(ruled)), 'tidy')).toMatchObject({ disabled: true });
+    // Spine keeps where each band went: Tidy lays them out afresh.
+    expect(row(tidyMenu({ ...repoZone, layoutRule: 'spine' }, undefined, spies()), 'tidy')).not.toHaveProperty('disabled');
   });
 
   it('offers the rule and the views in one Layout list, the one in use ticked', () => {
     const layouts = (zone: Zone) => tidyMenu(zone, undefined, spies()).filter((entry) => typeof entry === 'object' && 'id' in entry && entry.id.startsWith('layout-'));
     expect(layouts(repoZone)).toMatchObject([
       { id: 'layout-free', label: 'Free', checked: true },
+      { id: 'layout-spine', label: 'Spine', hint: 'The lead at the left, a band per ticket in columns beside it', checked: false },
       { id: 'layout-lanes', label: 'Lanes by ticket', hint: 'A lane per ticket, kept as work comes and goes', checked: false },
       { id: 'layout-shelves', label: 'Status shelves', checked: false },
       { id: 'layout-clusters', label: 'Clusters', checked: false },
     ]);
-    expect(layouts({ ...repoZone, layoutRule: 'lanes' }).map((entry) => (entry as { checked: boolean }).checked)).toEqual([false, true, false, false]);
+    expect(layouts({ ...repoZone, layoutRule: 'lanes' }).map((entry) => (entry as { checked: boolean }).checked)).toEqual([false, false, true, false, false]);
+    expect(layouts({ ...repoZone, layoutRule: 'spine' }).map((entry) => (entry as { checked: boolean }).checked)).toEqual([false, true, false, false, false]);
   });
 
   it('lists Tidy ▾: Tidy now, its layouts, its spacings, and the spacing for new zones', () => {
-    expect(menuIds(tidyMenu(repoZone, undefined, spies()))).toEqual(['tidy', 'layout-free', 'layout-lanes', 'layout-shelves', 'layout-clusters', 'spacing-compact', 'spacing-normal', 'spacing-roomy', 'new-zone-spacing']);
+    expect(menuIds(tidyMenu(repoZone, undefined, spies()))).toEqual(['tidy', 'layout-free', 'layout-spine', 'layout-lanes', 'layout-shelves', 'layout-clusters', 'spacing-compact', 'spacing-normal', 'spacing-roomy', 'new-zone-spacing']);
     expect(row(tidyMenu(repoZone, 'roomy', spies()), 'new-zone-spacing')).toMatchObject({ detail: 'Roomy · Settings' });
   });
 
@@ -617,6 +651,32 @@ describe("every row's fields", () => {
               "id": "follow-up-reviewer",
               "label": "Follow-up reviewer",
             },
+            "separator",
+            {
+              "entries": [
+                {
+                  "heading": "Gives the role and sends the role's template as a message",
+                },
+                {
+                  "id": "send-orchestrator",
+                  "label": "Orchestrator",
+                },
+                {
+                  "id": "send-implementer",
+                  "label": "Implementer",
+                },
+                {
+                  "id": "send-reviewer",
+                  "label": "Reviewer",
+                },
+                {
+                  "id": "send-follow-up-reviewer",
+                  "label": "Follow-up reviewer",
+                },
+              ],
+              "id": "with-template",
+              "label": "With its template",
+            },
           ],
           "id": "role",
           "label": "Role",
@@ -735,6 +795,32 @@ describe("every row's fields", () => {
             {
               "id": "follow-up-reviewer",
               "label": "Follow-up reviewer",
+            },
+            "separator",
+            {
+              "entries": [
+                {
+                  "heading": "Gives the role and sends the role's template as a message",
+                },
+                {
+                  "id": "send-orchestrator",
+                  "label": "Orchestrator",
+                },
+                {
+                  "id": "send-implementer",
+                  "label": "Implementer",
+                },
+                {
+                  "id": "send-reviewer",
+                  "label": "Reviewer",
+                },
+                {
+                  "id": "send-follow-up-reviewer",
+                  "label": "Follow-up reviewer",
+                },
+              ],
+              "id": "with-template",
+              "label": "With its template",
             },
           ],
           "id": "role",
@@ -866,6 +952,32 @@ describe("every row's fields", () => {
               "id": "follow-up-reviewer",
               "label": "Follow-up reviewer",
             },
+            "separator",
+            {
+              "entries": [
+                {
+                  "heading": "Gives the role and sends the role's template as a message",
+                },
+                {
+                  "id": "send-orchestrator",
+                  "label": "Orchestrator",
+                },
+                {
+                  "id": "send-implementer",
+                  "label": "Implementer",
+                },
+                {
+                  "id": "send-reviewer",
+                  "label": "Reviewer",
+                },
+                {
+                  "id": "send-follow-up-reviewer",
+                  "label": "Follow-up reviewer",
+                },
+              ],
+              "id": "with-template",
+              "label": "With its template",
+            },
           ],
           "id": "role",
           "label": "Role",
@@ -986,6 +1098,32 @@ describe("every row's fields", () => {
               "id": "follow-up-reviewer",
               "label": "Follow-up reviewer",
             },
+            "separator",
+            {
+              "entries": [
+                {
+                  "heading": "Gives the role and sends the role's template as a message",
+                },
+                {
+                  "id": "send-orchestrator",
+                  "label": "Orchestrator",
+                },
+                {
+                  "id": "send-implementer",
+                  "label": "Implementer",
+                },
+                {
+                  "id": "send-reviewer",
+                  "label": "Reviewer",
+                },
+                {
+                  "id": "send-follow-up-reviewer",
+                  "label": "Follow-up reviewer",
+                },
+              ],
+              "id": "with-template",
+              "label": "With its template",
+            },
           ],
           "id": "role",
           "label": "Role",
@@ -1103,6 +1241,12 @@ describe("every row's fields", () => {
             },
             {
               "checked": false,
+              "hint": "The lead at the left, a band per ticket in columns beside it",
+              "id": "layout-spine",
+              "label": "Spine",
+            },
+            {
+              "checked": false,
               "hint": "A lane per ticket, kept as work comes and goes",
               "id": "layout-lanes",
               "label": "Lanes by ticket",
@@ -1144,6 +1288,12 @@ describe("every row's fields", () => {
           ],
           "id": "spacing",
           "label": "Layout and spacing",
+        },
+        {
+          "disabled": false,
+          "hint": "The work its agents started, by stage: To do, Doing, Waiting for review, Done",
+          "id": "stage-board",
+          "label": "Add stage board",
         },
         {
           "hint": "Pauses the agents that can pause and lets their terminals go, to free memory. The chip keeps a count and anything that needs you",
@@ -1279,6 +1429,12 @@ describe("every row's fields", () => {
             },
             {
               "checked": false,
+              "hint": "The lead at the left, a band per ticket in columns beside it",
+              "id": "layout-spine",
+              "label": "Spine",
+            },
+            {
+              "checked": false,
               "hint": "A lane per ticket, kept as work comes and goes",
               "id": "layout-lanes",
               "label": "Lanes by ticket",
@@ -1320,6 +1476,12 @@ describe("every row's fields", () => {
           ],
           "id": "spacing",
           "label": "Layout and spacing",
+        },
+        {
+          "disabled": false,
+          "hint": "The work its agents started, by stage: To do, Doing, Waiting for review, Done",
+          "id": "stage-board",
+          "label": "Add stage board",
         },
         {
           "hint": "Pauses the agents that can pause and lets their terminals go, to free memory. The chip keeps a count and anything that needs you",
@@ -1432,6 +1594,12 @@ describe("every row's fields", () => {
           "hint": "Each tile where you put it",
           "id": "layout-free",
           "label": "Free",
+        },
+        {
+          "checked": false,
+          "hint": "The lead at the left, a band per ticket in columns beside it",
+          "id": "layout-spine",
+          "label": "Spine",
         },
         {
           "checked": false,
@@ -1563,6 +1731,10 @@ describe("every row's handler", () => {
         "role/implementer → setRole("a1", "implementer")",
         "role/reviewer → setRole("a1", "reviewer")",
         "role/follow-up-reviewer → setRole("a1", "follow-up-reviewer")",
+        "role/with-template/send-orchestrator → setRole("a1", "orchestrator", true)",
+        "role/with-template/send-implementer → setRole("a1", "implementer", true)",
+        "role/with-template/send-reviewer → setRole("a1", "reviewer", true)",
+        "role/with-template/send-follow-up-reviewer → setRole("a1", "follow-up-reviewer", true)",
         "open-review → openReview("a1")",
         "start-review → startReview(#a1)",
         "run-gate → openGate(#a1, true)",
@@ -1584,6 +1756,10 @@ describe("every row's handler", () => {
         "role/implementer → setRole("a1", "implementer")",
         "role/reviewer → setRole("a1", "reviewer")",
         "role/follow-up-reviewer → setRole("a1", "follow-up-reviewer")",
+        "role/with-template/send-orchestrator → setRole("a1", "orchestrator", true)",
+        "role/with-template/send-implementer → setRole("a1", "implementer", true)",
+        "role/with-template/send-reviewer → setRole("a1", "reviewer", true)",
+        "role/with-template/send-follow-up-reviewer → setRole("a1", "follow-up-reviewer", true)",
         "open-review → openReview("impl")",
         "run-gate → openGate(#a1, true)",
         "delete → deleteAgent("a1")",
@@ -1606,6 +1782,10 @@ describe("every row's handler", () => {
         "role/implementer → setRole("a2", "implementer")",
         "role/reviewer → setRole("a2", "reviewer")",
         "role/follow-up-reviewer → setRole("a2", "follow-up-reviewer")",
+        "role/with-template/send-orchestrator → setRole("a2", "orchestrator", true)",
+        "role/with-template/send-implementer → setRole("a2", "implementer", true)",
+        "role/with-template/send-reviewer → setRole("a2", "reviewer", true)",
+        "role/with-template/send-follow-up-reviewer → setRole("a2", "follow-up-reviewer", true)",
         "start-review → startReview(#a2)",
         "run-gate → openGate(#a2, true)",
         "delete → deleteAgent("a2")",
@@ -1626,6 +1806,10 @@ describe("every row's handler", () => {
         "role/implementer → setRole("a3", "implementer")",
         "role/reviewer → setRole("a3", "reviewer")",
         "role/follow-up-reviewer → setRole("a3", "follow-up-reviewer")",
+        "role/with-template/send-orchestrator → setRole("a3", "orchestrator", true)",
+        "role/with-template/send-implementer → setRole("a3", "implementer", true)",
+        "role/with-template/send-reviewer → setRole("a3", "reviewer", true)",
+        "role/with-template/send-follow-up-reviewer → setRole("a3", "follow-up-reviewer", true)",
         "start-review → startReview(#a3)",
         "run-gate → openGate(#a3, true)",
         "delete → deleteAgent("a3")",
@@ -1647,6 +1831,10 @@ describe("every row's handler", () => {
         "role/implementer → setRole("a4", "implementer")",
         "role/reviewer → setRole("a4", "reviewer")",
         "role/follow-up-reviewer → setRole("a4", "follow-up-reviewer")",
+        "role/with-template/send-orchestrator → setRole("a4", "orchestrator", true)",
+        "role/with-template/send-implementer → setRole("a4", "implementer", true)",
+        "role/with-template/send-reviewer → setRole("a4", "reviewer", true)",
+        "role/with-template/send-follow-up-reviewer → setRole("a4", "follow-up-reviewer", true)",
         "start-review → startReview(#a4)",
         "run-gate → openGate(#a4, true)",
         "delete → deleteAgent("a4")",
@@ -1669,6 +1857,10 @@ describe("every row's handler", () => {
         "role/implementer → setRole("a5", "implementer")",
         "role/reviewer → setRole("a5", "reviewer")",
         "role/follow-up-reviewer → setRole("a5", "follow-up-reviewer")",
+        "role/with-template/send-orchestrator → setRole("a5", "orchestrator", true)",
+        "role/with-template/send-implementer → setRole("a5", "implementer", true)",
+        "role/with-template/send-reviewer → setRole("a5", "reviewer", true)",
+        "role/with-template/send-follow-up-reviewer → setRole("a5", "follow-up-reviewer", true)",
         "start-review → startReview(#a5)",
         "run-gate → openGate(#a5, true)",
         "delete → deleteAgent("a5")",
@@ -1709,6 +1901,10 @@ describe("every row's handler", () => {
         "settings/role/implementer → setRole("a1", "implementer")",
         "settings/role/reviewer → setRole("a1", "reviewer")",
         "settings/role/follow-up-reviewer → setRole("a1", "follow-up-reviewer")",
+        "settings/role/with-template/send-orchestrator → setRole("a1", "orchestrator", true)",
+        "settings/role/with-template/send-implementer → setRole("a1", "implementer", true)",
+        "settings/role/with-template/send-reviewer → setRole("a1", "reviewer", true)",
+        "settings/role/with-template/send-follow-up-reviewer → setRole("a1", "follow-up-reviewer", true)",
         "review/open-pr → openPullRequest(#a1, #?)",
         "review/open-review → openReview("a1")",
         "review/start-review → startReview(#a1)",
@@ -1772,12 +1968,14 @@ describe("every row's handler", () => {
         "crew/crew-library → crewLibrary(#z1)",
         "tidy → tidy(#z1)",
         "spacing/layout-free → setLayoutMode(#z1, "free")",
+        "spacing/layout-spine → setLayoutMode(#z1, "spine")",
         "spacing/layout-lanes → setLayoutMode(#z1, "lanes")",
         "spacing/layout-shelves → setLayoutMode(#z1, "shelves")",
         "spacing/layout-clusters → setLayoutMode(#z1, "clusters")",
         "spacing/spacing-compact → setSpacing(#z1, "compact")",
         "spacing/spacing-normal → setSpacing(#z1, "normal")",
         "spacing/spacing-roomy → setSpacing(#z1, "roomy")",
+        "stage-board → addStageBoard(#z1)",
         "fold → fold(#z1)",
         "rename → rename()",
         "colour → recolor(#z1, "picked")",
@@ -1791,12 +1989,14 @@ describe("every row's handler", () => {
         "crew/crew-library → crewLibrary(#g1)",
         "tidy → tidy(#g1)",
         "spacing/layout-free → setLayoutMode(#g1, "free")",
+        "spacing/layout-spine → setLayoutMode(#g1, "spine")",
         "spacing/layout-lanes → setLayoutMode(#g1, "lanes")",
         "spacing/layout-shelves → setLayoutMode(#g1, "shelves")",
         "spacing/layout-clusters → setLayoutMode(#g1, "clusters")",
         "spacing/spacing-compact → setSpacing(#g1, "compact")",
         "spacing/spacing-normal → setSpacing(#g1, "normal")",
         "spacing/spacing-roomy → setSpacing(#g1, "roomy")",
+        "stage-board → addStageBoard(#g1)",
         "fold → fold(#g1)",
         "rename → rename()",
         "colour → recolor(#g1, "picked")",
@@ -1825,6 +2025,7 @@ describe("every row's handler", () => {
         "tab-tidy → tidy(#c1)",
         "tidy → tidy(#z1)",
         "layout-free → setLayoutMode(#z1, "free")",
+        "layout-spine → setLayoutMode(#z1, "spine")",
         "layout-lanes → setLayoutMode(#z1, "lanes")",
         "layout-shelves → setLayoutMode(#z1, "shelves")",
         "layout-clusters → setLayoutMode(#z1, "clusters")",
@@ -1974,9 +2175,11 @@ describe("a project's menus, under the Simplified design", () => {
         "options/spacing/spacing-roomy → setSpacing(#z1, "roomy")",
         "options/spacing/new-zone-spacing → openSettings()",
         "options/layout/layout-free → setLayoutMode(#z1, "free")",
+        "options/layout/layout-spine → setLayoutMode(#z1, "spine")",
         "options/layout/layout-lanes → setLayoutMode(#z1, "lanes")",
         "options/layout/layout-shelves → setLayoutMode(#z1, "shelves")",
         "options/layout/layout-clusters → setLayoutMode(#z1, "clusters")",
+        "options/stage-board → addStageBoard(#z1)",
         "options/fold → fold(#z1)",
         "options/issues/tracker → pickTracker(#z1)",
         "options/issues/add-issue → addIssue(#z1)",
@@ -2007,9 +2210,11 @@ describe("a project's menus, under the Simplified design", () => {
         "options/spacing/spacing-roomy → setSpacing(#z1, "roomy")",
         "options/spacing/new-zone-spacing → openSettings()",
         "options/layout/layout-free → setLayoutMode(#z1, "free")",
+        "options/layout/layout-spine → setLayoutMode(#z1, "spine")",
         "options/layout/layout-lanes → setLayoutMode(#z1, "lanes")",
         "options/layout/layout-shelves → setLayoutMode(#z1, "shelves")",
         "options/layout/layout-clusters → setLayoutMode(#z1, "clusters")",
+        "options/stage-board → addStageBoard(#z1)",
         "options/fold → fold(#z1)",
         "options/issues/tracker → pickTracker(#z1)",
         "options/folder/repo → bind(#z1, "repo")",
@@ -2051,9 +2256,11 @@ describe("a project's menus, under the Simplified design", () => {
       'spacing/new-zone-spacing',
       'layout',
       'layout/layout-free',
+      'layout/layout-spine',
       'layout/layout-lanes',
       'layout/layout-shelves',
       'layout/layout-clusters',
+      'stage-board',
       'fold',
       'issues',
       'issues/tracker',

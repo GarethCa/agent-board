@@ -1,7 +1,7 @@
 // A queue's looks, apart from the board: the open card, the folded icon and the peek. They take what to show and what
 // to do as props, so the gallery draws them as the board does.
 import { useEffect, useRef, useState, type ComponentProps, type DragEvent, type KeyboardEvent, type ReactNode } from 'react';
-import { ArrowUpToLine, Check, Hand, Inbox, NotebookText, Search, Ticket, Trash2, Undo2 } from 'lucide-react';
+import { ArrowUpFromLine, ArrowUpToLine, Check, ClockArrowDown, Hand, Inbox, NotebookText, Search, Ticket, Trash2, Undo2 } from 'lucide-react';
 import { jobsFrom } from '@agent-board/daemon/memory-lines';
 import { MAX_DRAIN_DROPS, MAX_JOB_TEXT, isQueueWork, type Agent, type QueueAudience, type QueueJob, type QueueRowKind } from '@agent-board/daemon/protocol';
 import { Button, IconButton, Segmented } from '../../ui';
@@ -10,7 +10,7 @@ import { itemKind, needsLine } from './to-look-at';
 import { JOB_DRAG, setJobDropOver, startJobDrag } from './queue-board';
 import { peekKeys, ScopeChip, ListCardAddBox, ListCardFace, ListCardIconView } from './ListCardParts';
 import { useScrollFade } from './CardSizing';
-import { countsText, DONE_SHOWN, doneJobs, jobCorner, jobLine, jobState, matchingJobs, nextJob, openInCardOrder } from './queue-card';
+import { countsText, DONE_SHOWN, doneJobs, isLaterRow, jobCorner, jobLine, jobState, matchingJobs, nextJob, openInCardOrder } from './queue-card';
 
 /** A job or note to add: its text, and its link when the line ends ` -> link`. */
 /** What the add box adds: the queue's own kind (a task, or backlog on the user's queue), or a note, read, never taken. */
@@ -65,11 +65,12 @@ function QueueAddBox({ audience, onAdd, autoFocus }: { audience: QueueAudience; 
 
 /** A row's chip: where a job is, in a work queue; what kind of thing it is (a pull request, a doc), in the user's. */
 function rowChip(job: QueueJob, next: QueueJob | undefined, audience: QueueAudience): { text: string; tone: string } {
-  return audience === 'user' ? { text: itemKind(job).chip, tone: 'kind' } : jobState(job, next);
+  if (audience === 'user' && !isLaterRow(job)) return { text: itemKind(job).chip, tone: 'kind' };
+  return jobState(job, next);
 }
 
-/** One row: its chip, its text on one line, and its corner (its taker, its link, who queued it). */
-function JobRow({ job, next, audience }: { job: QueueJob; next: QueueJob | undefined; audience: QueueAudience }) {
+/** One row: its chip, its text on one line, and its corner (its taker, its link, who queued it), with `end` after it. */
+function JobRow({ job, next, audience, end }: { job: QueueJob; next: QueueJob | undefined; audience: QueueAudience; end?: ReactNode }) {
   const state = rowChip(job, next, audience);
   const corner = jobCorner(job);
   return (
@@ -80,9 +81,20 @@ function JobRow({ job, next, audience }: { job: QueueJob; next: QueueJob | undef
       <span className="listcard-value" title={job.text}>
         {jobLine(job)}
       </span>
-      {corner !== '' && (
-        <span className="listcard-who" title={job.link ?? undefined}>
-          {corner}
+      {end === undefined ? (
+        corner !== '' && (
+          <span className="listcard-who" title={job.link ?? undefined}>
+            {corner}
+          </span>
+        )
+      ) : (
+        <span className="queue-row-end">
+          {corner !== '' && (
+            <span className="listcard-who" title={job.link ?? undefined}>
+              {corner}
+            </span>
+          )}
+          {end}
         </span>
       )}
     </>
@@ -122,8 +134,11 @@ export interface DragFrom {
   zoneId: string | null;
 }
 
-/** Whether a row can be handed to an agent: a waiting job of a queue for agents. */
-const handable = (job: QueueJob, audience: QueueAudience) => audience === 'agents' && isQueueWork(job.kind) && job.state === 'queued';
+/** Whether a row can be handed to an agent: a waiting job of a queue for agents, not marked Later. */
+const handable = (job: QueueJob, audience: QueueAudience) => audience === 'agents' && isQueueWork(job.kind) && job.state === 'queued' && !isLaterRow(job);
+
+/** Whether a row can be marked Later: a waiting job, not yet put off. */
+const puttable = (job: QueueJob) => isQueueWork(job.kind) && job.state === 'queued' && !isLaterRow(job);
 
 /** A row's drag, for a job that can be handed on: dropped on an idle agent's tile, it opens Hand on. */
 function dragProps(queue: DragFrom | undefined, job: QueueJob, audience: QueueAudience) {
@@ -204,18 +219,21 @@ interface QueueCardViewProps {
   /** A work queue's drain: how many it starts at most while on, and the sheet that turns it on. */
   drain?: { on: boolean; most: number };
   onDrain?(): void;
+  /** Moves a job marked Later up: it waits in its place again. Without it, its rows have no Move up. */
+  onMoveUp?(job: QueueJob): void;
   children?: ReactNode;
 }
 
 /**
  * A queue open on the board (C): a raised card in the theme's neutrals, the ticket's face (the inbox's, for the user's
- * own) and its count at its head's left, a line of counts, the taken jobs then the rest in order, and a box to add one.
+ * own) and its count at its head's left, a line of counts, the taken jobs then the rest in order, those marked Later at
+ * the foot with Move up, and a box to add one.
  */
 export function QueueCardView(props: QueueCardViewProps) {
-  const { title, scope, zoneColor, zoneName, audience, jobs, count, loaded = true, onAdd, onOpen, onAudience, fresh, focusAdd, needs = [], onOpenAgent, onStart, dragFrom, drain, onDrain, children } = props;
+  const { title, scope, zoneColor, zoneName, audience, jobs, count, loaded = true, onAdd, onOpen, onAudience, fresh, focusAdd, needs = [], onOpenAgent, onStart, dragFrom, drain, onDrain, onMoveUp, children } = props;
   const open = openInCardOrder(jobs);
   const next = nextJob(jobs);
-  const fade = useScrollFade<HTMLUListElement>();
+  const fade = useScrollFade<HTMLUListElement>({ whole: true });
   const looking = audience === 'user' && open.length + needs.length > 0;
   return (
     <div className="listcard listcard-unfolded" data-testid="queue-card" data-audience={audience} onDoubleClick={(event) => (event.stopPropagation(), onOpen())}>
@@ -239,17 +257,34 @@ export function QueueCardView(props: QueueCardViewProps) {
               </button>
             </li>
           ))}
-          {open.map((job) => (
-            <li key={job.id} className="listcard-row nodrag" data-fresh={job.id === fresh || undefined} {...dragProps(dragFrom, job, audience)}>
-              <JobRow job={job} next={next} audience={audience} />
-            </li>
-          ))}
+          {open.map((job) =>
+            isLaterRow(job) ? (
+              <li key={job.id} className="listcard-row queue-later-row nodrag" data-fresh={job.id === fresh || undefined}>
+                <JobRow
+                  job={job}
+                  next={next}
+                  audience={audience}
+                  end={
+                    onMoveUp === undefined ? undefined : (
+                      <button type="button" className="queue-move-up nodrag" aria-label={`Move ${jobLine(job)} up from Later`} title="Move up from Later: back in line, in its place" onClick={() => onMoveUp(job)}>
+                        Move up
+                      </button>
+                    )
+                  }
+                />
+              </li>
+            ) : (
+              <li key={job.id} className="listcard-row nodrag" data-fresh={job.id === fresh || undefined} {...dragProps(dragFrom, job, audience)}>
+                <JobRow job={job} next={next} audience={audience} />
+              </li>
+            ),
+          )}
         </ul>
       )}
       <div className="listcard-foot">
         <QueueAddBox audience={audience} onAdd={onAdd} autoFocus={focusAdd} />
         <span className="listcard-foot-line">
-          <span>{footText({ audience, next, drain, idle: !open.some((job) => job.state === 'taken'), left: open.filter((job) => job.state === 'queued' && isQueueWork(job.kind) && job.drops >= MAX_DRAIN_DROPS).length })}</span>
+          <span>{footText({ audience, next, drain, idle: !open.some((job) => job.state === 'taken'), left: open.filter((job) => job.state === 'queued' && isQueueWork(job.kind) && !isLaterRow(job) && job.drops >= MAX_DRAIN_DROPS).length })}</span>
           <span className="queue-foot-actions">
             {audience === 'agents' && onDrain !== undefined && (drain?.on === true || (next !== undefined && !open.some((job) => job.state === 'taken'))) && (
               <Button size="sm" variant={drain?.on === true ? 'ghost' : 'primary'} className="nodrag" data-testid="queue-drain" onClick={onDrain}>
@@ -321,6 +356,8 @@ interface QueuePeekProps {
   /** Hands a waiting job to an agent: Hand on, for it. With it, its rows drag onto a tile too. */
   onHand?(job: QueueJob): void;
   dragFrom?: DragFrom;
+  /** Marks a waiting job Later (`later` true): no take without a job starts it until it is moved up (false). */
+  onLater?(job: QueueJob, later: boolean): void;
 }
 
 /** A row's text as it is edited: its link after ` -> `, as it is typed. */
@@ -328,12 +365,12 @@ const editText = (job: QueueJob) => (job.link === null ? job.text : `${job.text}
 
 /**
  * Every job and note of a queue, in its order, searchable, over the board, with the last few done under them. A click
- * on a row edits it (↵ saves, esc puts it back). Each open row moves to the top, is done, or goes back (taken), or is
- * removed. Keys: / searches, ↑ and ↓ move between rows, ⌥↑ and ⌥↓ move the row, E (or ↵) edits it, D finishes it,
+ * on a row edits it (↵ saves, esc puts it back). Each open row moves to the top, is marked Later (or moved up, at the
+ * foot with the others marked Later), is done, or goes back (taken), or is removed. Keys: / searches, ↑ and ↓ move between rows, ⌥↑ and ⌥↓ move the row, E (or ↵) edits it, D finishes it,
  * ⌫ removes it.
  */
 export function QueuePeek(props: QueuePeekProps) {
-  const { title, scope, zoneColor, audience, jobs, onAdd, onEdit, onMove, onDone, onDrop, onRemove, onGone, search: initial = '', focusAdd = false, autoFocus = true, needs = [], onOpenAgent, onStart, onHand, dragFrom } = props;
+  const { title, scope, zoneColor, audience, jobs, onAdd, onEdit, onMove, onDone, onDrop, onRemove, onGone, search: initial = '', focusAdd = false, autoFocus = true, needs = [], onOpenAgent, onStart, onHand, dragFrom, onLater } = props;
   const [search, setSearch] = useState(initial);
   const [editing, setEditing] = useState<{ job: QueueJob; text: string }>();
   const searchField = useRef<HTMLInputElement>(null);
@@ -341,10 +378,12 @@ export function QueuePeek(props: QueuePeekProps) {
   // The row ⌥↑ or ⌥↓ moved, and where it was: moving its row in the list loses the focus, so it is given back once the
   // rows read again have it somewhere else, unless the focus is somewhere by then. A move that fails forgets it.
   const moved = useRef<{ id: string; from: number }>(undefined);
-  const open = jobs.filter((job) => job.state !== 'done');
+  // The rows in their queue's order, which ⌥↑ and ⌥↓ move among; those marked Later wait at the foot, out of it.
+  const open = jobs.filter((job) => job.state !== 'done' && !isLaterRow(job));
+  const later = jobs.filter((job) => job.state !== 'done' && isLaterRow(job));
   const done = doneJobs(jobs).slice(0, DONE_SHOWN);
   const next = nextJob(jobs);
-  const shown = [...matchingJobs(open, search), ...matchingJobs(done, search)];
+  const shown = [...matchingJobs(open, search), ...matchingJobs(later, search), ...matchingJobs(done, search)];
   const save = (job: QueueJob) => {
     const line = jobsFrom(editing?.text ?? '')[0];
     if (line !== undefined && (line.text !== job.text || line.link !== job.link)) onEdit(job, line);
@@ -352,7 +391,8 @@ export function QueuePeek(props: QueuePeekProps) {
   };
   useEffect(() => {
     const move = moved.current;
-    if (move === undefined || jobs.filter((job) => job.state !== 'done').findIndex((job) => job.id === move.id) === move.from) return;
+    // The place among the rows ⌥↑↓ moves through, as `moveBy` counts it: rows marked Later aren't among them.
+    if (move === undefined || jobs.filter((job) => job.state !== 'done' && !isLaterRow(job)).findIndex((job) => job.id === move.id) === move.from) return;
     moved.current = undefined;
     // Only the focus the move lost is given back: one the user has put somewhere else since stays there.
     const active = document.activeElement;
@@ -406,11 +446,17 @@ export function QueuePeek(props: QueuePeekProps) {
   };
   const actions = (job: QueueJob) => (
     <span className="listcard-row-actions">
-      {job.state === 'queued' && open[0]?.id !== job.id && (
+      {job.state === 'queued' && !isLaterRow(job) && open[0]?.id !== job.id && (
         <IconButton icon={<ArrowUpToLine />} size="sm" aria-label={`Move ${jobLine(job)} to the top`} tooltip="Move to the top" onClick={() => onMove(job, open[0] ?? null)} />
       )}
       {onHand !== undefined && handable(job, audience) && (
         <IconButton icon={<Hand />} size="sm" aria-label={`Hand ${jobLine(job)} to an agent`} tooltip="Hand it to an idle agent" onClick={() => onHand(job)} />
+      )}
+      {onLater !== undefined && puttable(job) && (
+        <IconButton icon={<ClockArrowDown />} size="sm" aria-label={`Mark ${jobLine(job)} Later`} tooltip="Later: no agent takes it until it is moved up" onClick={() => onLater(job, true)} />
+      )}
+      {onLater !== undefined && job.state === 'queued' && isLaterRow(job) && (
+        <IconButton icon={<ArrowUpFromLine />} size="sm" aria-label={`Move ${jobLine(job)} up from Later`} tooltip="Move up from Later: back in line, in its place" onClick={() => onLater(job, false)} />
       )}
       {job.state === 'taken' && <IconButton icon={<Undo2 />} size="sm" aria-label={`Put ${jobLine(job)} back`} tooltip="Put it back at the front, for someone else" onClick={() => onDrop(job)} />}
       {isQueueWork(job.kind) && job.state !== 'done' && <IconButton icon={<Check />} size="sm" aria-label={`Finish ${jobLine(job)}`} tooltip="Done" onClick={() => onDone(job)} />}

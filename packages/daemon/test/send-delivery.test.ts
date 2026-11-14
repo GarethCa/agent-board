@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { fakeHarnessEnv, McpClient } from '@agent-board/fake-harness';
-import { BOARD_ERROR, RPC_ERROR, type Agent, type AgentUpdatedEvent, type DaemonEvent } from '../src/protocol.ts';
+import { RPC_ERROR, type Agent, type AgentUpdatedEvent, type DaemonEvent } from '../src/protocol.ts';
 import { runBoardCommand } from '../src/board-cli.ts';
 import { BOARD_SOCKET_ENV, BOARD_TOKEN_ENV } from '../src/board-env.ts';
 import { refOf } from '../src/crew-flags.ts';
@@ -184,14 +184,6 @@ describe('a send whose Enter never starts a turn', () => {
       code: RPC_ERROR.invalidParams,
     });
 
-    // Nor the draft of an agent the user started by hand.
-    const mine = await setup.client.call('agent.spawn', { zoneId: setup.zone.id, name: 'mine', ...SIZE });
-    for (const draft of [{ submit: true }, { clear: true }]) {
-      await expect(connection.call('orchestrator.send', { token, sessionId: mine.sessionId, ...draft })).rejects.toMatchObject({
-        code: BOARD_ERROR.outOfScope,
-        message: expect.stringMatching(/started by hand/),
-      });
-    }
   });
 });
 

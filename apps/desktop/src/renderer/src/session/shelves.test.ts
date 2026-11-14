@@ -10,6 +10,8 @@ const agent = (overrides: Partial<Agent> = {}): Agent =>
     endedAt: null,
     spawnedBy: null,
     orphanedFrom: null,
+    ticket: null,
+    ticketChat: false,
     master: false,
     flag: null,
     permissions: [],

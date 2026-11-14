@@ -76,6 +76,7 @@ import {
   moveTile,
   removeConnector,
   removeNote,
+  passNote,
   removeShape,
   zoneMap,
   zoneScreenshot,
@@ -174,7 +175,7 @@ export const BOARD_MCP_INSTRUCTIONS =
 export const ORCHESTRATOR_INSTRUCTIONS =
   'You may start, message, watch and close other agents, join them with edges, and keep the board tidy (move tiles, ' +
   'arrange a crew, notes), with the tools below or the same commands in `agent-board help orchestrate`. You reach ' +
-  "every agent anywhere on the board except the ones the user started by hand, which you may only message if they are the Captain. " +
+  "every agent anywhere on the board, the ones the user started by hand too; to remove a tile you didn't start, `ask_to_remove` it, and the user decides. " +
   'A reviewer started from an agent\'s branch gets no edge to that agent: it and its implementer talk through `send` (findings back, next round), and the user presses no Send ' +
   'button. Ask for a line between them only with `new` `edges` (`auto` hands the findings back by itself, the way ' +
   'back manual; `manual` leaves both for the user), never an edge to your own tile, and keep one of a pair manual, ' +
@@ -627,14 +628,15 @@ export const BOARD_MCP_TOOLS: Tool[] = [
       'Change a queue: add queues jobs, one a line (" -> link" at its end; front puts them at the front; kind sets their ' +
       'kind; or one job as a headline and a body); take takes the next job, or job: it is yours until done or drop, and goes back to the front if your session ' +
       'ends first; drop puts a job you took back at the front, counted; done finishes it (result: what was done); edit, remove and restore (a ' +
-      'version from queue_read) change a row; move puts one before another open job (to: its #id), at the top or last. ' +
+      'version from queue_read) change a row; move puts one before another open job (to: its #id), at the top or last; later marks a waiting job Later, which no ' +
+      'take without a job, nor the drain, starts until up moves it up. ' +
       'drain (on a queue you made) has the board start fresh agents for its waiting jobs. ' +
-      'As `agent-board queue add|take|drop|done|edit|move|rm|restore|drain`.',
+      'As `agent-board queue add|take|drop|done|edit|move|later|up|rm|restore|drain`.',
     inputSchema: {
       type: 'object',
       properties: {
         queue: { type: 'string', description: 'The queue, by ref (item:3f2a) or title.' },
-        action: { type: 'string', enum: ['add', 'take', 'drop', 'done', 'edit', 'move', 'remove', 'restore', 'drain'], description: 'What to do.' },
+        action: { type: 'string', enum: ['add', 'take', 'drop', 'done', 'edit', 'move', 'later', 'up', 'remove', 'restore', 'drain'], description: 'What to do.' },
         job: { type: 'string', description: "The row, by #id (its start will do). For take, leave it out for the next one." },
         text: { type: 'string', description: 'For add: the jobs, one a line; for edit, the new text.' },
         headline: { type: 'string', description: `For add, instead of text: one job's headline, a line of at most ${MAX_JOB_HEADLINE} characters. Its detail goes in body.` },
@@ -964,7 +966,7 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
     description:
       "Send an agent its next message, once its turn has ended (wait first). Never to one that needs the user's " +
       "permission, and never a harness command. To one still starting it is queued until it's up, after its first " +
-      'prompt; to one mid-turn, until its turn ends, then sent as a turn of its own. You may also reply to an agent that messaged you, even one the user started, and message the Captain. It fails, saying why, when ' +
+      'prompt; to one mid-turn, until its turn ends, then sent as a turn of its own. You may message any agent but yourself, the Captain and the agents the user started by hand included. It fails, saying why, when ' +
       'the message was typed at its prompt but no turn started on it: then submit presses Enter on what is typed ' +
       'there, or clear clears it, instead of text (for an agent you may steer). The agent reads your message headed with your ' +
       'sender mark, so it and its chat know it is yours, not the user\'s: `⟨send from <your name> · <your ref>⟩ <text>` ' +
@@ -1042,14 +1044,16 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
     description:
       "Give a running agent a role, as its tile's Role menu does, or take it away with clear: a built-in one (implementer, " +
       'reviewer, follow-up-reviewer) or any other by its name, orchestrator among them. Give `me` to name yourself: ' +
-      "`orchestrator` makes you your zone's. Only the role changes: the agent isn't restarted and no template is sent to " +
-      'it. Not for an agent the user started by hand. As `agent-board role`; set_role edits templates.',
+      "`orchestrator` makes you your zone's. Only the role changes: the agent isn't restarted, and no template is sent " +
+      "to it unless send_template asks, when the role's template goes to it as a message from you (a role with none " +
+      'sends nothing). As `agent-board role`; set_role edits templates.',
     inputSchema: {
       type: 'object',
       properties: {
         agent: AGENT_REF,
         role: { type: 'string', maxLength: MAX_ROLE_NAME_LENGTH, description: 'The role: implementer, reviewer, orchestrator, designer.' },
         clear: { type: 'boolean', description: 'Take its role away instead.' },
+        send_template: { type: 'boolean', description: "Also send it the role's template as a message. Not with clear, nor to yourself." },
       },
       required: ['agent'],
       additionalProperties: false,
@@ -1188,17 +1192,18 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
     name: 'zone_layout',
     description:
       'Set how your zone (or another) draws what it holds, as its Layout menu does in the app: free, each tile ' +
-      'where it was put (every zone starts free); lanes, a rule the zone keeps: a lane per ticket, laid out again whenever ' +
+      'where it was put (every zone starts free); spine, a rule the zone keeps: its lead at the left with its shells under it, each ticket a band ' +
+      '(its agent, then its reviewers) in columns to the right, each band kept in its column as work comes and goes; lanes, a rule the zone keeps: a lane per ticket, laid out again whenever ' +
       'its work changes, a tile the user drags leaving the rule where it is put; shelves, one stack per ticket on To do, Doing, Waiting and Done shelves ' +
       "under a head row of the zone's leads and shells, a click on a stack fanning its tiles out below the shelves; clusters, " +
       "each ticket's tiles drawn together, what needs the user first. Shelves and clusters move no tile's own place, so " +
-      'free again shows the zone as it was; lanes moves them. Choose shelves when its work is easier to follow by status, ' +
-      'clusters or lanes when by ticket. As ' +
+      'free again shows the zone as it was; spine and lanes move them. Choose shelves when its work is easier to follow by status, ' +
+      'spine, clusters or lanes when by ticket. As ' +
       '`agent-board zone layout`.',
     inputSchema: {
       type: 'object',
       properties: {
-        layout: { type: 'string', enum: [...ZONE_LAYOUT_CHOICES], description: 'free, lanes, shelves or clusters.' },
+        layout: { type: 'string', enum: [...ZONE_LAYOUT_CHOICES], description: 'free, spine, lanes, shelves or clusters.' },
         zone: { type: 'string', description: 'The zone, by ref; yours by default.' },
       },
       required: ['layout'],
@@ -1280,6 +1285,19 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
       type: 'object',
       properties: { note: { type: 'string', description: 'The note, by ref (item:31f0).' } },
       required: ['note'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'pass_note',
+    description:
+      'Pass an agent note or document card you or any other agent holds to any agent, one the user started by hand ' +
+      'included, which holds it from then on and is told: it stays when you are removed, and goes with that agent. Never the user\'s own ' +
+      'notes. As `agent-board note pass`.',
+    inputSchema: {
+      type: 'object',
+      properties: { note: { type: 'string', description: 'The agent note or document card, by ref (item:31f0).' }, to: AGENT_REF },
+      required: ['note', 'to'],
       additionalProperties: false,
     },
   },
@@ -1475,8 +1493,12 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
   {
     name: 'close',
     description:
-      "End an agent's session, keeping its tile, worktree and branch; with remove, delete them too (only an agent you " +
-      'started, with nothing unsaved: to remove others, use ask_to_remove). As `agent-board close`.',
+      "End an agent's session and take its tile off the board, with the notes and documents it holds; its worktree and " +
+      'branch go too, unless they hold unsaved work, which stays (the answer says where). One the user started by hand ' +
+      "only by asking them (ask_to_remove). A ticket's chat closes with its helpers: as an agent, only when you " +
+      'started each helper yourself. With remove, delete it with ' +
+      'its worktree and branch, keeping nothing: only an agent you started, with nothing unsaved; to remove others, ' +
+      'use ask_to_remove. As `agent-board close`.',
     inputSchema: {
       type: 'object',
       properties: { agent: AGENT_REF, remove: { type: 'boolean' } },
@@ -1635,6 +1657,8 @@ function queueUpdateArg(args: Record<string, unknown>): QueueUpdate {
     }
     case 'drop':
     case 'remove':
+    case 'later':
+    case 'up':
       return { action: args.action, job: job() };
     case 'restore':
       return { action: 'restore', job: job(), version: versionArg(args) };
@@ -1648,7 +1672,7 @@ function queueUpdateArg(args: Record<string, unknown>): QueueUpdate {
       return { action: 'drain', on, ...(most === undefined ? {} : { most: most as number }) };
     }
     default:
-      throw new BoardError('action must be add, take, drop, done, edit, move, remove, restore or drain');
+      throw new BoardError('action must be add, take, drop, done, edit, move, later, up, remove, restore or drain');
   }
 }
 
@@ -1884,7 +1908,8 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
     const role = stringArg(args, 'role', true);
     const clear = booleanArg(args, 'clear') === true;
     if ((role === undefined) === !clear) throw new BoardError('give a role, or clear: true, not both');
-    return (await giveAgentRole(session, stringArg(args, 'agent'), clear ? null : role!)).text;
+    const sendTemplate = booleanArg(args, 'send_template') === true;
+    return (await giveAgentRole(session, stringArg(args, 'agent'), clear ? null : role!, sendTemplate)).text;
   },
   continue_on_credits: async (session, args) => (await continueAgent(session, stringArg(args, 'agent'))).text,
   restart: async (session, args) => {
@@ -2014,6 +2039,7 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
     return (await editNote(session, stringArg(args, 'note'), { text, color, size, ...lines })).text;
   },
   remove_note: async (session, args) => (await removeNote(session, stringArg(args, 'note'))).text,
+  pass_note: async (session, args) => (await passNote(session, stringArg(args, 'note'), stringArg(args, 'to'))).text,
   add_shape: async (session, args) => (await addShape(session, { ...shapeArgs(args), shape: stringArg(args, 'shape'), ...placeArgs(args) })).text,
   add_diagram: async (session, args) => (await addDiagram(session, stringArg(args, 'mermaid'), placeArgs(args))).text,
   export_diagram: async (session, args) => (await exportDiagram(session, linesArg(args, 'refs') ?? [])).text,

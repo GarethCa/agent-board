@@ -3,9 +3,9 @@
 //
 //   env LINEAR_API_KEY=lin_api_… pnpm --filter @agent-board/tracker record:linear
 //
-// It creates a scratch issue in team $LINEAR_TEAM (ACME by default; in its most recently updated open project), runs
-// every call the tests replay against it, deletes it, writes the fixtures, prints their diff and runs the tracker tests
-// on them. The key is never written: fixtures keep no request headers. The lists a workspace answers are cut to the
+// It creates a scratch issue in team $LINEAR_TEAM (ACME by default; in its most recently updated open project with a
+// milestone, and in that milestone), runs every call the tests replay against it, deletes it, writes the fixtures,
+// prints their diff and runs the tracker tests on them. The key is never written: fixtures keep no request headers. The lists a workspace answers are cut to the
 // scratch issue, the team and the project, and its slug is redacted from URLs (sanitise-linear.ts): still read the diff
 // before committing. $LINEAR_API_URL points it at another endpoint, such as a stub, for testing the script itself.
 import { execFileSync } from 'node:child_process';
@@ -48,10 +48,16 @@ const teams = await graphql<{ teams: { nodes: { id: string }[] } }>(
 const teamId = teams.teams.nodes[0]?.id;
 if (teamId === undefined) throw new Error(`the key cannot see a team ${scope}`);
 
-// The scratch issue goes in the team's most recently updated open project, so the project calls have something to find.
-const projects = await createLinearTracker({ credential: apiKey, apiUrl }).projects!(scope);
-const project = projects[0];
-if (project === undefined) throw new Error(`team ${scope} has no open project: make one for the recording to use`);
+// The scratch issue goes in the team's most recently updated open project that has a milestone, and in that milestone,
+// so the project and milestone calls have something to find.
+const unrecorded = createLinearTracker({ credential: apiKey, apiUrl });
+const projects = await unrecorded.projects!(scope);
+if (projects.length === 0) throw new Error(`team ${scope} has no open project: make one for the recording to use`);
+const withMilestone = (await unrecorded.issueFilters!(scope)).projects.find((p) => p.milestones.length > 0);
+if (withMilestone === undefined)
+  throw new Error(`no open project of team ${scope} has a milestone: add one to a project for the recording to use`);
+const project = projects.find((p) => p.id === withMilestone.id)!;
+const milestone = withMilestone.milestones[0]!.id;
 
 // A word only the scratch issue has, so the recorded search finds exactly it.
 const searchTerm = `abfixture${randomBytes(4).toString('hex')}`;
@@ -71,6 +77,7 @@ const created = await graphql<{ issueCreate: { issue: { id: string; identifier: 
       teamId,
       title: `agent-board fixture recording ${searchTerm}`,
       projectId: project.id,
+      projectMilestoneId: milestone,
       description: `Scratch issue made by packages/tracker/scripts/record-linear.ts (${searchTerm}). It deletes it when done; delete it by hand if it is still here.`,
     },
   },
@@ -104,6 +111,13 @@ try {
   if (!inProject.some((issue) => issue.id === scratch.identifier))
     throw new Error(`${scratch.identifier} is not in ${project.name}`);
   await tracker.searchIssues(scope, searchTerm, { project: project.id });
+  // The picker's filters, and a list narrowed to the scratch issue's milestone.
+  const filters = await tracker.issueFilters!(scope);
+  if (!filters.projects.some((p) => p.id === project.id && p.milestones.some((m) => m.id === milestone)))
+    throw new Error(`the filters do not list ${project.name}'s milestone`);
+  const inMilestone = await tracker.listIssues(scope, { project: project.id, milestone });
+  if (!inMilestone.some((issue) => issue.id === scratch.identifier))
+    throw new Error(`${scratch.identifier} is not in its milestone`);
   const knownIssue = await tracker.getIssue(scratch.identifier);
   if (knownIssue === undefined) throw new Error(`${scratch.identifier} is not found`);
   await tracker.getIssue(`${scratch.identifier}${MISSING_ISSUE_SUFFIX}`);
@@ -122,7 +136,7 @@ try {
   // Only the scratch issue, team and project stay of what the workspace answered; nothing else of it is committed.
   const fixture = sanitiseRecording({
     source,
-    subject: { scope, knownIssue, searchTerm, project: project.id },
+    subject: { scope, knownIssue, searchTerm, project: project.id, milestone },
     interactions,
   });
   const json = `${JSON.stringify(fixture, null, 2)}\n`;

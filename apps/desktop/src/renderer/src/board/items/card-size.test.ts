@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fadeEdges, foldTo, heightPulled, keptFrame, scrollToShow } from './card-size';
+import { fadeEdges, foldTo, wholeRowsHeight, heightPulled, keptFrame, scrollToShow } from './card-size';
 
 const sizes = { folded: { width: 128, height: 132 }, open: { width: 340, height: 220 } };
 
@@ -60,5 +60,20 @@ describe('keptFrame', () => {
   it('counts a pixel of rounding as no pull', () => {
     expect(heightPulled(104.5, 104)).toBe(false);
     expect(heightPulled(110, 104)).toBe(true);
+  });
+});
+
+describe('wholeRowsHeight', () => {
+  it('cuts a list that runs past its room to the last row that shows whole, so no sliver of the next shows', () => {
+    // Rows end at 30, 60, 90, 120, 150: room for 130 shows four whole rows.
+    expect(wholeRowsHeight(130, [30, 60, 90, 120, 150])).toBe(120);
+    // A pixel's rounding still counts as whole.
+    expect(wholeRowsHeight(119.5, [30, 60, 90, 120, 150])).toBe(120);
+  });
+
+  it('leaves a list that fits, or one whose first row is taller than its room, as it is', () => {
+    expect(wholeRowsHeight(200, [30, 60, 90])).toBeUndefined();
+    expect(wholeRowsHeight(20, [30, 60])).toBeUndefined();
+    expect(wholeRowsHeight(100, [])).toBeUndefined();
   });
 });

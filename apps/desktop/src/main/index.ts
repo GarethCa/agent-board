@@ -101,6 +101,9 @@ const SETTINGS_MIN_SIZE = { minWidth: 620, minHeight: 400 };
 /** The narrowest the Overview window gets: its toolbar on two rows and two columns of threads side by side. */
 const OVERVIEW_MIN_SIZE = { minWidth: 720, minHeight: 420 };
 
+/** The app's own windows that a person sees (board, Settings, Overview, pop-outs): not the hidden ones that take pictures. */
+const shownWindows = new WeakSet<BrowserWindow>();
+
 /** Opens a renderer window: the board, or with `query` set, one view of it such as a popped-out session window. */
 function openWindow(
   query: Record<string, string> = {},
@@ -144,6 +147,7 @@ function openWindow(
     },
   });
 
+  if (!hidden) shownWindows.add(window);
   if (backgroundMode && !headless && !hidden) window.once('ready-to-show', () => window.showInactive());
   // macOS hides the traffic lights in full screen, and the page moves into the room they leave.
   const sendFullScreen = (fullScreen: boolean) => {
@@ -228,11 +232,16 @@ function openBoard(showing?: WindowTarget): BrowserWindow {
 ipcMain.handle(DAEMON_IPC.health, () => daemon.call('daemon.health'));
 ipcMain.handle(DAEMON_IPC.build, () => BUILD);
 // The renderer asks without `force` first, so live sessions are counted at the moment of the restart, not when the
-// banner appeared. The next call starts this build's daemon.
-ipcMain.handle(DAEMON_IPC.restart, async (_event, force: unknown): Promise<RestartDaemonResult> => {
+// banner appeared. The next call starts this build's daemon. Every window a person sees holds state from the old daemon,
+// so the others reload once it is back; the one that asked reloads itself, after it has the answer. Hidden windows taking
+// a picture are left to finish it.
+ipcMain.handle(DAEMON_IPC.restart, async (event, force: unknown): Promise<RestartDaemonResult> => {
   const stopped = await stopDaemon(dataDir, { force: force === true });
   if (stopped.status === 'sessions-live') return stopped;
   await daemon.call('daemon.health');
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (shownWindows.has(window) && window.webContents !== event.sender) window.webContents.reload();
+  }
   return { status: 'restarted' };
 });
 registerSessionIpc(daemon, () => ensureDaemon(daemonConnection));

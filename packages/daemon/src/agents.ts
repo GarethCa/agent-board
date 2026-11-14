@@ -11,7 +11,9 @@ import { systemClock, type Clock } from './clock.ts';
 import { createComposerWatch } from './codex-screen.ts';
 import { createAgentSpawns, issueColumns, type FolderPlace, type SpawnUsed } from './agent-spawns.ts';
 import type { StartChange } from './agent-starts.ts';
-import { createDeliveries, type AfterTurn, type Answered, type UnsentSent } from './deliveries.ts';
+import { createDeliveries, type AfterTurn, type Answered, type KeptWaiting, type UnsentSent, type WaitingStore } from './deliveries.ts';
+import { readSender } from './sender-marker.ts';
+import { refOf } from './crew-flags.ts';
 import { draftLine, sendTrail, type SendTrail } from './send-log.ts';
 import { createHookStates } from './hook-states.ts';
 import { answerTrustScreen, readStartupScreen, screenTail, type StartupScreen } from './startup-screen.ts';
@@ -61,6 +63,7 @@ import {
   type TileMove,
   type AgentFlag,
   type UndeliveredMessage,
+  SEND_TRAILER,
   type DaemonMethods,
   type PermissionDecision,
   type PromptAnswer,
@@ -73,6 +76,8 @@ import {
   type TerminalSize,
   type TilePosition,
   type TranscriptChunk,
+  agentRefOf,
+  FIRST_PROMPT,
   waitsForYou,
 } from './protocol.ts';
 import { folderPath, repoZoneOf } from './repo-zone.ts';
@@ -83,6 +88,7 @@ import { createBackgroundCommands } from './background-commands.ts';
 import { createQuietTurns, QUIET_TURN_MS, readTranscriptTail, showsIdlePrompt, turnEndedInTranscript } from './quiet-turns.ts';
 import { createSubagentStore, subagentsAfterExit } from './subagents.ts';
 import { oneLine, submitsDraft } from './terminal-input.ts';
+import { flagLeadOf } from './ticket-tiles.ts';
 import { isWorking, statusAfterTurn } from './turn-status.ts';
 import { AGENT_POSES, CHARACTER_EXPIRY_MS, characterLive, isRestingPose, type AgentFace, type AgentPose, type AgentProp, type CharacterSet } from './character.ts';
 import { stateClock } from './state-since.ts';
@@ -116,6 +122,8 @@ export const ANSWERS_DROPPED_FLAG =
 
 /** How long after output a starting agent's screen is read for Claude's trust screen or its prompt, at most. */
 const PROBE_MS = 250;
+/** How much of a message not delivered its sender's notice quotes, in characters. */
+const NOTICE_EXCERPT = 120;
 
 /** How long a trust screen answered by its zone's setting may take to leave the screen before the user is asked. */
 const TRUST_GONE_WAIT_MS = 3_000;
@@ -273,6 +281,8 @@ export interface AgentHostOptions {
   documents?: Pick<DocumentHost, 'list'>;
   /** Ends the shells in the agent's session window's tabs, and removes the tabs: it is being deleted. */
   endTabs?(sessionId: string): Promise<void>;
+  /** The agent's own worktree is about to be removed with it: anything kept for other agents is copied out first. */
+  beforeWorktreeRemoved?(sessionId: string, worktree: string): void;
   /** Whether the shell `pid` is running something: `isRunningSomething` by default. */
   isRunningSomething?(pid: number): Promise<boolean>;
   broadcast(event: DaemonEvent): void;
@@ -391,6 +401,12 @@ export interface AgentHost {
    */
   setRole(sessionId: string, role: string | null): Agent;
   /**
+   * The template of `role` (as typed, `parseRole`) for the agent, filled in for it as its start would have: empty when
+   * the role has none. A crew's reviewer passes its crew's round and last review. Read for sending to it, which only
+   * happens when asked (`orchestrator.giveRole`).
+   */
+  roleTemplate(sessionId: string, role: string, crewReview?: { round: number; previous: string | null }): string;
+  /**
    * Sets what the agent says it is doing now (ADR-0010), replacing what was there: a summary, trimmed and at most
    * `MAX_STATUS_LENGTH`, and a progress 0-100 or null; its character's pose; and its work category (ADR-0024), whole:
    * a label or who it waits on left out goes. Each left out keeps what it had, but one must be given. `done` says its
@@ -416,14 +432,20 @@ export interface AgentHost {
    * Sends `text` to the agent as the user's next message, after any answer to it still being typed: its line breaks
    * kept, pasted as a terminal pastes them, and pasted even as one line with `paste`. Resolves with how it went.
    */
-  answer(sessionId: string, text: string, paste?: boolean, trail?: SendTrail): Promise<Answered>;
+  answer(sessionId: string, text: string, paste?: boolean, trail?: SendTrail, from?: string): Promise<Answered>;
   /** A trail for the daemon log of one message of `chars` characters sent to the agent (`sendTrail`). */
   sendTrail(sessionId: string, chars: number): SendTrail;
   /**
    * Keeps a message for the live agent mid-turn until a turn of its ends, then types it, after any kept before it
-   * (`Agent.messagesWaiting`); handed back as not delivered if it ends or the daemon closes first.
+   * (`Agent.messagesWaiting`): in the database too, so a daemon restart types it once the agent is resumed. Handed
+   * back as not delivered if the agent ends first: to the agent that sent it (`from`), else to the user.
    */
   queueAfterTurn(sessionId: string, item: AfterTurn): void;
+  /**
+   * Drops the notices waiting for the agent that a message of its to `about` was not delivered (`keepUndelivered`):
+   * its new message to that agent says what the lost one did. Returns how many went.
+   */
+  dropNotices(sessionId: string, about: string): number;
   /** Types the next message kept for the agent's turn to end, if it is ready for it now (call on each change of it). */
   deliverAfterTurn(sessionId: string): void;
   /**
@@ -652,6 +674,10 @@ export interface AgentRow extends PositionColumns {
   spawned_by: string | null;
   /** The removed orchestrator that started it, until another takes its crew over (`Agent.orphanedFrom`). */
   orphaned_from: string | null;
+  /** The ticket's chat it is a helper of (`Agent.ticket`), or null. */
+  ticket: string | null;
+  /** 1 for a ticket tile's chat (`Agent.ticketChat`). */
+  ticket_chat: number;
   /**
    * How deep in a crew it was started (0 for the user's), fixed at spawn. Nothing limits it any more (a crew goes any
    * depth); it is still written so that an older daemon on this database finds it.
@@ -852,12 +878,16 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     at: string;
     keepsEnded: boolean;
     replaced?: StoredFlag;
+    /** Whether it reaches the agent's live orchestrator, as its own flag would, rather than only the user. */
+    toLead?: boolean;
   }
   /** The flag `folding` shows: its own reason, then the one it stands in place of. */
   const foldedFlag = (folding: Folding): StoredFlag => {
     const also = folding.replaced === undefined ? '' : `. Also: ${folding.replaced.reason}`;
     const reason = `${folding.base}${also}`.slice(0, MAX_FLAG_LENGTH);
-    return { id: folding.id, reason, at: folding.at, via: null, forUser: true, ...(folding.keepsEnded ? { keepsEnded: true } : {}) };
+    // One that carries a flag only the user may answer goes to the user with it.
+    const forUser = folding.toLead !== true || folding.replaced?.forUser === true;
+    return { id: folding.id, reason, at: folding.at, via: null, forUser, ...(folding.keepsEnded ? { keepsEnded: true } : {}) };
   };
   /** The agent's foldings now: what was never delivered to it, and what sits unsent at its prompt. */
   const foldingsOf = (sessionId: string): Folding[] =>
@@ -895,11 +925,17 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
    * goes on in its reason (`Folding`). One whose `before` the other folding stands in place of stays under it, where
    * that one shows it (the caller's `unfold`): on top, each would stand in place of the other.
    */
-  const raiseFolding = (sessionId: string, before: Folding | undefined, base: string, keepsEnded: boolean, at = new Date().toISOString()): Folding => {
+  const raiseFolding = (
+    sessionId: string,
+    before: Folding | undefined,
+    base: string,
+    keepsEnded: boolean,
+    { at = new Date().toISOString(), toLead = false }: { at?: string; toLead?: boolean } = {},
+  ): Folding => {
     const standing = flags.get(sessionId);
     const buried = before !== undefined && foldingsOf(sessionId).some((other) => other !== before && other.replaced?.id === before.id);
     const replaced = standing !== undefined && standing.id !== before?.id && !buried ? standing : before?.replaced;
-    const folding: Folding = { id: ++lastFlagId, base, at, keepsEnded, ...(replaced === undefined ? {} : { replaced }) };
+    const folding: Folding = { id: ++lastFlagId, base, at, keepsEnded, ...(replaced === undefined ? {} : { replaced }), ...(toLead ? { toLead } : {}) };
     if (!buried) flags.set(sessionId, foldedFlag(folding));
     return folding;
   };
@@ -957,22 +993,56 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     const before = undelivered.get(sessionId);
     const lost = items.length === 1 ? items[0]!.what : `${items.length} messages`;
     const base = `${lost} ${items.length === 1 ? 'was' : 'were'} not delivered (${items.at(-1)!.reason}): Resend on its tile`;
-    const folding = raiseFolding(sessionId, before, base, true, at);
+    const folding = raiseFolding(sessionId, before, base, true, { at });
     undelivered.set(sessionId, { ...folding, items });
     if (before !== undefined) unfold(sessionId, before.id, foldedFlag(undelivered.get(sessionId)!));
   };
   /**
    * Hands back what was queued for the agent and never typed: kept for Resend, and flagged to the user. A flag the agent
    * already had (its own words, or why its start stalled) is kept: its reason goes on in this flag's, and it stands
-   * again once what was not delivered is resent or cleared, unless it has gone meanwhile.
+   * again once what was not delivered is resent or cleared, unless it has gone meanwhile. One another agent sent
+   * (`from`) goes back to that agent instead (`tellSender`): the user never sent it, and the agent it was for has
+   * nothing to answer for.
    */
-  const keepUndelivered = (sessionId: string, what: string, text: string, reason: string) => {
+  const keepUndelivered = (sessionId: string, what: string, text: string, reason: string, from?: string) => {
     if (getRow(sessionId) === undefined) return;
+    if (from !== undefined) return tellSender(from, sessionId, text, reason);
     options.log(`${what} sent to ${sessionId} before it was up was not delivered: ${reason}`);
     const at = new Date().toISOString();
     insertUndelivered.run(sessionId, what, text, reason, at);
     flagUndelivered(sessionId, [...(undelivered.get(sessionId)?.items ?? []), { what, text, reason }], at);
     announce(sessionId);
+  };
+  /**
+   * Tells the agent `from` that its message `text` to the agent `to` was not delivered, and why: typed at its prompt,
+   * as its crew's flags are, once its turn ends. An older notice of the same still waiting goes, this one counting
+   * what it told of. One whose sender has gone is only logged: nobody is left to tell. A send to an ended agent is
+   * refused, so the notice says to restart it first.
+   */
+  const tellSender = (from: string, to: string, text: string, reason: string) => {
+    const receiver = getRow(to)!;
+    options.log(`a message from ${from} to ${to} was not delivered (${reason}): ${from} is told`);
+    if (getRow(from) === undefined) return options.log(`${from} has been deleted: the message to ${to} is dropped`);
+    const lost = deliveries.dropNotices(from, to) + 1;
+    const sent = oneLine(readSender(text).text.replace(SEND_TRAILER, ''));
+    const excerpt = sent.length > NOTICE_EXCERPT ? `${sent.slice(0, NOTICE_EXCERPT).trimEnd()}…` : sent;
+    const ref = refOf({ sessionId: to });
+    const messages = lost === 1 ? 'Your message' : `Your ${lost} messages`;
+    const send = `\`agent-board send ${ref} -- '…'\``;
+    const notice = [
+      `[agent-board] ${messages} to ${receiver.name} (${ref}) ${lost === 1 ? 'was' : 'were'} not delivered: ${reason}. The last began: "${excerpt}"`,
+      receiver.ended_at === null
+        ? `Send it again with ${send} if it still matters.`
+        : `Restart it with \`agent-board restart ${ref}\`, then send it again with ${send}, if it still matters.`,
+    ].join('\n');
+    const told = (why: string) => options.log(`the notice to ${from} that its message to ${to} was not delivered: ${why}`);
+    deliveries.queueAfterTurn(from, {
+      text: notice,
+      about: to,
+      lost,
+      typing: () => told('being typed'),
+      settled: (started, why) => told(started ? 'typed' : (why ?? 'not typed')),
+    });
   };
   /**
    * Forgets what was never delivered to the agent, and the flag that said so if it still stands, putting back the flag
@@ -1013,7 +1083,9 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
    * Tells the user that `what` was typed at the agent's prompt and given up on, and `why`: only their Send or Clear
    * (in its terminal, `inTerminal`, when they typed there) moves it on. A flag the agent already had is kept: its
    * reason goes on in this flag's, and it stands again once the message is sent or cleared, unless it has gone
-   * meanwhile. With no `what`, takes this flag down: the prompt holds nothing unsent now.
+   * meanwhile. With no `what`, takes this flag down: the prompt holds nothing unsent now. A first prompt left unsent
+   * goes to the agent's live orchestrator, as its own flag would: nobody else heard of it, and that orchestrator may
+   * submit it (`send --submit`). Not when the user typed there: that prompt holds their words too.
    */
   const flagNotSent = (sessionId: string, what?: string, why?: string, inTerminal = false) => {
     const before = notSentFlags.get(sessionId);
@@ -1023,8 +1095,14 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       lowerFolding(sessionId, before);
       return;
     }
-    const where = inTerminal ? 'send or clear it in its terminal' : 'Send or Clear it on its tile';
-    const folding = raiseFolding(sessionId, before, `${what} was typed at its prompt but not sent (${why}): ${where}`, false);
+    const row = getRow(sessionId);
+    const toLead = what === FIRST_PROMPT && !inTerminal && row !== undefined && led(row) !== null;
+    const where = inTerminal
+      ? 'send or clear it in its terminal'
+      : toLead
+        ? `Send or Clear it on its tile, or \`agent-board send ${agentRefOf(sessionId)} --submit\``
+        : 'Send or Clear it on its tile';
+    const folding = raiseFolding(sessionId, before, `${what} was typed at its prompt but not sent (${why}): ${where}`, false, { toLead });
     notSentFlags.set(sessionId, folding);
     if (before !== undefined) unfold(sessionId, before.id, foldedFlag(folding));
   };
@@ -1298,6 +1376,37 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     log: options.log,
     hookShimPath: options.hookShimPath,
   });
+  const insertWaiting = db.prepare(
+    'INSERT INTO waiting_messages (session_id, text, from_session_id, about_session_id, lost, at) VALUES (?, ?, ?, ?, ?, ?)',
+  );
+  const deleteWaiting = db.prepare('DELETE FROM waiting_messages WHERE id = ?');
+  const selectWaiting = db.prepare('SELECT id, session_id, text, from_session_id, about_session_id, lost FROM waiting_messages ORDER BY id');
+  /** Where what waits for an agent's turn to end is kept, so a restart types it once the agent is resumed. */
+  const waitingStore: WaitingStore = {
+    add: (sessionId, { text, from, about, lost }) =>
+      Number(insertWaiting.run(sessionId, text, from ?? null, about ?? null, lost ?? null, new Date().toISOString()).lastInsertRowid),
+    remove: (id) => void deleteWaiting.run(id),
+    all: () =>
+      (
+        selectWaiting.all() as unknown as {
+          id: number;
+          session_id: string;
+          text: string;
+          from_session_id: string | null;
+          about_session_id: string | null;
+          lost: number | null;
+        }[]
+      ).map(
+        (row): KeptWaiting => ({
+          id: row.id,
+          sessionId: row.session_id,
+          text: row.text,
+          ...(row.from_session_id === null ? {} : { from: row.from_session_id }),
+          ...(row.about_session_id === null ? {} : { about: row.about_session_id }),
+          ...(row.lost === null ? {} : { lost: row.lost }),
+        }),
+      ),
+  };
   const deliveries = createDeliveries({
     write: (sessionId, data) => sessions.write(sessionId, data),
     getRow: (sessionId) => getRow(sessionId),
@@ -1310,7 +1419,8 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       return row === undefined || row.ended_at !== null ? 'moved-on' : hookStates.promptNow(row);
     },
     announce: (sessionId) => announce(sessionId),
-    undelivered: (sessionId, what, text, reason) => keepUndelivered(sessionId, what, text, reason),
+    undelivered: (sessionId, what, text, reason, from) => keepUndelivered(sessionId, what, text, reason, from),
+    waiting: waitingStore,
     notSent: (sessionId, what, why, inTerminal) => flagNotSent(sessionId, what, why, inTerminal),
     log: options.log,
     // Its waits are the terminal's, in real time: never the schedules' clock, which tests drive by hand.
@@ -1428,7 +1538,8 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     id === null ? { by: null, byId: null } : { by: getRow(id)?.name ?? 'a removed orchestrator', byId: id };
 
   const selectLiveSession = db.prepare('SELECT 1 FROM sessions WHERE id = ? AND ended_at IS NULL');
-  const selectCrew = db.prepare('SELECT session_id FROM agents WHERE spawned_by = ?');
+  // A ticket's chat leads its helpers too, those it didn't start among them.
+  const selectCrew = db.prepare('SELECT session_id FROM agents WHERE spawned_by = ? OR ticket = ?');
   const updateLead = db.prepare('UPDATE agents SET spawned_by = ?, orphaned_from = NULL WHERE session_id = ?');
   const selectHandedCrew = db.prepare('SELECT session_id FROM agents WHERE spawned_by = ? OR orphaned_from = ?');
   // Only while a crew agent still names it: a removed orchestrator with none left has nothing to hand over.
@@ -1444,17 +1555,27 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     return row === undefined ? undefined : { sessionId: row.session_id, name: row.name };
   };
 
-  /** The name of the agent's orchestrator while that one is live; null for a loose agent, the Captain's, or one whose orchestrator ended. */
+  /**
+   * The ticket the agent is a helper of, while its chat is on the board: a start that raced the chat's delete, or an
+   * older daemon's delete, leaves the column naming a gone chat, and the agent is then a helper of none.
+   */
+  const ticketOf = (row: AgentRow): string | null => (row.ticket !== null && getRow(row.ticket)?.ticket_chat === 1 ? row.ticket : null);
+
+  /**
+   * The name of the agent's orchestrator while that one is live: its ticket's chat for a helper, else the agent that
+   * started it. Null for a loose agent, the Captain's, or one whose orchestrator ended.
+   */
   const led = (row: AgentRow): string | null => {
-    if (row.spawned_by === null) return null;
-    const lead = getRow(row.spawned_by);
+    const leadId = flagLeadOf({ ticket: ticketOf(row), spawnedBy: row.spawned_by });
+    if (leadId === null) return null;
+    const lead = getRow(leadId);
     // Never the Captain (ADR-0019): what its leads ask or plan waits for the user, never for it to settle.
-    return lead === undefined || lead.master === 1 || selectLiveSession.get(row.spawned_by) === undefined ? null : lead.name;
+    return lead === undefined || lead.master === 1 || selectLiveSession.get(leadId) === undefined ? null : lead.name;
   };
 
   /** Tells every client about the agents `leadId` started, whose `ledBy` changed with it: its start, end or new name. */
   const announceCrew = (leadId: string) => {
-    for (const { session_id: crewId } of selectCrew.all(leadId) as { session_id: string }[]) announce(crewId);
+    for (const { session_id: crewId } of selectCrew.all(leadId, leadId) as { session_id: string }[]) announce(crewId);
   };
 
   /** The agent's flag, reaching its orchestrator while that one is live, else the user. */
@@ -1588,6 +1709,8 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       plainFolder: row.plain_folder === 1 || inGroupFolder(options.groupsDir, row.worktree),
       spawnedBy: row.spawned_by,
       orphanedFrom: row.orphaned_from === null ? null : { sessionId: row.orphaned_from, name: (selectRemovedLeadName.get(row.orphaned_from) as { name: string } | undefined)?.name ?? 'a removed orchestrator' },
+      ticket: ticketOf(row),
+      ticketChat: row.ticket_chat === 1,
       ledBy: led(row),
       records: records.of(row.session_id),
       page: pages.of(row.session_id) ?? null,
@@ -1898,6 +2021,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     answer: deliveries.answer,
     sendTrail: (sessionId, chars) => sendTrail(options.log, sessionId, chars),
     queueAfterTurn: deliveries.queueAfterTurn,
+    dropNotices: deliveries.dropNotices,
     deliverAfterTurn: deliveries.deliverAfterTurn,
 
     runScheduled: deliveries.runScheduled,
@@ -2225,6 +2349,12 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       return agent;
     },
 
+    roleTemplate(sessionId, role, crewReview) {
+      const parsed = parseRole(role);
+      if ('error' in parsed) throw invalidParams(parsed.error);
+      return spawns.roleTemplate(requireRow(sessionId), parsed, crewReview);
+    },
+
     setStatus(sessionId, { summary = null, progress = null, done = false, character, category, purpose }, setBy = null) {
       requireAgent(sessionId);
       if (summary === null && character === undefined && category === undefined && purpose === undefined) {
@@ -2443,6 +2573,8 @@ function spawnParams(params: unknown): SpawnAgentParams {
     noTemplate: optionalBooleanParam(p, 'noTemplate'),
     checkout: optionalStringParam(p, 'checkout') as 'main' | 'worktree' | undefined,
     issueZoneId: optionalStringParam(p, 'issueZoneId'),
+    ticketChat: optionalBooleanParam(p, 'ticketChat'),
+    ticket: optionalStringParam(p, 'ticket'),
     allowProjectCodexConfig: optionalBooleanParam(p, 'allowProjectCodexConfig'),
     prompt: optionalStringParam(p, 'prompt'),
     name: optionalStringParam(p, 'name'),

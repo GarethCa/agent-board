@@ -52,13 +52,15 @@ function parse(argv: string[]): Command {
       const [key, ...value] = (own[++i] ?? '').split('=');
       fields.set(key!, value.join('='));
     }
+    // `--flag=value`, as gh's own parser takes it too.
+    else if (/^--[\w-]+=/.test(arg)) flags.set(arg.slice(0, arg.indexOf('=')), arg.slice(arg.indexOf('=') + 1));
     else if (arg.startsWith('-') && arg !== '-') flags.set(FLAG_ALIASES[arg] ?? arg, own[++i] ?? '');
     else words.push(arg);
   }
   return { words, flags, fields, passthrough: end === -1 ? [] : argv.slice(end + 1) };
 }
 
-function answer(state: FakeGitHubState, { words, flags }: Command): unknown {
+function answer(state: FakeGitHubState, { words, flags, fields: apiFields }: Command): unknown {
   const command = words.slice(0, 2).join(' ');
   const fields = (flags.get('--json') ?? '').split(',').filter(Boolean);
   if (command === 'api user') return { login: FAKE_USER };
@@ -75,6 +77,7 @@ function answer(state: FakeGitHubState, { words, flags }: Command): unknown {
     const squashMergeAllowed = repo.squashMergeAllowed ?? true;
     return pick({ nameWithOwner: repo.nameWithOwner, name: repo.nameWithOwner.split('/')[1], description: repo.description, viewerPermission, squashMergeAllowed }, fields);
   }
+  if (command === 'api graphql') return graphqlAnswer(state, apiFields);
   const pullApi = /^repos\/([\w.-]+\/[\w.-]+)\/pulls\/(\d+)\/(files|comments)(?:\?.*)?$/.exec(words[0] === 'api' ? (words[1] ?? '') : '');
   if (pullApi !== null) {
     const [, name, number, what] = pullApi;
@@ -98,8 +101,14 @@ function answer(state: FakeGitHubState, { words, flags }: Command): unknown {
       .toLowerCase()
       .split(/\s+/)
       .filter((term) => term !== '' && !term.includes(':'));
+    const milestone = flags.get('--milestone');
+    const milestones = state.milestones?.[repo] ?? [];
+    // gh takes a milestone's number or its title, and fails for one the repo does not have.
+    const wanted = milestone === undefined ? undefined : milestones.find((m) => String(m.number) === milestone || m.title === milestone);
+    if (milestone !== undefined && wanted === undefined) throw new GhExit(1, `no milestone found with title or number "${milestone}"`);
     return state.issues
       .filter((issue) => issue.repo === repo && (status === 'all' || issue.state === status.toUpperCase()))
+      .filter((issue) => wanted === undefined || issue.milestone === wanted.number)
       .filter((issue) => terms.every((term) => `${issue.title} ${issue.body}`.toLowerCase().includes(term)))
       .slice(0, Number(flags.get('--limit') ?? 30))
       .map((issue) => pick(issueJson(issue), fields));
@@ -268,6 +277,49 @@ function findRepo(state: FakeGitHubState, name: string) {
     throw new GhExit(1, `GraphQL: Could not resolve to a Repository with the name '${name}'. (repository)`);
   }
   return repo;
+}
+
+/** `gh api graphql`: the queries agent-board sends, told apart by what they ask for, answered as GitHub would. */
+function graphqlAnswer(state: FakeGitHubState, fields: Map<string, string>): unknown {
+  const query = fields.get('query') ?? '';
+  if (/projectsV2|ProjectV2/.test(query) && state.projectScope === false) {
+    throw new GhExit(
+      1,
+      "GraphQL: Your token has not been granted the required scopes to execute this query. The 'projectsV2' field requires one of the following scopes: ['read:project'], but your token has only been granted the: ['gist', 'read:org', 'repo'] scopes. Please modify your token's scopes at: https://github.com/settings/tokens.",
+    );
+  }
+  if (query.includes('node(id:')) {
+    const project = (state.projects ?? []).find((p) => p.id === fields.get('project'));
+    if (project === undefined) return { data: { node: null } };
+    const nodes = project.issues.flatMap(({ repo, number }) => {
+      const issue = state.issues.find((i) => i.repo === repo && i.number === number);
+      if (issue === undefined) return [];
+      const milestone = issue.milestone === undefined ? null : { number: issue.milestone };
+      // Most recently updated first, as `state.issues` is: a day apart.
+      const updatedAt = new Date(Date.UTC(2026, 0, 31) - state.issues.indexOf(issue) * 86_400_000).toISOString();
+      const json = issueJson(issue);
+      const content = {
+        ...{ __typename: 'Issue', number: json.number, title: json.title, body: json.body, url: json.url, state: json.state },
+        ...{ updatedAt, milestone, repository: { nameWithOwner: repo } },
+      };
+      return [{ content }];
+    });
+    // Pages of `projectPageSize` items (100, as GitHub's `first: 100`), the cursor being where the next page starts.
+    const size = state.projectPageSize ?? 100;
+    const start = Number(fields.get('after') ?? 0);
+    const end = start + size;
+    const pageInfo = { hasNextPage: end < nodes.length, endCursor: end < nodes.length ? String(end) : null };
+    return { data: { node: { items: { pageInfo, nodes: nodes.slice(start, end) } } } };
+  }
+  const repo = findRepo(state, `${fields.get('owner')}/${fields.get('name')}`).nameWithOwner;
+  const milestones = { nodes: state.milestones?.[repo] ?? [] };
+  if (!query.includes('projectsV2')) return { data: { repository: { milestones } } };
+  const projects = (state.projects ?? []).filter((p) => p.repos.includes(repo));
+  return {
+    data: {
+      repository: { projectsV2: { nodes: projects.map((p) => ({ id: p.id, title: p.title, closed: p.closed ?? false })) }, milestones },
+    },
+  };
 }
 
 function issueJson(issue: FakeGitHubIssue) {

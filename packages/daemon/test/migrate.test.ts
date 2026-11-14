@@ -756,4 +756,31 @@ describe('the queue-kinds migration', () => {
       'queue_jobs_taker',
     ]);
   });
+  it('drop the messages another agent sent that were kept as not delivered as the daemon shut down, and keep the rest', () => {
+    const db = new DatabaseSync(':memory:');
+    const added = MIGRATIONS.findIndex((m) => m.name === 'waiting_messages');
+    expect(added).toBeGreaterThan(0);
+    migrate(db, MIGRATIONS.slice(0, added));
+    db.exec(`INSERT INTO zones (id, repo_root, folder, name, color, x, y, width, height)
+        VALUES ('z', '/code/app', '', 'app', '#4c6ef5', 0, 0, 300, 200);
+      INSERT INTO sessions (id, harness, hook_token_sha256, cwd) VALUES ('s', 'claude', 'h', '/w');
+      INSERT INTO agents (session_id, zone_id, repo_root, codex_bypass_hook_trust, name, description, branch, worktree, state)
+        VALUES ('s', 'z', '/code/app', 0, 'Ada', 'Do it', 'ada', '/w', 'idle');`);
+    const keep = db.prepare('INSERT INTO undelivered_messages (session_id, what, text, reason, at) VALUES (?, ?, ?, ?, ?)');
+    const shutDown = 'the daemon shut down before its turn ended';
+    const at = '2026-11-14T09:00:00.000Z';
+    keep.run('s', 'A message', '⟨send from lead · agent:1d20af09⟩ Morning report', shutDown, at);
+    keep.run('s', 'A message', '⟨reply from lead · agent:1d20af09⟩ Yes, push it', shutDown, at);
+    keep.run('s', 'A message', 'Also lint', shutDown, at);
+    keep.run('s', 'A message', '⟨send from lead · agent:1d20af09⟩ Evening report', 'its session ended before its turn did', at);
+    keep.run('s', 'Its first prompt', '⟨hand-off from impl · agent:2e31b0aa⟩ Review this', shutDown, at);
+
+    migrate(db);
+
+    expect(db.prepare('SELECT what, text FROM undelivered_messages ORDER BY id').all()).toEqual([
+      { what: 'A message', text: 'Also lint' },
+      { what: 'A message', text: '⟨send from lead · agent:1d20af09⟩ Evening report' },
+      { what: 'Its first prompt', text: '⟨hand-off from impl · agent:2e31b0aa⟩ Review this' },
+    ]);
+  });
 });

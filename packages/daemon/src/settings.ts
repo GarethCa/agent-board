@@ -1,5 +1,6 @@
 import { isAbsolute } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
+import { userForcedHyperlink } from './hyperlink-env.ts';
 import { invalidParams, oneOf, optionalBooleanParam, paramsObject, stringParam } from './params.ts';
 import {
   ARRANGE_SPACINGS,
@@ -25,6 +26,7 @@ const DEFAULT_SETTINGS: DaemonSettings = {
   codexPath: '',
   compactWindow: 0,
   clickableLinks: true,
+  clickableLinksFromEnvironment: null,
   needsYouShows: 'explicit',
   notifications: true,
   notifyInFront: false,
@@ -44,14 +46,15 @@ export interface SettingsHost {
 
 /**
  * The daemon's settings, one JSON value per key in `settings`, which it reads and acts on. `changed` hears of
- * each change, with the settings as they were.
+ * each change, with the settings as they were. `env` is the environment agents start from, which a few read-only fields
+ * report on.
  */
-export function createSettings(db: DatabaseSync, changed: (now: DaemonSettings, was: DaemonSettings) => void): SettingsHost {
+export function createSettings(db: DatabaseSync, changed: (now: DaemonSettings, was: DaemonSettings) => void, env: NodeJS.ProcessEnv = {}): SettingsHost {
   const select = db.prepare('SELECT key, value FROM settings');
   const upsert = db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value');
 
   const get = (): DaemonSettings => {
-    const settings = { ...DEFAULT_SETTINGS };
+    const settings = { ...DEFAULT_SETTINGS, clickableLinksFromEnvironment: userForcedHyperlink(env) };
     for (const { key, value } of select.all() as { key: string; value: string }[]) {
       if (key === 'heldPayloads' && HELD_PAYLOAD_STORAGE.includes(JSON.parse(value))) settings.heldPayloads = JSON.parse(value);
       if (key === 'compactWindow' && isCompactWindow(JSON.parse(value))) settings.compactWindow = JSON.parse(value);

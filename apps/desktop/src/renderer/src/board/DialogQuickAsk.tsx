@@ -38,7 +38,7 @@ function useDialogActions(
 }
 
 /** What a sent or kept-open dialog says in place of its questions; null while the board can answer it. */
-function DialogNote({ prompt, onOpen }: { prompt: DialogPrompt; onOpen: (() => void) | undefined }): ReactNode {
+export function DialogNote({ prompt, onOpen }: { prompt: DialogPrompt; onOpen: (() => void) | undefined }): ReactNode {
   const status = dialogStatus(prompt);
   if (status === 'sent') {
     return (

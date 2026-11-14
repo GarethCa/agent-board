@@ -33,6 +33,68 @@ trackerContract('GitHub (fake gh)', () => ({
   branchPrefix: 'gh-34',
 }));
 
+describe('the GitHub tracker, projects and milestones', () => {
+  const ROADMAP = { id: 'PVT_fakeRoadmap', name: 'Roadmap' };
+  const MILESTONES = [
+    { id: '1', name: 'v1.0' },
+    { id: '2', name: 'v1.1' },
+  ];
+
+  it("lists the repo's open GitHub Projects, each with the repo's milestones under it", async () => {
+    const { tracker } = fakeGitHub();
+    expect(await tracker.issueFilters!('acme/app')).toEqual({
+      projects: [{ ...ROADMAP, milestones: MILESTONES }],
+      milestones: [],
+    });
+    // A repo in no project has its milestones on their own.
+    expect(await tracker.issueFilters!('acme/ops')).toEqual({ projects: [], milestones: [] });
+  });
+
+  it("falls back to the repo's milestones, and says why, when gh's login may not read projects", async () => {
+    const { tracker } = fakeGitHub({ ...FAKE_GITHUB_STATE, projectScope: false });
+    expect(await tracker.issueFilters!('acme/app')).toEqual({
+      projects: [],
+      milestones: MILESTONES,
+      missing: 'project-scope',
+    });
+    // Listing by milestone needs no project scope.
+    expect((await tracker.listIssues('acme/app', { milestone: '1' })).map((issue) => issue.id)).toEqual(['acme/app#12']);
+  });
+
+  it("lists a project's open issues in this repo only, newest first, and narrows them to a milestone", async () => {
+    const { tracker, github } = fakeGitHub();
+    const listed = await tracker.listIssues('acme/app', { project: ROADMAP.id });
+    expect(listed.map((issue) => issue.id)).toEqual(['acme/app#34', 'acme/app#12']);
+    expect(listed[0]).toEqual(LOGIN_ISSUE);
+    const inMilestone = await tracker.listIssues('acme/app', { project: ROADMAP.id, milestone: '1' });
+    expect(inMilestone.map((issue) => issue.id)).toEqual(['acme/app#12']);
+    expect(await tracker.listIssues('acme/app', { project: ROADMAP.id, milestone: '2' })).toEqual([]);
+    const call = github.calls().find((c) => c.args.includes('graphql'));
+    expect(call?.args.slice(0, 3)).toEqual(['api', 'graphql', '-f']);
+  });
+
+  it("reads every page of a project's items", async () => {
+    const { tracker, github } = fakeGitHub({ ...FAKE_GITHUB_STATE, projectPageSize: 1 });
+    const listed = await tracker.listIssues('acme/app', { project: ROADMAP.id });
+    expect(listed.map((issue) => issue.id)).toEqual(['acme/app#34', 'acme/app#12']);
+    const pages = github.calls().filter((c) => c.args.includes('graphql'));
+    expect(pages.length).toBeGreaterThan(2);
+    expect(pages[1]?.args).toContain('after=1');
+  });
+
+  it("searches a project's issues in this repo, closed ones too", async () => {
+    const { tracker } = fakeGitHub();
+    expect((await tracker.searchIssues('acme/app', 'push', { project: ROADMAP.id })).map((i) => i.id)).toEqual(['acme/app#3']);
+    expect(await tracker.searchIssues('acme/app', 'deploy', { project: ROADMAP.id })).toEqual([]);
+  });
+
+  it("lists and searches a repo's issues by milestone, outside any project", async () => {
+    const { tracker } = fakeGitHub();
+    expect((await tracker.listIssues('acme/app', { milestone: '1' })).map((issue) => issue.id)).toEqual(['acme/app#12']);
+    expect(await tracker.searchIssues('acme/app', 'login', { milestone: '1' })).toEqual([]);
+  });
+});
+
 describe('the GitHub tracker', () => {
   it("lists a repo's open issues, newest first, and names repos by owner/repo", async () => {
     const { tracker } = fakeGitHub();

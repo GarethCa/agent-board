@@ -56,11 +56,49 @@ export function Fieldset({ legend, children, className, ...rest }: FieldsetHTMLA
 }
 
 /** A line that says what a control is for, outside a Field. */
-export function Hint({ children, className, ...rest }: { children: ReactNode; className?: string; 'data-testid'?: string }) {
+export function Hint({ children, className, ...rest }: { children: ReactNode; className?: string; id?: string; 'data-testid'?: string }) {
   return (
     <p className={cx('ui-hint', className)} {...rest}>
       {children}
     </p>
+  );
+}
+
+interface ReadoutProps {
+  /** What the reading is of, drawn as a field's name. */
+  label: ReactNode;
+  /** The reading itself: a count, a status. */
+  children: ReactNode;
+  /** What acts on it, at the end of its line: a button. */
+  end?: ReactNode;
+  /** A line under it saying what it means. */
+  hint?: ReactNode;
+  className?: string;
+  /** Put on the reading, not the row, so a test can read or blank the reading alone. */
+  'data-testid'?: string;
+}
+
+/** A labelled reading that is not a control (how many agents are muted, how the background service is), named like a Field. */
+export function Readout({ label, children, end, hint, className, 'data-testid': testId }: ReadoutProps) {
+  const nameId = useId();
+  const hintId = useId();
+  return (
+    <div className={cx('ui-field', className)} role="group" aria-labelledby={nameId} aria-describedby={hint === undefined ? undefined : hintId}>
+      <span className="ui-field-name" id={nameId}>
+        {label}
+      </span>
+      <div className="ui-readout">
+        <span className="ui-readout-value" data-testid={testId}>
+          {children}
+        </span>
+        {end}
+      </div>
+      {hint !== undefined && (
+        <p className="ui-hint" id={hintId}>
+          {hint}
+        </p>
+      )}
+    </div>
   );
 }
 

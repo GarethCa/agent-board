@@ -32,6 +32,8 @@ import { SubagentPerch } from './SubagentPerch';
 import { TileActionsContext, type TileProps } from './tile';
 import { dropKey } from '../session/shell-moves';
 import { CAPTURE_FRAME } from './capture-mode';
+import { FrostMark } from './FrostMark';
+import { frostedClasses } from './paused';
 
 const stopPropagation = (event: MouseEvent) => event.stopPropagation();
 
@@ -101,7 +103,7 @@ function ExpandedTileShown({ id, tile, parent }: TileProps & { parent: ExpandedP
   return (
     <section
       ref={root}
-      className="expanded-tile"
+      className={agent ? frostedClasses('expanded-tile', agent) : 'expanded-tile'}
       data-testid="expanded-tile"
       data-harness={harness}
       data-session-id={agent?.sessionId}
@@ -118,6 +120,7 @@ function ExpandedTileShown({ id, tile, parent }: TileProps & { parent: ExpandedP
       <header className="session-window-head expanded-tile-head" tabIndex={extended ? -1 : undefined}>
         <HarnessMark className="session-window-mark" harness={harness} />
         <SessionName agent={agent} shell={shell} name={name} title={name} nodeId={id} />
+        {agent && <FrostMark agent={agent} />}
         {agent && (simplified ? <StatusMark status={humanStatus(agent, shows).status} /> : <StatusPill {...agentPill(agent, shows)} />)}
         {external && <StatusPill state={external.state} label={STATE_LABELS[external.state]} />}
         {/* Its shelves hold the branch, issue and pull requests, as in its window: the header says them only while they are on the rail. */}

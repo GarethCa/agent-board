@@ -58,7 +58,8 @@ import { canRestart, canRestartLive, endedShellLabel } from '../session/RestartA
 import { useReviews } from '../review/ReviewsProvider';
 import { roundsOf } from '../review/reviews';
 import { dropKey, dropOver as dropOverValue } from '../session/shell-moves';
-import { pausedLine } from './paused';
+import { frostedClasses, pausedLine } from './paused';
+import { FrostMark } from './FrostMark';
 import { externalMenu, menuBarAgentEntries, shellMenu } from './menu-model';
 import { useAgentTileMenu } from './agent-tile-menu';
 import { useMenuBarSection } from '../keys/menu-bar-bridge';
@@ -334,7 +335,7 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
   return (
     <HoverCard label={card?.label ?? 'Details'} content={hoverCard}>
     <div
-      className="hybrid-tile hybrid-tile-agent"
+      className={frostedClasses('hybrid-tile hybrid-tile-agent', agent)}
       data-testid="agent-tile"
       data-representation="hybrid"
       data-harness={agent.harness}
@@ -372,6 +373,7 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
       <div className="hybrid-tile-head">
         {startup !== null && !startup.failed ? <Spinner /> : <HarnessMark className="hybrid-tile-icon" harness={agent.harness} />}
         <EditableName className={nameClass(shownName.name)} value={agent.name} title={agent.name} shown={shownName.name} renaming={renaming} clicks={nameClicks} label="Agent name" />
+        <FrostMark agent={agent} />
         {/* With the corner shown only on hover, the pencil goes in it, so the name takes the whole head at rest. */}
         {look.cornerAlways && <RenameButton renaming={renaming} />}
         {!look.mutedInFooter && agent.muted && <MutedBell />}

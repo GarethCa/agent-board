@@ -1,11 +1,11 @@
 // An agent's model and role at spawn: the harness, model and role chips in New agent, a zone's Role
 // templates dialog, and the tile's model and role badges, with a reviewer's detached branch line.
-// A named custom role shows its name on the chip and the badge. A running agent takes a new role from its tile's menu.
+// A named custom role shows its name on the chip and the badge. A running agent takes a new role from its tile's menu, and with its template if asked.
 import { expect } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import { rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { agents, launch, openSubmenu, pickInChip, screen, spawnAgent, tile, tileGroup, zoneNamed } from './agent-helpers.ts';
+import { agents, launch, openSubmenu, pickInChip, screen, spawnAgent, tile, tileGroup, TURN_MS, zoneNamed } from './agent-helpers.ts';
 import { test, browseForZone, pickFolderNext, removeDataDir, tempDataDir } from './launch.ts';
 import { scratch } from './scratch.ts';
 import { showTileParts } from './settings-helpers.ts';
@@ -167,6 +167,36 @@ test('a running agent takes a role from its tile menu at once, orchestrator amon
     // Only the role changed: the same session, still running.
     const [after] = await agents(window);
     expect(after).toMatchObject({ sessionId: before!.sessionId, role: null, roleName: null, endedAt: null });
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("Role ▸ With its template ▸ gives a running agent the role and sends it the role's template as a message", async () => {
+  const { dir, repo, env } = scratch('output');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, env);
+  try {
+    await showTileParts(window, ['chips']);
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await spawnAgent(window, 'monorepo', 'Plan the release');
+    const agentTile = tile(window).filter({ hasText: 'Plan the release' });
+
+    await agentTile.getByRole('button', { name: 'More' }).click();
+    await openSubmenu(window, tileGroup('Settings'));
+    await openSubmenu(window, 'Role');
+    // The Role menu under it has an Implementer row of its own, which gives the role without the template. The row is
+    // picked with Enter, not a click: the agent's turn changes its tile meanwhile, and the menus hung from it can move
+    // between a click's aim and its press, which then lands on the page and closes them.
+    const withTemplate = await openSubmenu(window, 'With its template');
+    await withTemplate.getByRole('menuitem', { name: 'Implementer', exact: true }).press('Enter');
+    await expect(agentTile.getByTestId('tile-role')).toHaveText('Implementer');
+    // The template, filled in, reaches it once its first turn is over.
+    await agentTile.dblclick();
+    await expect(screen(window)).toContainText('> You are the implementer for none.', { timeout: TURN_MS });
   } finally {
     await app.close();
     await removeDataDir(dataDir);

@@ -1,6 +1,5 @@
-// Reply paths (ADR-0011): an agent that got a message from another agent may send back to it for a while, even one it
-// may not otherwise send to (one the user started by hand). One way only: the receiver answers the sender, and its
-// answer opens nothing back.
+// Reply paths (ADR-0011): an agent that got a message from another agent answers it for a while: what it sends back is
+// marked a reply (ADR-0023). One way only: the receiver answers the sender, and its answer opens nothing back.
 
 /** How long a receiver may answer a message: an hour by default, from the sender's latest message to it. */
 const DEFAULT_REPLY_WINDOW_MS = 60 * 60 * 1000;

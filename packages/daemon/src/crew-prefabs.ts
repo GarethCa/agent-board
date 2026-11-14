@@ -173,12 +173,13 @@ function checkTemplates(members: PrefabMember[]) {
 }
 
 /** Refuses members that pass work in no way the crew can run. */
-function checkFlow(members: PrefabMember[]) {
+/** Checks how work passes between a prefab's members. A ticket's chat (`ticket`) leads as an orchestrator does. */
+function checkFlow(members: PrefabMember[], ticket: boolean) {
   const first = members.filter((member) => member.starts === 'prompt');
   if (first.length !== 1) {
     throw invalidParams(`a crew has one member that starts on the prompt, its builder or its lead; this one has ${first.length}`);
   }
-  const lead = isOrchestratorRole(first[0]!.role);
+  const lead = ticket || isOrchestratorRole(first[0]!.role);
   for (const member of members) {
     if (member.starts === 'handoff' && !REVIEWER_ROLES.includes(member.role as never)) {
       throw invalidParams(`${member.id} starts at the hand-off, so it is a reviewer or follow-up reviewer, which reviews the builder's branch`);
@@ -187,7 +188,7 @@ function checkFlow(members: PrefabMember[]) {
       throw invalidParams(`${member.id} starts at the hand-off, but a crew with a lead has the lead start its reviewers: start it by the lead`);
     }
     if (member.starts === 'lead' && !lead) {
-      throw invalidParams(`${member.id} is started by the lead, so the member that starts on the prompt is an orchestrator`);
+      throw invalidParams(`${member.id} is started by the lead, so the member that starts on the prompt is an orchestrator, or the prefab is a ticket`);
     }
   }
 }
@@ -214,14 +215,15 @@ function readPrefab(value: unknown): CrewPrefab {
   const read = members.map(readMember);
   const twice = read.find((member, n) => read.findIndex((other) => other.id === member.id) !== n);
   if (twice !== undefined) throw invalidParams(`two members are ${twice.id}: each has an id of its own`);
-  checkFlow(read);
+  const onBoard = choice(fields, 'onBoard', 'onBoard', ['card', 'tiles', 'ticket'] as const, 'card');
+  checkFlow(read, onBoard === 'ticket');
   checkTemplates(read);
   return {
     name,
     icon,
     purpose: line(fields, 'purpose', "the prefab's purpose", MAX_PURPOSE_LENGTH, ''),
     roundLimit,
-    onBoard: choice(fields, 'onBoard', 'onBoard', ['card', 'tiles'] as const, 'card'),
+    onBoard,
     members: read,
   };
 }
@@ -306,5 +308,12 @@ export const BUILT_IN_PREFABS: readonly CrewPrefab[] = [
       member({ id: 'impl', role: 'implementer', starts: 'lead' }),
       member({ id: 'review', role: 'reviewer', starts: 'lead' }),
     ],
+  }),
+  prefab({
+    name: 'Ticket',
+    icon: 'ticket',
+    purpose: 'One chat for a ticket: it builds, and starts and runs its helpers (designer, builder, reviewer)',
+    onBoard: 'ticket',
+    members: [member({ id: 'chat', role: 'implementer', starts: 'prompt' }), member({ id: 'review', role: 'reviewer', starts: 'lead' })],
   }),
 ];

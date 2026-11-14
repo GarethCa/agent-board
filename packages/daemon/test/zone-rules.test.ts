@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { fakeHarnessEnv } from '@agent-board/fake-harness';
 import type { DaemonClient } from '../src/client.ts';
 import { migrate } from '../src/migrate.ts';
+import { daemonPaths } from '../src/paths.ts';
 import type { DaemonCall } from '../src/orchestrator-layout.ts';
 import { zoneSnapshot, type Agent, type BoardItem, type FlowEdge, type Shell, type Zone } from '../src/protocol.ts';
 import { createZoneRules, RULE_SETTLE_MS, zonesChangedBy, type RuleInputs } from '../src/zone-rules.ts';
@@ -15,7 +16,7 @@ import { connectTestClient, recordEvents, startTestDaemon, tempDataDir, tempRepo
 
 const zone = (fields: Partial<Zone> = {}) => ({ id: 'z1', name: 'web', layoutRule: 'lanes', layoutMode: 'free', spacing: 'normal', width: 1200, folded: false, handPlaced: [], ...fields }) as Zone;
 const agent = (fields: Partial<Agent> = {}) =>
-  ({ sessionId: 's1', name: 'impl', zoneId: 'z1', issue: null, role: null, reviewOf: null, reviews: null, spawnedBy: null, branch: '', endedAt: null, state: 'idle', shellSessionId: null, shellHarness: null, position: { x: 0, y: 0 }, ...fields }) as Agent;
+  ({ sessionId: 's1', name: 'impl', zoneId: 'z1', issue: null, role: null, reviewOf: null, reviews: null, spawnedBy: null, orphanedFrom: null, ticket: null, ticketChat: false, branch: '', endedAt: null, state: 'idle', shellSessionId: null, shellHarness: null, position: { x: 0, y: 0 }, ...fields }) as Agent;
 
 describe('what sets a zone off to be laid out by its rule again', () => {
   it('is a tile coming, going or changing what its lane depends on, never its place or its state', () => {
@@ -33,6 +34,20 @@ describe('what sets a zone off to be laid out by its rule again', () => {
     expect(zonesChangedBy({ type: 'agent.removed', sessionId: 'gone' }, inputs)).toBe('all');
   });
 
+  it("is, in a Spine zone, a move of an agent the user started (a drop may let it join), never of one an agent started", () => {
+    const inputs: RuleInputs = new Map();
+    const spines = new Set(['z1']);
+    expect(zonesChangedBy({ type: 'agent.updated', agent: agent() }, inputs, spines)).toEqual(['z1']);
+    expect(zonesChangedBy({ type: 'agent.updated', agent: agent({ position: { x: 400, y: 300, z: 1 } }) }, inputs, spines)).toEqual(['z1']);
+    expect(zonesChangedBy({ type: 'agent.updated', agent: agent({ position: { x: 400, y: 300, z: 2 }, state: 'running' }) }, inputs, spines)).toEqual([]);
+    const crew = agent({ sessionId: 's2', spawnedBy: 's1' });
+    expect(zonesChangedBy({ type: 'agent.updated', agent: crew }, inputs, spines)).toEqual(['z1']);
+    expect(zonesChangedBy({ type: 'agent.updated', agent: { ...crew, position: { x: 400, y: 300, z: 1 } } }, inputs, spines)).toEqual([]);
+    // Off Spine, the user's agent's move sets nothing off either.
+    expect(zonesChangedBy({ type: 'agent.updated', agent: agent({ position: { x: 90, y: 90, z: 1 } }) }, inputs)).toEqual(['z1']);
+    expect(zonesChangedBy({ type: 'agent.updated', agent: agent({ position: { x: 10, y: 10, z: 1 } }) }, inputs)).toEqual([]);
+  });
+
   it('is a zone changing its rule, width, folding or tiles placed by hand, never its place or height', () => {
     const inputs: RuleInputs = new Map();
     expect(zonesChangedBy({ type: 'zone.updated', zone: zone() }, inputs)).toEqual(['z1']);
@@ -40,6 +55,18 @@ describe('what sets a zone off to be laid out by its rule again', () => {
     expect(zonesChangedBy({ type: 'zone.updated', zone: zone({ folded: true }) }, inputs)).toEqual(['z1']);
     expect(zonesChangedBy({ type: 'zone.updated', zone: zone({ folded: true, handPlaced: ['agent:s1'] }) }, inputs)).toEqual(['z1']);
     expect(zonesChangedBy({ type: 'zone.updated', zone: zone({ folded: true, handPlaced: ['agent:s1'], width: 900 }) }, inputs)).toEqual(['z1']);
+  });
+
+  it('is a stage board coming, going, moving, resizing or changing who it holds; never another note', () => {
+    const inputs: RuleInputs = new Map();
+    const board = { id: 'b1', kind: 'stages', zoneId: 'z1', x: 0, y: 0, width: 600, height: 92, rotation: 0, data: { joined: [], left: [] } } as unknown as BoardItem;
+    expect(zonesChangedBy({ type: 'item.updated', item: board }, inputs)).toEqual(['z1']);
+    expect(zonesChangedBy({ type: 'item.updated', item: board }, inputs)).toEqual([]);
+    expect(zonesChangedBy({ type: 'item.updated', item: { ...board, height: 300 } }, inputs)).toEqual(['z1']);
+    expect(zonesChangedBy({ type: 'item.updated', item: { ...board, height: 300, x: 50 } }, inputs)).toEqual(['z1']);
+    expect(zonesChangedBy({ type: 'item.updated', item: { ...board, height: 300, x: 50, data: { joined: ['s1'], left: [] } } }, inputs)).toEqual(['z1']);
+    expect(zonesChangedBy({ type: 'item.removed', id: 'b1' }, inputs)).toEqual(['z1']);
+    expect(zonesChangedBy({ type: 'item.updated', item: { ...board, id: 'n1', kind: 'sticky' } as BoardItem }, inputs)).toEqual([]);
   });
 
   it("is an edge between agents joined or cut, a shell or clock coming or going; never a shell in an agent's tile or a note", () => {
@@ -147,11 +174,18 @@ describe('the rules engine', () => {
 describe('a zone with a rule, on the daemon', () => {
   const SIZE = { cols: 120, rows: 40 };
   async function ruleDaemon() {
-    const daemon = await startTestDaemon({ dataDir: tempDataDir(), worktreesDir: tempDataDir(), agentEnv: fakeHarnessEnv({ scenario: 'waiting', home: tempDataDir() }) });
+    const dataDir = tempDataDir();
+    const daemon = await startTestDaemon({ dataDir, worktreesDir: tempDataDir(), agentEnv: fakeHarnessEnv({ scenario: 'waiting', home: tempDataDir() }) });
     const client = await connectTestClient(daemon);
     await client.call('settings.set', { arrangeSpacing: 'normal' });
     const web = await client.call('zone.add', { path: tempRepo(), x: 0, y: 0, width: 1200, height: 600, name: 'web' });
-    return { client, web };
+    const startedByAnAgent = (sessionId: string) => {
+      // As the daemon marks an agent an orchestrator started: the rule lays it out (it leaves the user's own where they are).
+      const db = new DatabaseSync(daemonPaths(dataDir).database);
+      db.prepare("UPDATE agents SET spawned_by = 'an-orchestrator' WHERE session_id = ?").run(sessionId);
+      db.close();
+    };
+    return { client, web, startedByAnAgent };
   }
   const placeOf = async (client: DaemonClient, sessionId: string) => (await client.call('agent.list')).find((each) => each.sessionId === sessionId)?.position;
   const zoneOf = async (client: DaemonClient, id: string) => (await client.call('zone.list')).find((each) => each.id === id)!;
@@ -164,7 +198,7 @@ describe('a zone with a rule, on the daemon', () => {
     expect(await client.call('zone.configure', { id: web.id, layoutRule: 'lanes' })).toMatchObject({ layoutRule: 'lanes', layoutMode: 'free' });
     expect(await client.call('zone.configure', { id: web.id, layoutMode: 'clusters' })).toMatchObject({ layoutRule: 'off', layoutMode: 'clusters' });
     await expect(client.call('zone.configure', { id: web.id, layoutRule: 'lanes', layoutMode: 'shelves' })).rejects.toThrow(/a layout rule or a shelves view, not both/);
-    await expect(client.call('zone.configure', { id: web.id, layoutRule: 'spine' as never })).rejects.toThrow(/layoutRule must be one of off, lanes/);
+    await expect(client.call('zone.configure', { id: web.id, layoutRule: 'status' as never })).rejects.toThrow(/layoutRule must be one of off, lanes, spine/);
 
     const ruled = await client.call('zone.configure', { id: web.id, layoutRule: 'lanes' });
     expect(zoneSnapshot(ruled)).toMatchObject({ layoutRule: 'lanes' });
@@ -243,6 +277,95 @@ describe('a zone with a rule, on the daemon', () => {
     const zoneChanges = events.events.filter((event) => event.type === 'zone.updated' && event.zone.id === web.id);
     expect(zoneChanges.map((event) => (event as { zone: Zone }).zone.width)).toEqual([3000]);
     expect(await ruleLines(client)).toHaveLength(1);
+  });
+
+  it('lays a Spine zone out as bands in a column, hugging them; keeps each band where it went until a Tidy', async () => {
+    const { client, web, startedByAnAgent } = await ruleDaemon();
+    const first = await client.call('agent.spawn', { zoneId: web.id, name: 'impl', ...SIZE });
+    const second = await client.call('agent.spawn', { zoneId: web.id, name: 'docs', ...SIZE });
+    for (const { sessionId } of [first, second]) startedByAnAgent(sessionId);
+    await client.call('agent.move', { sessionId: first.sessionId, zoneId: web.id, x: 900, y: 420 });
+    expect(await client.call('orchestrator.zoneLayout', { zoneId: web.id, mode: 'spine' })).toMatchObject({ layoutRule: 'spine', layoutMode: 'free' });
+    // Each agent a band, the first started on top; the zone shrinks to hug them.
+    await vi.waitFor(async () => expect((await zoneOf(client, web.id)).width).toBeLessThan(1200), { timeout: 5000 });
+    const [one, two] = [await placeOf(client, first.sessionId), await placeOf(client, second.sessionId)];
+    expect(two!.x).toBe(one!.x);
+    expect(two!.y).toBeGreaterThan(one!.y);
+    const saved = (await client.call('view.get', { key: `spine:${web.id}` })) as { places: Record<string, { line: number; rank: number }> };
+    expect(Object.values(saved.places)).toEqual([
+      { line: 0, rank: 0 },
+      { line: 0, rank: 1 },
+    ]);
+    expect((await client.call('orchestrator.arrange', { zoneId: web.id })).moved).toEqual([]);
+    await expect(client.call('orchestrator.arrange', { zoneId: web.id, layout: 'grid' })).rejects.toThrow(/web keeps the Spine rule/);
+
+    // A band that goes moves the one under it up.
+    await client.call('agent.delete', { sessionId: first.sessionId, force: true });
+    await vi.waitFor(async () => expect(await placeOf(client, second.sessionId)).toMatchObject({ x: one!.x, y: one!.y }), { timeout: 5000 });
+
+    // Dragged, a tile stays where it was put; put back, it is laid out with the rest.
+    await client.call('agent.move', { sessionId: second.sessionId, zoneId: web.id, x: 300, y: 200, byHand: true });
+    await new Promise((resolve) => setTimeout(resolve, RULE_SETTLE_MS * 2));
+    expect(await placeOf(client, second.sessionId)).toMatchObject({ x: 300, y: 200 });
+    await client.call('zone.followRule', { id: web.id, tiles: [`agent:${second.sessionId}`], reflow: true });
+    expect(await placeOf(client, second.sessionId)).toMatchObject({ x: one!.x, y: one!.y });
+  });
+
+  it('leaves the agents on a stage board out of the Spine, where the board draws them', async () => {
+    const { client, web, startedByAnAgent } = await ruleDaemon();
+    const held = await client.call('agent.spawn', { zoneId: web.id, name: 'impl', ...SIZE });
+    startedByAnAgent(held.sessionId);
+    await client.call('agent.move', { sessionId: held.sessionId, zoneId: web.id, x: 900, y: 420 });
+    await client.call('item.create', { kind: 'stages', zoneId: web.id, x: 40, y: 40, width: 600, height: 92, data: { joined: [], left: [] } });
+    await client.call('orchestrator.zoneLayout', { zoneId: web.id, mode: 'spine' });
+    expect((await client.call('orchestrator.arrange', { zoneId: web.id })).moved).toEqual([]);
+    expect(await placeOf(client, held.sessionId)).toMatchObject({ x: 900, y: 420 });
+  });
+
+  it('leaves the notes of the agents on a stage board out of the Spine’s way too', async () => {
+    // Where the Spine puts an agent dragged off the board, with a note of a held agent there or not.
+    const outPlace = async (noted: boolean) => {
+      const { client, web, startedByAnAgent } = await ruleDaemon();
+      const held = await client.call('agent.spawn', { zoneId: web.id, name: 'impl', ...SIZE });
+      const out = await client.call('agent.spawn', { zoneId: web.id, name: 'out', ...SIZE });
+      for (const each of [held, out]) startedByAnAgent(each.sessionId);
+      await client.call('item.create', { kind: 'stages', zoneId: web.id, x: 40, y: 400, width: 600, height: 92, data: { joined: [], left: [out.sessionId] } });
+      await client.call('orchestrator.zoneLayout', { zoneId: web.id, mode: 'spine' });
+      await client.call('orchestrator.arrange', { zoneId: web.id });
+      const first = (await placeOf(client, out.sessionId))!;
+      if (!noted) return first;
+      const agent = { sessionId: held.sessionId, name: 'impl', harness: 'claude', role: null };
+      await client.call('item.create', { kind: 'agent-note', zoneId: web.id, x: first.x, y: first.y, width: 240, height: 96, data: { text: 'hi', agent, writtenAt: new Date().toISOString(), editedByUser: false, about: held.sessionId } });
+      await client.call('zone.followRule', { id: web.id, tiles: [], reflow: true });
+      return placeOf(client, out.sessionId);
+    };
+    expect(await outPlace(true)).toEqual(await outPlace(false));
+  });
+
+  it('re-packs a Spine zone in start order on a Tidy, and only then', async () => {
+    const { client, web, startedByAnAgent } = await ruleDaemon();
+    const spawned: string[] = [];
+    for (const name of ['a', 'b', 'c', 'd']) spawned.push((await client.call('agent.spawn', { zoneId: web.id, name, ...SIZE })).sessionId);
+    for (const sessionId of spawned) startedByAnAgent(sessionId);
+    const [first, second, third, fourth] = spawned as [string, string, string, string];
+    await client.call('orchestrator.zoneLayout', { zoneId: web.id, mode: 'spine' });
+    // Three bands fill the first column; the fourth starts the next.
+    await vi.waitFor(async () => expect((await placeOf(client, fourth))!.x).toBeGreaterThan((await placeOf(client, first))!.x), { timeout: 5000 });
+    const top = (await placeOf(client, first))!;
+    const next = (await placeOf(client, second))!;
+    const right = (await placeOf(client, fourth))!;
+    await client.call('agent.delete', { sessionId: second, force: true });
+    await client.call('agent.delete', { sessionId: third, force: true });
+    await vi.waitFor(async () => expect((await client.call('agent.list')).filter((agent) => agent.zoneId === web.id)).toHaveLength(2), { timeout: 5000 });
+    await new Promise((resolve) => setTimeout(resolve, RULE_SETTLE_MS * 3));
+    // The fourth keeps its column, though the first has room again; a pass without a Tidy keeps it there too.
+    expect(await placeOf(client, fourth)).toMatchObject({ x: right.x, y: right.y });
+    await client.call('zone.followRule', { id: web.id, tiles: [] });
+    expect(await placeOf(client, fourth)).toMatchObject({ x: right.x, y: right.y });
+    // A Tidy lays the bands out afresh: the fourth goes under the first.
+    await client.call('zone.followRule', { id: web.id, tiles: [], reflow: true });
+    expect(await placeOf(client, first)).toMatchObject({ x: top.x, y: top.y });
+    expect(await placeOf(client, fourth)).toMatchObject({ x: next.x, y: next.y });
   });
 
   it("never marks a tile an agent moves, wherever it puts it; the user's own move does", async () => {

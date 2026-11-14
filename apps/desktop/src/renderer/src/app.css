@@ -539,6 +539,118 @@ kbd {
   height: var(--space-3);
 }
 
+/* A zone's stage board: a block of four stages, dragged by its top bar, under the tiles of its Doing tickets. */
+.stage-board {
+  position: relative;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-2xl);
+  background: color-mix(in srgb, var(--raised) var(--stage-board-fill-mix), transparent);
+  color: var(--text);
+  font-family: var(--font-sans);
+}
+
+.stage-board[data-selected] {
+  border-color: var(--accent);
+}
+
+.stage-board-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: var(--stage-board-header);
+  box-sizing: border-box;
+  padding: 0 var(--space-3);
+  border-bottom: 1px solid var(--separator);
+  font-size: var(--font-size-sm);
+  cursor: grab;
+}
+
+.stage-board-name {
+  font-weight: var(--weight-bold);
+}
+
+.stage-board-grip {
+  width: var(--space-4);
+  height: var(--space-4);
+  color: var(--muted);
+}
+
+.stage-board-count,
+.stage-board-hint {
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+}
+
+.stage-board-count {
+  font-family: var(--font-mono);
+}
+
+.stage-board-hint {
+  margin-left: auto;
+}
+
+.stage-heading {
+  position: absolute;
+  box-sizing: border-box;
+  border-bottom: 2px solid var(--separator);
+}
+
+/* A Doing ticket: its live tiles are drawn over it, its ticket in its corner. */
+.stage-band {
+  position: absolute;
+  box-sizing: border-box;
+  border-radius: var(--radius-card);
+  background: color-mix(in srgb, var(--zone-color, var(--accent)) var(--zone-fill-mix), transparent);
+}
+
+.stage-band-label {
+  position: absolute;
+  top: var(--space-1);
+  left: var(--space-2-5);
+  color: var(--text-soft);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+}
+
+/* Put off for later, at the foot of To do: a dashed card no agent starts. */
+.stage-later {
+  position: absolute;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: var(--space-0-5);
+  padding: var(--space-1-5) var(--space-2-5);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-xl);
+  color: var(--text-soft);
+  font-size: var(--font-size-sm);
+}
+
+.stage-later-tag,
+.stage-later-count {
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+}
+
+.stage-later-count {
+  margin-left: var(--space-2);
+}
+
+.stage-later-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stage-card .shelf-card-foot svg {
+  width: var(--space-3);
+  height: var(--space-3);
+}
+
 /* Over a pinned lead's tile: it is pinned, and a right-click frees it. */
 .shelf-pin {
   position: absolute;
@@ -912,22 +1024,83 @@ kbd {
   outline-offset: -1px;
 }
 
-/* Paused (hibernated) by the user or an orchestrator: a solid slate border over faint stripes, never dashed (that is
-   stopped, and starting). Its name and line stay readable, greyed; who paused it sits under them, and Wake in its
-   footer. */
+/* Paused (hibernated) by the user or an orchestrator: frosted, so a frozen agent reads across the board in every design
+   and pack. A solid cool border, never dashed (that is stopped, and starting), on a cool fill with frost gathered in two
+   corners, drawn under its name, its line and its buttons; a slate snowflake by its name. No motion: the
+   frost is there or not, and waking it clears it at once. Who paused it sits under its line, and Wake in its footer. */
 .hybrid-tile-agent[data-state='hibernated'] {
-  outline: 1.5px solid color-mix(in srgb, var(--state-hibernated) 55%, var(--border));
-  background: repeating-linear-gradient(
-    135deg,
-    var(--raised) 0 var(--space-2-5),
-    color-mix(in srgb, var(--state-hibernated) 5%, var(--raised)) var(--space-2-5) calc(2 * var(--space-2-5))
-  );
-  /* What its head's hover buttons sit on: between its two stripes. */
-  --tile-fill: color-mix(in srgb, var(--state-hibernated) 2.5%, var(--raised));
+  outline: 1.5px solid color-mix(in srgb, var(--state-hibernated) 70%, var(--border));
+  background: var(--frost-fill);
+  /* What its head's hover buttons sit on: its frosted fill. */
+  --tile-fill: var(--frost-fill);
 }
 
-.hybrid-tile-agent[data-state='hibernated'] :is(.hybrid-tile-name, .hybrid-tile-description) {
-  color: var(--muted);
+/* The frost itself: under every part of the tile (the tile is its own stacking context), never in a pointer's way. */
+.hybrid-tile.tile-frosted::after {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  border-radius: inherit;
+  background:
+    radial-gradient(ellipse at 0 0, var(--frost), transparent 60%),
+    radial-gradient(ellipse at 100% 100%, var(--frost), transparent 55%);
+  pointer-events: none;
+  content: '';
+}
+
+/* On the frost its text is drawn in full ink: the packs tune their softer inks to just pass AA on --raised, and the
+   frost would take them under it (tokens.test checks --text on the frost at its densest). Its slate is in the frost,
+   its edge and its snowflake, whose ink --frost-mark keeps. */
+.hybrid-tile.tile-frosted {
+  --muted: var(--text);
+  --text-soft: var(--text);
+  --state-hibernated-ink: var(--text);
+}
+
+/* Classic's hatching, switched back on, lies over the frost. */
+.hybrid-tile-agent[data-state='hibernated'][data-hatch] {
+  background:
+    repeating-linear-gradient(
+      135deg,
+      transparent 0 var(--space-2-5),
+      color-mix(in srgb, var(--state-hibernated) 6%, transparent) var(--space-2-5) calc(2 * var(--space-2-5))
+    ),
+    var(--frost-fill);
+}
+
+/* Expanded, the frost lies in the corners of its terminal and chat as well, faint enough to read through; they stay
+   usable. */
+.expanded-tile.tile-frosted {
+  border-color: color-mix(in srgb, var(--state-hibernated) 70%, var(--border));
+}
+
+.expanded-tile.tile-frosted .expanded-tile-body {
+  position: relative;
+}
+
+.expanded-tile.tile-frosted .expanded-tile-body::after {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  border-radius: inherit;
+  background:
+    radial-gradient(ellipse at 0 0, var(--frost), transparent 45%),
+    radial-gradient(ellipse at 100% 100%, var(--frost), transparent 40%);
+  pointer-events: none;
+  content: '';
+}
+
+/* The snowflake, by its name: in its state's ink, at the size of the head's other marks. */
+.tile-frost-mark {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  color: var(--frost-mark);
+}
+
+.tile-frost-mark svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
 }
 
 .hybrid-tile-agent[data-state='hibernated'] .hybrid-tile-icon {
@@ -1493,13 +1666,6 @@ kbd {
   opacity: 0.75;
 }
 
-/* Paused, without its hatching switched back on: its slate border on a plain tile. [data-tile-state] keeps the rule off
-   the Simplified tile, which shares the class but has its own paused look; a paused tile that flags the user is plain too. */
-.hybrid-tile-agent[data-tile-state][data-state='hibernated']:not([data-hatch]) {
-  background: var(--raised);
-  --tile-fill: var(--raised);
-}
-
 /* Who set the line, when it was not the agent: its orchestrator, under the line. */
 .hybrid-tile-byline {
   flex: none;
@@ -2056,6 +2222,12 @@ kbd {
   background: var(--surface);
 }
 
+/* A screen of empty page below the last section, on a line of its own, so no shot is stopped by the page's end. */
+.gallery-foot {
+  flex-basis: 100%;
+  height: 100vh;
+}
+
 .component-gallery {
   display: flex;
   flex-direction: column;
@@ -2360,12 +2532,16 @@ kbd {
   padding: var(--space-2) var(--space-2) var(--space-2-5) var(--space-3);
 }
 
-/* Needs you rings it in orange, a problem in red; the rest sit plain. A paused agent or one a restart stopped takes none
-   of Classic's dashed, striped or slate looks: its status says it. The ring follows its status, so an agent that asks in
-   its last words or has changes to review is ringed too, seen or not. */
+/* Needs you rings it in orange, a problem in red; the rest sit plain. A paused agent or one a restart stopped takes no
+   ring and none of Classic's dashes or stripes: its status says it, and a paused one keeps the frost. The ring follows
+   its status, so an agent that asks in its last words or has changes to review is ringed too, seen or not. */
 .calm-tile.hybrid-tile-agent:is([data-state='stopped-by-restart'], [data-state='hibernated']) {
   outline-style: solid;
   outline-width: 2.5px;
+}
+
+/* Stopped, it sits plain; paused, it keeps the frost every design shares. */
+.calm-tile.hybrid-tile-agent[data-state='stopped-by-restart'] {
   background: var(--raised);
   --tile-fill: var(--raised);
 }
@@ -2636,6 +2812,23 @@ kbd {
   display: flex;
   flex-direction: column;
   gap: var(--space-1-5);
+}
+
+.issue-picker-bar {
+  display: flex;
+  gap: var(--space-1-5);
+  align-items: center;
+}
+
+.issue-picker-bar > .ui-input-wrap {
+  flex: 1;
+  min-width: 0;
+}
+
+/* The project select keeps to its share of the line, however long a project's name. */
+.issue-picker-bar > .ui-select-wrap {
+  flex: 0 1 auto;
+  max-width: 45%;
 }
 
 .issue-picker-selected {
@@ -5911,15 +6104,8 @@ button.chat-chip[aria-expanded='true'] {
   border-right-color: var(--agent-note-fill);
 }
 
-/* Under Simplified the bubble is a flat fill with no edge, and its face is lifted by its shadow alone. */
-:root[data-design='simplified'] .agent-note-bubble {
-  border-color: transparent;
-}
-
-:root[data-design='simplified'] .agent-note-bubble::before {
-  border-right-color: transparent;
-}
-
+/* Under Simplified the bubble keeps its edge, as a light pack's paper fill can be the board's own colour, and its face
+   is lifted by its shadow alone. */
 :root[data-design='simplified'] .agent-note-face {
   box-shadow: var(--shadow-tile);
 }
@@ -6173,6 +6359,13 @@ button.chat-chip[aria-expanded='true'] {
   padding: var(--space-1) var(--space-2-5) var(--space-1) var(--space-1);
   border-radius: var(--radius-pill);
   gap: var(--space-1-5);
+}
+
+/* The chip standing for the clocks a Spine zone set aside along its top. */
+.clock-more {
+  justify-content: center;
+  padding-right: var(--space-1-5);
+  color: var(--muted);
 }
 
 .react-flow__node.selected > .clock {
@@ -6622,6 +6815,11 @@ button.chat-chip[aria-expanded='true'] {
   gap: var(--space-1);
 }
 
+/* A list cut to whole rows ends early; the slack goes above the foot, which stays at the card's bottom. */
+.listcard-unfolded > .listcard-foot {
+  margin-top: auto;
+}
+
 .listcard-add {
   display: flex;
   align-items: center;
@@ -6869,18 +7067,34 @@ button.chat-chip[aria-expanded='true'] {
   white-space: pre-wrap;
 }
 
-/* A memory's card, its notebook look: pinned facts, documents by title, then facts, each under a small heading. */
+/* A memory's card, its notebook look: pinned facts, documents by title, then facts, each under a small heading. Made
+   smaller than its rows, a section that doesn't fit folds to its heading, which a click turns. */
+.memory-section-row {
+  grid-column: 1 / 4;
+}
+
 .memory-section {
   display: flex;
-  grid-column: 1 / 4;
+  box-sizing: border-box;
+  width: 100%;
   align-items: center;
   gap: var(--space-1);
   padding: var(--space-1-5) var(--space-1) var(--space-0-5);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
   color: var(--muted);
+  font: inherit;
   font-size: var(--font-size-2xs);
   font-weight: var(--weight-semibold);
   letter-spacing: var(--tracking-caps);
+  text-align: left;
   text-transform: uppercase;
+  cursor: pointer;
+}
+
+.memory-section:hover {
+  background: var(--hover);
 }
 
 .memory-section svg {
@@ -6888,7 +7102,15 @@ button.chat-chip[aria-expanded='true'] {
   height: var(--font-size-xs);
 }
 
-.memory-section + .listcard-row {
+.memory-section-chevron {
+  transition: transform var(--motion-fast) var(--ease-out);
+}
+
+.memory-section[aria-expanded='true'] .memory-section-chevron {
+  transform: rotate(90deg);
+}
+
+.memory-section-row + .listcard-row {
   border-top: 0;
 }
 
@@ -7540,6 +7762,12 @@ button.chat-chip[aria-expanded='true'] {
   text-overflow: ellipsis;
 }
 
+/* The counts give way before the queue's title does. */
+.listcard-peek-head .listcard-title:has(+ .queue-counts) {
+  flex-shrink: 0;
+  max-width: 60%;
+}
+
 .queue-state {
   display: inline-flex;
   overflow: hidden;
@@ -7593,6 +7821,49 @@ button.chat-chip[aria-expanded='true'] {
 
 .queue-state[data-tone='note']::before {
   border-radius: var(--radius-xs);
+}
+
+/* Marked Later (or put off until a time): a dotted ring in the muted ink, its text softer, at the queue's foot. */
+.queue-state[data-tone='later']::before {
+  border-style: dotted;
+}
+
+.queue-later-row .listcard-value,
+.listcard-peek-row:has(.queue-state[data-tone='later']) .listcard-value {
+  color: var(--text-soft);
+}
+
+/* On the open card a row marked Later keeps its corner, with Move up after it. */
+.queue-row-end {
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  min-width: 0;
+  gap: var(--space-2);
+}
+
+.queue-row-end .listcard-who {
+  overflow: hidden;
+  max-width: var(--queue-corner-width);
+  text-overflow: ellipsis;
+}
+
+.queue-move-up {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-strong);
+  font: inherit;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.queue-move-up:focus-visible {
+  border-radius: var(--radius-sm);
+  outline: none;
+  box-shadow: var(--shadow-focus);
 }
 
 /* The user's queue: what kind each item is, in mono, and an agent's request from Needs you, in Needs you's ink. */
@@ -14700,7 +14971,7 @@ button.agent-shelves-row:hover {
 
 .steps-full-step {
   display: grid;
-  grid-template-columns: auto auto auto minmax(0, 1fr) auto;
+  grid-template-columns: auto auto minmax(0, 1fr) auto auto;
   gap: var(--space-2);
   align-items: start;
   padding: var(--space-2) 0;
@@ -14750,6 +15021,8 @@ button.agent-shelves-row:hover {
 .steps-full-state {
   color: var(--muted);
   font-size: var(--font-size-3xs);
+  /* The row's text line, so the small caps centre on it, not above it. */
+  line-height: calc(var(--font-size-md) * var(--leading-body));
   font-weight: var(--weight-bold);
   letter-spacing: var(--tracking-caps);
   text-transform: uppercase;
@@ -14912,6 +15185,11 @@ button.agent-shelves-row:hover {
   font-weight: var(--weight-bold);
 }
 
+/* The open step's state dot, level with the text's first line. */
+.steps-open-head > .steps-dot {
+  margin-top: var(--space-1);
+}
+
 .steps-kind {
   display: grid;
   flex: none;
@@ -14922,6 +15200,32 @@ button.agent-shelves-row:hover {
 .steps-kind svg {
   width: var(--icon-sm);
   height: var(--icon-sm);
+}
+
+/* A question's kind, after its text: smaller and quieter than the state dot, so it reads as a label, not a second state. */
+.steps-kind-trail {
+  color: var(--muted);
+}
+
+.steps-kind-trail svg {
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+}
+
+/* On the card, centred on the head's first line, whatever its size. */
+.steps-open-head > .steps-kind-trail {
+  height: 1lh;
+  margin-left: auto;
+}
+
+/* In full, centred on the text's first line, as the state word is. */
+.steps-full-step > .steps-kind-trail {
+  height: 1lh;
+  margin-top: 0;
+}
+
+.steps-open-head > .steps-required + .steps-kind-trail {
+  margin-left: 0;
 }
 
 .steps-open-text {
@@ -15650,12 +15954,40 @@ button.steps-link-open:focus-visible {
   color: var(--state-failed-ink);
 }
 
+/* Sent or kept open, in the tile's popover: the note keeps the quick ask's own inset. */
+.quick-ask-popover > .quick-ask-note {
+  padding: var(--space-2-5) var(--space-3);
+}
+
 /* Claude's plan approval in Needs you and the pane (P1): its title and first lines, read only. */
 .inbox-plan-text {
   padding-left: var(--space-2-5);
   border-left: 3px solid var(--border);
   color: var(--text-soft);
   font-size: var(--font-size-sm);
+}
+
+/* In Needs you and the Captain's panel, on the app's surface: its code on the app's sunken colour, not the terminal's. */
+.inbox-item .inbox-plan-text code,
+.inbox-item .inbox-plan-text .chat-md-code,
+.master-for-you-item .inbox-plan-text code,
+.master-for-you-item .inbox-plan-text .chat-md-code {
+  background: var(--sunken);
+}
+
+.inbox-item .inbox-plan-text .chat-md-code,
+.master-for-you-item .inbox-plan-text .chat-md-code {
+  border-color: var(--border);
+}
+
+.inbox-item .inbox-plan-text .chat-md-code code,
+.master-for-you-item .inbox-plan-text .chat-md-code code {
+  background: none;
+}
+
+/* Claude's three choices are wider than Needs you: they wrap rather than run off its edge. */
+.inbox-plan .inbox-item-actions {
+  flex-wrap: wrap;
 }
 
 .inbox-plan-text:not([data-open]) {
@@ -15699,6 +16031,12 @@ button.steps-link-open:focus-visible {
 .gallery-quick-ask-cell figcaption {
   color: var(--muted);
   font-size: var(--font-size-2xs);
+}
+
+/* Claude's plan approval as Needs you lists it: its popover's width. */
+.ui-popover.gallery-quick-ask-plan {
+  width: var(--size-inbox);
+  padding: 0;
 }
 
 /* A crew prefab's flow editor, and the library it opens from. */

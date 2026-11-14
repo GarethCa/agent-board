@@ -64,6 +64,8 @@ import {
   Users,
   Zap,
   LibraryBig,
+  SquareKanban,
+  SendHorizontal,
 } from 'lucide-react';
 import { CrewFaces } from '../crews/icons';
 import { crewGroups } from '../crews/prefab-store';
@@ -615,7 +617,8 @@ function reasoningEntry(agent: Agent, actions: Pick<AgentMenuActions, 'setEffort
 /**
  * An agent's Role ▸: None, Orchestrator and the built-in roles, and its own custom role if it has one, its own ticked.
  * Only the role changes, at once: its badge, and what goes by the role (an orchestrator's place at the top of its zone,
- * the Captain's list), follow; the session is neither restarted nor sent a template.
+ * the Captain's list), follow; the session is neither restarted nor sent a template. Its last row, With its template ▸,
+ * gives the same roles and sends the role's template to the agent as a message too.
  */
 function roleEntry(agent: Agent, actions: Pick<AgentMenuActions, 'setRole'>): ModelEntry {
   const orchestrator = isOrchestratorRole(agent.roleName);
@@ -626,6 +629,12 @@ function roleEntry(agent: Agent, actions: Pick<AgentMenuActions, 'setRole'>): Mo
     icon: ticked ? <Check /> : <span className="agent-setup-blank" aria-hidden />,
     ...(hint === undefined ? {} : { hint }),
     onSelect: () => actions.setRole(agent.sessionId, role),
+  });
+  const sending = (id: string, label: string, role: string): ModelEntry => ({
+    id: `send-${id}`,
+    label,
+    icon: <span className="agent-setup-blank" aria-hidden />,
+    onSelect: () => actions.setRole(agent.sessionId, role, true),
   });
   return {
     id: 'role',
@@ -638,6 +647,18 @@ function roleEntry(agent: Agent, actions: Pick<AgentMenuActions, 'setRole'>): Mo
       row('orchestrator', 'Orchestrator', ORCHESTRATOR_ROLE, orchestrator),
       ...BUILT_IN_ROLES.map((role) => row(role, ROLE_LABELS[role], role, agent.role === role && agent.roleName === null)),
       ...(custom === null ? [] : [row('custom', custom, custom, true)]),
+      'separator',
+      {
+        id: 'with-template',
+        label: 'With its template',
+        icon: <SendHorizontal />,
+        entries: [
+          { heading: "Gives the role and sends the role's template as a message" },
+          sending('orchestrator', 'Orchestrator', ORCHESTRATOR_ROLE),
+          ...BUILT_IN_ROLES.map((role) => sending(role, ROLE_LABELS[role], role)),
+          ...(custom === null ? [] : [sending('custom', custom, custom)]),
+        ],
+      },
     ],
   };
 }
@@ -727,10 +748,30 @@ export interface ZoneBindingActions {
   startCrew(prefab: string, zone: Zone): void;
   /** Opens the app's crew library, one for every board, a crew from it starting in the zone. */
   crewLibrary(zone: Zone): void;
+  /** Adds the zone's stage board, which holds the work its agents started (one to a zone). */
+  addStageBoard(zone: Zone): void;
 }
 
 /** What a zone's menus do to it: the handlers its tab is given, but for renaming, which its menu starts in place. */
 type ZoneMenuActions = Omit<ZoneBindingActions, 'rename'>;
+
+/**
+ * Add stage board, in a zone that lays its tiles out where they are put or by a rule (one laid out by status says the
+ * same on its shelves): there while it has one, but not to choose.
+ */
+function stageBoardRows(zone: Zone, has: boolean, actions: Pick<ZoneMenuActions, 'addStageBoard'>): ModelEntry[] {
+  if (zone.layoutMode !== 'free') return [];
+  return [
+    {
+      id: 'stage-board',
+      label: 'Add stage board',
+      icon: <SquareKanban />,
+      hint: has ? 'It has one already: drag it where you want it' : 'The work its agents started, by stage: To do, Doing, Waiting for review, Done',
+      disabled: has,
+      onSelect: () => actions.addStageBoard(zone),
+    },
+  ];
+}
 
 /**
  * The rows that fold a zone to a chip while it isn't needed, or unfold it: Fold, or Unfold (its agents stay paused, as
@@ -794,7 +835,7 @@ function spacingEntries(zone: Zone, actions: Pick<ZoneMenuActions, 'setSpacing'>
  * free zone.
  */
 export function tidyBlocked(zone: Pick<Zone, 'layoutMode' | 'layoutRule'>): { disabled: true; hint: string } | Record<string, never> {
-  if (zone.layoutRule !== 'off') return { disabled: true, hint: 'The zone lays its tiles out by its rule' };
+  if (zone.layoutRule === 'lanes') return { disabled: true, hint: 'The zone lays its tiles out by its rule' };
   if (zone.layoutMode === 'shelves') return { disabled: true, hint: 'Not on status shelves: it would move the tiles folded into stacks' };
   if (zone.layoutMode === 'clusters') return { disabled: true, hint: 'Not in clusters: the zone lays its tiles out itself' };
   return {};
@@ -803,6 +844,7 @@ export function tidyBlocked(zone: Pick<Zone, 'layoutMode' | 'layoutRule'>): { di
 /** Each zone layout's name and what it draws, as the zone's Layout menu offers them. */
 const LAYOUT_MODE_LABELS: Record<ZoneLayoutChoice, { label: string; hint: string }> = {
   free: { label: 'Free', hint: 'Each tile where you put it' },
+  spine: { label: 'Spine', hint: 'The lead at the left, a band per ticket in columns beside it' },
   lanes: { label: 'Lanes by ticket', hint: 'A lane per ticket, kept as work comes and goes' },
   shelves: { label: 'Status shelves', hint: 'Shelves by status, a stack per ticket' },
   clusters: { label: 'Clusters', hint: "Each ticket's tiles together, what needs you first" },
@@ -906,6 +948,8 @@ export interface ZoneMenuInput {
   themeFill: number;
   /** Starts renaming it in place. */
   rename(): void;
+  /** Whether it has its stage board already. */
+  stageBoard?: boolean;
   actions: ZoneMenuActions;
 }
 
@@ -913,7 +957,7 @@ export interface ZoneMenuInput {
  * A zone's ⋯ menu: its folded chips, then Tidy, spacing, rename, colour, fill, its binding, its agents' settings, and
  * Delete. While it clones, it holds only what folded.
  */
-export function zoneMenu({ zone, folded, themeFill, rename, actions }: ZoneMenuInput): ModelEntry[] {
+export function zoneMenu({ zone, folded, themeFill, rename, stageBoard = false, actions }: ZoneMenuInput): ModelEntry[] {
   if (zone.clone !== null) return [...folded];
   const unbound = zone.repoRoot === null;
   // A crew is one more way to start something: under what starts an agent or a shell, where those folded onto this menu.
@@ -931,6 +975,7 @@ export function zoneMenu({ zone, folded, themeFill, rename, actions }: ZoneMenuI
       icon: <Rows3 />,
       entries: [{ heading: 'Layout' }, ...layoutModeEntries(zone, actions), 'separator', { heading: 'Spacing' }, ...spacingEntries(zone, actions)],
     },
+    ...stageBoardRows(zone, stageBoard, actions),
     ...foldRows(zone, actions),
     { id: 'rename', label: 'Rename', icon: <Pencil />, onSelect: rename },
     {
@@ -1031,6 +1076,8 @@ export interface ProjectMenuInput {
   themeFill: number;
   /** Starts renaming it in place. */
   rename(): void;
+  /** Whether it has its stage board already. */
+  stageBoard?: boolean;
   actions: ProjectMenuActions;
 }
 
@@ -1189,6 +1236,7 @@ export function projectMenu(input: ProjectMenuInput): ModelEntry[] {
       ],
     },
     { id: 'layout', label: 'Layout', icon: <LayoutDashboard />, entries: layoutModeEntries(zone, actions) },
+    ...stageBoardRows(zone, input.stageBoard ?? false, actions),
     ...foldRows(zone, actions),
     issues,
     folder,

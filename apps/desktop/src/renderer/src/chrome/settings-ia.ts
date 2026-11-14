@@ -117,10 +117,10 @@ export const SETTINGS_CONTROLS: readonly SettingsControl[] = [
   { id: 'needsYouShows', label: 'Needs you shows', home: 'alerts.notifications', also: 'inbox turns' },
   { id: 'osNotifications', label: 'OS notifications', home: 'alerts.notifications', also: 'alerts banners' },
   { id: 'notifyInFront', label: 'Also while agent-board is in front', home: 'alerts.notifications', also: 'focused foreground' },
-  { id: 'mutedAgents', label: 'A tile muted from its ⋯ menu never notifies', home: 'alerts.notifications', also: 'mute silence' },
+  { id: 'mutedAgents', label: 'Muted agents', home: 'alerts.notifications', also: 'mute silence quiet tiles' },
   { id: 'usageReading', label: 'Used so far', home: 'usage.plan', also: 'limits plan' },
   { id: 'usageOnBoard', label: 'Show usage on the board', home: 'usage.plan' },
-  { id: 'otherTerminals', label: 'Other terminals', home: 'accounts.terminals', also: 'hooks external sessions' },
+  { id: 'otherTerminals', label: 'Show sessions from other terminals', home: 'accounts.terminals', also: 'hooks external' },
   { id: 'claudePath', label: 'Claude path', home: 'advanced.programs', also: 'binary executable' },
   { id: 'codexPath', label: 'Codex path', home: 'advanced.programs', also: 'binary executable' },
   { id: 'heldHandOffs', label: 'Held hand-offs', home: 'advanced.handoffs', also: 'payloads approvals' },
@@ -129,7 +129,7 @@ export const SETTINGS_CONTROLS: readonly SettingsControl[] = [
   { id: 'clearBrowsingData', label: 'Clear browsing data', home: 'advanced.webTabs', also: 'cookies cache browser' },
   { id: 'gpuTerminals', label: 'GPU-accelerated terminals', home: 'advanced.terminals', also: 'webgl renderer graphics performance smooth' },
   { id: 'keepTerminals', label: 'Keep terminals while off screen', home: 'advanced.terminals', also: 'memory cache stutter panes performance smooth' },
-  { id: 'daemonStatus', label: 'Build', home: 'advanced.service', also: 'version daemon background service' },
+  { id: 'daemonStatus', label: 'Background service', home: 'advanced.service', also: 'restart build version daemon pid schema' },
 ];
 
 /** The section at `home`, if there is one. */

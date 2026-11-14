@@ -5,9 +5,10 @@ import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from 
 import { scratch } from './scratch.ts';
 import { openSettings } from './settings-helpers.ts';
 
-// A note an agent writes under the Simplified design is a speech bubble from its agent's face, as under Classic, but flat,
-// with no edge: its first line names the agent, and its face flies to it. A note with no known author reads just Note. A
-// sticky is not touched, and Classic's Agent notes setting is not drawn.
+// A note an agent writes under the Simplified design is a speech bubble from its agent's face, as under Classic, with
+// the same hairline edge, as a light pack's paper fill can be the board's own colour: its first line names the agent,
+// and its face flies to it. A note with no known author reads just Note. A sticky is not touched, and Classic's Agent
+// notes setting is not drawn.
 
 const LONG = Array.from({ length: 30 }, (_, row) => `- item ${row + 1} of a long list the card must scroll or grow for`).join('\n');
 
@@ -40,11 +41,21 @@ test("an agent note is a bubble from a face that flies to its agent, long markdo
     await expect(notes).toHaveCount(3);
     const note = notes.first();
 
-    // A speech bubble from its agent's face, its first line naming the agent; Simplified draws the bubble flat, with no edge.
+    // A speech bubble from its agent's face, its first line naming the agent; Simplified keeps the bubble's edge.
     await expect(note).toHaveAttribute('data-look', 'document');
     const bubble = note.locator('.agent-note-bubble');
+    // Its edge is the bubble's edge token, resolved by a probe beside it, not a transparent or fainter one.
     const edge = () => bubble.evaluate((element) => getComputedStyle(element).borderTopColor);
-    expect(await edge()).toBe('rgba(0, 0, 0, 0)');
+    const token = await bubble.evaluate((element) => {
+      const probe = document.createElement('div');
+      probe.style.borderTop = '1px solid var(--agent-note-bubble-edge)';
+      element.parentElement!.append(probe);
+      const resolved = getComputedStyle(probe).borderTopColor;
+      probe.remove();
+      return resolved;
+    });
+    expect(token).not.toBe('rgba(0, 0, 0, 0)');
+    expect(await edge()).toBe(token);
     const face = note.getByRole('button', { name: `Note by ${agent!.name}` });
     await expect(face).toHaveCount(1);
     await expect(note.locator('.agent-note-head .agent-note-name')).toHaveText(agent!.name);

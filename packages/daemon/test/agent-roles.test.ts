@@ -387,6 +387,29 @@ describe('a reviewer', () => {
     );
   });
 
+  it('sent its role’s template again while it runs, gets its own round and the review before its own, never a later one', async () => {
+    const { client, recorder } = await agentDaemon();
+    const repo = repoWithPrompts();
+    const zone = await zoneFor(client, repo);
+    const implementer = await client.call('agent.spawn', { zoneId: zone.id, prompt: 'Build it', ...SIZE });
+    const first = await client.call('agent.spawn', { zoneId: zone.id, role: 'reviewer', baseBranch: implementer.branch, ...SIZE });
+    mkdirSync(join(first.worktree, '.agent-board'), { recursive: true });
+    writeFileSync(join(first.worktree, '.agent-board', 'review-STO-1.md'), 'VERDICT: changes-requested\n');
+    const followUp = await client.call('agent.spawn', { zoneId: zone.id, role: 'follow-up-reviewer', baseBranch: implementer.branch, ...SIZE });
+    // A third, after both: no round of theirs counts it.
+    await client.call('agent.spawn', { zoneId: zone.id, role: 'follow-up-reviewer', baseBranch: implementer.branch, ...SIZE });
+    const firstPrompts = [await firstPrompt(recorder, first.sessionId), await firstPrompt(recorder, followUp.sessionId)];
+    await client.call('orchestrator.wait', { sessionIds: [first.sessionId, followUp.sessionId] });
+
+    for (const [agent, role] of [[first, 'reviewer'], [followUp, 'follow-up-reviewer']] as const) {
+      expect(await client.call('orchestrator.giveRole', { sessionId: agent.sessionId, role, sendTemplate: true })).toMatchObject({ template: 'started' });
+    }
+    const prompts = (sessionId: string) =>
+      recorder.events.filter((e): e is HookEvent => e.type === 'hook' && e.sessionId === sessionId && e.event === 'UserPromptSubmit').map((e) => String(e.payload.prompt));
+    await recorder.waitFor((e): e is HookEvent => e.type === 'hook' && prompts(first.sessionId).length === 2 && prompts(followUp.sessionId).length === 2);
+    expect([prompts(first.sessionId)[1], prompts(followUp.sessionId)[1]]).toEqual(firstPrompts);
+  });
+
   it('as a follow-up, still gets the round, the previous review and its commit once the earlier reviewer is deleted', async () => {
     const { dataDir, client, recorder } = await agentDaemon();
     const repo = repoWithPrompts();

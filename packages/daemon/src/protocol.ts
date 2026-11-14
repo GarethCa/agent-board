@@ -8,7 +8,9 @@ import type {
   PullRequestRef,
   PullRequestReview,
   PullRequestState,
+  IssueFilters,
   TrackerIssue,
+  TrackerMilestone,
   TrackerProject,
   TrackerScope,
 } from '@agent-board/tracker';
@@ -32,11 +34,23 @@ export type {
   PullRequestRef,
   PullRequestReview,
   PullRequestState,
+  IssueFilters,
   TrackerIssue,
+  TrackerMilestone,
   TrackerProject,
   TrackerProvider,
   TrackerScope,
 };
+
+/**
+ * What a zone's issue picker is narrowed to. `project` left out is the zone's own project, if it has one; null is all
+ * of the zone's scope (a project zone widened to its team); else a project of the scope (`IssueFilters.projects`).
+ * `milestone` narrows that further (one of its project's milestones, or of `IssueFilters.milestones`).
+ */
+export interface IssuePick {
+  project?: string | null;
+  milestone?: string;
+}
 // The provider table has no Node imports, so clients (the app's renderer) can use it too.
 export { isTrackerProvider, shortIssueId, TRACKER_PROVIDERS } from '@agent-board/tracker/providers';
 export { pullRequestOfUrl } from '@agent-board/tracker/pull-request-ref';
@@ -389,16 +403,17 @@ export type ZoneLayoutMode = (typeof ZONE_LAYOUT_MODES)[number];
 
 /**
  * The layout rule a zone keeps (`Zone.layoutRule`): `off`, each tile where it was put; `lanes`, a lane per ticket, its
- * leads and shells in a head row, laid out again as work comes and goes. Off until the user (or an agent) picks.
+ * leads and shells in a head row, laid out again as work comes and goes; `spine`, its lead at the left with its shells
+ * under it and each ticket a band in columns to the right (`spine-layout.ts`). Off until the user (or an agent) picks.
  */
-export const ZONE_LAYOUT_RULES = ['off', 'lanes'] as const;
+export const ZONE_LAYOUT_RULES = ['off', 'lanes', 'spine'] as const;
 export type ZoneLayoutRule = (typeof ZONE_LAYOUT_RULES)[number];
 
 /**
- * A zone's layout as the one picker offers it: a free zone with no rule (`free`), a rule it keeps (`lanes`), or a view
- * (`shelves`, `clusters`). Each sets both `Zone.layoutMode` and `Zone.layoutRule` (`zoneLayoutChoiceFields`).
+ * A zone's layout as the one picker offers it: a free zone with no rule (`free`), a rule it keeps (`lanes`, `spine`), or
+ * a view (`shelves`, `clusters`). Each sets both `Zone.layoutMode` and `Zone.layoutRule` (`zoneLayoutChoiceFields`).
  */
-export const ZONE_LAYOUT_CHOICES = ['free', 'lanes', 'shelves', 'clusters'] as const;
+export const ZONE_LAYOUT_CHOICES = ['free', 'spine', 'lanes', 'shelves', 'clusters'] as const;
 export type ZoneLayoutChoice = (typeof ZONE_LAYOUT_CHOICES)[number];
 
 /** The picker's choice for `zone`: its rule if it keeps one, else its layout mode. */
@@ -406,9 +421,14 @@ export function zoneLayoutChoiceOf(zone: Pick<Zone, 'layoutMode' | 'layoutRule'>
   return zone.layoutRule === 'off' ? zone.layoutMode : zone.layoutRule;
 }
 
+/** Whether `layout` is a rule the zone keeps, which moves its tiles, rather than free or a view. */
+export function isLayoutRule(layout: ZoneLayoutChoice): layout is Exclude<ZoneLayoutRule, 'off'> {
+  return layout === 'lanes' || layout === 'spine';
+}
+
 /** The fields that make a zone laid out as `layout`. */
 export function zoneLayoutChoiceFields(layout: ZoneLayoutChoice): { layoutMode: ZoneLayoutMode; layoutRule: ZoneLayoutRule } {
-  return layout === 'lanes' ? { layoutMode: 'free', layoutRule: layout } : { layoutMode: layout, layoutRule: 'off' };
+  return isLayoutRule(layout) ? { layoutMode: 'free', layoutRule: layout } : { layoutMode: layout, layoutRule: 'off' };
 }
 
 /** One window of plan usage, from a reading: how much of it is used, in percent, and when it resets. */
@@ -528,7 +548,7 @@ export interface ZoneLayout {
  * never one of the user's stickies. A `clock` is a schedule (`ClockData`). A `crew` is a running crew's card (`CrewCardData`),
  * which the board keeps.
  */
-export const BOARD_ITEM_KINDS = ['sticky', 'text', 'shape', 'image', 'link', 'issue', 'agent-note', 'clock', 'document', 'plan', 'steps', 'memory', 'queue', 'crew', 'todo'] as const;
+export const BOARD_ITEM_KINDS = ['sticky', 'text', 'shape', 'image', 'link', 'issue', 'agent-note', 'clock', 'document', 'plan', 'steps', 'memory', 'queue', 'crew', 'todo', 'stages'] as const;
 export type BoardItemKind = (typeof BOARD_ITEM_KINDS)[number];
 
 /**
@@ -642,6 +662,8 @@ export interface AgentNoteData {
    * (`userSized`) wins over it.
    */
   lines?: number | null;
+  /** The agent that held it before it was passed to `agent` (`orchestrator.passItem`), as it was then. */
+  passedFrom?: AgentNoteAuthor;
 }
 
 /**
@@ -1469,6 +1491,11 @@ export interface DaemonSettings {
    * default. A `FORCE_HYPERLINK` already in the daemon's environment wins either way. Codex and shells never get it.
    */
   clickableLinks: boolean;
+  /**
+   * Read only, from the daemon's environment: whether a `FORCE_HYPERLINK` the user set themselves turns Claude's links on
+   * (any value but 0) or off (0), which wins over `clickableLinks`; null when they set none. `settings.set` ignores it.
+   */
+  clickableLinksFromEnvironment: boolean | null;
   /** What the needs-you inbox lists: explicit requests only (the default), or every finished turn too. */
   needsYouShows: NeedsYouShows;
   /** Whether the app raises an OS notification for each new request in the needs-you inbox. On by default. */
@@ -1769,6 +1796,9 @@ export function needsYouNow(agent: NeedsYouFacts & Pick<Agent, 'seen'>, shows: N
  */
 export const INTERRUPT_KEY = '\x03';
 
+/** What an agent's first prompt is called once it is typed and not sent (`Agent.unsent`), or not delivered. */
+export const FIRST_PROMPT = 'Its first prompt';
+
 /**
  * An agent: a session running a harness in its own worktree, drawn as a tile in any zone or loose on the board. Where
  * its tile sits is only where it is drawn: its repo, worktree, branch and linked issue stay its own.
@@ -1994,8 +2024,20 @@ export interface Agent {
    */
   orphanedFrom: { sessionId: string; name: string } | null;
   /**
+   * The ticket tile it is a helper of: the session id of that ticket's chat, which started it, or started the agent that
+   * did. Null for an agent in no ticket, a ticket's chat among them. Its questions and flags go to that chat (`ledBy`),
+   * whoever started it; cleared once the chat is removed.
+   */
+  ticket: string | null;
+  /**
+   * Whether it is a ticket tile's chat: the agent the ticket is, which runs its loop and starts its helpers (designer,
+   * builder, reviewer) into it. Kept as it was started.
+   */
+  ticketChat: boolean;
+  /**
    * The name of the orchestrator that started it while that one is live, else null (a loose agent, or one whose
-   * orchestrator has ended). Its turns, questions and open changes go to that orchestrator, not the user.
+   * orchestrator has ended); for a helper, its ticket's chat while that one is live. Its turns, questions and open
+   * changes go to that agent, not the user.
    */
   ledBy: string | null;
   /** What it flagged for attention (`board.needsYou`) and hasn't cleared; null for none. */
@@ -2297,6 +2339,11 @@ export interface ClockData {
   modeSetBy?: ClockMark | null;
   /** The agent that turned it off (`clock.self`), and why; the user turning it on again clears it. */
   stoppedBy?: ClockMark | null;
+  /**
+   * Whether a Spine zone set it aside because the row along its top had no room for it: the board hides it, and its
+   * zone shows a "+N" chip for it instead. Missing on a clock that was never set aside.
+   */
+  tucked?: boolean;
 }
 
 /** An agent's change to its own clock, as the clock's data keeps it. */
@@ -2371,6 +2418,9 @@ export interface ClockTemplateSaveParams {
 /** A clock's size as a card, and folded to a pill. */
 export const CLOCK_SIZE = { width: 256, height: 76 };
 export const CLOCK_FOLDED_SIZE = { width: 200, height: 34 };
+
+/** How wide the chip is that stands for the clocks a Spine zone set aside, as they don't fit along its top (“+2”). */
+export const SPINE_MORE_CHIP_WIDTH = 56;
 
 /** How many of a clock's runs its status carries, newest first. */
 export const CLOCK_RUNS_KEPT = 20;
@@ -2615,6 +2665,14 @@ export interface RemoveAsk {
  * why (denied, held back and not ticked, gone, its reviewer staying, or refused as the user's own Delete would refuse
  * it). `removed` may end with a reviewer the ask left out, which went with a ticked tile it reviews.
  */
+/** What a closed agent left behind: its worktree and branch, kept as they hold unsaved work. */
+export interface ClosedKept {
+  worktree: string;
+  branch: string;
+  /** Why they stay: "its worktree has uncommitted changes". */
+  why: string;
+}
+
 export interface RemoveAskResult {
   outcome: 'allowed' | 'denied' | 'timed-out';
   removed: { sessionId: string; name: string }[];
@@ -2777,6 +2835,8 @@ export interface DocumentCardData {
   collapsed: boolean;
   /** The height the user gave the page, kept while it is a slim bar so showing the page again restores it. */
   openHeight?: number;
+  /** The agent that held it before it was passed to `agent` (`orchestrator.passItem`), as it was then. */
+  passedFrom?: AgentNoteAuthor;
 }
 
 /** A plan card's size. */
@@ -3053,6 +3113,12 @@ export const queueKindOn = (audience: QueueAudience, kind: QueueRowKind): QueueR
   return kind === 'read' ? 'info' : kind === 'backlog' ? 'task' : 'request';
 };
 
+/** The `hiddenUntil` of a job marked Later: a time that never comes, so it waits until it is moved up. */
+export const QUEUE_LATER = '9999-12-31T23:59:59.999Z';
+
+/** Whether an open job is put off at `now` (an ISO time): marked Later, or put off until a time still ahead. */
+export const isPutOff = (job: Pick<QueueJob, 'state' | 'hiddenUntil'>, now: string): boolean => job.state !== 'done' && job.hiddenUntil !== null && job.hiddenUntil > now;
+
 /** Where a job is: waiting, taken by an agent (a lease its session holds), or done. Info is always queued. */
 export type QueueJobState = 'queued' | 'taken' | 'done';
 
@@ -3067,7 +3133,10 @@ export interface QueueJob {
   state: QueueJobState;
   /** What its finisher said was done, as it was done. */
   result: string | null;
-  /** Put off for later on the user's queue: hidden from it until then. */
+  /**
+   * Put off until then: on the user's queue, hidden from it until that time; marked Later (`QUEUE_LATER`, a time that
+   * never comes) on any queue, until it is moved up. No `take` without a job, and no drain, starts it meanwhile.
+   */
   hiddenUntil: string | null;
   /** Its taker while taken. */
   takenBy: StepsWho | null;
@@ -3144,9 +3213,10 @@ export type MemoryChange =
  * `headline` and a `body`; a kind of `job` or `note` (the names before kinds) reads as the queue's default kind, or info
  * (something to read on the user's queue). `take` without `job` takes the first queued job. `drop` puts a taken job back
  * at the front, counting the drop; `done` keeps its finisher's `result`; `restore` puts back a version's text and link.
- * `move` puts an open job or info just before the open one `before`, or last for null. On the user's queue, `later`
- * hides an open job until `until` (null shows it again), and `skip` puts a shown one behind the next shown open job.
- * Neither makes a version: the job is as it was.
+ * `move` puts an open job or info just before the open one `before`, or last for null. `later` without `until` marks a
+ * waiting job Later, on any queue: no `take` without a job, and no drain, starts it until it is moved up (`until` null).
+ * On the user's queue alone, `until` a time puts it off until then, and `skip` puts a shown one behind the next shown
+ * open job. Neither makes a version: the job is as it was.
  */
 export type QueueChange =
   | { action: 'add'; kind?: QueueAddKind; text?: string; headline?: string; body?: string; link?: string | null; front?: boolean }
@@ -3157,7 +3227,7 @@ export type QueueChange =
   | { action: 'done'; job: string; result?: string }
   | { action: 'restore'; job: string; version: number }
   | { action: 'move'; job: string; before: string | null }
-  | { action: 'later'; job: string; until: string | null }
+  | { action: 'later'; job: string; until?: string | null }
   | { action: 'skip'; job: string };
 
 /** A new to-do list's size: its head, three lines and its foot. */
@@ -3715,6 +3785,7 @@ export const ORCHESTRATOR_ACTIONS = [
   'add-note',
   'edit-note',
   'remove-note',
+  'pass',
   'add-shape',
   'add-diagram',
   'edit-shape',
@@ -3793,6 +3864,10 @@ export interface OrchestratorSpawnParams {
   prompt?: string;
   /** What it is for (`Agent.purpose`), kept as `board.setStatus` with `description` keeps it, but cut to `MAX_PURPOSE_LENGTH` rather than refused. */
   description?: string;
+  /** As `SpawnAgentParams.ticketChat`. */
+  ticketChat?: boolean;
+  /** As `SpawnAgentParams.ticket`: the caller's own ticket's, or none, without. */
+  ticket?: string;
 }
 
 /** What `orchestrator.spawn` answers: the agent, and which role template its first message began with, if one. */
@@ -3817,6 +3892,12 @@ export type SendDelivery = 'started' | 'queued-until-up' | 'waking' | 'queued-in
  * headed with its sender mark when an agent sent it (ADR-0023); none for `submit` or `clear`.
  */
 export type OrchestratorSent = Agent & { delivery: SendDelivery; typed?: string };
+
+/**
+ * What `orchestrator.giveRole` answers: the agent with its new role, and, only when its role's template was asked to be
+ * sent, how that went: `none` when the role has no template, so nothing was sent.
+ */
+export type GivenRole = Agent & { template?: Exclude<SendDelivery, 'cleared'> | 'none' };
 
 /** The sides of a tile or note another is put beside (`orchestrator.move`'s and `addNote`'s `near`). */
 export const TILE_SIDES = ['below', 'right', 'left', 'above'] as const;
@@ -4296,6 +4377,11 @@ export function parseRole(text: string): { role: AgentRole; name: string | null 
  */
 export const ORCHESTRATOR_ROLE = 'orchestrator';
 
+/** Whether the user started `agent` by hand: no agent started it, and it never lost the orchestrator that did. */
+export function startedByHand(agent: Pick<Agent, 'spawnedBy' | 'orphanedFrom'>): boolean {
+  return agent.spawnedBy === null && agent.orphanedFrom === null;
+}
+
 /** Whether `role` (as typed, or an agent's custom role name) is the orchestrator role. */
 export function isOrchestratorRole(role: string | null): boolean {
   if (role === null) return false;
@@ -4403,8 +4489,11 @@ export interface CrewPrefab {
   purpose: string;
   /** Review rounds before the crew stops and asks the user, 1 to `MAX_REVIEW_CAP`. */
   roundLimit: number;
-  /** How a crew from it is drawn at first: one card, or a tile for each member. */
-  onBoard: 'card' | 'tiles';
+  /**
+   * How a crew from it is drawn at first: one card, or a tile for each member. Or `ticket`: its first member starts as a
+   * ticket tile's chat (`Agent.ticketChat`), and the rest, and whoever that chat starts, are its helpers.
+   */
+  onBoard: 'card' | 'tiles' | 'ticket';
   members: PrefabMember[];
 }
 
@@ -4605,6 +4694,13 @@ export type SpawnAgentParams = TerminalSize & {
    * loose on the board, or one picked a repo for. Without, the tracker that would have it (`issueId`).
    */
   issueZoneId?: string;
+  /** Start it as a ticket tile's chat (`Agent.ticketChat`): the agents it starts are its ticket's helpers. Not with `ticket`. */
+  ticketChat?: boolean;
+  /**
+   * The ticket it is a helper of (`Agent.ticket`), by its chat's session id. Without, its starter's ticket: the chat's own,
+   * for an agent a ticket's chat starts, else that of the helper that starts it, else none.
+   */
+  ticket?: string;
   /** Where its tile goes: in the zone (the board slots it in without), or on the board for a loose one. */
   position?: { x: number; y: number };
 };
@@ -5176,8 +5272,8 @@ export interface DaemonMethods {
    * The orchestrator methods (ADR-0011). Each acts as the session holding `token`: any agent's own live session
    * (one that has ended is refused with `BOARD_ERROR.notAllowed`), or a user-side one (`BoardCaller.side`). With no
    * token, on a connection that never presented one, it acts as the user. No agent outranks another: an agent
-   * reaches every agent an agent started, anywhere on the board, but never one the user started by hand, nor itself
-   * (`BOARD_ERROR.outOfScope`); the user's side reaches every agent. Each spawn, send, interrupt, restart and close is
+   * reaches every agent anywhere on the board, the user's own too, but never itself (`BOARD_ERROR.outOfScope`); it
+   * removes only one it started, and asks the user to remove any other (`askRemove`). Each spawn, send, interrupt, restart and close is
    * logged, done or refused (`orchestrator.activity`).
    *
    * `spawn` starts an agent as `agent.spawn` does, in any zone (its own zone by default), with
@@ -5241,9 +5337,12 @@ export interface DaemonMethods {
    */
   'orchestrator.setEffort': { params: { token?: string; sessionId: string; effort: Effort }; result: { agent: Agent; applies: EffortApplies } };
   /**
-   * Gives an agent a role, or none with null (`agent.setRole`): an agent it may steer, or its own tile.
+   * Gives an agent a role, or none with null (`agent.setRole`): an agent it may steer, or its own tile. With
+   * `sendTemplate`, the new role's template, filled in for that agent as New agent fills one, then goes to it as a
+   * message from the caller (`orchestrator.send`, with its checks); `template` says how, or `none` when the role has no
+   * template. Never to its own tile (`invalidParams`). A send that fails leaves the role given, and says so.
    */
-  'orchestrator.giveRole': { params: { token?: string; sessionId: string; role: string | null }; result: Agent };
+  'orchestrator.giveRole': { params: { token?: string; sessionId: string; role: string | null; sendTemplate?: boolean }; result: GivenRole };
   /** Resumes a rate-limited agent's turn on usage credits (`agent.continueOnCredits`). */
   'orchestrator.continueOnCredits': { params: { token?: string; sessionId: string }; result: Agent };
   /**
@@ -5255,11 +5354,15 @@ export interface DaemonMethods {
    */
   'orchestrator.restart': { params: { token?: string; sessionId: string; fresh?: boolean; prompt?: string }; result: Agent };
   /**
-   * Ends the agent's session, keeping its tile, worktree and branch (`agent.stop`); with `remove`, deletes it with its
-   * worktree and branch (`agent.delete`, never forced, so `AGENT_ERROR.unsavedWork` stands), which only an agent the
-   * orchestrator started may be. Resolves with the agent, or null once removed.
+   * Ends the agent's session and takes its tile off the board, its reviewers first, with the notes and document cards
+   * it holds. Its worktree and branch go too, unless they hold unsaved work (the board's own files under
+   * `.agent-board/` aside): then they stay, and it resolves with what stayed and why; else with null. Nothing in reach of
+   * the agent is lost, so the caller may close any agent but itself, and but one the user started by hand: an agent
+   * closes that only through `orchestrator.askRemove` (`BOARD_ERROR.outOfScope`). With `remove`, it deletes the agent with its
+   * worktree and branch instead (`agent.delete`, never forced, so `AGENT_ERROR.unsavedWork` stands), which only an
+   * agent the orchestrator started may be; it resolves with null.
    */
-  'orchestrator.close': { params: { token?: string; sessionId: string; remove?: boolean }; result: Agent | null };
+  'orchestrator.close': { params: { token?: string; sessionId: string; remove?: boolean }; result: ClosedKept | null };
   /**
    * Asks the user to remove tiles that it did not start, the user's own among them, in one prompt, and waits
    * for their answer: as long as `timeoutMs` (`DEFAULT_ASK_WAIT_MS` by default, at most `MAX_ASK_WAIT_MS`). It is
@@ -5356,8 +5459,9 @@ export interface DaemonMethods {
    * Puts the tiles `tiles` (keys, as `Zone.handPlaced` has them) of a zone that keeps a layout rule back under it, and
    * lays the zone out by its rule again. `[]` puts none back: the zone is only laid out again. The board's Put back
    * under the rule, and how the daemon applies a rule as the zone's work changes. Refused for a zone that keeps no rule.
+   * `reflow`, the board's Tidy: a rule that keeps where each unit of work went (Spine's columns) lays them out afresh.
    */
-  'zone.followRule': { params: { id: string; tiles: string[] }; result: Zone };
+  'zone.followRule': { params: { id: string; tiles: string[]; reflow?: boolean }; result: Zone };
   /**
    * Puts a sticky note (or a text item) of `text` on the board, marked as made by it, at `place` (`LayoutPlace`; in its
    * own zone by default), clear of the tiles and items there, in any zone.
@@ -5367,6 +5471,12 @@ export interface DaemonMethods {
   'orchestrator.editNote': { params: { token?: string; id: string; text?: string; color?: string; width?: number; height?: number; lines?: number }; result: BoardItem };
   /** Deletes a note it (or its crew) made; a user-side caller any sticky note or text item. */
   'orchestrator.removeNote': { params: { token?: string; id: string }; result: null };
+  /**
+   * Passes an agent note or a document card to the agent `to`, which then holds it: it goes off the board with that
+   * agent, not with the one that wrote it. A document's file is kept by the board if it was in its old holder's
+   * worktree. Any agent or a user-side caller passes it, to any agent; never the user's own.
+   */
+  'orchestrator.passItem': { params: { token?: string; id: string; to: string }; result: BoardItem };
   /**
    * Puts a shape of `shape` with `text` in it on the board (a class's `attributes` and `methods`, a line each, under its
    * name), marked as made by it, placed as `addNote` places a note. It is sized for its text; the board grows it taller
@@ -5973,10 +6083,16 @@ export interface DaemonMethods {
    */
   'tracker.projects': { params: { provider: TrackerProvider; scope: string }; result: TrackerProject[] };
   /**
-   * The zone's open issues (its project's, if it has one), most recently updated first; or, with a non-blank `query`,
-   * the issues matching it.
+   * The zone's open issues, most recently updated first; or, with a non-blank `query`, the issues matching it. Only
+   * those of the pick's project and milestone (`IssuePick`): a project zone lists its own project's unless widened.
    */
-  'tracker.issues': { params: { zoneId: string; query?: string }; result: TrackerIssue[] };
+  'tracker.issues': { params: { zoneId: string; query?: string } & IssuePick; result: TrackerIssue[] };
+  /**
+   * What the zone's issue picker can be narrowed to: its scope's open projects, each with its milestones, and
+   * milestones outside any project. GitHub's projects need gh's `read:project` scope: without it, `missing` says so
+   * and there are only the repo's milestones. Empty for a tracker that has neither.
+   */
+  'tracker.issueFilters': { params: { zoneId: string }; result: IssueFilters };
 }
 
 /** Error codes for agent methods, outside JSON-RPC's reserved range. */
@@ -6005,12 +6121,9 @@ export const BOARD_ERROR = {
    * orchestrator method, and the token's agent's session has ended.
    */
   notAllowed: -32021,
-  /** An agent acted on an agent out of its reach (one the user started by hand), or on itself. */
+  /** An agent acted on itself, or did what only the user may (removing a tile it didn't start, unasked). */
   outOfScope: -32022,
 } as const;
-
-/** Why an agent may not act on `name`: the user started it by hand, and no agent acts on those. */
-export const handStartedReason = (name: string) => `${name} is one the user started by hand: agents never act on the user's own agents`;
 
 /**
  * What a connection that has presented a session's board token (`board.identify`, `board.setStatus`) may call: the
@@ -6102,6 +6215,7 @@ export const ORCHESTRATOR_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMet
   'orchestrator.addNote',
   'orchestrator.editNote',
   'orchestrator.removeNote',
+  'orchestrator.passItem',
   'orchestrator.addShape',
   'orchestrator.addDiagram',
   'orchestrator.editShape',

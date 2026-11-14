@@ -1,5 +1,5 @@
 // What a queue card shows, worked out from its data and jobs: kept apart from React, so it is tested on its own.
-import { isQueueWork, type QueueAudience, type QueueData, type QueueJob, type QueueJobChange } from '@agent-board/daemon/protocol';
+import { isPutOff, isQueueWork, type QueueAudience, type QueueData, type QueueJob, type QueueJobChange } from '@agent-board/daemon/protocol';
 import { whoText } from './memory-card';
 
 /** How many done jobs the peek shows, under the open ones. */
@@ -30,18 +30,29 @@ export function newQueueData(zoneName?: string): QueueData {
   return { title: queueTitle('agents', zoneName), madeBy: { kind: 'user' }, audience: 'agents', noAgents: false, count: 0 };
 }
 
-/** The open rows in the order the card lists them: those taken first, then the rest in their queue's order. */
-export function openInCardOrder(jobs: readonly QueueJob[]): QueueJob[] {
+/** The time now, as the jobs' times are written: what `isPutOff` compares them with. */
+const nowText = (): string => new Date().toISOString();
+
+/** Whether a row is put off at `now`: marked Later, or put off until a time still ahead. */
+export const isLaterRow = (job: QueueJob, now = nowText()): boolean => isPutOff(job, now);
+
+/**
+ * The open rows in the order the card lists them: those taken first, then those waiting in their queue's order, then
+ * those marked Later (or put off until a time), at its foot.
+ */
+export function openInCardOrder(jobs: readonly QueueJob[], now = nowText()): QueueJob[] {
   const open = jobs.filter((job) => job.state !== 'done');
-  return [...open.filter((job) => job.state === 'taken'), ...open.filter((job) => job.state === 'queued')];
+  const later = open.filter((job) => job.state === 'queued' && isPutOff(job, now));
+  const waiting = open.filter((job) => job.state === 'queued' && !isPutOff(job, now));
+  return [...open.filter((job) => job.state === 'taken'), ...waiting, ...later];
 }
 
 /** The done jobs, newest first, as the daemon lists them. */
 export const doneJobs = (jobs: readonly QueueJob[]): QueueJob[] => jobs.filter((job) => job.state === 'done');
 
-/** The job an agent's `queue take` takes next: the first waiting job (not info) in the queue's order. */
-export function nextJob(jobs: readonly QueueJob[]): QueueJob | undefined {
-  return jobs.find((job) => isQueueWork(job.kind) && job.state === 'queued');
+/** The job an agent's `queue take` takes next: the first waiting job (not info, nor one marked Later) in the queue's order. */
+export function nextJob(jobs: readonly QueueJob[], now = nowText()): QueueJob | undefined {
+  return jobs.find((job) => isQueueWork(job.kind) && job.state === 'queued' && !isPutOff(job, now));
 }
 
 /** 1st, 2nd, 3rd, 4th … 11th, 12th, 13th … 21st, 22nd. */
@@ -52,16 +63,18 @@ export function ordinal(n: number): string {
 }
 
 /** The tone of a row's state chip, which its CSS colours. */
-export type JobTone = 'queued' | 'next' | 'taken' | 'back' | 'done' | 'note';
+export type JobTone = 'queued' | 'next' | 'taken' | 'back' | 'done' | 'note' | 'later';
 
 /**
- * A row's state chip: "taken", "next" (what `take` takes), "queued", a note's "note", "done". A job dropped back (by its
+ * A row's state chip: "taken", "next" (what `take` takes), "queued", "later" (marked Later, or put off until a time), a
+ * note's "note", "done". A job dropped back (by its
  * taker, or as its taker's session ended) has the dashed "back" look, and its corner says which try comes next.
  */
 export function jobState(job: QueueJob, next: QueueJob | undefined): { text: string; tone: JobTone } {
   if (!isQueueWork(job.kind)) return { text: 'note', tone: 'note' };
   if (job.state === 'done') return { text: 'done', tone: 'done' };
   if (job.state === 'taken') return { text: 'taken', tone: 'taken' };
+  if (isPutOff(job, nowText())) return { text: 'later', tone: 'later' };
   const tone = job.id === next?.id ? 'next' : 'queued';
   return { text: tone, tone: job.drops > 0 ? 'back' : tone };
 }
@@ -90,12 +103,14 @@ export function jobCorner(job: QueueJob): string {
 /** A job's text on one line. */
 export const jobLine = (job: Pick<QueueJob, 'text'>): string => job.text.replace(/\s+/g, ' ').trim();
 
-/** The card's counts: "2 queued · 1 taken · 3 done", with notes their own ("3 to look at", in the user's); "No jobs yet" for none. */
+/** The card's counts: "2 queued · 1 taken · 1 later · 3 done", with notes their own ("3 to look at", in the user's); "No jobs yet" for none. */
 export function countsText(jobs: readonly QueueJob[], audience: QueueAudience = 'agents'): string {
   const of = (match: (job: QueueJob) => boolean) => jobs.filter(match).length;
+  const now = nowText();
   const parts = [
-    [of((job) => isQueueWork(job.kind) && job.state === 'queued'), audience === 'user' ? 'to look at' : 'queued'],
+    [of((job) => isQueueWork(job.kind) && job.state === 'queued' && !isPutOff(job, now)), audience === 'user' ? 'to look at' : 'queued'],
     [of((job) => job.state === 'taken'), 'taken'],
+    [of((job) => isQueueWork(job.kind) && isPutOff(job, now)), 'later'],
     [of((job) => !isQueueWork(job.kind)), 'note'],
     [of((job) => job.state === 'done'), 'done'],
   ] as const;

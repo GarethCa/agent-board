@@ -32,6 +32,17 @@ export function fadeEdges({ scrollTop, clientHeight, scrollHeight }: { scrollTop
 }
 
 /**
+ * The height a list `room` tall is cut to so its last row in view shows whole, from where each row ends (`bottoms`, in
+ * order, from the list's top): the end of the last row that fits. A list that fits, or whose first row is taller than
+ * its room, is left as it is (undefined).
+ */
+export function wholeRowsHeight(room: number, bottoms: readonly number[]): number | undefined {
+  const last = bottoms.at(-1);
+  if (last === undefined || last <= room + SLACK) return undefined;
+  return bottoms.filter((bottom) => bottom <= room + SLACK).at(-1);
+}
+
+/**
  * Where a list scrolled to `scrollTop`, `clientHeight` tall, scrolls to so a row from `top` to `bottom` (in the list's
  * scrolled content) is in view: as little as it takes, its top first when it is taller than the list.
  */

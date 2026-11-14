@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { fakeHarnessEnv, McpClient } from '@agent-board/fake-harness';
@@ -285,11 +285,12 @@ describe('a user-side caller: a shell, or the user with no token', () => {
     expect(started.spawnedBy).toBeNull();
     await setup.client.call('orchestrator.wait', { sessionIds: [started.sessionId] });
     expect((await setup.client.call('orchestrator.read', { sessionId: started.sessionId })).text).toBeTruthy();
-    await expect(setup.client.call('orchestrator.close', { sessionId: started.sessionId })).resolves.toBeDefined();
+    // Removes it, as the user does in the app, but never one with unsaved work: its handover is a file git has not seen.
+    await expect(setup.client.call('orchestrator.close', { sessionId: started.sessionId, remove: true })).rejects.toMatchObject({ code: AGENT_ERROR.unsavedWork });
+    // A close loses nothing: it takes it off the board, the board's own files with it.
+    await expect(setup.client.call('orchestrator.close', { sessionId: started.sessionId })).resolves.toBeNull();
     const [line] = await setup.client.call('orchestrator.activity', { limit: 1 });
     expect(line).toMatchObject({ orchestratorName: 'you', action: 'close', outcome: 'done' });
-    // And removes it, as the user does in the app, but never one with unsaved work.
-    await expect(setup.client.call('orchestrator.close', { sessionId: started.sessionId, remove: true })).rejects.toMatchObject({ code: AGENT_ERROR.unsavedWork });
     const clean = await setup.client.call('orchestrator.spawn', { zoneId: setup.other.id, name: 'clean' });
     await expect(setup.client.call('orchestrator.close', { sessionId: clean.sessionId, remove: true })).resolves.toBeNull();
     expect((await setup.client.call('agent.list')).some((each) => each.sessionId === clean.sessionId)).toBe(false);
@@ -335,7 +336,7 @@ describe('a user-side caller: a shell, or the user with no token', () => {
 });
 
 describe('whom an agent acts on', () => {
-  it('any agent an agent started, in any zone and repo, its own moved anywhere; never itself, nor one the user started by hand, and logs each refusal', async () => {
+  it('any agent, in any zone and repo, its own moved anywhere and the user’s own too; never itself, and logs each refusal', async () => {
     const setup = await orchestrateDaemon();
     const { agent: me, token, connection } = await agentSide(setup, setup.zone.id);
     const neighbour = await userAgent(setup.client, setup.zone.id, 'neighbour');
@@ -352,23 +353,21 @@ describe('whom an agent acts on', () => {
     await expect(connection.call('orchestrator.read', { token, sessionId: child.sessionId, path: 'apps/web/index.ts' })).resolves.toMatchObject({
       path: 'apps/web/index.ts',
     });
-    // The user's own, in its zone or another, never.
+    // The user's own, in its zone or another, as any other.
     for (const users of [neighbour, elsewhere]) {
-      await expect(connection.call('orchestrator.read', { token, sessionId: users.sessionId, path: 'apps/web/index.ts' })).rejects.toMatchObject({
-        code: BOARD_ERROR.outOfScope,
-        message: `${users.name} is one the user started by hand: agents never act on the user's own agents`,
+      await expect(connection.call('orchestrator.read', { token, sessionId: users.sessionId, path: 'apps/web/index.ts' })).resolves.toMatchObject({
+        path: 'apps/web/index.ts',
       });
     }
-    // Never itself.
+    // Never itself, and the user sees it tried.
     await expect(connection.call('orchestrator.interrupt', { token, sessionId: me.sessionId })).rejects.toMatchObject({
       code: BOARD_ERROR.outOfScope,
     });
-    // Nor continues one of the user's on credits, and the user sees it tried.
-    await expect(connection.call('orchestrator.continueOnCredits', { token, sessionId: elsewhere.sessionId })).rejects.toMatchObject({
+    await expect(connection.call('orchestrator.continueOnCredits', { token, sessionId: me.sessionId })).rejects.toMatchObject({
       code: BOARD_ERROR.outOfScope,
     });
     const [line] = await setup.client.call('orchestrator.activity', { limit: 1 });
-    expect(line).toMatchObject({ orchestratorId: me.sessionId, action: 'continue', outcome: 'refused', targetName: 'elsewhere' });
+    expect(line).toMatchObject({ orchestratorId: me.sessionId, action: 'continue', outcome: 'refused', targetName: me.name });
     // No refusal speaks of a scope, a rank or a switch.
     for (const each of await setup.client.call('orchestrator.activity', { limit: 50 })) {
       expect(each.reason ?? '').not.toMatch(/scope|rank|orchestrat/i);
@@ -409,24 +408,30 @@ describe('whom an agent acts on', () => {
     });
     await expect(connection.call('orchestrator.read', { token, sessionId: far.sessionId })).resolves.toMatchObject({ path: null });
     await expect(connection.call('orchestrator.send', { token, sessionId: far.sessionId, text: 'One more thing' })).resolves.toMatchObject({ delivery: 'started' });
-    await connection.call('orchestrator.close', { token, sessionId: far.sessionId });
-    await untilAgent(setup.recorder, far.sessionId, (seen) => seen.endedAt !== null);
-    // Removing it is still the user's to allow.
+    // Removing it, unsaved work and all, is still the user's to allow.
     await expect(connection.call('orchestrator.close', { token, sessionId: far.sessionId, remove: true })).rejects.toMatchObject({
       code: BOARD_ERROR.outOfScope,
       message: expect.stringMatching(/only an agent you started.*--remove --ask/),
     });
+    // Closing it takes its tile off the board; it left no unsaved work, so nothing is kept.
+    await expect(connection.call('orchestrator.close', { token, sessionId: far.sessionId })).resolves.toBeNull();
+    expect((await setup.client.call('agent.list')).some((each) => each.sessionId === far.sessionId)).toBe(false);
 
-    // One the user started stays out of reach: the stranger, and the lead itself.
-    for (const refused of [
-      connection.call('orchestrator.read', { token, sessionId: stranger.sessionId, path: 'apps/web/index.ts' }),
-      connection.call('orchestrator.send', { token, sessionId: stranger.sessionId, text: 'Hello' }),
-      connection.call('orchestrator.wait', { token, sessionIds: [stranger.sessionId], timeoutMs: 1 }),
-      connection.call('orchestrator.close', { token, sessionId: stranger.sessionId }),
-      connection.call('orchestrator.read', { token, sessionId: lead.agent.sessionId }),
-    ]) {
-      await expect(refused).rejects.toMatchObject({ code: BOARD_ERROR.outOfScope, message: expect.stringMatching(/started by hand/) });
-    }
+    // One the user started is in reach as any other: the stranger, and the lead itself. Closing it, which takes its
+    // tile off the board, or removing it still asks.
+    await expect(connection.call('orchestrator.read', { token, sessionId: stranger.sessionId, path: 'apps/web/index.ts' })).resolves.toBeDefined();
+    await expect(connection.call('orchestrator.wait', { token, sessionIds: [stranger.sessionId], timeoutMs: 1 })).resolves.toBeDefined();
+    await expect(connection.call('orchestrator.send', { token, sessionId: stranger.sessionId, text: 'Hello' })).resolves.toMatchObject({ delivery: 'started' });
+    await expect(connection.call('orchestrator.read', { token, sessionId: lead.agent.sessionId })).resolves.toBeDefined();
+    await expect(connection.call('orchestrator.close', { token, sessionId: stranger.sessionId })).rejects.toMatchObject({
+      code: BOARD_ERROR.outOfScope,
+      message: expect.stringMatching(/started by the user.*--remove --ask/),
+    });
+    expect((await setup.client.call('agent.list')).some((each) => each.sessionId === stranger.sessionId)).toBe(true);
+    await expect(connection.call('orchestrator.close', { token, sessionId: stranger.sessionId, remove: true })).rejects.toMatchObject({
+      code: BOARD_ERROR.outOfScope,
+      message: expect.stringMatching(/only an agent you started.*--remove --ask/),
+    });
 
     // Its starter removed, the crew it left is still an agent's, not the user's: in reach.
     await setup.client.call('agent.delete', { sessionId: lead.agent.sessionId, force: true });
@@ -434,21 +439,21 @@ describe('whom an agent acts on', () => {
     await expect(connection.call('orchestrator.read', { token, sessionId: kept.sessionId })).resolves.toMatchObject({ path: null });
   });
 
-  it('steers another agent’s crew, which may no more act on the user’s agents than it may', async () => {
+  it('steers another agent’s crew, which acts on the user’s agents as it may', async () => {
     const setup = await orchestrateDaemon();
     const { token, connection } = await agentSide(setup, setup.zone.id);
     const lead = await agentSide(setup, setup.other.id);
     const deputy = await lead.connection.call('orchestrator.spawn', { token: lead.token, name: 'deputy', prompt: 'Print your board identity' });
     const users = await userAgent(setup.client, setup.other.id, 'users-own');
 
-    await expect(connection.call('orchestrator.close', { token, sessionId: users.sessionId })).rejects.toMatchObject({ code: BOARD_ERROR.outOfScope });
     const side = await agentSideOf(setup, deputy.sessionId);
     // A send to an agent mid-turn is queued, so wait for the deputy's first turn to end: printing its identity comes before that.
     await expect(connection.call('orchestrator.wait', { token, sessionIds: [deputy.sessionId], timeoutMs: 10_000 })).resolves.toMatchObject({ timedOut: false });
     await expect(connection.call('orchestrator.send', { token, sessionId: deputy.sessionId, text: 'Close users-own' })).resolves.toMatchObject({ delivery: 'started' });
+    // Closing it asks the user, as it would for the deputy's lead.
     await expect(side.connection.call('orchestrator.close', { token: side.token, sessionId: users.sessionId })).rejects.toMatchObject({
       code: BOARD_ERROR.outOfScope,
-      message: expect.stringMatching(/started by hand/),
+      message: expect.stringMatching(/--remove --ask/),
     });
   });
 });
@@ -476,11 +481,68 @@ describe('what an orchestrator may send', () => {
     const setup = await orchestrateDaemon();
     const { token, connection } = await agentSide(setup, setup.zone.id);
     const worker = await connection.call('orchestrator.spawn', { token, name: 'worker' });
-    await connection.call('orchestrator.close', { token, sessionId: worker.sessionId });
+    await setup.client.call('agent.stop', { sessionId: worker.sessionId });
     await expect(connection.call('orchestrator.send', { token, sessionId: worker.sessionId, text: 'more' })).rejects.toMatchObject({
       code: RPC_ERROR.invalidParams,
       message: expect.stringMatching(/has ended/),
     });
+  });
+});
+
+describe('closing an agent', () => {
+  it('takes its tile off the board, with its worktree and branch unless they hold unsaved work, which stays', async () => {
+    const setup = await orchestrateDaemon();
+    const lead = await agentSide(setup, setup.zone.id);
+    const done = await lead.connection.call('orchestrator.spawn', { token: lead.token, name: 'done', prompt: 'Write the handover' });
+    const busy = await lead.connection.call('orchestrator.spawn', { token: lead.token, name: 'busy' });
+    await lead.connection.call('orchestrator.wait', { token: lead.token, sessionIds: [done.sessionId, busy.sessionId], timeoutMs: 10_000 });
+    writeFileSync(join(busy.worktree, 'draft.ts'), 'export {};\n');
+
+    // A handover is the board's own file: it loses nothing.
+    await expect(lead.connection.call('orchestrator.close', { token: lead.token, sessionId: done.sessionId })).resolves.toBeNull();
+    await expect(lead.connection.call('orchestrator.close', { token: lead.token, sessionId: busy.sessionId })).resolves.toEqual({
+      worktree: busy.worktree,
+      branch: busy.ownedBranch,
+      why: 'its worktree has uncommitted changes',
+    });
+    const left = (await setup.client.call('agent.list')).map((agent) => agent.sessionId);
+    expect(left).not.toContain(done.sessionId);
+    expect(left).not.toContain(busy.sessionId);
+    expect(existsSync(done.worktree)).toBe(false);
+    expect(git(done.repoRoot, 'branch', '--list', done.ownedBranch)).toBe('');
+    expect(readFileSync(join(busy.worktree, 'draft.ts'), 'utf8')).toBe('export {};\n');
+    expect(git(busy.repoRoot, 'branch', '--list', busy.ownedBranch)).toContain(busy.ownedBranch);
+    const [line] = await setup.client.call('orchestrator.activity', { limit: 1 });
+    expect(line).toMatchObject({ action: 'close', outcome: 'done', targetName: 'busy' });
+  });
+
+  it('ends the agent before it looks for unsaved work: an edit made as it stops is kept', async () => {
+    const setup = await orchestrateDaemon({ fakes: { writeOnStop: 'late.ts' } });
+    const lead = await agentSide(setup, setup.zone.id);
+    // A first turn ended, so its harness is up to catch the stop.
+    const worker = await lead.connection.call('orchestrator.spawn', { token: lead.token, name: 'worker', prompt: 'Write the handover' });
+    await lead.connection.call('orchestrator.wait', { token: lead.token, sessionIds: [worker.sessionId], timeoutMs: 10_000 });
+    expect(existsSync(join(worker.worktree, 'late.ts'))).toBe(false);
+
+    await expect(lead.connection.call('orchestrator.close', { token: lead.token, sessionId: worker.sessionId })).resolves.toMatchObject({
+      worktree: worker.worktree,
+      why: 'its worktree has uncommitted changes',
+    });
+    expect(readFileSync(join(worker.worktree, 'late.ts'), 'utf8')).toBe('written as it stopped\n');
+  });
+
+  it('says over the close tool what it kept, and why', async () => {
+    const setup = await orchestrateDaemon();
+    const lead = await agentSide(setup, setup.zone.id);
+    const busy = await lead.connection.call('orchestrator.spawn', { token: lead.token, name: 'busy' });
+    writeFileSync(join(busy.worktree, 'draft.ts'), 'export {};\n');
+    const clean = await lead.connection.call('orchestrator.spawn', { token: lead.token, name: 'clean' });
+    const mcp = mcpAs(setup, lead.token);
+    expect((await mcp.callTool('close', { agent: 'busy' })).text).toMatch(
+      new RegExp(`^Closed agent:\\S+ busy and took its tile off the board\\. Its worktree ${busy.worktree} and branch ${busy.ownedBranch} stay: its worktree has uncommitted changes\\.$`),
+    );
+    expect((await mcp.callTool('close', { agent: 'clean' })).text).toMatch(/^Closed agent:\S+ clean and took its tile off the board, with its worktree and branch: nothing in them was unsaved\.$/);
+    expect((await setup.client.call('agent.list')).map((agent) => agent.sessionId)).not.toContain(clean.sessionId);
   });
 });
 
@@ -556,15 +618,16 @@ describe('the orchestrator loop', () => {
     expect(prompts.at(-1)).toMatchObject({ text: 'Also add a test', from: { ref: refOf(me), name: me.name, kind: 'send' } });
     expect(prompts[0]).not.toHaveProperty('from');
 
-    const closed = await connection.call('orchestrator.close', { token, sessionId: worker.sessionId });
-    expect(closed).toMatchObject({ state: 'done' });
+    // Its handover is the board's own file: closing it loses nothing, so its tile, worktree and branch go.
+    expect(await connection.call('orchestrator.close', { token, sessionId: worker.sessionId })).toBeNull();
+    expect((await setup.client.call('agent.list')).some((each) => each.sessionId === worker.sessionId)).toBe(false);
   });
 
   it('times out a wait, saying where each agent got to', async () => {
     const setup = await orchestrateDaemon();
     const { token, connection } = await agentSide(setup, setup.zone.id);
     const worker = await connection.call('orchestrator.spawn', { token, name: 'worker' });
-    await connection.call('orchestrator.close', { token, sessionId: worker.sessionId });
+    await setup.client.call('agent.stop', { sessionId: worker.sessionId });
     const result = await connection.call('orchestrator.wait', { token, sessionIds: [worker.sessionId], states: ['running'], timeoutMs: 50 });
     expect(result).toMatchObject({ timedOut: true, agents: [{ sessionId: worker.sessionId, state: 'done' }] });
   });
@@ -573,7 +636,7 @@ describe('the orchestrator loop', () => {
     const setup = await orchestrateDaemon();
     const lead = await agentSide(setup, setup.zone.id);
     const worker = await lead.connection.call('orchestrator.spawn', { token: lead.token, name: 'worker' });
-    await lead.connection.call('orchestrator.close', { token: lead.token, sessionId: worker.sessionId });
+    await setup.client.call('agent.stop', { sessionId: worker.sessionId });
     const mcp = mcpAs(setup, lead.token);
 
     expect(await mcp.callTool('wait', { agents: ['worker'], until: ['running'], timeout_seconds: 0 })).toMatchObject({
@@ -603,7 +666,7 @@ describe('the orchestrator loop', () => {
   it('removes only an agent it started, and never one with unsaved work', async () => {
     const setup = await orchestrateDaemon();
     const { token, connection } = await agentSide(setup, setup.zone.id);
-    // Another agent's, which it may steer but not remove, and the user's own, which it may not touch.
+    // Another agent's, and the user's own: it may steer both but remove neither, and asks the user instead.
     const neighbour = await crewAgent(setup, { zoneId: setup.zone.id, name: 'neighbour' });
     await expect(connection.call('orchestrator.close', { token, sessionId: neighbour.sessionId, remove: true })).rejects.toMatchObject({
       code: BOARD_ERROR.outOfScope,
@@ -612,7 +675,7 @@ describe('the orchestrator loop', () => {
     const mine = await userAgent(setup.client, setup.zone.id, 'mine');
     await expect(connection.call('orchestrator.close', { token, sessionId: mine.sessionId, remove: true })).rejects.toMatchObject({
       code: BOARD_ERROR.outOfScope,
-      message: expect.stringMatching(/started by hand/),
+      message: expect.stringMatching(/only an agent you started.*--remove --ask/),
     });
 
     const messy = await connection.call('orchestrator.spawn', { token, name: 'messy' });
@@ -633,10 +696,12 @@ describe('the orchestrator loop', () => {
     git(child.worktree, '-c', 'user.name=T', '-c', 'user.email=t@e', 'commit', '--allow-empty', '-q', '-m', 'the work');
     const round = await setup.client.call('review.start', { sessionId: child.sessionId });
 
-    await expect(connection.call('orchestrator.close', { token, sessionId: child.sessionId, remove: true })).rejects.toMatchObject({
-      code: BOARD_ERROR.outOfScope,
-      message: expect.stringMatching(/reviewer/),
-    });
+    for (const remove of [true, false]) {
+      await expect(connection.call('orchestrator.close', { token, sessionId: child.sessionId, remove })).rejects.toMatchObject({
+        code: BOARD_ERROR.outOfScope,
+        message: expect.stringMatching(/reviewer/),
+      });
+    }
     const left = (await setup.client.call('agent.list')).map((agent) => agent.sessionId);
     expect(left).toContain(round.reviewer);
     expect(left).toContain(child.sessionId);
@@ -664,7 +729,7 @@ describe('steering a turn', () => {
     expect((await connection.call('orchestrator.read', { token, sessionId: worker.sessionId })).text).toBe(`Done: ${sentBy(me, 'Do it faster')}.`);
   });
 
-  it('changes a crew agent’s reasoning effort between turns, and refuses one the user started by hand', async () => {
+  it('changes an agent’s reasoning effort between turns, the user’s own too, and refuses itself', async () => {
     const setup = await orchestrateDaemon();
     const { agent: me, token, connection } = await agentSide(setup, setup.zone.id);
     const worker = await connection.call('orchestrator.spawn', { token, name: 'slow', prompt: 'Work slowly' });
@@ -690,14 +755,14 @@ describe('steering a turn', () => {
       agent: { effort: 'low', effortPending: 'restart' },
     });
 
-    // Never itself, nor one the user started by hand, in any zone; the user sees it tried.
-    await expect(connection.call('orchestrator.setEffort', { token, sessionId: me.sessionId, effort: 'low' })).rejects.toMatchObject({ code: BOARD_ERROR.outOfScope });
+    // One the user started by hand, in any zone, as any other.
     const elsewhere = await setup.client.call('agent.spawn', { zoneId: setup.other.id, name: 'elsewhere', ...SIZE });
-    await expect(connection.call('orchestrator.setEffort', { token, sessionId: elsewhere.sessionId, effort: 'low' })).rejects.toMatchObject({
-      code: BOARD_ERROR.outOfScope,
-    });
+    await untilAgent(setup.recorder, elsewhere.sessionId, (seen) => seen.state === 'idle');
+    await expect(connection.call('orchestrator.setEffort', { token, sessionId: elsewhere.sessionId, effort: 'low' })).resolves.toMatchObject({ agent: { effort: 'low' } });
+    // Never itself; the user sees it tried.
+    await expect(connection.call('orchestrator.setEffort', { token, sessionId: me.sessionId, effort: 'low' })).rejects.toMatchObject({ code: BOARD_ERROR.outOfScope });
     const [line] = await setup.client.call('orchestrator.activity', { limit: 1 });
-    expect(line).toMatchObject({ action: 'effort', outcome: 'refused', targetName: 'elsewhere' });
+    expect(line).toMatchObject({ action: 'effort', outcome: 'refused', targetName: me.name });
   });
 
   it('gives a running agent a role, changes it and takes it away, without restarting it or sending it anything', async () => {
@@ -728,7 +793,98 @@ describe('steering a turn', () => {
     expect(await connection.call('orchestrator.giveRole', { token, sessionId: worker.sessionId, role: 'designer' })).toMatchObject({ roleName: 'designer' });
   });
 
-  it('lets an agent make itself its zone’s orchestrator, and give any role to an agent an agent started, never to the user’s own', async () => {
+  it('sends a running agent its new role’s template as a message only when asked, and nothing for a role with none', async () => {
+    const setup = await orchestrateDaemon();
+    const lead = await agentSide(setup, setup.zone.id);
+    const { connection, token } = lead;
+    const worker = await crewAgent(setup, { zoneId: setup.zone.id, name: 'worker', prompt: 'Print your board identity' }, lead);
+    const settled = () => connection.call('orchestrator.wait', { token, sessionIds: [worker.sessionId] });
+    // What it last answered: the fake harness answers each message with "Done: <message>.".
+    const lastAnswer = async () => (await connection.call('orchestrator.read', { token, sessionId: worker.sessionId })).text;
+    await settled();
+
+    // Asked by the user: the template, filled in for this agent, goes to it as the user's message.
+    const given = await setup.client.call('orchestrator.giveRole', { sessionId: worker.sessionId, role: 'implementer', sendTemplate: true });
+    expect(given).toMatchObject({ role: 'implementer', template: 'started' });
+    await settled();
+    const implementer = await lastAnswer();
+    expect(implementer).toMatch(/^Done: You are the implementer for none\./);
+    expect(implementer).toContain(`Worktree: \`${worker.worktree}\``);
+    expect(implementer).not.toContain('{{');
+
+    // Not asked: only the role changes.
+    expect(await setup.client.call('orchestrator.giveRole', { sessionId: worker.sessionId, role: 'reviewer' })).not.toHaveProperty('template');
+    // A role with no template sends nothing, and says so; no role has none to send, and is refused.
+    expect(await setup.client.call('orchestrator.giveRole', { sessionId: worker.sessionId, role: 'designer', sendTemplate: true })).toMatchObject({
+      roleName: 'designer',
+      template: 'none',
+    });
+    await expect(setup.client.call('orchestrator.giveRole', { sessionId: worker.sessionId, role: null, sendTemplate: true })).rejects.toMatchObject({
+      code: RPC_ERROR.invalidParams,
+      message: expect.stringContaining('sends no template'),
+    });
+    expect((await setup.client.call('agent.list')).find((agent) => agent.sessionId === worker.sessionId)).toMatchObject({ roleName: 'designer' });
+    expect(await lastAnswer()).toBe(implementer);
+
+    // An agent sends one too, headed with who sent it.
+    expect(await connection.call('orchestrator.giveRole', { token, sessionId: worker.sessionId, role: 'orchestrator', sendTemplate: true })).toMatchObject({
+      roleName: 'orchestrator',
+      template: 'started',
+    });
+    await settled();
+    const [heading] = sentBy(lead.agent, '|').split('|');
+    expect(await lastAnswer()).toMatch(/^Done: /);
+    expect(await lastAnswer()).toContain(`${heading}Orchestrate this zone's open issues`);
+    // Never to itself: refused before the role changes.
+    await expect(connection.call('orchestrator.giveRole', { token, sessionId: lead.agent.sessionId, role: 'reviewer', sendTemplate: true })).rejects.toMatchObject({
+      code: RPC_ERROR.invalidParams,
+    });
+    // To one the user started by hand as to any other.
+    const theirs = await userAgent(setup.client, setup.other.id, 'theirs');
+    expect(await connection.call('orchestrator.giveRole', { token, sessionId: theirs.sessionId, role: 'reviewer', sendTemplate: true })).toMatchObject({
+      role: 'reviewer',
+    });
+    const roles = new Map((await setup.client.call('agent.list')).map((agent) => [agent.sessionId, agent.role]));
+    expect([roles.get(lead.agent.sessionId), roles.get(theirs.sessionId)]).toEqual([null, 'reviewer']);
+  });
+
+  it('refuses a role’s template it can’t send before the role changes, and logs the role refused', async () => {
+    const setup = await orchestrateDaemon();
+    const lead = await agentSide(setup, setup.zone.id);
+    const worker = await crewAgent(setup, { zoneId: setup.zone.id, name: 'worker', prompt: 'Print your board identity' }, lead);
+    await setup.client.call('agent.stop', { sessionId: worker.sessionId });
+    await untilAgent(setup.recorder, worker.sessionId, (seen) => seen.endedAt !== null);
+
+    await expect(setup.client.call('orchestrator.giveRole', { sessionId: worker.sessionId, role: 'implementer', sendTemplate: true })).rejects.toMatchObject({
+      code: RPC_ERROR.invalidParams,
+      message: 'worker has ended',
+    });
+    expect((await setup.client.call('agent.list')).find((agent) => agent.sessionId === worker.sessionId)).toMatchObject({ role: null });
+    const [line] = await setup.client.call('orchestrator.activity', { limit: 1 });
+    expect(line).toMatchObject({ action: 'role', outcome: 'refused', targetName: 'worker' });
+    // The role alone still changes: nothing is sent.
+    expect(await setup.client.call('orchestrator.giveRole', { sessionId: worker.sessionId, role: 'implementer' })).toMatchObject({ role: 'implementer' });
+  });
+
+  it('queues a role’s template for an agent mid-turn, and it is its next prompt once that turn ends', async () => {
+    const setup = await orchestrateDaemon();
+    const { token, connection } = await agentSide(setup, setup.zone.id);
+    const busy = await connection.call('orchestrator.spawn', { token, zoneId: setup.zone.id, name: 'busy', prompt: 'Work slowly' });
+    await setup.client.call('session.attach', { sessionId: busy.sessionId });
+    await untilAgent(setup.recorder, busy.sessionId, (seen) => seen.state === 'running');
+
+    expect(await connection.call('orchestrator.giveRole', { token, sessionId: busy.sessionId, role: 'implementer', sendTemplate: true })).toMatchObject({
+      role: 'implementer',
+      template: 'queued-after-turn',
+    });
+    await connection.call('orchestrator.wait', { token, sessionIds: [busy.sessionId] });
+    const prompts = setup.recorder.events.filter(
+      (event): event is HookEvent => event.type === 'hook' && event.sessionId === busy.sessionId && event.event === 'UserPromptSubmit',
+    );
+    expect(prompts.map((event) => String(event.payload.prompt))).toEqual([expect.stringContaining('Work slowly'), expect.stringContaining('You are the implementer for none.')]);
+  });
+
+  it('lets an agent make itself its zone’s orchestrator, and give any role to any agent, the user’s own too', async () => {
     const setup = await orchestrateDaemon();
     const { agent: me, token, connection } = await agentSide(setup, setup.zone.id);
 
@@ -747,13 +903,10 @@ describe('steering a turn', () => {
     const elsewhere = await userAgent(setup.client, setup.other.id, 'elsewhere');
     expect(await setup.client.call('orchestrator.giveRole', { sessionId: elsewhere.sessionId, role: 'orchestrator' })).toMatchObject({ roleName: 'orchestrator' });
 
-    // One the user started, refused in plain words, and the user sees it tried.
-    await expect(connection.call('orchestrator.giveRole', { token, sessionId: elsewhere.sessionId, role: 'reviewer' })).rejects.toMatchObject({
-      code: BOARD_ERROR.outOfScope,
-      message: expect.stringContaining('elsewhere is one the user started by hand'),
-    });
+    // An agent may too, and the user sees it done.
+    expect(await connection.call('orchestrator.giveRole', { token, sessionId: elsewhere.sessionId, role: 'reviewer' })).toMatchObject({ role: 'reviewer' });
     const [line] = await setup.client.call('orchestrator.activity', { limit: 1 });
-    expect(line).toMatchObject({ action: 'role', outcome: 'refused', targetName: 'elsewhere', detail: 'reviewer' });
+    expect(line).toMatchObject({ action: 'role', outcome: 'done', targetName: 'elsewhere', detail: 'reviewer' });
   });
 
   it('never types to an agent waiting mid-turn on the user’s answer to its question', async () => {
@@ -823,12 +976,10 @@ describe('steering a turn', () => {
     await expect(zone.connection.call('orchestrator.send', { token: zone.token, sessionId: board.agent.sessionId, text: 'Carry on' })).resolves.toBeDefined();
     await expect(board.connection.call('orchestrator.send', { token: board.token, sessionId: zone.agent.sessionId, text: 'Carry on' })).resolves.toBeDefined();
     expect((await plain.connection.call('orchestrator.wait', { token: plain.token, sessionIds: [zone.agent.sessionId, board.agent.sessionId] })).timedOut).toBe(false);
-    await expect(plain.connection.call('orchestrator.close', { token: plain.token, sessionId: zone.agent.sessionId })).resolves.toMatchObject({ sessionId: zone.agent.sessionId });
-    // But none the user started by hand, the one that started them among them.
-    await expect(board.connection.call('orchestrator.interrupt', { token: board.token, sessionId: starter.agent.sessionId })).rejects.toMatchObject({
-      code: BOARD_ERROR.outOfScope,
-      message: expect.stringMatching(/started by hand/),
-    });
+    await expect(plain.connection.call('orchestrator.close', { token: plain.token, sessionId: zone.agent.sessionId })).resolves.toBeNull();
+    expect((await setup.client.call('agent.list')).some((each) => each.sessionId === zone.agent.sessionId)).toBe(false);
+    // And the one the user started by hand that started them.
+    await expect(board.connection.call('orchestrator.read', { token: board.token, sessionId: starter.agent.sessionId })).resolves.toBeDefined();
   });
 
   it('starts no agent from a base whose project config differs from the repo’s HEAD', async () => {
@@ -968,23 +1119,107 @@ describe('a send to an agent mid-turn', () => {
     });
   });
 
-  it('is kept as not delivered, for Resend, when the daemon shuts down before its turn ends', async () => {
+  it('is kept over a daemon restart, flags nobody, and is typed once after the agent is resumed', async () => {
     const dataDir = tempDataDir();
-    const setup = await orchestrateDaemon({ dataDir });
-    const { token, connection } = await agentSide(setup, setup.zone.id);
+    const home = tempDataDir();
+    const setup = await orchestrateDaemon({ dataDir, home });
+    const { agent: me, token, connection } = await agentSide(setup, setup.zone.id);
     const busy = await crewAgent(setup, { zoneId: setup.zone.id, name: 'busy lead', prompt: 'Work slowly' });
     await untilAgent(setup.recorder, busy.sessionId, (seen) => seen.state === 'running');
     await connection.call('orchestrator.send', { token, sessionId: busy.sessionId, text: 'Morning report' });
     await setup.daemon.stop();
 
-    const again = await startOrchestrateDaemon({ dataDir });
+    const again = await startOrchestrateDaemon({ dataDir, home });
     const client = await connectTestClient(again);
-    expect((await client.call('agent.list')).find((agent) => agent.sessionId === busy.sessionId)).toMatchObject({
-      messagesWaiting: 0,
-      undelivered: [{ what: 'A message', text: expect.stringMatching(/^⟨send from .*⟩ Morning report/), reason: 'the daemon shut down before its turn ended' }],
-      flag: { to: 'user', reason: expect.stringMatching(/^A message was not delivered .*Resend/) },
-    });
-  });
+    const after = recordEvents(client);
+    const listed = async () => (await client.call('agent.list')).find((agent) => agent.sessionId === busy.sessionId);
+    // Nothing for the user to resend, and nothing waits while it is down.
+    expect(await listed()).toMatchObject({ messagesWaiting: 0, undelivered: [], flag: null });
+
+    await client.call('agent.resume', { sessionId: busy.sessionId });
+    await client.call('session.attach', { sessionId: busy.sessionId });
+    const prompts = () =>
+      after.events.flatMap((event) =>
+        event.type === 'hook' && event.sessionId === busy.sessionId && event.event === 'UserPromptSubmit' ? [event.payload.prompt] : [],
+      );
+    // Resumed, it carries on its turn first: the message is typed once that turn ends, and only once.
+    const expected = [expect.stringMatching(/^The app restarted/), expect.stringContaining(sentBy(me, 'Morning report'))];
+    await vi.waitFor(() => expect(prompts()).toEqual(expected), { timeout: 30_000 });
+    await vi.waitFor(async () => expect(await listed()).toMatchObject({ messagesWaiting: 0, undelivered: [], flag: null }));
+    expect(prompts()).toEqual(expected);
+  }, 60_000);
+
+  it('that never arrives goes back to the agent that sent it, typed at its prompt, and its receiver shows nothing', async () => {
+    const setup = await orchestrateDaemon();
+    const { agent: me, token, connection } = await agentSide(setup, setup.zone.id);
+    const busy = await crewAgent(setup, { zoneId: setup.zone.id, name: 'busy lead', prompt: 'Work slowly' });
+    await untilAgent(setup.recorder, busy.sessionId, (seen) => seen.state === 'running');
+    await connection.call('orchestrator.send', { token, sessionId: busy.sessionId, text: 'Morning report' });
+
+    await setup.client.call('agent.stop', { sessionId: busy.sessionId });
+
+    const told = (prompt: string) =>
+      prompt.startsWith(`[agent-board] Your message to busy lead (${refOf(busy)}) was not delivered: its session ended before its turn did.`) &&
+      prompt.includes('"Morning report"');
+    await vi.waitFor(
+      () =>
+        expect(
+          setup.recorder.events.some(
+            (event) => event.type === 'hook' && event.sessionId === me.sessionId && event.event === 'UserPromptSubmit' && told(String(event.payload.prompt)),
+          ),
+        ).toBe(true),
+      { timeout: 30_000 },
+    );
+    expect((await setup.client.call('agent.list')).find((agent) => agent.sessionId === busy.sessionId)).toMatchObject({ undelivered: [], flag: null });
+  }, 60_000);
+
+  /**
+   * An orchestrator at work, with `count` of its messages waiting for a busy lead whose session then ends: each goes
+   * back to it, folded into one notice waiting for its own turn to end.
+   */
+  async function lostWhileBusy(count: number) {
+    // Each later message plays the scenario too, so the sender can be set to work slowly after it has sent.
+    const setup = await orchestrateDaemon({ repeat: true });
+    const sender = await agentSide(setup, setup.zone.id);
+    // Its turn holds until its session ends: nothing waiting for it is typed meanwhile.
+    const busy = await crewAgent(setup, { zoneId: setup.zone.id, name: 'busy lead', prompt: 'Work until interrupted' });
+    await untilAgent(setup.recorder, busy.sessionId, (seen) => seen.state === 'thinking');
+    for (const text of ['Morning report', 'Noon report', 'Night report'].slice(0, count)) {
+      await sender.connection.call('orchestrator.send', { token: sender.token, sessionId: busy.sessionId, text });
+    }
+    const listed = async (sessionId: string) => (await setup.client.call('agent.list')).find((agent) => agent.sessionId === sessionId);
+    expect(await listed(busy.sessionId)).toMatchObject({ messagesWaiting: count });
+    await setup.client.call('agent.answer', { sessionId: sender.agent.sessionId, text: 'Work slowly' });
+    await untilAgent(setup.recorder, sender.agent.sessionId, (seen) => seen.state === 'running');
+    await setup.client.call('agent.stop', { sessionId: busy.sessionId });
+    await vi.waitFor(async () => expect(await listed(sender.agent.sessionId)).toMatchObject({ messagesWaiting: 1 }), { timeout: 10_000 });
+    const prompts = () =>
+      setup.recorder.events.flatMap((event) =>
+        event.type === 'hook' && event.sessionId === sender.agent.sessionId && event.event === 'UserPromptSubmit' ? [String(event.payload.prompt)] : [],
+      );
+    return { setup, sender, busy, listed, prompts };
+  }
+
+  it('that never arrive go back as one notice that counts them, saying to restart the agent first', async () => {
+    const { busy, prompts } = await lostWhileBusy(3);
+    const notices = () => prompts().filter((prompt) => prompt.startsWith('[agent-board]'));
+    await vi.waitFor(() => expect(notices()).toHaveLength(1), { timeout: 30_000 });
+    expect(notices()[0]).toMatch(
+      new RegExp(`^\\[agent-board\\] Your 3 messages to busy lead \\(${refOf(busy)}\\) were not delivered: .*"Night report"\\nRestart it with \`agent-board restart ${refOf(busy)}\``),
+    );
+  }, 60_000);
+
+  it('that never arrives is not told of once its sender sends that agent another', async () => {
+    const { setup, sender, busy, listed, prompts } = await lostWhileBusy(1);
+    await setup.client.call('agent.resume', { sessionId: busy.sessionId });
+    await untilAgent(setup.recorder, busy.sessionId, (seen) => seen.endedAt === null);
+    await sender.connection.call('orchestrator.send', { token: sender.token, sessionId: busy.sessionId, text: 'Evening report' });
+    expect(await listed(sender.agent.sessionId)).toMatchObject({ messagesWaiting: 0 });
+    // Its turn ends with nothing typed after it.
+    await vi.waitFor(() => expect(setup.recorder.screenText(sender.agent.sessionId)).toContain('Slow work done.'), { timeout: 30_000 });
+    await untilAgent(setup.recorder, sender.agent.sessionId, (seen) => seen.state !== 'running');
+    expect(prompts().filter((prompt) => prompt.startsWith('[agent-board]'))).toEqual([]);
+  }, 60_000);
 });
 
 describe("the daemon's log of an orchestrator ending or interrupting an agent", () => {
@@ -1025,6 +1260,7 @@ describe("the daemon's log of an orchestrator ending or interrupting an agent", 
     await lead.connection.call('orchestrator.close', { token: lead.token, sessionId: worker.sessionId });
 
     expect(await logged(new RegExp(`^claude session ${worker.sessionId} .* exited `))).toMatch(
+      // A close ends the agent itself, before it looks for unsaved work and deletes it.
       new RegExp(`, ended by the daemon for orchestrator ${lead.agent.name}'s close \\(agent:${lead.agent.sessionId}\\)$`),
     );
   });
@@ -1219,16 +1455,16 @@ describe('an orchestrator agent, over the board MCP and CLI', () => {
 
     await setup.recorder.waitForText(lead.sessionId, 'The worker is done and closed.');
     const screen = setup.recorder.screenText(lead.sessionId).replace(/\r/g, '');
-    const worker = (await setup.client.call('agent.list')).find((agent) => agent.name === 'worker')!;
-    const ref = `agent:${worker.sessionId.slice(0, 4)}`;
-    expect(worker).toMatchObject({ spawnedBy: lead.sessionId, zoneId: setup.zone.id, state: 'done' });
+    const log = await setup.client.call('orchestrator.activity', { orchestratorId: lead.sessionId });
+    expect(log.map(({ action, outcome }) => `${action} ${outcome}`)).toEqual(['close done', 'send done', 'spawn done']);
+    const workerId = log.at(-1)!.targetId!;
+    const ref = `agent:${workerId.slice(0, 4)}`;
     expect(screen).toContain(`Started ${ref}  worker  [`);
     expect(screen).toContain('# Handover\n\nThe work is done.');
     expect(screen).toContain(`Done: ${sentBy(lead, 'Also add a test')}.`);
-    expect(screen).toContain(`Closed ${ref} worker: its session ended`);
-
-    const log = await setup.client.call('orchestrator.activity', { orchestratorId: lead.sessionId });
-    expect(log.map(({ action, outcome }) => `${action} ${outcome}`)).toEqual(['close done', 'send done', 'spawn done']);
+    // Its handover is the board's own file, so nothing stays: its tile, worktree and branch go.
+    expect(screen).toContain(`Closed ${ref} worker and took its tile off the board, with its worktree and branch`);
+    expect((await setup.client.call('agent.list')).some((agent) => agent.sessionId === workerId)).toBe(false);
   });
 });
 
@@ -1236,7 +1472,7 @@ describe('agent-board mcp for an orchestrator', () => {
   /** What the board MCP offers an agent's live session: every tool, the control tools among them. */
   const ALL_TOOLS = [
     'whoami', 'board', 'usage', 'connections', 'handoff', 'ask', 'present_plan', 'show_doc', 'set_status', 'needs_you', 'open_pr', 'record_pr', 'record_doc', 'pin', 'unpin', 'steps_new', 'steps_read', 'steps_update', 'memory_new', 'memory_read', 'memory_update', 'queue_new', 'queue_read', 'queue_update', 'remind', 'remind_read', 'remind_update', 'set_page', 'clock_add', 'clock_set', 'save_clock_template', 'list_clock_templates', 'remove_clock_template', 'new_agent', 'send', 'wait', 'read', 'interrupt', 'set_effort', 'give_role', 'continue_on_credits', 'restart', 'pause', 'wake', 'add_edge', 'list_edges', 'remove_edge', 'move', 'arrange', 'zone_layout', 'map', 'zone_screenshot', 'add_note',
-    'edit_note', 'remove_note', 'add_shape', 'add_diagram', 'export_diagram', 'edit_shape', 'remove_shape', 'connect', 'edit_connector', 'remove_connector', 'add_schedule', 'list_schedules', 'remove_schedule', 'prefabs', 'roles', 'set_role', 'remove_role', 'close', 'ask_to_remove', 'handover',
+    'edit_note', 'remove_note', 'pass_note', 'add_shape', 'add_diagram', 'export_diagram', 'edit_shape', 'remove_shape', 'connect', 'edit_connector', 'remove_connector', 'add_schedule', 'list_schedules', 'remove_schedule', 'prefabs', 'roles', 'set_role', 'remove_role', 'close', 'ask_to_remove', 'handover',
   ];
 
   it('tells every live agent it may act on the board, and lists the control tools to each', async () => {
@@ -1471,16 +1707,14 @@ describe('restarting an ended agent', () => {
     expect(agent.earlierConversations).toEqual([]);
   }, 30_000);
 
-  it('refuses a fresh restart of an agent the user started by hand', async () => {
+  it('restarts an agent the user started by hand fresh, as any other', async () => {
     const setup = await orchestrateDaemon();
     const { token, connection } = await agentSide(setup, setup.zone.id);
     const elsewhere = await userAgent(setup.client, setup.other.id, 'elsewhere');
     await setup.client.call('agent.stop', { sessionId: elsewhere.sessionId });
-    await expect(connection.call('orchestrator.restart', { token, sessionId: elsewhere.sessionId, fresh: true })).rejects.toMatchObject({
-      code: BOARD_ERROR.outOfScope,
-    });
-    expect((await setup.client.call('agent.list')).find((each) => each.sessionId === elsewhere.sessionId)!.earlierConversations).toEqual([]);
-  });
+    await untilAgent(setup.recorder, elsewhere.sessionId, (seen) => seen.endedAt !== null);
+    await expect(connection.call('orchestrator.restart', { token, sessionId: elsewhere.sessionId, fresh: true })).resolves.toMatchObject({ endedAt: null });
+  }, 30_000);
 
   it('restarts an agent stopped by a restart of agent-board, carrying on its conversation', async () => {
     const dataDir = tempDataDir();
@@ -1527,17 +1761,13 @@ describe('restarting an ended agent', () => {
     expect(line).toMatchObject({ action: 'restart', outcome: 'refused' });
   }, 30_000);
 
-  it('refuses an agent the user started by hand, a running one and itself, and logs each refusal', async () => {
+  it('restarts an agent the user started by hand; refuses a running one and itself, and logs each refusal', async () => {
     const setup = await orchestrateDaemon();
     const { agent: me, token, connection } = await agentSide(setup, setup.zone.id);
     const elsewhere = await userAgent(setup.client, setup.other.id, 'elsewhere');
     const running = await crewAgent(setup, { zoneId: setup.zone.id, name: 'running' });
     await setup.client.call('agent.stop', { sessionId: elsewhere.sessionId });
 
-    await expect(connection.call('orchestrator.restart', { token, sessionId: elsewhere.sessionId })).rejects.toMatchObject({
-      code: BOARD_ERROR.outOfScope,
-      message: expect.stringMatching(/started by hand/),
-    });
     await expect(connection.call('orchestrator.restart', { token, sessionId: running.sessionId })).rejects.toMatchObject({
       code: RPC_ERROR.invalidParams,
       message: expect.stringContaining('still running'),
@@ -1546,12 +1776,13 @@ describe('restarting an ended agent', () => {
       code: BOARD_ERROR.outOfScope,
     });
 
-    expect((await setup.client.call('agent.list')).find((each) => each.sessionId === elsewhere.sessionId)!.endedAt).not.toBeNull();
+    await untilAgent(setup.recorder, elsewhere.sessionId, (seen) => seen.endedAt !== null);
+    await expect(connection.call('orchestrator.restart', { token, sessionId: elsewhere.sessionId })).resolves.toMatchObject({ endedAt: null });
     const log = await setup.client.call('orchestrator.activity', { orchestratorId: me.sessionId });
     expect(log.map(({ action, outcome, targetName }) => `${action} ${outcome} ${targetName}`)).toEqual([
+      'restart done elsewhere',
       `restart refused ${me.name}`,
       'restart refused running',
-      'restart refused elsewhere',
     ]);
   });
 });
@@ -1599,9 +1830,8 @@ describe('pausing and waking an agent', () => {
     expect(await mcp.callTool('pause', { agent: ref })).toMatchObject({ isError: false, text: expect.stringMatching(/^Paused agent:/) });
     before = setup.recorder.events.length;
     expect(await mcp.callTool('send', { agent: ref, text: 'Also add a test' })).toMatchObject({ isError: false });
-    // The lead is one the user started by hand, which it may not message unprompted: so it is told it may answer it.
     expect((await hookAfter(setup, before, worker.sessionId, 'UserPromptSubmit')).payload).toMatchObject({
-      prompt: `${markSender('send', lead.agent.name, refOf(lead.agent), 'Also add a test')}\n\n[agent-board] From ${lead.agent.name} (agent:${lead.agent.sessionId.slice(0, 8)}), who you may answer with \`agent-board send agent:${lead.agent.sessionId.slice(0, 8)} -- '…'\`.`,
+      prompt: markSender('send', lead.agent.name, refOf(lead.agent), 'Also add a test'),
     });
 
     const log = await setup.client.call('orchestrator.activity', { orchestratorId: lead.agent.sessionId });
@@ -1652,7 +1882,7 @@ describe('pausing and waking an agent', () => {
     ]);
   }, 30_000);
 
-  it('refuses to wake an agent that is not paused, or to pause one the user started by hand', async () => {
+  it('refuses to wake an agent that is not paused, and pauses one the user started by hand', async () => {
     const setup = await orchestrateDaemon();
     const lead = await agentSide(setup, setup.zone.id);
     const worker = await crewAgent(setup, { zoneId: setup.zone.id, name: 'worker' });
@@ -1662,15 +1892,13 @@ describe('pausing and waking an agent', () => {
       code: RPC_ERROR.invalidParams,
       message: 'worker is not paused',
     });
-    await expect(lead.connection.call('orchestrator.pause', { token: lead.token, sessionId: elsewhere.sessionId })).rejects.toMatchObject({
-      code: BOARD_ERROR.outOfScope,
-      message: expect.stringMatching(/started by hand/),
-    });
-  });
+    await untilAgentAfter(setup, 0, elsewhere.sessionId, (agent) => agent.state === 'idle' || agent.state === 'waiting');
+    expect((await lead.connection.call('orchestrator.pause', { token: lead.token, sessionId: elsewhere.sessionId })).hibernated).toMatchObject({ by: lead.agent.name });
+  }, 30_000);
 });
 
 describe('a crew member and the agent that started it', () => {
-  it('messages it, though the user started it, and does nothing more to it or to another the user started', async () => {
+  it('messages it and another the user started, though the user started them', async () => {
     const setup = await orchestrateDaemon();
     const lead = await agentSide(setup, setup.zone.id);
     const other = await userAgent(setup.client, setup.zone.id, 'other');
@@ -1678,19 +1906,9 @@ describe('a crew member and the agent that started it', () => {
 
     await member.connection.call('orchestrator.send', { token: member.token, sessionId: lead.agent.sessionId, text: 'The menu scrolls now' });
     await setup.recorder.waitForText(lead.agent.sessionId, 'The menu scrolls now');
-    for (const call of [
-      { sessionId: lead.agent.sessionId, submit: true },
-      { sessionId: lead.agent.sessionId, clear: true },
-      { sessionId: other.sessionId, text: 'Hello' },
-    ]) {
-      await expect(member.connection.call('orchestrator.send', { token: member.token, ...call })).rejects.toMatchObject({
-        code: BOARD_ERROR.outOfScope,
-        message: expect.stringMatching(/started by hand/),
-      });
-    }
-    await expect(member.connection.call('orchestrator.interrupt', { token: member.token, sessionId: lead.agent.sessionId })).rejects.toMatchObject({
-      code: BOARD_ERROR.outOfScope,
-    });
+    await setup.client.call('session.attach', { sessionId: other.sessionId });
+    await member.connection.call('orchestrator.send', { token: member.token, sessionId: other.sessionId, text: 'Hello there' });
+    await setup.recorder.waitForText(other.sessionId, 'Hello there');
   });
 });
 
@@ -1736,7 +1954,7 @@ describe('handing a crew over', () => {
     expect((await setup.client.call('agent.list')).map((each) => each.name)).not.toContain('far');
   });
 
-  it('never hands a crew to an agent the user started by hand, whose prompt its needs-you would reach', async () => {
+  it('hands a crew to an agent the user started by hand, as to any other', async () => {
     const setup = await orchestrateDaemon();
     const boss = await agentSide(setup, setup.zone.id);
     const mine = await userAgent(setup.client, setup.zone.id, 'mine');
@@ -1744,17 +1962,12 @@ describe('handing a crew over', () => {
     await boss.connection.call('orchestrator.spawn', { token: boss.token, name: 'one' });
     await deputy.connection.call('orchestrator.spawn', { token: deputy.token, name: 'two' });
 
-    // A hand-started agent may not hand its crew to another, and nor may one an agent started.
+    // A hand-started agent hands its crew to another, and so does one an agent started.
     for (const [side, from] of [[boss, boss.agent], [deputy, deputy.agent]] as const) {
-      await expect(side.connection.call('orchestrator.handover', { token: side.token, from: from.sessionId, to: mine.sessionId })).rejects.toMatchObject({
-        code: BOARD_ERROR.outOfScope,
-        message: expect.stringContaining('mine is one the user started by hand'),
-      });
+      await side.connection.call('orchestrator.handover', { token: side.token, from: from.sessionId, to: mine.sessionId });
     }
     const crewOf = async () => Object.fromEntries((await setup.client.call('agent.list')).map((each) => [each.name, each.spawnedBy]));
-    expect(await crewOf()).toMatchObject({ one: boss.agent.sessionId, two: deputy.agent.sessionId });
-    // The user may.
-    expect((await setup.client.call('orchestrator.handover', { from: boss.agent.sessionId, to: mine.sessionId })).crew.map((each) => each.name)).toContain('one');
+    expect(await crewOf()).toMatchObject({ one: mine.sessionId, two: mine.sessionId });
   });
 
   it('never hands a crew to an agent in it, which would then lead the agent that leads it', async () => {
@@ -1812,10 +2025,10 @@ describe('handing a crew over', () => {
 
       await taker.connection.call('orchestrator.close', { token: taker.token, sessionId: left.sessionId, remove: true });
       expect(await listed(setup, left.sessionId)).toBeUndefined();
-      // The user's own agent stays out of its reach.
+      // The user's own agent it may remove only by asking.
       await expect(taker.connection.call('orchestrator.close', { token: taker.token, sessionId: mine.sessionId, remove: true })).rejects.toMatchObject({
         code: BOARD_ERROR.outOfScope,
-        message: expect.stringContaining('started by hand'),
+        message: expect.stringContaining('--remove --ask'),
       });
       // Nothing of it is left to hand over.
       await expect(taker.connection.call('orchestrator.handover', { token: taker.token, from: gone.agent.sessionId, to: taker.agent.sessionId })).rejects.toMatchObject({
@@ -1911,7 +2124,7 @@ describe('edges an orchestrator makes', () => {
     expect((await setup.client.call('flowEdge.list')).map(({ id }) => id)).toEqual([back.id]);
   });
 
-  it('refuses an end the user started by hand, either way, and logs it', async () => {
+  it('joins an end the user started by hand, either way, and logs it', async () => {
     const setup = await orchestrateDaemon();
     const { agent: me, token, connection } = await agentSide(setup, setup.zone.id);
     const mine = await userAgent(setup.client, setup.zone.id, 'mine');
@@ -1923,17 +2136,14 @@ describe('edges an orchestrator makes', () => {
       [mine.sessionId, near.sessionId],
       [near.sessionId, mine.sessionId],
     ] as const) {
-      await expect(connection.call('orchestrator.addEdge', { token, from, to })).rejects.toMatchObject({
-        code: BOARD_ERROR.outOfScope,
-        message: expect.stringMatching(/started by hand/),
-      });
+      await connection.call('orchestrator.addEdge', { token, from, to, trigger: 'manual' });
     }
-    // Agents another agent started, in any zone, and itself, it may join.
+    // Agents another agent started, in any zone, and itself, it may join too.
     await connection.call('orchestrator.addEdge', { token, from: near.sessionId, to: far.sessionId });
     await connection.call('orchestrator.addEdge', { token, from: far.sessionId, to: me.sessionId });
 
     const log = await setup.client.call('orchestrator.activity', { orchestratorId: me.sessionId });
-    expect(log.map(({ outcome }) => outcome)).toEqual(['done', 'done', 'refused', 'refused']);
+    expect(log.map(({ outcome }) => outcome)).toEqual(['done', 'done', 'done', 'done']);
   });
 
   it('never approves a gate or script it puts on an edge, nor sends, drops or changes an edge', async () => {
@@ -2352,7 +2562,7 @@ describe('an orchestrator setting its crew’s status lines', () => {
     });
     await expect(lead.connection.call('orchestrator.setStatus', { token: lead.token, sessionId: mine.sessionId, summary: 'No' })).rejects.toMatchObject({
       code: BOARD_ERROR.outOfScope,
-      message: expect.stringMatching(/started by hand/),
+      message: expect.stringMatching(/not in your crew/),
     });
     for (const each of [outsider, mine]) expect((await setup.client.call('agent.list')).find((agent) => agent.sessionId === each.sessionId)!.status).toBeNull();
 
@@ -3194,79 +3404,49 @@ describe('agents recording their own sidebar', () => {
 describe('replying to an agent that messaged it', () => {
   /** Waits, as the user, until each agent's turn has ended: a message is sent only between turns. */
   const settled = (setup: Setup, ...sessionIds: string[]) => setup.client.call('orchestrator.wait', { sessionIds });
+  const replied = (from: Agent, text: string) => expect.stringMatching(new RegExp(`^${escaped(markSender('reply', from.name, refOf(from), text))}`));
+  const sent = (from: Agent, text: string) => expect.stringMatching(new RegExp(`^${escaped(markSender('send', from.name, refOf(from), text))}`));
 
-  it('lets an agent answer one the user started by hand only once that one messaged it, with send alone', async () => {
+  it('marks an answer to one the user started by hand as a reply, though it may message it unasked too', async () => {
     const setup = await orchestrateDaemon();
-    // The captain and the bystander are the user's own: no agent steers them.
     const captain = await agentSide(setup, setup.other.id);
     const lead = await crewSide(setup, setup.zone.id);
-    const bystander = await agentSide(setup, setup.other.id);
-    await settled(setup, captain.agent.sessionId, lead.agent.sessionId, bystander.agent.sessionId);
+    await settled(setup, captain.agent.sessionId, lead.agent.sessionId);
     const reply = () => lead.connection.call('orchestrator.send', { token: lead.token, sessionId: captain.agent.sessionId, text: 'The zone is green' });
 
-    await expect(reply()).rejects.toMatchObject({ code: BOARD_ERROR.outOfScope, message: expect.stringMatching(/started by hand/) });
+    // Unasked, it is a message like any other.
+    await expect(reply()).resolves.toMatchObject({ typed: sent(lead.agent, 'The zone is green') });
+    await settled(setup, captain.agent.sessionId);
 
     const asked = await captain.connection.call('orchestrator.send', { token: captain.token, sessionId: lead.agent.sessionId, text: 'How is the zone?' });
-    // The message says who sent it, and how to answer.
-    expect(asked.typed).toMatch(new RegExp(`^${escaped(sentBy(captain.agent, 'How is the zone?'))}\n\n\\[agent-board\\] From `));
-    await setup.recorder.waitForText(lead.agent.sessionId, `agent-board send ${refOf(captain.agent)}`);
+    // It answers the lead's message, so it is a reply too.
+    expect(asked.typed).toMatch(new RegExp(`^${escaped(markSender('reply', captain.agent.name, refOf(captain.agent), 'How is the zone?'))}`));
+    await settled(setup, lead.agent.sessionId);
 
     // Its answer is marked as a reply.
-    await expect(reply()).resolves.toMatchObject({
-      sessionId: captain.agent.sessionId,
-      typed: expect.stringMatching(new RegExp(`^${escaped(markSender('reply', lead.agent.name, refOf(lead.agent), 'The zone is green'))}`)),
-    });
+    await expect(reply()).resolves.toMatchObject({ sessionId: captain.agent.sessionId, typed: replied(lead.agent, 'The zone is green') });
     const [line] = await setup.client.call('orchestrator.activity', { limit: 1 });
     expect(line).toMatchObject({ orchestratorId: lead.agent.sessionId, action: 'send', outcome: 'done', targetId: captain.agent.sessionId });
-
-    // Only to the agent that messaged it.
-    await expect(lead.connection.call('orchestrator.send', { token: lead.token, sessionId: bystander.agent.sessionId, text: 'Hello' })).rejects.toMatchObject({
-      code: BOARD_ERROR.outOfScope,
-    });
-    // And only a message: nothing else reaches it.
-    const others = [
-      lead.connection.call('orchestrator.interrupt', { token: lead.token, sessionId: captain.agent.sessionId }),
-      lead.connection.call('orchestrator.restart', { token: lead.token, sessionId: captain.agent.sessionId }),
-      lead.connection.call('orchestrator.close', { token: lead.token, sessionId: captain.agent.sessionId }),
-      lead.connection.call('orchestrator.read', { token: lead.token, sessionId: captain.agent.sessionId }),
-      lead.connection.call('orchestrator.wait', { token: lead.token, sessionIds: [captain.agent.sessionId] }),
-      lead.connection.call('orchestrator.addEdge', { token: lead.token, from: lead.agent.sessionId, to: captain.agent.sessionId }),
-      // Nor what sits at its prompt.
-      lead.connection.call('orchestrator.send', { token: lead.token, sessionId: captain.agent.sessionId, submit: true }),
-      lead.connection.call('orchestrator.send', { token: lead.token, sessionId: captain.agent.sessionId, clear: true }),
-    ];
-    for (const call of others) await expect(call).rejects.toMatchObject({ code: BOARD_ERROR.outOfScope });
   });
 
-  it('answers with the CLI, as the hint says, and reaches no other agent the user started', async () => {
+  it('answers with the CLI, and over the MCP', async () => {
     const setup = await orchestrateDaemon();
     const captain = await agentSide(setup, setup.other.id);
     const plain = await crewSide(setup, setup.zone.id);
-    const neighbour = await userAgent(setup.client, setup.zone.id, 'neighbour');
-    await settled(setup, captain.agent.sessionId, plain.agent.sessionId, neighbour.sessionId);
+    await settled(setup, captain.agent.sessionId, plain.agent.sessionId);
 
     await captain.connection.call('orchestrator.send', { token: captain.token, sessionId: plain.agent.sessionId, text: 'Report back' });
-    await setup.recorder.waitForText(plain.agent.sessionId, `agent-board send ${refOf(captain.agent)}`);
-    await settled(setup, captain.agent.sessionId);
+    await settled(setup, plain.agent.sessionId, captain.agent.sessionId);
     let out = '';
     const io = { out: (text: string) => (out += text), err: (text: string) => (out += text), env: { [BOARD_SOCKET_ENV]: setup.daemon.socketPath, [BOARD_TOKEN_ENV]: plain.token } };
     expect(await runBoardCommand('send', [refOf(captain.agent), '--', 'And the tests pass'], io)).toBe(0);
     expect(out).toMatch(/^Sent to /);
-    await expect(plain.connection.call('orchestrator.send', { token: plain.token, sessionId: neighbour.sessionId, text: 'Hello' })).rejects.toMatchObject({
-      code: BOARD_ERROR.outOfScope,
-      message: expect.stringMatching(/started by hand/),
-    });
-    await expect(plain.connection.call('orchestrator.interrupt', { token: plain.token, sessionId: captain.agent.sessionId })).rejects.toMatchObject({
-      code: BOARD_ERROR.outOfScope,
-    });
-    for (const draft of [{ submit: true }, { clear: true }]) {
-      await expect(plain.connection.call('orchestrator.send', { token: plain.token, sessionId: captain.agent.sessionId, ...draft })).rejects.toMatchObject({
-        code: BOARD_ERROR.outOfScope,
-      });
-    }
+    await settled(setup, captain.agent.sessionId);
+    const mcp = mcpAs(setup, plain.token);
+    expect(await mcp.callTool('send', { agent: refOf(captain.agent), text: 'The zone is green' })).toMatchObject({ isError: false });
   });
 
-  it('grants nothing for a message that was refused', async () => {
+  it('marks nothing a reply for a message that was refused', async () => {
     const setup = await orchestrateDaemon();
     const captain = await agentSide(setup, setup.other.id);
     const lead = await crewSide(setup, setup.zone.id);
@@ -3274,39 +3454,20 @@ describe('replying to an agent that messaged it', () => {
     await expect(captain.connection.call('orchestrator.send', { token: captain.token, sessionId: lead.agent.sessionId, text: '/config' })).rejects.toMatchObject({
       code: RPC_ERROR.invalidParams,
     });
-    await expect(lead.connection.call('orchestrator.send', { token: lead.token, sessionId: captain.agent.sessionId, text: 'Yes?' })).rejects.toMatchObject({
-      code: BOARD_ERROR.outOfScope,
+    await expect(lead.connection.call('orchestrator.send', { token: lead.token, sessionId: captain.agent.sessionId, text: 'Yes?' })).resolves.toMatchObject({
+      typed: sent(lead.agent, 'Yes?'),
     });
-  });
-
-  it('answers over the MCP as over the CLI', async () => {
-    const setup = await orchestrateDaemon();
-    const captain = await agentSide(setup, setup.other.id);
-    const lead = await crewSide(setup, setup.zone.id);
-    await settled(setup, captain.agent.sessionId, lead.agent.sessionId);
-    const mcp = mcpAs(setup, lead.token);
-    expect(await mcp.callTool('send', { agent: refOf(captain.agent), text: 'The zone is green' })).toMatchObject({ isError: true });
-
-    await captain.connection.call('orchestrator.send', { token: captain.token, sessionId: lead.agent.sessionId, text: 'How is the zone?' });
-    await setup.recorder.waitForText(lead.agent.sessionId, `agent-board send ${refOf(captain.agent)}`);
-    expect(await mcp.callTool('send', { agent: refOf(captain.agent), text: 'The zone is green' })).toMatchObject({ isError: false });
   });
 
   it("opens none to the sender's own crew, which answers in its turn's last message", async () => {
     const setup = await orchestrateDaemon();
     const lead = await agentSide(setup, setup.zone.id);
     const worker = await lead.connection.call('orchestrator.spawn', { token: lead.token, name: 'worker', prompt: 'Print your board identity' });
-    const workerSide = await agentSideOf(setup, worker.sessionId);
+    await agentSideOf(setup, worker.sessionId);
     await settled(setup, worker.sessionId, lead.agent.sessionId);
     await lead.connection.call('orchestrator.send', { token: lead.token, sessionId: worker.sessionId, text: 'Also add a test' });
     await setup.recorder.waitForText(worker.sessionId, `Done: ${sentBy(lead.agent, 'Also add a test')}.`);
     expect(setup.recorder.screenText(worker.sessionId)).not.toContain('agent-board send');
-    await settled(setup, lead.agent.sessionId);
-    // It may still message the agent that started it, as any crew member may, but nothing more.
-    await expect(workerSide.connection.call('orchestrator.send', { token: workerSide.token, sessionId: lead.agent.sessionId, submit: true })).rejects.toMatchObject({
-      code: BOARD_ERROR.outOfScope,
-      message: expect.stringMatching(/started by hand/),
-    });
   });
 
   it('lasts only its window from the message', async () => {
@@ -3317,8 +3478,8 @@ describe('replying to an agent that messaged it', () => {
     await captain.connection.call('orchestrator.send', { token: captain.token, sessionId: lead.agent.sessionId, text: 'How is the zone?' });
     await settled(setup, lead.agent.sessionId);
     await new Promise((done) => setTimeout(done, 1100));
-    await expect(lead.connection.call('orchestrator.send', { token: lead.token, sessionId: captain.agent.sessionId, text: 'Green' })).rejects.toMatchObject({
-      code: BOARD_ERROR.outOfScope,
+    await expect(lead.connection.call('orchestrator.send', { token: lead.token, sessionId: captain.agent.sessionId, text: 'Green' })).resolves.toMatchObject({
+      typed: sent(lead.agent, 'Green'),
     });
   });
 

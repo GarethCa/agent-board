@@ -98,6 +98,46 @@ export function cardSections(entries: readonly MemoryEntry[]): { pinned: MemoryE
   return { pinned: facts.filter((entry) => entry.pinned), docs: entries.filter((entry) => entry.file), facts: facts.filter((entry) => !entry.pinned) };
 }
 
+/** A memory card's sections, as it lists them. */
+export type MemorySectionKey = 'pinned' | 'docs' | 'facts';
+
+/**
+ * Which of a card's sections show open, with room for `fit` rows (a section's head is a row): in order, each opens
+ * that fits with the heads of the ones after it still in view, and the rest fold to their heads, as a steps card's do.
+ * One the user turned by hand (`turned`) stays as they left it, and the one that holds a new entry (`fresh`) opens
+ * unless they have turned it. With room for none, the first left to the rule stays
+ * open and scrolls, so the card is not all heads. Not measured yet (`fit` undefined), every one is open.
+ */
+export function openSections(
+  sections: readonly { key: MemorySectionKey; count: number }[],
+  fit: number | undefined,
+  turned: ReadonlyMap<MemorySectionKey, boolean> = new Map(),
+  fresh?: MemorySectionKey,
+): Set<MemorySectionKey> {
+  // The section a new entry just landed in opens, so the entry shows and flashes, unless the user has turned it since.
+  if (fresh !== undefined && !turned.has(fresh)) turned = turnedOpen(turned, fresh);
+  const free = sections.filter((section) => !turned.has(section.key));
+  const open = new Set(sections.filter((section) => turned.get(section.key) === true).map((section) => section.key));
+  if (fit === undefined) return new Set([...open, ...free.map((section) => section.key)]);
+  let room = fit - sections.reduce((rows, section) => rows + (turned.get(section.key) === true ? 1 + section.count : turned.has(section.key) ? 1 : 0), 0);
+  free.forEach((section, index) => {
+    const after = free.length - index - 1;
+    if (1 + section.count + after <= room) {
+      open.add(section.key);
+      room -= 1 + section.count;
+    } else room -= 1;
+  });
+  if (open.size === 0 && free.length > 0) open.add(free[0]!.key);
+  return open;
+}
+
+/** The sections the user turned, with `key` turned open: as a new entry lands in it, so the entry stays in sight. */
+export const turnedOpen = (turned: ReadonlyMap<MemorySectionKey, boolean>, key: MemorySectionKey): ReadonlyMap<MemorySectionKey, boolean> =>
+  turned.get(key) === true ? turned : new Map(turned).set(key, true);
+
+/** Where an entry typed in a card's add box goes: a fact, keyed or not, never pinned or a document. */
+export const ADDED_SECTION: MemorySectionKey = 'facts';
+
 const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
 

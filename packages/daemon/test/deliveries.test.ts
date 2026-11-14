@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { submittedText } from '../src/terminal-input.ts';
 import { drawRateLimitMenu, rateLimitMenuRows } from '@agent-board/fake-harness';
-import { createDeliveries, type DeliveryRow, type PromptNow } from '../src/deliveries.ts';
+import { createDeliveries, type DeliveryRow, type KeptWaiting, type PromptNow, type WaitingStore } from '../src/deliveries.ts';
 import { invalidParams } from '../src/params.ts';
 import type { AgentState, PermissionPrompt } from '../src/protocol.ts';
 import type { RunStart } from '../src/schedules.ts';
@@ -26,15 +26,34 @@ const flush = async () => {
   for (let tick = 0; tick < 20; tick += 1) await Promise.resolve();
 };
 
+/** A store of waiting messages in memory, as the daemon keeps them in its database: what outlives a restart. */
+function memoryStore(): WaitingStore & { rows: KeptWaiting[] } {
+  let last = 0;
+  const rows: KeptWaiting[] = [];
+  return {
+    rows,
+    add(sessionId, item) {
+      last += 1;
+      rows.push({ id: last, sessionId, ...item });
+      return last;
+    },
+    remove(id) {
+      const at = rows.findIndex((each) => each.id === id);
+      if (at !== -1) rows.splice(at, 1);
+    },
+    all: () => [...rows],
+  };
+}
+
 /**
  * Deliveries over the agents `rows`, on a fake clock, recording what is written, relaunched and announced. Each prompt
  * stands where `prompt` says.
  */
-function setup(rows: Row[], notReady?: string) {
+function setup(rows: Row[], notReady?: string, waiting?: WaitingStore) {
   const writes: [string, string][] = [];
   const relaunches: { sessionId: string; prompt: string | undefined; why: string; codexSessionId: string | null | undefined }[] = [];
   const announced: { sessionId: string; handingOff: boolean }[] = [];
-  /** What was handed back, never typed: `sessionId what: text (reason)`. */
+  /** What was handed back, never typed: `sessionId what: text (reason)`, and ` from <sender>` for an agent's. */
   const undelivered: string[] = [];
   /** What the user was told of messages given up on at a prompt, and of them going: `notSent`'s arguments. */
   const notSent: unknown[][] = [];
@@ -83,11 +102,13 @@ function setup(rows: Row[], notReady?: string) {
       return prompt.now;
     },
     announce: (sessionId) => void announced.push({ sessionId, handingOff: deliveries.isHandingOff(sessionId) }),
-    undelivered: (sessionId, what, text, reason) => void undelivered.push(`${sessionId} ${what}: ${text} (${reason})`),
+    undelivered: (sessionId, what, text, reason, from) =>
+      void undelivered.push(`${sessionId} ${what}: ${text} (${reason})${from === undefined ? '' : ` from ${from}`}`),
     notSent: (...args) => void notSent.push(args),
     log: () => {},
     clock,
     submitConfirmMs: 1_000,
+    ...(waiting === undefined ? {} : { waiting }),
   });
 
   /** Moves the fake clock on by `ms` a millisecond at a time, letting what waits on each timer run before the next. */
@@ -292,6 +313,41 @@ describe('deliveries', () => {
     expect(deliveries.queuedUntilUp('a')).toBe(0);
   });
 
+  it('keeps pressing Enter on a first prompt longer than on a message, waiting longer each time up to a cap, before calling it not sent', async () => {
+    const { deliveries, writes, advance, notSent } = setup([row('a')]);
+    deliveries.firstPrompt('a', 'Fix the tests', Promise.resolve(true));
+    // Typed, settled; then six presses, waiting 1, 2, 4, 8, then 10 and 10 seconds (the cap) for a turn to start.
+    await advance(2_000);
+    const presses = () => writes.filter(([, data]) => data === '\r').length;
+    expect(presses()).toBe(1);
+    await advance(1_000 + 2_000 + 4_000 + 8_000);
+    expect(presses()).toBe(5);
+    await advance(10_000);
+    expect(presses()).toBe(6);
+    expect(notSent).toEqual([]);
+    await advance(10_000);
+    expect(presses()).toBe(6);
+    expect(deliveries.unsent('a')).toBe('Its first prompt');
+    expect(notSent).toEqual([['a', 'Its first prompt', 'no turn started on it after 6 presses of Enter', false]]);
+  });
+
+  it('stops pressing Enter on a first prompt at once when its session ends, not after its wait', async () => {
+    const a = row('a');
+    const { deliveries, writes, advance, notSent } = setup([a]);
+    deliveries.firstPrompt('a', 'Fix the tests', Promise.resolve(true));
+    // Typed, settled, then pressed at 2, 3, 5 and 9 seconds: the fifth press would come after a 16 s wait.
+    await advance(2_000 + 1_000 + 2_000 + 4_000 + 1_000);
+    const presses = () => writes.filter(([, data]) => data === '\r').length;
+    expect(presses()).toBe(4);
+    expect(deliveries.isTypingFirst('a')).toBe(true);
+    a.ended_at = '2026-10-22T10:00:01Z';
+    deliveries.ended('a');
+    await advance(100);
+    expect(deliveries.isTypingFirst('a')).toBe(false);
+    expect(presses()).toBe(4);
+    expect(notSent).toEqual([]);
+  });
+
   it('holds what is sent to an agent launched with no first prompt until its session is up, then types it', async () => {
     const { deliveries, writes, land, advance } = setup([row('a'), row('from', { name: 'planner' })]);
     const { promise: up, resolve: comeUp } = Promise.withResolvers<boolean>();
@@ -412,7 +468,7 @@ describe('deliveries', () => {
     expect(await deliveries.answer('a', 'Also lint')).toEqual({ queued: true });
     comeUp(true);
     // No turn starts on it: Enter is pressed again while its prompt holds only it, then it is kept unsent.
-    await advance(30_000);
+    await advance(40_000);
     expect(deliveries.unsent('a')).toBe('Its first prompt');
     expect(writes.map(([, data]) => data)).not.toContain('Also lint');
     expect(undelivered).toEqual([`a A message: Also lint (a message typed at its prompt was never sent)`]);
@@ -1214,26 +1270,144 @@ describe('messages waiting for a turn to end', () => {
     expect(writes.filter(([, data]) => data === 'First')).toHaveLength(1);
   });
 
-  it('hands back the one being typed, with those behind it, when its session ends or the daemon closes, settling each once', async () => {
-    for (const end of ['session', 'daemon'] as const) {
-      const a = row('a');
-      const { deliveries, undelivered, land } = setup([a]);
-      const heard: string[] = [];
-      deliveries.queueAfterTurn('a', waiting('First', heard));
-      deliveries.queueAfterTurn('a', waiting('Second', heard));
-      deliveries.deliverAfterTurn('a');
-      if (end === 'session') {
-        a.ended_at = '2026-10-22T10:00:01Z';
-        deliveries.ended('a');
-      } else {
-        deliveries.handBackQueued();
-      }
-      await land('a');
-      const reason = end === 'session' ? 'its session ended before its turn did' : 'the daemon shut down before its turn ended';
-      expect(undelivered).toEqual([`a A message: First (${reason})`, `a A message: Second (${reason})`]);
-      expect(heard).toEqual(['First: typing', 'First: not started', 'Second: not started']);
-      expect(deliveries.waitingAfterTurn('a')).toBe(0);
-    }
+  it('hands back the one being typed, with those behind it, when its session ends, settling each once', async () => {
+    const a = row('a');
+    const { deliveries, undelivered, land } = setup([a]);
+    const heard: string[] = [];
+    deliveries.queueAfterTurn('a', waiting('First', heard));
+    deliveries.queueAfterTurn('a', waiting('Second', heard));
+    deliveries.deliverAfterTurn('a');
+    a.ended_at = '2026-10-22T10:00:01Z';
+    deliveries.ended('a');
+    await land('a');
+    const reason = 'its session ended before its turn did';
+    expect(undelivered).toEqual([`a A message: First (${reason})`, `a A message: Second (${reason})`]);
+    expect(heard).toEqual(['First: typing', 'First: not started', 'Second: not started']);
+    expect(deliveries.waitingAfterTurn('a')).toBe(0);
+  });
+
+  it('keeps every one in its store as the daemon shuts down, and the next daemon types them once the agent is ready', async () => {
+    const store = memoryStore();
+    const first = setup([row('a')], 'it is at work', store);
+    const heard: string[] = [];
+    first.deliveries.queueAfterTurn('a', { ...waiting('First', heard), from: 'lead' });
+    first.deliveries.queueAfterTurn('a', waiting('Second', heard));
+    expect(store.rows.map(({ sessionId, text, from }) => ({ sessionId, text, from }))).toEqual([
+      { sessionId: 'a', text: 'First', from: 'lead' },
+      { sessionId: 'a', text: 'Second', from: undefined },
+    ]);
+    first.deliveries.ended('a', true);
+    first.deliveries.handBackQueued();
+    first.closeDaemon();
+    expect(first.undelivered).toEqual([]);
+    expect(store.rows.map(({ text }) => text)).toEqual(['First', 'Second']);
+
+    const again = setup([row('a')], undefined, store);
+    expect(again.deliveries.waitingAfterTurn('a')).toBe(2);
+    again.deliveries.deliverAfterTurn('a');
+    await again.land('a');
+    again.deliveries.deliverAfterTurn('a');
+    await again.land('a');
+    expect(again.writes).toEqual([
+      ['a', 'First'],
+      ['a', '\r'],
+      ['a', 'Second'],
+      ['a', '\r'],
+    ]);
+    expect(again.deliveries.waitingAfterTurn('a')).toBe(0);
+    expect(store.rows).toEqual([]);
+  });
+
+  it('keeps no message whose text was typed as the daemon shut down, before its turn was seen: never typed twice', async () => {
+    const store = memoryStore();
+    const first = setup([row('a')], undefined, store);
+    const heard: string[] = [];
+    first.deliveries.queueAfterTurn('a', { ...waiting('First', heard), from: 'lead' });
+    first.deliveries.queueAfterTurn('a', waiting('Second', heard));
+    first.deliveries.deliverAfterTurn('a');
+    await flush();
+    first.deliveries.outputSeen('a');
+    await first.advance(150);
+    // Enter is pressed; the daemon shuts down before the turn it started is seen.
+    expect(first.writes).toEqual([
+      ['a', 'First'],
+      ['a', '\r'],
+    ]);
+    first.deliveries.ended('a', true);
+    first.closeDaemon();
+    await first.advance(10_000);
+    expect(first.undelivered).toEqual([]);
+    expect(store.rows.map(({ text }) => text)).toEqual(['Second']);
+
+    const again = setup([row('a')], undefined, store);
+    expect(again.deliveries.waitingAfterTurn('a')).toBe(1);
+    again.deliveries.deliverAfterTurn('a');
+    await again.land('a');
+    expect(again.writes).toEqual([
+      ['a', 'Second'],
+      ['a', '\r'],
+    ]);
+  });
+
+  it('keeps nothing in its store for an agent deleted meanwhile, nor one handed back', async () => {
+    const store = memoryStore();
+    const a = row('a');
+    const { deliveries } = setup([a, row('b')], 'it is at work', store);
+    deliveries.queueAfterTurn('a', waiting('First', []));
+    deliveries.queueAfterTurn('b', waiting('Second', []));
+    deliveries.forget('a');
+    expect(store.rows.map(({ text }) => text)).toEqual(['Second']);
+    expect(setup([row('b')], 'it is at work', store).deliveries.waitingAfterTurn('a')).toBe(0);
+
+    deliveries.ended('b');
+    expect(store.rows).toEqual([]);
+  });
+
+  it('hands back a message with the agent that sent it, and drops a board notice that could not be typed', async () => {
+    const a = row('a');
+    const { deliveries, undelivered, land } = setup([a], 'it is at work');
+    deliveries.queueAfterTurn('a', { ...waiting('From the lead', []), from: 'lead' });
+    deliveries.queueAfterTurn('a', { ...waiting('[agent-board] Your message to b was not delivered', []), about: 'b' });
+    a.ended_at = '2026-10-22T10:00:01Z';
+    deliveries.ended('a');
+    await land('a');
+    expect(undelivered).toEqual(['a A message: From the lead (its session ended before its turn did) from lead']);
+  });
+
+  it('hands back, with the agent that sent it, a message that woke a paused agent and was never typed', async () => {
+    const a = row('a');
+    const { deliveries, relaunches, shown, undelivered, land } = setup([a]);
+    shown.state = 'hibernated';
+    expect(await deliveries.answer('a', 'Morning report', false, undefined, 'lead')).toEqual({ queued: false, woken: true });
+    expect(relaunches.map(({ prompt }) => prompt)).toEqual(['Morning report']);
+    // Its new session ends as it comes up: its first prompt is never typed.
+    a.ended_at = '2026-10-22T10:00:01Z';
+    deliveries.firstPrompt('a', 'Morning report', Promise.resolve(true));
+    await land('a');
+    expect(undelivered).toEqual(['a Its first prompt: Morning report (its session has ended) from lead']);
+  });
+
+  it('drops the board notices about one agent, counting the messages they told of, but not one being typed, nor messages', async () => {
+    const store = memoryStore();
+    const { deliveries, writes } = setup([row('lead')], 'it is at work', store);
+    const notice = (about: string) => ({ ...waiting(`[agent-board] Your message to ${about} was not delivered`, []), about });
+    deliveries.queueAfterTurn('lead', notice('b'));
+    deliveries.queueAfterTurn('lead', waiting('A message about b', []));
+    deliveries.queueAfterTurn('lead', notice('c'));
+    deliveries.queueAfterTurn('lead', { ...notice('b'), lost: 2 });
+    expect(store.rows.at(-1)).toMatchObject({ about: 'b', lost: 2 });
+    // One notice, then one that told of two more: three lost.
+    expect(deliveries.dropNotices('lead', 'b')).toBe(3);
+    expect(store.rows.map(({ text }) => text)).toEqual(['A message about b', '[agent-board] Your message to c was not delivered']);
+    expect(deliveries.waitingAfterTurn('lead')).toBe(2);
+
+    const typing = setup([row('lead')], undefined, memoryStore());
+    typing.deliveries.queueAfterTurn('lead', notice('b'));
+    typing.deliveries.deliverAfterTurn('lead');
+    expect(typing.deliveries.dropNotices('lead', 'b')).toBe(0);
+    await typing.land('lead');
+    expect(typing.writes.map(([, data]) => data)).toContain('[agent-board] Your message to b was not delivered');
+    expect(writes).toEqual([]);
   });
 
   it('hands back one that could not be typed, saying so plainly, and goes on to the next', async () => {

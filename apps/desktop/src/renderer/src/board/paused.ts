@@ -30,3 +30,11 @@ export function pauseControl(
 export function pausedLine(hibernated: NonNullable<Agent['hibernated']>, now: number): { who: string; when: string } {
   return { who: `paused by ${hibernated.by ?? 'you'}`, when: ` · ${sinceText(hibernated.at, now)}` };
 }
+
+/** The class that frosts a paused agent's tile (expanded too), so it reads as frozen across the board. */
+const FROSTED = 'tile-frosted';
+
+/** Its tile's classes with the frost added while it is paused, and only then: waking it clears the frost at once. */
+export function frostedClasses(base: string, agent: Pick<Agent, 'state'>): string {
+  return agent.state === 'hibernated' ? `${base} ${FROSTED}` : base;
+}
