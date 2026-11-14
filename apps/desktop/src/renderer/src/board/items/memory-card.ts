@@ -1,14 +1,6 @@
 // What a memory card shows, worked out from its data and entries: kept apart from React, so it is tested on its own.
 import { MEMORY_OLD_DAYS, type MemoryData, type MemoryEntry, type MemoryReaders, type StepsWho } from '@agent-board/daemon/protocol';
 
-/**
- * How many entries fit whole on the open card, under one section's head; a second head takes a row's room. The card is
- * one size, so this is fixed. The peek lists every one.
- */
-const CARD_ROWS = 3;
-/** How many rows its documents take at least, when it has facts too. */
-const CARD_DOCS = 1;
-
 const DAY = 24 * 60 * 60 * 1000;
 
 /** A memory card's data as saved, with what an older card lacks filled in. */
@@ -98,16 +90,12 @@ export function staleCount(entries: readonly MemoryEntry[], now: Date): number {
 }
 
 /**
- * What the open card lists, from entries in list order: its documents, then its facts, `rows` in all, or one fewer when
- * both show, as the second section's head takes a row's room. Documents take `CARD_DOCS` of them while there are facts to
- * show; with fewer facts, they take the rest.
+ * What the open card lists, from entries in list order: its pinned facts first, so they show at its first size, then
+ * its documents, then its other facts, every one. The card scrolls what its size doesn't show.
  */
-export function cardRows(entries: readonly MemoryEntry[], rows = CARD_ROWS): { docs: MemoryEntry[]; facts: MemoryEntry[]; docCount: number; factCount: number } {
-  const docs = entries.filter((entry) => entry.file);
+export function cardSections(entries: readonly MemoryEntry[]): { pinned: MemoryEntry[]; docs: MemoryEntry[]; facts: MemoryEntry[] } {
   const facts = entries.filter((entry) => !entry.file);
-  const room = docs.length > 0 && facts.length > 0 ? rows - 1 : rows;
-  const shownDocs = docs.slice(0, Math.min(room, Math.max(CARD_DOCS, room - facts.length)));
-  return { docs: shownDocs, facts: facts.slice(0, room - shownDocs.length), docCount: docs.length, factCount: facts.length };
+  return { pinned: facts.filter((entry) => entry.pinned), docs: entries.filter((entry) => entry.file), facts: facts.filter((entry) => !entry.pinned) };
 }
 
 const MINUTE = 60 * 1000;

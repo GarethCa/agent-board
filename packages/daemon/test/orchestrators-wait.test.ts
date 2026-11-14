@@ -26,8 +26,8 @@ function host(agents = new Map<string, Agent>()) {
       ask: null,
       removeAsk: null,
       plan: null,
-      orchestrate: null,
       spawnedBy: null,
+      orphanedFrom: null,
       flag: null,
       unsent: null,
       untypedPrompt: null,
@@ -41,7 +41,7 @@ function host(agents = new Map<string, Agent>()) {
       ...fields,
     } as Agent);
   if (agents.size === 0) {
-    add('me', { orchestrate: 'zone' });
+    add('me', {});
     add('worker', { state: 'rate-limited', spawnedBy: 'me' });
     add('outsider', { zoneId: 'elsewhere' });
   }
@@ -62,6 +62,9 @@ function host(agents = new Map<string, Agent>()) {
         throw new Error('not here');
       },
       setEffort: () => Promise.reject(new Error('not here')),
+      setRole: () => {
+        throw new Error('not here');
+      },
       continueOnCredits: () => Promise.reject(new Error('not here')),
       sendUnsent: () => Promise.reject(new Error('not here')),
       clearUnsent: () => {
@@ -75,7 +78,6 @@ function host(agents = new Map<string, Agent>()) {
       stop: () => Promise.reject(new Error('not here')),
       pause: () => Promise.reject(new Error('not here')),
       finalMessage: () => undefined,
-      orchestrateFacts: () => ({ off: false, depth: 0 }),
       waitsAtPrompt: (id) => waitsAtPrompt.has(id),
       clearFlag: (id) => agents.get(id)!,
       setStatus: () => {
@@ -261,14 +263,14 @@ describe('crew events', () => {
     expect((await heard(start, { crew: true, kinds: ['finished'] })).lines).toEqual(['worker finished']);
   });
 
-  it("hears its crew's agents alone, and refuses an agent outside its scope as read does", async () => {
+  it("hears its crew's agents alone, and refuses an agent the user started by hand as read does", async () => {
     const { update, heard, handlers } = host();
     const { cursor: start } = await heard('now');
     update('failed', {}, 'outsider');
     update('failed');
     expect((await heard(start)).lines).toEqual(['worker failed']);
     await expect(handlers['orchestrator.wait']({ token: 'me-token', sessionIds: ['outsider'], since: 'now', timeoutMs: 30 }, {})).rejects.toThrow(
-      /outside your scope/,
+      /outsider is one the user started by hand: agents never act on the user's own agents/,
     );
   });
 

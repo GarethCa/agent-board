@@ -32,6 +32,7 @@ import {
   identifyView,
   interruptAgent,
   setAgentEffort,
+  giveAgentRole,
   continueAgent,
   restartAgent,
   newAgent,
@@ -117,6 +118,7 @@ import {
   MAX_ASK_QUESTIONS,
   MAX_PIN_LABEL,
   MAX_PIN_NOTE,
+  MAX_AGENT_NOTE_LINES,
   MAX_ASK_WAIT_MS,
   MAX_REMOVE_ASK_TILES,
   MAX_OPTION_LENGTH,
@@ -168,11 +170,12 @@ export const BOARD_MCP_INSTRUCTIONS =
   'For a long watch, `clock_add` adds a clock of your own that messages you on a schedule; `clock_set` changes what your ' +
   'clock does with you after each run, or turns it off, with your reason; `save_clock_template` saves a clock to start new ones from.';
 
-/** What the server adds to its instructions for an agent that may orchestrate as it starts. */
+/** What the server adds to its instructions for an agent's own live session, which may act on other agents. */
 export const ORCHESTRATOR_INSTRUCTIONS =
-  'The user lets you orchestrate: you may start, message, watch and close other agents, join them with edges, and keep ' +
-  'your zone tidy (move tiles, arrange your crew, notes), with the tools below or the same commands in ' +
-  '`agent-board help orchestrate`. A reviewer started from an agent\'s branch gets no edge to that agent: it and its implementer talk through `send` (findings back, next round), and the user presses no Send ' +
+  'You may start, message, watch and close other agents, join them with edges, and keep the board tidy (move tiles, ' +
+  'arrange a crew, notes), with the tools below or the same commands in `agent-board help orchestrate`. You reach ' +
+  "every agent anywhere on the board except the ones the user started by hand, which you may only message if they are the Captain. " +
+  'A reviewer started from an agent\'s branch gets no edge to that agent: it and its implementer talk through `send` (findings back, next round), and the user presses no Send ' +
   'button. Ask for a line between them only with `new` `edges` (`auto` hands the findings back by itself, the way ' +
   'back manual; `manual` leaves both for the user), never an edge to your own tile, and keep one of a pair manual, ' +
   'as two auto edges in a loop re-trigger each other. Keep your crew\'s tile lines current ' +
@@ -234,7 +237,7 @@ export const BOARD_MCP_TOOLS: Tool[] = [
         to: {
           type: 'string',
           description:
-            'One agent, by ref or name: along your edge to it, or, with none, a one-off edge in your scope; every edge out of you without.',
+            'One agent, by ref or name: along your edge to it, or, with none, a one-off edge; every edge out of you without.',
         },
         message: { type: 'string', description: 'What a message edge carries: your result, in your words.' },
         handover_path: { type: 'string', description: 'A markdown file in your worktree, relative to it, for a handover edge.' },
@@ -507,7 +510,7 @@ export const BOARD_MCP_TOOLS: Tool[] = [
     name: 'steps_read',
     description:
       'Read a steps card in full, each step numbered with its answer or tick; without card, list the cards you can read ' +
-      '(in your zone, in zones your orchestrator scope reaches, loose ones, and any you are part of), with mine only ' +
+      '(in your zone, loose ones, and any you are part of), with mine only ' +
       'those with a to-do of yours not yet done. As `agent-board steps read` and `steps ls`.',
     inputSchema: {
       type: 'object',
@@ -542,7 +545,7 @@ export const BOARD_MCP_TOOLS: Tool[] = [
   },
   {
     name: 'memory_new',
-    description: 'Put a new memory beside your tile: shared context that agents in its scope and the user read and write. As `agent-board memory new`.',
+    description: 'Put a new memory beside your tile: shared context that the agents of its zone (every agent, if it is loose) and the user read and write. As `agent-board memory new`.',
     inputSchema: {
       type: 'object',
       properties: { title: { type: 'string', maxLength: MAX_PLAN_TITLE_LENGTH, description: 'What it remembers, in a line.' } },
@@ -553,7 +556,7 @@ export const BOARD_MCP_TOOLS: Tool[] = [
   {
     name: 'memory_read',
     description:
-      'Read what other agents left before you start. Without memory, list the memories you can read (in your zone, zones your orchestrator scope reaches, and loose ones). ' +
+      'Read what other agents left before you start. Without memory, list the memories you can read (in your zone, and loose ones). ' +
       'With memory, its facts in full, pinned first, then newest first, and its documents by title (search: only those holding it); ' +
       'with entry, that one in full (a document whole), or with history its versions, newest first. As `agent-board memory ls|read|history`.',
     inputSchema: {
@@ -573,7 +576,7 @@ export const BOARD_MCP_TOOLS: Tool[] = [
       'Change a memory: add remembers a fact ("key: value" with a one-word key replaces that key\'s value; else a note) or, ' +
       'with document (a title) or file, text kept whole (up to 1 MB), listed by title until read; edit changes an entry\'s text, ' +
       'key or pin; remove removes one; restore puts a version back (memory_read with history lists them); confirm says a stale ' +
-      "one is still true. Anyone in scope may change any entry, the user's too. Add what the next agent should know before you " +
+      "one is still true. Any agent that reads it may change any entry, the user's too. Add what the next agent should know before you " +
       'finish. As `agent-board memory add|edit|rm|restore|confirm`.',
     inputSchema: {
       type: 'object',
@@ -595,7 +598,7 @@ export const BOARD_MCP_TOOLS: Tool[] = [
   },
   {
     name: 'queue_new',
-    description: 'Put a new queue beside your tile: jobs for agents in its scope to take one at a time, and info to read; with for_user, a queue of things for the user to look at, which no agent takes from. As `agent-board queue new`.',
+    description: 'Put a new queue beside your tile: jobs for the agents of its zone (every agent, if it is loose) to take one at a time, and info to read; with for_user, a queue of things for the user to look at, which no agent takes from. As `agent-board queue new`.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -670,7 +673,7 @@ export const BOARD_MCP_TOOLS: Tool[] = [
   {
     name: 'remind_read',
     description:
-      'The to-do lists you can read (in your zone, and zones your orchestrator scope reaches), each line numbered, with who ' +
+      'The to-do lists you can read (in your zone, loose ones, and any you are part of), each line numbered, with who ' +
       'ticked it and when; with mine, only your own. As `agent-board remind ls [--mine]`.',
     inputSchema: {
       type: 'object',
@@ -889,7 +892,7 @@ const CONNECTOR_PROPERTIES = {
   to_label: { type: 'string', description: 'The text by its to end.' },
 };
 
-/** The orchestrator's tools (ADR-0011), listed only to a session that may orchestrate (a shell's too). As the CLI's commands. */
+/** The orchestrator's tools (ADR-0011), listed to every agent's own live session and to a shell. As the CLI's commands. */
 export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
   {
     name: 'new_agent',
@@ -961,7 +964,7 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
     description:
       "Send an agent its next message, once its turn has ended (wait first). Never to one that needs the user's " +
       "permission, and never a harness command. To one still starting it is queued until it's up, after its first " +
-      'prompt; to an orchestrator mid-turn, until its turn ends, then sent as a turn of its own. You may also reply to an agent that messaged you, even outside your scope, and message the Captain whatever your scope. It fails, saying why, when ' +
+      'prompt; to one mid-turn, until its turn ends, then sent as a turn of its own. You may also reply to an agent that messaged you, even one the user started, and message the Captain. It fails, saying why, when ' +
       'the message was typed at its prompt but no turn started on it: then submit presses Enter on what is typed ' +
       'there, or clear clears it, instead of text (for an agent you may steer). The agent reads your message headed with your ' +
       'sender mark, so it and its chat know it is yours, not the user\'s: `⟨send from <your name> · <your ref>⟩ <text>` ' +
@@ -1035,6 +1038,24 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
     },
   },
   {
+    name: 'give_role',
+    description:
+      "Give a running agent a role, as its tile's Role menu does, or take it away with clear: a built-in one (implementer, " +
+      'reviewer, follow-up-reviewer) or any other by its name, orchestrator among them. Give `me` to name yourself: ' +
+      "`orchestrator` makes you your zone's. Only the role changes: the agent isn't restarted and no template is sent to " +
+      'it. Not for an agent the user started by hand. As `agent-board role`; set_role edits templates.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agent: AGENT_REF,
+        role: { type: 'string', maxLength: MAX_ROLE_NAME_LENGTH, description: 'The role: implementer, reviewer, orchestrator, designer.' },
+        clear: { type: 'boolean', description: 'Take its role away instead.' },
+      },
+      required: ['agent'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'continue_on_credits',
     description:
       'Continue on credits: resume the turn of a Claude agent its usage limit stopped (rate-limited), for its usage ' +
@@ -1076,7 +1097,7 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
   {
     name: 'add_edge',
     description:
-      'Join two agents in your scope (or you) with an edge: when `from` hands off, what it carries goes to `to` as its ' +
+      'Join two agents (or you) with an edge: when `from` hands off, what it carries goes to `to` as its ' +
       'next message. Marked as made by you. A gate or script condition runs nothing until the user approves it. As ' +
       '`agent-board edge add`.',
     inputSchema: {
@@ -1123,7 +1144,7 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
   {
     name: 'move',
     description:
-      'Move a tile (an agent, a shell, or you) or a note in your scope, as dragging it would: into a zone in your scope ' +
+      'Move a tile (an agent, a shell, or you) or a note, as dragging it would: into a zone ' +
       "or a group you made, exactly at a place (on the zone's grid) or beside another, what is in the way moving aside. " +
       'As `agent-board move`.',
     inputSchema: {
@@ -1149,7 +1170,7 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
         zone: {
           type: 'string',
           description:
-            "The zone, by ref; yours by default. `board`, at board scope: the whole board's zones in rows a gap apart and its loose agents and shells below them, never what is in a zone (no by, layout or auto).",
+            "The zone, by ref; yours by default. `board`: the whole board's zones in rows a gap apart and its loose agents and shells below them, never what is in a zone (no by, layout or auto).",
         },
         by: { type: 'string', enum: [...ARRANGE_BYS], description: 'What a row holds: issue at first, then as you last asked.' },
         layout: {
@@ -1166,7 +1187,7 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
   {
     name: 'zone_layout',
     description:
-      'Set how your zone (or one in your scope) draws what it holds, as its Layout menu does in the app: free, each tile ' +
+      'Set how your zone (or another) draws what it holds, as its Layout menu does in the app: free, each tile ' +
       'where it was put (every zone starts free); lanes, a rule the zone keeps: a lane per ticket, laid out again whenever ' +
       'its work changes, a tile the user drags leaving the rule where it is put; shelves, one stack per ticket on To do, Doing, Waiting and Done shelves ' +
       "under a head row of the zone's leads and shells, a click on a stack fanning its tiles out below the shelves; clusters, " +
@@ -1220,7 +1241,7 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
     name: 'add_note',
     description:
       'Put a note of short markdown on the board, marked as made by you, in your zone or beside a tile, what is there moving ' +
-      'aside: an agent note (a card with your badge and the time, never a sticky) by default, or a signed sticky or text with kind. Near an agent with no ' +
+      'aside: an agent note (a speech bubble from your face, with your name, role and the time, never a sticky) by default, or a signed sticky or text with kind. Near an agent with no ' +
       "side, it is added to its cluster's note, else goes in the slot before it. As `agent-board note add`.",
     inputSchema: {
       type: 'object',
@@ -1228,6 +1249,7 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
         text: { type: 'string' },
         kind: { type: 'string', enum: [...NOTE_KINDS], description: 'Left out, an agent note from you; sticky makes a signed sticky; or text.' },
         color: { type: 'string', description: 'Text only (an agent note has none, and ignores one): yellow, orange, pink, violet, blue, green, grey or white (text: accent, ink, grey, red, orange, yellow, green, teal, cyan, blue, violet or pink, which follow the theme), or #rrggbb.' },
+        lines: { type: 'integer', minimum: 1, maximum: MAX_AGENT_NOTE_LINES, description: 'An agent note\'s line budget: it starts as tall as this many lines, and past them its text fades into a "more lines" chip the user can click.' },
         ...PLACE_PROPERTIES,
       },
       required: ['text'],
@@ -1237,14 +1259,15 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
   {
     name: 'edit_note',
     description:
-      'Change the text (or text item\'s colour, or an agent note\'s size) of a note you, or an agent you started, made. As `agent-board note edit`.',
+      'Change the text (or text item\'s colour, or an agent note\'s size or line budget) of a note you, or an agent you started, made. As `agent-board note edit`.',
     inputSchema: {
       type: 'object',
       properties: {
         note: { type: 'string', description: 'The note, by ref (item:31f0).' },
         text: { type: 'string' },
         color: { type: 'string' },
-        size: { type: 'string', description: 'An agent note\'s size, <width>x<height> such as 360x240 (200x96 to 1200x1440). An arrange keeps it, and text that does not fit scrolls.' },
+        size: { type: 'string', description: 'An agent note\'s size, <width>x<height> such as 360x240 (238x96 to 1200x1440). An arrange keeps it, and text that does not fit scrolls. Not with lines.' },
+        lines: { type: 'integer', minimum: 0, maximum: MAX_AGENT_NOTE_LINES, description: 'An agent note\'s line budget, as add_note takes it; 0 takes it away. Rewritten, a note keeps its budget. Not with size.' },
       },
       required: ['note'],
       additionalProperties: false,
@@ -1422,14 +1445,14 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
   {
     name: 'set_role',
     description:
-      "Add one of the app's default roles, or replace the one of the same name, logged for the user: an orchestrator of " +
-      "the whole board's alone. With zone, that zone's own template for the name instead. Not for a built-in role. The " +
+      "Add one of the app's default roles, or replace the one of the same name, logged for the user. With zone, that " +
+      "zone's own template for the name instead. Not for a built-in role. The " +
       'template may not start with ! or a /command, nor hold a control character. As `agent-board roles set`.',
     inputSchema: {
       type: 'object',
       properties: {
         name: { type: 'string', maxLength: MAX_ROLE_NAME_LENGTH, description: 'The role\'s name: designer, release prep.' },
-        zone: { type: 'string', description: "A zone ref in your scope: set its own template for the name, not the app's." },
+        zone: { type: 'string', description: "A zone ref: set its own template for the name, not the app's." },
         template: {
           type: 'string',
           description: 'What an agent in the role starts with, before its prompt: {{issue}}, {{branch}}, {{worktree}} and {{prev_review}} are filled in.',
@@ -1444,7 +1467,7 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
     description: "Remove one of the app's default roles, or with zone that zone's template for the name, logged for the user. As `agent-board roles remove`.",
     inputSchema: {
       type: 'object',
-      properties: { name: { type: 'string' }, zone: { type: 'string', description: 'A zone ref in your scope.' } },
+      properties: { name: { type: 'string' }, zone: { type: 'string', description: 'A zone ref.' } },
       required: ['name'],
       additionalProperties: false,
     },
@@ -1464,7 +1487,7 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
   {
     name: 'ask_to_remove',
     description:
-      'Ask the user to remove agents in your scope that you did not start, each with its tile, worktree and branch: ' +
+      'Ask the user to remove agents you may close but did not start, each with its tile, worktree and branch: ' +
       'they get one Allow/Deny prompt for the whole list, and nothing goes unless they press Allow. One still running, ' +
       'or with an agent it started still running, stays unless they tick it. Waits for the answer ' +
       `(${DEFAULT_ASK_WAIT_MS / 60_000} minutes by default) and returns what was removed and what stayed, and why. ` +
@@ -1483,7 +1506,7 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
     name: 'handover',
     description:
       "Hand one orchestrator's crew, and what it made on the board, to another, which may then arrange, edit, remove and " +
-      "close them: your own crew to an orchestrator in your scope, or take over one in your scope whose session has ended. " +
+      "close them: your own crew to another agent, or take over one whose session has ended or that was removed. " +
       "`from` may be a removed orchestrator whose crew is still on the board (the crew's `orphanedFrom`). " +
       'As `agent-board orchestrate handover`.',
     inputSchema: {
@@ -1529,6 +1552,13 @@ function stringArg(args: Record<string, unknown>, name: string, optional = false
   if (value === undefined && optional) return undefined;
   if (typeof value !== 'string') throw new BoardError(`${name} must be a string`);
   return value;
+}
+
+/** An agent note's line budget, from `args.lines`, if given: checked as a number by the note ops. */
+function linesArgOf(args: Record<string, unknown>): { lines?: number } {
+  if (args.lines === undefined) return {};
+  if (typeof args.lines !== 'number') throw new BoardError('lines must be a whole number');
+  return { lines: args.lines };
 }
 
 /** A whole version number, from `args.version`. */
@@ -1850,6 +1880,12 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
   read: async (session, args) => (await readAgent(session, stringArg(args, 'agent'), stringArg(args, 'path', true))).text,
   interrupt: async (session, args) => (await interruptAgent(session, stringArg(args, 'agent'))).text,
   set_effort: async (session, args) => (await setAgentEffort(session, stringArg(args, 'agent'), stringArg(args, 'effort'))).text,
+  give_role: async (session, args) => {
+    const role = stringArg(args, 'role', true);
+    const clear = booleanArg(args, 'clear') === true;
+    if ((role === undefined) === !clear) throw new BoardError('give a role, or clear: true, not both');
+    return (await giveAgentRole(session, stringArg(args, 'agent'), clear ? null : role!)).text;
+  },
   continue_on_credits: async (session, args) => (await continueAgent(session, stringArg(args, 'agent'))).text,
   restart: async (session, args) => {
     const prompt = stringArg(args, 'prompt', true);
@@ -1965,6 +2001,7 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
         text: stringArg(args, 'text'),
         kind: stringArg(args, 'kind', true),
         color: stringArg(args, 'color', true),
+        ...linesArgOf(args),
         ...placeArgs(args),
       })
     ).text,
@@ -1972,8 +2009,9 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
     const text = stringArg(args, 'text', true);
     const color = stringArg(args, 'color', true);
     const size = stringArg(args, 'size', true);
-    if (text === undefined && color === undefined && size === undefined) throw new BoardError('give the text, the color or the size');
-    return (await editNote(session, stringArg(args, 'note'), { text, color, size })).text;
+    const lines = linesArgOf(args);
+    if (text === undefined && color === undefined && size === undefined && lines.lines === undefined) throw new BoardError('give the text, the color, the size or the lines');
+    return (await editNote(session, stringArg(args, 'note'), { text, color, size, ...lines })).text;
   },
   remove_note: async (session, args) => (await removeNote(session, stringArg(args, 'note'))).text,
   add_shape: async (session, args) => (await addShape(session, { ...shapeArgs(args), shape: stringArg(args, 'shape'), ...placeArgs(args) })).text,
@@ -2167,7 +2205,7 @@ export function boardMcpHandlers(context: BoardMcpContext): RpcHandlers<McpMetho
   return {
     initialize: async (params) => {
       const asked = (params as { protocolVersion?: unknown } | undefined)?.protocolVersion;
-      const orchestrating = (await whoIs(context))?.orchestrate != null;
+      const orchestrating = (await whoIs(context))?.orchestrates === true;
       return {
         protocolVersion: typeof asked === 'string' && MCP_VERSIONS.includes(asked) ? asked : MCP_VERSIONS[0],
         capabilities: { tools: {} },
@@ -2179,7 +2217,7 @@ export function boardMcpHandlers(context: BoardMcpContext): RpcHandlers<McpMetho
     ping: () => ({}),
     // The control tools only for an orchestrator, as it lists them: a harness lists them once, as it starts.
     'tools/list': async () => ({
-      tools: (await whoIs(context))?.orchestrate != null ? [...BOARD_MCP_TOOLS, ...ORCHESTRATOR_MCP_TOOLS] : BOARD_MCP_TOOLS,
+      tools: (await whoIs(context))?.orchestrates === true ? [...BOARD_MCP_TOOLS, ...ORCHESTRATOR_MCP_TOOLS] : BOARD_MCP_TOOLS,
     }),
     'tools/call': async (params, { signal }) => {
       const { name, arguments: args = {} } = (params ?? {}) as McpMethods['tools/call']['params'];

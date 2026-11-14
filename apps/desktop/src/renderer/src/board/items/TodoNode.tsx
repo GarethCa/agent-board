@@ -1,9 +1,11 @@
 import { createContext, memo, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { useReactFlow, type NodeProps } from '@xyflow/react';
-import { TODO_CARD_SIZE, TODO_PILL_SIZE } from '@agent-board/daemon/protocol';
+import { TODO_CARD_MIN_SIZE, TODO_CARD_SIZE, TODO_PILL_SIZE } from '@agent-board/daemon/protocol';
 import { requestTab } from '../../session/tab-request';
 import { todoSurfaceOf } from '../../session/tabs';
 import { useBoardCommands } from '../commands';
+import { CardResizer } from './CardSizing';
+import { foldTo } from './card-size';
 import { ItemActionsContext, useOnlySelected, type ItemNodeType } from './items';
 import { ListCardToolbar, useZone } from './ListCardNodeParts';
 import { TodoCardView, TodoPillView, type TodoCardActions } from './TodoCard';
@@ -49,7 +51,14 @@ export const TodoNode = memo(function TodoNode({ id: nodeId, data, selected: pic
   }, [nodeId, updateNodeData]);
 
   const changes = useTodoChanges(item.id, list.lines);
-  const fold = useCallback((next: boolean) => update({ id: item.id, data: { folded: next }, ...(next ? TODO_PILL_SIZE : TODO_CARD_SIZE) }), [item.id, update]);
+  // Folded, it keeps the size it had open, which the user may have given it, and opens to that again.
+  const fold = useCallback(
+    (next: boolean) => {
+      const { size, kept } = foldTo(item, next, { folded: TODO_PILL_SIZE, open: TODO_CARD_SIZE });
+      update({ id: item.id, data: { folded: next, ...kept }, ...size });
+    },
+    [item, update],
+  );
   const agentId = listAgent(list);
 
   const actions = useMemo<TodoCardActions>(
@@ -76,6 +85,7 @@ export const TodoNode = memo(function TodoNode({ id: nodeId, data, selected: pic
 
   return (
     <div className="todo-node" data-folded={folded || undefined}>
+      <CardResizer visible={selected && !folded} least={TODO_CARD_MIN_SIZE} onResized={(frame) => update({ id: item.id, ...frame })} />
       {folded ? (
         <TodoPillView data={list} lookup={lookup} onOpen={() => fold(false)} onClear={changes.clear}>
           {toolbar}

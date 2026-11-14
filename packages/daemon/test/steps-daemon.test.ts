@@ -74,6 +74,11 @@ describe('steps cards an agent puts up through the board MCP', () => {
     await client.call('steps.answer', { id: card.id, stepId: friday!.id, answer: { yes: true } });
     await client.call('steps.send', { id: card.id });
     await recorder.waitForText(agent.sessionId, 'The user updated an answer on your steps “Release 1.4”');
+
+    // Folded, it keeps the size the user gave it open; a size that is not one is refused.
+    const folded = await client.call('item.update', { id: card.id, width: 120, height: 120, data: { collapsed: true, openSize: { width: 360, height: 420 } } });
+    expect(dataOf(folded)).toMatchObject({ collapsed: true, openSize: { width: 360, height: 420 } });
+    await expect(client.call('item.update', { id: card.id, data: { openSize: { width: 360, height: '420' } } })).rejects.toThrow(/openSize must be \{ width, height \}/);
   });
 
   it("lets the agent tick its own to-dos, wait on the user's, and add steps; told once the user ticks", async () => {
@@ -127,15 +132,6 @@ describe('steps cards an agent puts up through the board MCP', () => {
     await heard.waitFor((e): e is DaemonEvent => e.type === 'zone.updated' && e.zone.name === 'docs');
     expect(heard.events.some((e) => e.type === 'item.updated' && e.item.id === card.id)).toBe(false);
 
-    // An orchestrator whose scope reaches the zone reads it too.
-    await client.call('agent.setOrchestrate', { sessionId: stranger.sessionId, scope: 'board' });
-    expect((await connection.call('board.readSteps', { token, id: card.id })).map((item) => item.id)).toEqual([card.id]);
-    // And hears it move, as one.
-    await client.call('item.update', { id: card.id, x: card.x + 80, y: card.y });
-    await heard.waitFor((e): e is DaemonEvent => e.type === 'item.updated' && e.item.id === card.id && e.item.x === card.x + 80);
-    await client.call('agent.setOrchestrate', { sessionId: stranger.sessionId, scope: null });
-    await expect(connection.call('board.readSteps', { token, id: card.id })).rejects.toMatchObject({ code: BOARD_ERROR.outOfScope });
-
     // Loose, it is every agent's to read.
     await client.call('item.update', { id: card.id, zoneId: null, x: 9000, y: 0 });
     expect((await connection.call('board.readSteps', { token, id: card.id })).map((item) => item.id)).toEqual([card.id]);
@@ -146,7 +142,6 @@ describe('steps cards an agent puts up through the board MCP', () => {
   it("puts a crew member's questions to its orchestrator, which answers and sends them", async () => {
     const { client, recorder, start, asAgent, cardOf } = await stepsDaemon();
     const lead = await start(['# Crew', '- [ ] Run the crew'], undefined, 'lead');
-    await client.call('agent.setOrchestrate', { sessionId: lead.sessionId, scope: 'zone' });
     const { token, connection } = await asAgent(lead.sessionId);
     const crew = await connection.call('orchestrator.spawn', { token, name: 'crew', prompt: 'Steps: # Cache plan ;; ? Which store? [Redis | SQLite]' });
     await client.call('session.attach', { sessionId: crew.sessionId });
@@ -328,7 +323,6 @@ describe('Needs you, for a steps card an agent waits on', () => {
   it("leaves a crew member's set to its orchestrator, and lists it for the user once the orchestrator goes", async () => {
     const { client, recorder, start, asAgent, cardOf } = await stepsDaemon();
     const lead = await start(['# Crew', '- [ ] Run the crew'], undefined, 'lead');
-    await client.call('agent.setOrchestrate', { sessionId: lead.sessionId, scope: 'zone' });
     const { token, connection } = await asAgent(lead.sessionId);
     const crew = await connection.call('orchestrator.spawn', { token, name: 'crew', prompt: 'Steps: # Cache plan ;; ? Which store? [Redis | SQLite]' });
     await client.call('session.attach', { sessionId: crew.sessionId });

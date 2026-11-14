@@ -119,7 +119,7 @@ function input(agents: Agent[], fields: Partial<ShelfInput> = {}): ShelfInput {
 }
 
 const crew = () => [
-  agent('lead', { orchestrate: 'zone', state: 'running' }),
+  agent('lead', { state: 'running' }),
   agent('impl-1', { role: 'implementer', issue: { id: 'ACME-1', title: 'Login redirect' } as Agent['issue'], state: 'running', createdAt: at(1) }),
   agent('rev-1', { role: 'reviewer', reviewOf: 'impl-1', state: 'idle', createdAt: at(2) }),
   agent('impl-2', { role: 'implementer', issue: { id: 'ACME-2', title: 'Export CSV' } as Agent['issue'], state: 'needs-permission', createdAt: at(3) }),

@@ -117,3 +117,27 @@ export async function zoomUntil(page: Page, tile: Locator, button: 'Zoom In' | '
   }
   expect(done(await boardZoom(page))).toBe(true);
 }
+
+/** Turns on the board's tethers with the View popover's switch, as a user does: they are off by default. */
+export async function showTethers(page: Page): Promise<void> {
+  await page.getByRole('button', { name: 'View', exact: true }).click();
+  const view = page.getByRole('dialog', { name: 'View', exact: true });
+  await view.getByRole('switch', { name: 'Tethers' }).check();
+  await page.keyboard.press('Escape');
+  await expect(view).toBeHidden();
+}
+
+/**
+ * The room a note's body has that its text leaves empty, as it is drawn: none, if the note is as tall as the text it
+ * shows. Read with a line budget's cap lifted, as a body stops at that cap however much room it has.
+ */
+export const emptyFoot = (body: Locator) => (): Promise<number> =>
+  body.evaluate((element: HTMLElement) => {
+    element.style.maxHeight = 'none';
+    const room = element.offsetHeight;
+    element.style.maxHeight = '';
+    element.style.flex = '0 0 auto';
+    const own = element.offsetHeight;
+    element.style.flex = '';
+    return room - own;
+  });

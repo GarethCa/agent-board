@@ -1,15 +1,15 @@
 import { useState } from 'react';
 import { ChevronDown, Eye } from 'lucide-react';
 import type { ConnectionsView } from '../board/connections-view';
-import type { CrewLook } from '../board/crew-view';
 import { keyText } from '../keys/registry';
 import { Button, Kbd, Popover, Segmented, Switch, ToolButton } from '../ui';
 
 export interface ViewPopoverProps {
   connections: ConnectionsView;
   onConnections(value: ConnectionsView): void;
-  crewLook: CrewLook;
-  onCrewLook(value: CrewLook): void;
+  /** Whether the board draws its tethers: the Captain's lines to the orchestrators it watches, a schedule's lines and an agent's notes' lines. */
+  tethers: boolean;
+  onTethers(on: boolean): void;
   /**
    * Snapping to the grid and the minimap, as switches in the popover: the Simplified design's, which has no buttons of
    * their own for them on the zoom bar. Classic leaves them out.
@@ -19,10 +19,10 @@ export interface ViewPopoverProps {
 
 /**
  * The zoom bar's View button: a popover with the two settings that only change how the board is drawn, which
- * connections it shows and how an orchestrator's crew is shown, so neither needs the Settings window. With `toggles`
+ * connections it shows and whether it draws its tethers, so neither needs the Settings window. With `toggles`
  * it is the Simplified design's View menu: a labelled button, and the grid and minimap switches under the two.
  */
-export function ViewPopover({ connections, onConnections, crewLook, onCrewLook, toggles }: ViewPopoverProps) {
+export function ViewPopover({ connections, onConnections, tethers, onTethers, toggles }: ViewPopoverProps) {
   const [open, setOpen] = useState(false);
   return (
     <Popover
@@ -49,21 +49,7 @@ export function ViewPopover({ connections, onConnections, crewLook, onCrewLook, 
               onChange={onConnections}
             />
           </div>
-          <div className="view-row">
-            <div className="view-label">
-              Crews <Kbd>{keyText('move.crews')}</Kbd>
-            </div>
-            <Segmented
-              aria-label="Crews"
-              options={[
-                { id: 'frames', label: 'Frames' },
-                { id: 'chips', label: 'Chips' },
-                { id: 'off', label: 'Off' },
-              ]}
-              value={crewLook}
-              onChange={onCrewLook}
-            />
-          </div>
+          <Switch label="Tethers" checked={tethers} onChange={(event) => onTethers(event.currentTarget.checked)} />
           {toggles !== undefined && (
             <div className="view-switches">
               <Switch label="Snap to grid" checked={toggles.grid} onChange={toggles.onGrid} />
@@ -84,7 +70,7 @@ export function ViewPopover({ connections, onConnections, crewLook, onCrewLook, 
               <Eye />
               <ChevronDown className="view-caret" aria-hidden />
             </>
-          } label="View" hint="Which connections and crews the board shows" pressed={open} />
+          } label="View" hint="Which connections and tethers the board shows" pressed={open} />
       )}
     </Popover>
   );

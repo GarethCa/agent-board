@@ -1,12 +1,13 @@
 import { memo, useContext, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode, type Ref } from 'react';
 import { NodeResizer, NodeToolbar, Position, useReactFlow, useStore, type NodeProps } from '@xyflow/react';
 import { MAX_AGENT_NOTE_HEIGHT, MAX_STICKY_TEXT, MAX_AGENT_NOTE_SIZE, MIN_AGENT_NOTE_SIZE, type BoardItem } from '@agent-board/daemon/protocol';
-import { Bot, Trash2 } from 'lucide-react';
+import { Trash2 } from 'lucide-react';
 import { useBoardCommands } from '../commands';
 import { HarnessMark } from '../HarnessMark';
-import { isZone, tileNodeId } from '../tiles';
+import { tileNodeId } from '../tiles';
 import { IconButton, Kbd } from '../../ui';
-import { acceptLabel, agentNoteData, agentNoteFooter, noteStamp, noteStampFull } from './agent-note';
+import { HARNESSES } from '../../harness';
+import { acceptLabel, agentNoteData, agentNoteFooter, lineBudget, noteStamp, noteStampFull } from './agent-note';
 import { useMinute } from '../../inbox/use-minute';
 import { useSuggestionActions } from '../ask/SuggestionGhosts';
 import { AgentNoteLookContext, type AgentNoteLook } from './agent-note-look';
@@ -18,21 +19,54 @@ import { useFitResize, useGrowToFit, useWindowFocused } from './grow-to-fit';
 import { keyText } from '../../keys/registry';
 
 /**
- * The height a note `height` tall needs for its text to show whole, at most `MAX_AGENT_NOTE_HEIGHT` (past it, it
- * scrolls), or 0 if it can't be measured. Its tab and footer keep their size, so it needs what its text overflows by.
+ * The heights the notes whose bodies are `bodies`, each as tall as `heights` says, need for their text, shorter or
+ * taller, at most `MAX_AGENT_NOTE_HEIGHT` (past it, it scrolls), or 0 for one that can't be measured. A note keeps its
+ * head and foot as they are, so it needs what its text's own height differs from the room its body has by. With a line
+ * budget the text needs as much as its lines let it show (past that it fades into a chip), or all of it if `whole`.
+ * Read all at once, then all again, so the page is laid out twice, however many notes.
  */
-function noteHeightToFit(root: HTMLElement | null, height: number): number {
-  const body = root?.querySelector<HTMLElement>('.agent-note-body');
-  if (!body || body.clientHeight === 0) return 0;
-  return Math.min(MAX_AGENT_NOTE_HEIGHT, Math.ceil(height + body.scrollHeight - body.clientHeight));
+export function noteHeightsToFit(bodies: readonly (HTMLElement | null)[], heights: readonly number[], whole = false): number[] {
+  const shown = bodies.map((body) => (body !== null && body.clientHeight > 0 ? body : null));
+  const tops = shown.map((body) => body?.scrollTop ?? 0);
+  // The room: the body's share of the note as it flexes, past the budget's cap, which a flexing body stops at too.
+  for (const body of shown) if (body !== null) body.style.maxHeight = 'none';
+  const room = shown.map((body) => body?.offsetHeight ?? 0);
+  // The text being typed: a text box at its own height is as tall as its rows, not its text, so it needs what its
+  // text overflows the room by.
+  const typed = shown.map((body, index) => (body instanceof HTMLTextAreaElement ? room[index]! + body.scrollHeight - body.clientHeight : undefined));
+  // What the text needs: the body at its own height, capped by its budget unless the whole is asked for.
+  for (const body of shown) {
+    if (body === null || body instanceof HTMLTextAreaElement) continue;
+    body.style.flex = '0 0 auto';
+    if (!whole) body.style.maxHeight = '';
+  }
+  const own = shown.map((body, index) => typed[index] ?? body?.offsetHeight ?? 0);
+  shown.forEach((body, index) => {
+    if (body === null) return;
+    body.style.flex = '';
+    body.style.maxHeight = '';
+    body.scrollTop = tops[index]!;
+  });
+  return shown.map((body, index) => (body === null ? 0 : Math.min(MAX_AGENT_NOTE_HEIGHT, Math.ceil(heights[index]! + own[index]! - room[index]!))));
+}
+
+const bodyOf = (root: HTMLElement | null) => root?.querySelector<HTMLElement>('.agent-note-body') ?? null;
+
+/** How many lines of a note's text are below what shows, or 0. */
+function linesBelow(body: HTMLElement): number {
+  const below = body.scrollHeight - body.scrollTop - body.clientHeight;
+  if (below <= 1) return 0;
+  const line = Number.parseFloat(getComputedStyle(body).lineHeight);
+  return Math.max(1, Math.ceil(below / (Number.isFinite(line) && line > 0 ? line : 16)));
 }
 
 /**
- * A note an agent wrote: a card under a tab (dashed in the colour of its zone, neutral when loose; the same under the Simplified design), that reads NOTE and names the agent, so it is never
- * taken for a tile or a handwritten sticky. The badge in the tab (its harness's mark, its name and role) selects its
- * tile; the time is when the agent last wrote it. It is drawn as a document
- * card or a cut of a terminal, as the Agent notes setting says. The user can move, resize, delete and
- * edit it like a sticky; once they edit it, it says "edited by you" until its agent writes it again.
+ * A note an agent wrote: a speech bubble from the agent's face (its harness's mark in a round face, ringed in the
+ * harness's colour), so it is never taken for a tile or a handwritten sticky. The face selects its tile; the bubble's
+ * first line names the agent and its role, and the time it last wrote it. It is drawn as a document card or with a cut
+ * of a terminal, as the Agent notes setting says. Given a line budget, its text past that many lines fades into a
+ * "more lines" chip that shows the rest. The user can move, resize, delete and edit it like a sticky; once they edit
+ * it, it says "edited by you" until its agent writes it again.
  */
 export const AgentNoteNode = memo(function AgentNoteNode({ id, data, selected: picked, dragging, width, height }: NodeProps<ItemNodeType>) {
   const selected = useOnlySelected(picked);
@@ -42,10 +76,6 @@ export const AgentNoteNode = memo(function AgentNoteNode({ id, data, selected: p
   const { updateNode } = useReactFlow<ItemNodeType>();
   const suggestions = useSuggestionActions();
   const { item } = data;
-  const zoneColor = useStore((state) => {
-    const node = item.zoneId === null ? undefined : state.nodeLookup.get(item.zoneId);
-    return node !== undefined && isZone(node) ? node.data.zone.color : undefined;
-  });
   const note = agentNoteData(item.data);
   const { agent } = note;
   // "Show agent" only while its tile is on the board.
@@ -65,24 +95,42 @@ export const AgentNoteNode = memo(function AgentNoteNode({ id, data, selected: p
   const edits = note.suggestions?.length ?? 0;
   const root = useRef<HTMLDivElement>(null);
   const focused = useWindowFocused();
-  // Whether there is text below what shows: a note sized shorter than its text scrolls, and says there is more.
-  const [more, setMore] = useState(false);
+  // How many lines are below what shows: past a note's line budget, or in a note sized shorter than its text (which
+  // scrolls), a chip says how many more there are.
+  const [more, setMore] = useState(0);
+  const budget = lineBudget(item.data);
   const checkMore = () => {
-    const body = root.current?.querySelector<HTMLElement>('.agent-note-body');
-    setMore(body != null && body.scrollHeight - body.scrollTop - body.clientHeight > 1);
+    const body = bodyOf(root.current);
+    setMore(body === null ? 0 : linesBelow(body));
   };
-  useLayoutEffect(checkMore, [width, height, shown, look, editing, item.data.userSized]);
+  useLayoutEffect(checkMore, [width, height, shown, look, editing, item.data.userSized, budget]);
   // Sized by the user (dragged, or `note edit --size`): the size is theirs, so it no longer grows to its text, which
   // scrolls, and an arrange keeps it.
   const userSized = item.data.userSized === true;
-  // A drag is the user's to size, as short as they like.
+  // A drag is the user's to size, as short as they like; it wins over a line budget, which it takes away.
+  const unbudgeted = budget === undefined ? {} : { lines: null };
   const resize = useFitResize(
     () => 0,
     item.y,
-    (box) => update({ id: item.id, ...box, data: { userSized: true } }),
+    (box) => update({ id: item.id, ...box, data: { userSized: true, ...unbudgeted } }),
   );
+  // The chip shows the rest: the note grows to its text (as far as a note grows), as the user's size.
+  const showMore = () => {
+    const body = bodyOf(root.current);
+    if (!body) return;
+    const at = height ?? item.height;
+    const [whole = 0] = noteHeightsToFit([body], [at], true);
+    if (whole > at) update({ id: item.id, height: whole, data: { userSized: true, ...unbudgeted } });
+    else body.scrollBy({ top: body.clientHeight });
+  };
+  // A note with a line budget is as tall as its lines, shorter as well as taller, so it has no empty foot; one with none
+  // only grows.
+  const fitted = (at: number) => {
+    const [needs = 0] = noteHeightsToFit([bodyOf(root.current)], [at]);
+    return needs === 0 ? 0 : Math.max(MIN_AGENT_NOTE_SIZE.height, needs);
+  };
   useGrowToFit(
-    (at) => (userSized ? 0 : noteHeightToFit(root.current, at)),
+    (at) => (userSized ? 0 : fitted(at)),
     height ?? item.height,
     resize.paused,
     (taller) => {
@@ -94,14 +142,14 @@ export const AgentNoteNode = memo(function AgentNoteNode({ id, data, selected: p
       // it for all.
       if (focused) update({ id: item.id, height: taller }, undefined, { silent: true });
     },
-    [focused, width ?? item.width, look, editing ? draft : shown, note.asked, edits],
+    [focused, width ?? item.width, look, editing ? draft : shown, note.asked, edits, budget],
+    budget !== undefined && !editing,
   );
 
   return (
     <AgentNoteFace
       item={item}
       look={look}
-      zoneColor={zoneColor}
       tileShown={tileShown}
       onShowAgent={showAgent}
       onAccept={() => suggestions.accept(item.id)}
@@ -128,7 +176,7 @@ export const AgentNoteNode = memo(function AgentNoteNode({ id, data, selected: p
             }}
           />
         ) : (
-          <AgentNoteBody text={shown} look={look} openLink={openLink} more={more} onScroll={checkMore} />
+          <AgentNoteBody text={shown} look={look} openLink={openLink} lines={budget} more={more} onMore={showMore} onScroll={checkMore} />
         )
       }
     >
@@ -163,8 +211,6 @@ export const AgentNoteNode = memo(function AgentNoteNode({ id, data, selected: p
 interface AgentNoteFaceProps {
   item: BoardItem;
   look: AgentNoteLook;
-  /** The colour of the zone it sits in; none when loose. */
-  zoneColor?: string;
   /** Whether its agent's tile is on the board, to show. */
   tileShown: boolean;
   /** Its text, or the field it is typed in. */
@@ -181,10 +227,11 @@ interface AgentNoteFaceProps {
 }
 
 /**
- * An agent note as it is drawn: the tab that names its agent over a card with its text, the edits it suggests and its
- * footer. The board draws it, and so does the measure of notes it doesn't draw (`AgentNoteMeasurer`), so the two agree.
+ * An agent note as it is drawn: its agent's face beside a bubble whose first line names the agent, over its text, the
+ * edits it suggests and its footer. The board draws it, and so does the measure of notes it doesn't draw
+ * (`AgentNoteMeasurer`), so the two agree.
  */
-export function AgentNoteFace({ item, look, zoneColor, tileShown, body, onShowAgent, onAccept, onDismiss, rootRef, onDoubleClick, children, measuring }: AgentNoteFaceProps) {
+export function AgentNoteFace({ item, look, tileShown, body, onShowAgent, onAccept, onDismiss, rootRef, onDoubleClick, children, measuring }: AgentNoteFaceProps) {
   const note = agentNoteData(item.data);
   const { agent } = note;
   const footer = agentNoteFooter(note, item.createdAt);
@@ -204,52 +251,46 @@ export function AgentNoteFace({ item, look, zoneColor, tileShown, body, onShowAg
     </div>
   );
 
-  // An agent whose name isn't known is not named: a tab that just reads Note.
+  // An agent whose name isn't known is not named: its face is a plain one, with no harness's mark and the border's
+  // ring, and its first line reads Note.
   const named = agent.name.trim() !== '';
-  const badge = (
-    <button
-      type="button"
-      className="agent-note-badge nodrag"
-      title={tileShown ? 'Select its tile' : named ? `${agent.name} is no longer on the board` : undefined}
-      disabled={!tileShown}
-      onClick={onShowAgent}
-    >
-      {/* The robot marks an agent note. On a named tab it stands in for the word Note, so the tab is no longer than before; on an unnamed one it comes before the word. */}
-      <Bot className="agent-note-robot" role="img" aria-label={named ? 'Note' : undefined} aria-hidden={named ? undefined : true} />
-      {!named && <span className="agent-note-label">Note</span>}
-      {named && <HarnessMark harness={agent.harness} className="agent-note-mark" />}
-      {named && <span className="agent-note-name">{agent.name}</span>}
-      {named && agent.role !== null && <span className="agent-note-role">· {agent.role}</span>}
-    </button>
-  );
-
   return (
-    <div
-      className="agent-note"
-      data-testid={measuring ? undefined : 'agent-note'}
-      data-look={look}
-      data-zone={item.zoneId ?? ''}
-      style={zoneColor === undefined ? undefined : ({ '--agent-note-zone': zoneColor } as CSSProperties)}
-      ref={rootRef}
-      onDoubleClick={onDoubleClick}
-    >
+    <div className="agent-note" data-testid={measuring ? undefined : 'agent-note'} data-look={look} data-zone={item.zoneId ?? ''} ref={rootRef} onDoubleClick={onDoubleClick}>
       {children}
-      <div className="agent-note-tab">{badge}</div>
-      <div className="agent-note-card">
-        {note.asked !== undefined && <div className="agent-note-asked">You asked: “{note.asked}”</div>}
-        {body}
-        {suggested}
-        <div className="agent-note-foot">
+      <button
+        type="button"
+        className="agent-note-face nodrag"
+        aria-label={named ? `Note by ${agent.name}` : 'Note'}
+        title={tileShown ? 'Select its tile' : named ? `${agent.name} is no longer on the board` : undefined}
+        disabled={!tileShown}
+        onClick={onShowAgent}
+        style={{ '--agent-note-harness': named ? HARNESSES[agent.harness].color : 'var(--border)' } as CSSProperties}
+      >
+        {named && <HarnessMark harness={agent.harness} className="agent-note-mark" />}
+      </button>
+      <div className="agent-note-bubble">
+        <div className="agent-note-head">
+          <span className="agent-note-name">{named ? agent.name : 'Note'}</span>
+          {named && agent.role !== null && <span className="agent-note-role">· {agent.role}</span>}
           <NoteStamp writtenAt={note.writtenAt} />
-          {footer?.kind === 'edited' && <span className="agent-note-edited" title="Edited by you">
-              ✎<span className="agent-note-edited-text"> edited by you</span>
-            </span>}
-          {footer?.kind === 'updated' && <span>updated</span>}
-          {tileShown && (
-            <button type="button" className="agent-note-show nodrag" onClick={onShowAgent}>
-              {terminal ? '↗ show agent' : '↗ Show agent'}
-            </button>
-          )}
+        </div>
+        <div className="agent-note-card">
+          {note.asked !== undefined && <div className="agent-note-asked">You asked: “{note.asked}”</div>}
+          {body}
+          {suggested}
+          <div className="agent-note-foot">
+            {footer?.kind === 'edited' && (
+              <span className="agent-note-edited" title="Edited by you">
+                ✎<span className="agent-note-edited-text"> edited by you</span>
+              </span>
+            )}
+            {footer?.kind === 'updated' && <span>updated</span>}
+            {tileShown && (
+              <button type="button" className="agent-note-show nodrag" onClick={onShowAgent}>
+                {terminal ? '↗ show agent' : '↗ Show agent'}
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -266,17 +307,45 @@ function NoteStamp({ writtenAt }: { writtenAt: string }) {
   );
 }
 
-/** A note's text as its look draws it: markdown on a document card, prompts on a terminal card. `more` is a cue that it scrolls on. */
-export function AgentNoteBody({ text, look, openLink, more, onScroll }: { text: string; look: AgentNoteLook; openLink: (url: string) => void; more?: boolean; onScroll?: () => void }) {
+/**
+ * A note's text as its look draws it: markdown on a document card, prompts on a terminal card. With a line budget
+ * (`lines`) it shows that many lines; `more`, the lines below what shows, fade into a chip that shows them (`onMore`).
+ */
+export function AgentNoteBody({
+  text,
+  look,
+  openLink,
+  lines,
+  more = 0,
+  onMore,
+  onScroll,
+}: {
+  text: string;
+  look: AgentNoteLook;
+  openLink: (url: string) => void;
+  lines?: number;
+  more?: number;
+  onMore?: () => void;
+  onScroll?: () => void;
+}) {
   return (
-    <div className="agent-note-body nowheel" onScroll={onScroll}>
-      {look === 'terminal' ? renderPrompts(text, openLink) : renderMarkdown(text, openLink)}
-      {more === true && (
-        <div className="agent-note-more" aria-hidden>
-          <span data-testid="agent-note-more">↓ more</span>
+    <>
+      <div
+        className="agent-note-body nowheel"
+        data-budget={lines === undefined ? undefined : ''}
+        style={lines === undefined ? undefined : ({ '--agent-note-lines': lines } as CSSProperties)}
+        onScroll={onScroll}
+      >
+        {look === 'terminal' ? renderPrompts(text, openLink) : renderMarkdown(text, openLink)}
+      </div>
+      {more > 0 && (
+        <div className="agent-note-more">
+          <button type="button" className="agent-note-chip nodrag" data-testid="agent-note-more" aria-label={`Show ${more} more ${more === 1 ? 'line' : 'lines'}`} onClick={onMore}>
+            ↓ {more} more {more === 1 ? 'line' : 'lines'}
+          </button>
         </div>
       )}
-    </div>
+    </>
   );
 }
 

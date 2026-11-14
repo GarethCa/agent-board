@@ -74,6 +74,26 @@ describe('codexComposerUp', () => {
     expect(codexComposerUp([...UP, ...FOLDER_TRUST])).toBe(false);
   });
 
+  it('reads a resumed conversation redrawn above its composer as up only once its own composer and status line are drawn', () => {
+    // Codex redraws a resumed conversation first: each past prompt after the glyph its composer has, each reply after a bullet.
+    const history = ['› fix the tests', '', '• All tests pass · 3 files changed', '', '› and the docs', '', '• Done · see notes'];
+    expect(codexComposerUp([...HEADER, ...history])).toBe(false);
+    expect(codexComposerUp([...HEADER, ...history, '', '› Ask Codex to do anything', '', '← for agents · ? for shortcuts'])).toBe(false);
+    expect(codexComposerUp([...HEADER, ...history, '', '› Ask Codex to do anything', '', 'gpt-5.5 high · ~/work/proj', '? for shortcuts'])).toBe(true);
+  });
+
+  it('reads a past prompt that wraps, or spans lines, as not up: its next line may look like the status line, but more of the conversation follows', () => {
+    const wrapped = ['› please refactor the parser and then run', 'tests · then commit', '', '• Done'];
+    expect(codexComposerUp([...HEADER, ...wrapped])).toBe(false);
+    expect(codexComposerUp([...HEADER, '› Carry on', 'tests · then commit', '', '• Handover written.', 'STATUS: done'])).toBe(false);
+    expect(codexComposerUp([...HEADER, ...wrapped, '', '› Ask Codex to do anything', '', 'gpt-5.5 high · ~/work/proj', '? for shortcuts'])).toBe(true);
+  });
+
+  it('reads its composer up when a long folder wraps its status line onto the next', () => {
+    const status = ['gpt-5-codex default · /private/var/folders/xy/abcdefgh/T/agent-board-test-1234/worktrees/proj', 'worker-2e9853'];
+    expect(codexComposerUp([...HEADER, '› Ask Codex to do anything', '', ...status, '← for agents · ? for shortcuts'])).toBe(true);
+  });
+
   it('reads nothing, or a screen with no composer, as not up', () => {
     expect(codexComposerUp([])).toBe(false);
     expect(codexComposerUp(['codex is starting', 'gpt-5.5 high · ~/work/proj'])).toBe(false);

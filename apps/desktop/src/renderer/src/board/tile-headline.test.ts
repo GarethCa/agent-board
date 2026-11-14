@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent, AgentState, NeedsYouShows, PullRequest } from '@agent-board/daemon/protocol';
 import { galleryAgent } from './TileGallery';
-import { TILE_STATE_WORDS, tileAbout, tileButton, tileNow, tileSince, tileState, tileTime, type TileState } from './tile-headline';
+import { footerFoldKey, TILE_STATE_WORDS, tileAbout, tileButton, tileMark, tileMarkKey, tileNow, tileSince, tileState, tileTime, type TileState } from './tile-headline';
 
 const NOW = Date.parse('2026-11-13T09:00:00.000Z');
 const MIN = 60_000;
@@ -168,5 +168,45 @@ describe('its one button', () => {
 
   it('is none while it thinks, waits on others or is idle', () => {
     for (const state of ['thinking', 'waiting', 'idle'] as const) expect(button(state)).toBeUndefined();
+  });
+});
+
+describe('its mark, which the footer folds round', () => {
+  it('changes when a finished turn comes to need the user, with no change to its state', () => {
+    const finished = base('waiting', { ask: null, flag: null, plan: null, permissions: [], stepsWait: null, ledBy: null });
+    const quiet = tileMark(finished, 'explicit', false, false);
+    expect(quiet.state).toBe('idle');
+    expect(quiet.button).toBeUndefined();
+    // Needs you comes to list finished turns: the same record now needs the user, and gets its Open button.
+    const listed = tileMark(finished, 'turns', false, false);
+    expect(listed.state).toBe('needs-you');
+    expect(listed.button?.label).toBe('Open');
+    expect(tileMarkKey(listed)).not.toBe(tileMarkKey(quiet));
+  });
+
+  it('changes when its waiting is seen: the pill loses the needs-you look', () => {
+    const asking = base('waiting', { ledBy: null, seen: false });
+    const seen = { ...asking, seen: true };
+    expect(tileMarkKey(tileMark(seen, 'turns', false, false))).not.toBe(tileMarkKey(tileMark(asking, 'turns', false, false)));
+  });
+
+  it('has no button while it hands work on or takes it in', () => {
+    const asking = base('waiting', { ledBy: null });
+    expect(tileMark(asking, 'turns', true, false).pill.state).toBe('handing-off');
+    expect(tileMark(asking, 'turns', true, false).button).toBeUndefined();
+    expect(tileMark(asking, 'turns', false, true).button).toBeUndefined();
+  });
+
+  it('is in the footer\'s fold key: the same footer measures again when only its mark changes', () => {
+    const finished = base('waiting', { ask: null, flag: null, plan: null, permissions: [], stepsWait: null, ledBy: null });
+    const line = [['#34', '#41'], 0, 'waiting'];
+    const parts = { mark: tileMark(finished, 'explicit', false, false), statePill: true, age: undefined, stateTime: undefined, character: 'off', onCredits: false };
+    const key = footerFoldKey(line, parts);
+    expect(footerFoldKey(line, { ...parts, mark: tileMark(finished, 'turns', false, false) })).not.toBe(key);
+    // The pill or the word and its time: the state-pill tile part switches between them.
+    expect(footerFoldKey(line, { ...parts, statePill: false })).not.toBe(key);
+    expect(footerFoldKey(line, { ...parts, age: '2m' })).not.toBe(key);
+    expect(footerFoldKey(line, { ...parts, stateTime: '3m' })).not.toBe(key);
+    expect(footerFoldKey(line, { ...parts })).toBe(key);
   });
 });

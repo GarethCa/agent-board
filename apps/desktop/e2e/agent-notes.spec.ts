@@ -3,7 +3,7 @@ import { rmSync } from 'node:fs';
 import { agentNoteSize } from '@agent-board/daemon/agent-notes';
 import { MAX_AGENT_NOTE_HEIGHT, type BoardItem } from '@agent-board/daemon/protocol';
 import { agents, launch, spawnAgent, tile, tileAction, TURN_MS, zones } from './agent-helpers.ts';
-import { withDaemon } from './board-helpers.ts';
+import { emptyFoot, showTethers, withDaemon } from './board-helpers.ts';
 import { test, connectedDaemonPid, launchApp, pickFolderNext, removeDataDir, tempDataDir, browseForZone } from './launch.ts';
 import { scratch } from './scratch.ts';
 import { openSettings, settingsSection } from './settings-helpers.ts';
@@ -16,7 +16,7 @@ async function agentNotesLook(window: Page, look: 'Document' | 'Terminal'): Prom
   await expect(choice).toHaveAttribute('aria-pressed', 'true');
 }
 
-test("an agent note: its badge selects its agent's tile, a tether leads there, the user's edit says so, and the look switches live", async () => {
+test("an agent note: its face selects its agent's tile, a tether leads there, the user's edit says so, and the look switches live", async () => {
   const { dir, repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env);
@@ -56,40 +56,33 @@ test("an agent note: its badge selects its agent's tile, a tether leads there, t
     await expect(note).toHaveAttribute('data-look', 'document');
     // Its agent wrote it again after it was made, until the user edits it.
     await expect(note.locator('.agent-note-foot')).toContainText('updated');
-    // Its tab and edge are tints of the colour of the zone it sits in.
-    await expect(note).toHaveCSS('--agent-note-zone', zone!.color);
-    // The tab itself is painted from it; out of every zone it is neutral, and in another zone it takes that zone's colour.
-    const tabPaint = () => note.locator('.agent-note-tab').evaluate((element) => getComputedStyle(element).backgroundColor);
-    const inZone = await tabPaint();
-    const noteId = await window.evaluate(async () => (await globalThis.window.agentBoard.items.list()).find((item) => item.kind === 'agent-note')!.id);
-    await window.evaluate((id) => globalThis.window.agentBoard.items.update({ id, zoneId: null, x: 900, y: 400 }), noteId);
-    await expect(note).toHaveAttribute('data-zone', '');
-    await expect.poll(() => note.evaluate((element) => element.style.getPropertyValue('--agent-note-zone'))).toBe('');
-    await expect.poll(tabPaint).not.toBe(inZone);
-    const loose = await tabPaint();
-    const other = await window.evaluate(async ({ avoid, at }) => {
-      const { zones } = globalThis.window.agentBoard;
-      const colour = ['#e64980', '#fcc419', '#40c057'].find((candidate) => candidate !== avoid)!;
-      const made = await zones.addUnbound({ name: 'Elsewhere', color: colour, x: at.x, y: at.y, width: 280, height: 300 });
-      return { id: made.id, colour };
-    }, { avoid: zone!.color, at: { x: zone!.x + zone!.width + 20, y: zone!.y } });
-    await window.evaluate(({ id, zoneId }) => globalThis.window.agentBoard.items.update({ id, zoneId, x: 20, y: 40 }), { id: noteId, zoneId: other.id });
-    await expect(note).toHaveCSS('--agent-note-zone', other.colour);
-    await expect.poll(tabPaint).not.toBe(loose);
-    await expect.poll(tabPaint).not.toBe(inZone);
+    // It speaks from its agent's face: the harness's mark, ringed in the harness's colour, named for the agent.
+    const face = note.getByRole('button', { name: `Note by ${agent!.name}` });
+    await expect(face).toHaveCount(1);
+    await expect.poll(() => face.evaluate((element) => element.style.getPropertyValue('--agent-note-harness'))).toBe('var(--harness-claude)');
+    // Its first line is who wrote it, their role and when; there is no tab above it.
+    const head = note.locator('.agent-note-head');
+    await expect(head.locator('.agent-note-name')).toHaveText(agent!.name);
+    await expect(head.locator('.agent-note-role')).toContainText('orchestrator of the long-running crew');
+    await expect(head.locator('.agent-note-time')).toHaveCount(1);
+    await expect(note.locator('.agent-note-tab')).toHaveCount(0);
     // A sticky the user made stays a sticky.
     await expect(window.getByTestId('sticky')).toHaveCount(1);
     await expect(note.locator('strong')).toHaveText('Round 2 of 3');
     await expect(note.locator('code')).toHaveText('2 of 3');
+    // Its tether is drawn only while View › Show Tethers is on, which it isn't by default.
+    await expect(window.getByTestId('agent-note-tether')).toHaveCount(0);
+    await showTethers(window);
     await expect(window.getByTestId('agent-note-tether')).toHaveCount(1);
     await expect(note).not.toContainText('edited by you');
-    // Even at the least width, with a long role, the tab clips its own text and never passes the note.
-    const tab = note.locator('.agent-note-tab');
-    expect(await tab.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-    expect((await tab.boundingBox())!.width).toBeLessThanOrEqual((await note.boundingBox())!.width);
+    // Even at the least width, with a long role, the first line clips its own text and never passes the bubble.
+    expect(await head.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    const bubble = (await note.locator('.agent-note-bubble').boundingBox())!;
+    const headBox = (await head.boundingBox())!;
+    expect(headBox.x + headBox.width).toBeLessThanOrEqual(bubble.x + bubble.width + 0.5);
 
-    // The badge selects its agent's tile.
-    await note.getByRole('button', { name: new RegExp(agent!.name) }).click();
+    // The face selects its agent's tile.
+    await face.click();
     await expect(lead.locator('xpath=ancestor::*[contains(@class, "react-flow__node")][1]')).toHaveClass(/selected/);
 
     // The user's edit says so.
@@ -98,17 +91,17 @@ test("an agent note: its badge selects its agent's tile, a tether leads there, t
     await editor.fill('Waiting on the gate');
     await editor.press('Escape');
     await expect(note).toContainText('✎ edited by you');
-    // The time stays whole in the narrow footer; the other text gives way.
+    // The time stays whole in the first line; the name and role give way.
     const time = note.locator('.agent-note-time');
     // The day with the time (five minutes ahead can be tomorrow, near midnight), and the full date on hover and as its accessible name.
     await expect(time).toHaveText(/ \d\d:\d\d$/);
     await expect(time).toHaveAttribute('title', /\d{4}, \d\d:\d\d$/);
     await expect(time).toHaveAttribute('aria-label', (await time.getAttribute('title'))!);
     expect(await time.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-    // Whole, and inside the card: a clipped time would run past the card's right edge.
-    const timeBox = (await time.boundingBox())!;
-    const cardBox = (await note.locator('.agent-note-card').boundingBox())!;
-    expect(timeBox.x + timeBox.width).toBeLessThanOrEqual(cardBox.x + cardBox.width);
+    // Whole, and inside the bubble: a clipped time would run past the bubble's right edge. The face's click moved the
+    // view to the tile, so the bubble is measured again.
+    const [timeBox, bubbleNow] = [(await time.boundingBox())!, (await note.locator('.agent-note-bubble').boundingBox())!];
+    expect(timeBox.x + timeBox.width).toBeLessThanOrEqual(bubbleNow.x + bubbleNow.width);
     expect(timeBox.width).toBeGreaterThan(30);
     await expect
       .poll(async () => (await window.evaluate(() => globalThis.window.agentBoard.items.list())).find((item) => item.kind === 'agent-note')?.data)
@@ -170,7 +163,8 @@ test("an agent note's tether goes round the tiles in its way: a reviewer a tile 
       { zoneId: zone!.id, lead: { sessionId: lead!.sessionId, name: lead!.name }, fixer: fixer!.sessionId, reviewer: reviewer!.sessionId },
     );
     const tetherOf = (noteId: string) => window.locator(`.react-flow__edge[data-id="tether:item:${noteId}"]`).getByTestId('agent-note-tether');
-    // The board draws only what is in view.
+    // The board draws only what is in view, and tethers only while View › Show Tethers is on.
+    await showTethers(window);
     const fitView = () => window.getByRole('button', { name: /^Fit view/ }).click();
     await fitView();
     await expect(window.getByTestId('agent-note-tether')).toHaveCount(2);
@@ -204,7 +198,11 @@ test("an agent note's tether goes round the tiles in its way: a reviewer a tile 
 });
 
 /** Makes an agent note in the daemon serving `dataDir`, off any zone, `width` by `height` at (`x`, `y`). */
-function makeNote(dataDir: string, text: string, { x, y = 40, width = 272, height }: { x: number; y?: number; width?: number; height: number }): Promise<BoardItem> {
+function makeNote(
+  dataDir: string,
+  text: string,
+  { x, y = 40, width = 272, height, lines }: { x: number; y?: number; width?: number; height: number; lines?: number },
+): Promise<BoardItem> {
   return withDaemon(dataDir, (client) =>
     client.call('item.create', {
       kind: 'agent-note',
@@ -213,12 +211,18 @@ function makeNote(dataDir: string, text: string, { x, y = 40, width = 272, heigh
       y,
       width,
       height,
-      data: { text, agent: { sessionId: '', name: 'lead', harness: 'claude', role: 'orchestrator' }, writtenAt: new Date().toISOString(), editedByUser: false },
+      data: {
+        text,
+        agent: { sessionId: '', name: 'lead', harness: 'claude', role: 'orchestrator' },
+        writtenAt: new Date().toISOString(),
+        editedByUser: false,
+        ...(lines === undefined ? {} : { lines }),
+      },
     }),
   );
 }
 
-test('an agent note grows to show all its text, not as a step of the user’s, up to a limit, then scrolls', async () => {
+test('an agent note grows to show all its text, not as a step of the user’s, up to a limit, then scrolls; or to its line budget, the rest a click away', async () => {
   const dataDir = tempDataDir();
   const app = await launchApp(dataDir);
   try {
@@ -254,6 +258,34 @@ test('an agent note grows to show all its text, not as a step of the user’s, u
     const long = await makeNote(dataDir, 'word '.repeat(600), { x: 680, height: 120 });
     await expect.poll(async () => (await find(long.id))?.height).toBe(MAX_AGENT_NOTE_HEIGHT);
     expect(await notes.nth(2).locator('.agent-note-body').evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+
+    // A note given a line budget shows that many lines, its text fading into a chip that counts the rest. Made taller
+    // than those lines, it comes down to them: no empty foot.
+    const budgeted = await makeNote(dataDir, tenLines, { x: 1000, height: 400, lines: 3 });
+    const kept = notes.nth(3);
+    const chip = kept.getByTestId('agent-note-more');
+    await expect(chip).toHaveText(/^↓ \d+ more lines$/);
+    const keptBody = kept.locator('.agent-note-body');
+    await expect.poll(async () => (await find(budgeted.id))?.height).toBeLessThan(400);
+    await expect.poll(emptyFoot(keptBody)).toBeLessThanOrEqual(2);
+    // Its text isn't cut short either.
+    expect(await emptyFoot(keptBody)()).toBeGreaterThanOrEqual(-1);
+    // Three lines and the body's own padding, and no more.
+    const threeLines = await keptBody.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return 3 * Number.parseFloat(style.lineHeight) + Number.parseFloat(style.paddingTop) + Number.parseFloat(style.paddingBottom);
+    });
+    expect(await keptBody.evaluate((element) => element.clientHeight)).toBeLessThanOrEqual(Math.ceil(threeLines));
+    expect((await find(budgeted.id))!.height).toBeLessThan(grown);
+    // A click on the chip grows the note to all its text, and it is the user's size from then on.
+    await chip.click();
+    await expect(chip).toHaveCount(0);
+    await expect.poll(async () => (await find(budgeted.id))?.data).toMatchObject({ userSized: true });
+    expect((await find(budgeted.id))!.data.lines ?? null).toBeNull();
+    await expect.poll(() => keptBody.evaluate((element) => element.scrollHeight <= element.clientHeight + 1)).toBe(true);
+    // As tall as all its text, and no taller.
+    expect(await emptyFoot(keptBody)()).toBeLessThanOrEqual(2);
+    expect(await emptyFoot(keptBody)()).toBeGreaterThanOrEqual(-1);
   } finally {
     await app.close();
     await removeDataDir(dataDir);

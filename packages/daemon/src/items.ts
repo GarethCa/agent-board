@@ -23,6 +23,8 @@ import {
   MAX_SUGGESTED_ARROWS,
   MAX_SUGGESTED_SHAPES,
   MAX_SUGGESTIONS,
+  isLineBudget,
+  MAX_AGENT_NOTE_LINES,
   type ImageRef,
   type LinkData,
   MAX_TEXT_FONT_SIZE,
@@ -134,6 +136,9 @@ const KIND_DATA: Record<BoardItemKind, (data: Record<string, unknown>) => void> 
             each.arrows.length <= MAX_SUGGESTED_ARROWS,
         );
       if (!ok) throw invalidParams(`an agent note's suggestions must be at most ${MAX_SUGGESTIONS} of { id, title, shapes, arrows }`);
+    }
+    if (data.lines !== undefined && data.lines !== null && !isLineBudget(data.lines)) {
+      throw invalidParams(`an agent note's lines must be a whole number from 1 to ${MAX_AGENT_NOTE_LINES}, or null`);
     }
   },
   document: (data) => {

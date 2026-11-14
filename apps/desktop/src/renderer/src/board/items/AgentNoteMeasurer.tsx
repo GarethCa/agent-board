@@ -5,31 +5,17 @@ import type { Node } from '@xyflow/react';
 import { MAX_AGENT_NOTE_HEIGHT } from '@agent-board/daemon/protocol';
 import { forgetNoteFits, noteFitContext, noteFitKnown, reportNoteFits, useMeasuresChanged, type NoteFit } from '../measured-boxes';
 import { tileNodeId } from '../tiles';
-import { agentNoteData } from './agent-note';
+import { agentNoteData, lineBudget } from './agent-note';
 import type { AgentNoteLook } from './agent-note-look';
-import { AgentNoteBody, AgentNoteFace } from './AgentNoteNode';
+import { AgentNoteBody, AgentNoteFace, noteHeightsToFit } from './AgentNoteNode';
 import { isItemNode, type ItemNodeType } from './items';
 
-/** How tall a note is laid out to be measured: tall enough for its tab, footer and some text, whatever it holds. */
+/** How tall a note is laid out to be measured: tall enough for its head, footer and some text, whatever it holds. */
 const LAID_OUT_HEIGHT = MAX_AGENT_NOTE_HEIGHT;
 
 const isAgentNote = (node: Node): node is ItemNodeType => isItemNode(node) && node.data.item.kind === 'agent-note';
 
 const noLink = () => {};
-
-/**
- * The heights the notes laid out in `roots`, each `height` tall, need for their text, shorter or taller (at most
- * `MAX_AGENT_NOTE_HEIGHT`), or 0 for one that can't be measured: each text laid out at its own height. No least: what
- * holds a note sets that. Read all at once, then all again, so the page is laid out twice, however many notes.
- */
-function noteHeightsForText(roots: readonly (Element | null)[], height: number): number[] {
-  const bodies = roots.map((root) => root?.querySelector<HTMLElement>('.agent-note-body') ?? null);
-  const drawn = bodies.map((body) => (body === null || body.clientHeight === 0 ? undefined : body.offsetHeight));
-  for (const body of bodies) if (body !== null) body.style.flex = '0 0 auto';
-  const own = bodies.map((body) => body?.offsetHeight ?? 0);
-  for (const body of bodies) if (body !== null) body.style.flex = '';
-  return drawn.map((at, index) => (at === undefined ? 0 : Math.min(MAX_AGENT_NOTE_HEIGHT, Math.ceil(height + own[index]! - at))));
-}
 
 /**
  * Lays out, out of sight, each agent note among `nodes` whose height for its text isn't known as it is now (drawn as
@@ -50,7 +36,9 @@ export const AgentNoteMeasurer = memo(function AgentNoteMeasurer({ nodes, look }
   useLayoutEffect(() => {
     if (pending.length === 0) return;
     const roots = pending.map(({ id }) => box.current?.querySelector(`[data-measure="${CSS.escape(id)}"]`) ?? null);
-    const heights = noteHeightsForText(roots, LAID_OUT_HEIGHT);
+    const bodies = roots.map((root) => root?.querySelector<HTMLElement>('.agent-note-body') ?? null);
+    // No least: what holds a note sets that.
+    const heights = noteHeightsToFit(bodies, bodies.map(() => LAID_OUT_HEIGHT));
     const fits = new Map<string, NoteFit>();
     pending.forEach(({ id, width, text, context }, index) => {
       if (heights[index]! > 0) fits.set(id, { width, height: heights[index]!, text, context });
@@ -74,7 +62,7 @@ export const AgentNoteMeasurer = memo(function AgentNoteMeasurer({ nodes, look }
               item={item}
               look={look}
               tileShown={agent.sessionId !== '' && ids.has(tileNodeId('agent', agent.sessionId))}
-              body={<AgentNoteBody text={text} look={look} openLink={noLink} />}
+              body={<AgentNoteBody text={text} look={look} openLink={noLink} lines={lineBudget(item.data)} />}
               measuring
             />
           </div>

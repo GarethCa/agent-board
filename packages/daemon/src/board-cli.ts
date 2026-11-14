@@ -30,6 +30,7 @@ import {
   identifyView,
   interruptAgent,
   setAgentEffort,
+  giveAgentRole,
   continueAgent,
   restartAgent,
   newAgent,
@@ -41,7 +42,6 @@ import {
   removeEdge,
   sendToAgent,
   setDefaultRole,
-  setOrchestrate,
   handOver,
   categoryAnswer,
   characterAnswer,
@@ -94,6 +94,7 @@ import {
   editShape,
   exportDiagram,
   moveTile,
+  noteLinesOf,
   noteSizeOf,
   pointOf,
   removeConnector,
@@ -117,7 +118,6 @@ import {
   isWaitState,
   MAX_ACTIVITY_LIMIT,
   MAX_CAPTURE_SIDE,
-  ORCHESTRATE_SETTING,
   MAX_ASK_WAIT_MS,
   MAX_ORCHESTRATOR_WAIT_MS,
   MAX_FLAG_LENGTH,
@@ -136,13 +136,10 @@ import {
   PAGE_ICONS,
   PAGE_TONES,
   MAX_STATUS_LENGTH,
-  ORCHESTRATE_SCOPES,
   ORCHESTRATOR_METHODS,
-  USER_SIDE_METHODS,
   statusLine,
   WAIT_STATES,
   type CrewEventKind,
-  type OrchestrateScope,
   type PageParams,
   type RecordParams,
   type WaitState,
@@ -206,8 +203,8 @@ COMMANDS
                         prompt, and to-dos ticked by whoever each names. \`steps ls|read|done|
                         wait|add|answer|close\` work with cards. See \`steps --help\`.
   memory ls|read|add|edit|rm|history|restore|new ...
-                        Shared context: keyed values, notes and whole files that agents in
-                        scope read and write, and people on the board. See \`memory --help\`.
+                        Shared context: keyed values, notes and whole files that the agents
+                        of its zone read and write, and people on the board. See \`memory --help\`.
   remind "<text>"... | remind ls [--mine] | remind done|undo|rm <n>
                         Add a to-do for the user to your to-do list, under your tile (agents
                         only): something only they can do. A tick tells you nothing; \`remind
@@ -250,12 +247,11 @@ COMMANDS
   Read commands take --json. \`agent-board <command> --help\` says more about one.
 
 ORCHESTRATING
-  An agent the user lets orchestrate can start, message, watch and close other agents, as a
-  lead does with workers: in its zone (or its repo, or the whole board, as the user chose),
-  and always the agents it started. \`identify\` says whether you may. The agents you start are
-  linked to you on the board, and orchestrate as their zone lets them, up to three deep. In a
-  shell, or a terminal outside agent-board, these act for the user on any agent. Each start,
-  message, interrupt, effort, continue, restart, pause, wake and close is logged for the user.
+  Any agent can start, message, watch and close other agents, as a lead does with workers,
+  in any zone: every agent but the ones the user started by hand. The agents you start are
+  linked to you on the board, and may start their own, at any depth. In a shell, or a
+  terminal outside agent-board, these act for the user on any agent. Each start, message, interrupt, effort, role, continue, restart, pause, wake and close
+  is logged for the user.
   \`agent-board help orchestrate\` shows the loop.
 
   new [options] [--] <prompt>
@@ -275,6 +271,9 @@ ORCHESTRATING
   read <ref> [<path>]   An agent's final message, or a file in its worktree.
   interrupt <ref>       Stop an agent's turn; it waits at its prompt.
   effort <ref> <level>  Change an agent's reasoning effort: low, medium, high, xhigh or max.
+  role <ref> <role> | --clear
+                        Give a running agent a role, orchestrator among them, or none; only
+                        its role changes. \`role me orchestrator\` makes you your zone's.
   continue <ref>        Continue on credits: resume a turn its usage limit stopped.
   restart <ref> [--fresh [--] [<prompt>]]
                         Start an ended agent again in its tile, worktree and branch, carrying
@@ -293,7 +292,7 @@ ORCHESTRATING
   edge list             Every edge (as \`edges\`).
   edge remove <ref>     Remove an edge you, or an agent you started, made.
 
-  Laying out your zone, its tiles anywhere in your scope (and you), on its grid, what is in
+  Laying out a zone, its tiles anywhere on the board (and you), on its grid, what is in
   the way moving aside:
   move <ref> [--to <zone ref>] [--at <x>,<y>] [--near <ref> [--side below|right|left|above]]
                         Move a tile (an agent, a shell) or a note.
@@ -301,8 +300,7 @@ ORCHESTRATING
                         Lay out your zone's tiles: you first, then a lane per issue, its
                         implementer, reviewer and follow-up in columns, then its note.
                         --auto on arranges by itself as you start agents and add notes.
-                        arrange board lays out the whole board's zones and loose tiles,
-                        at board scope.
+                        arrange board lays out the whole board's zones and loose tiles.
   zone map [<zone ref>] [--boxes]
                         Your zone as a table of its lanes and what is amiss, to check a
                         layout; --boxes draws it in characters.
@@ -359,9 +357,6 @@ ORCHESTRATING
   wait <crew>           Until the crew stops: ready to merge, at its limit, or stopped.
 
 FOR THE USER
-  orchestrate on|off <ref> [--scope zone|repo|board]
-                        Let an agent orchestrate, or stop it: in a terminal or any shell,
-                        never from an agent's own session.
   activity [--of <ref>] What orchestrators did and tried, newest first.
 
 ENVIRONMENT
@@ -656,43 +651,33 @@ For a question with answers to pick from, use the MCP tool \`ask\`, which waits 
   mcp: {
     usage: 'agent-board mcp',
     text: `Serves the board as MCP tools on stdio: whoami, board, connections, handoff, ask, present_plan,
-show_doc, set_status, needs_you, open_pr, record_pr, record_doc, pin, unpin and set_page, and for an agent that may orchestrate as it starts, new_agent, send, wait, read,
-interrupt, set_effort, continue_on_credits, restart, pause, wake, close, handover, add_edge, remove_edge, move, arrange, map,
+show_doc, set_status, needs_you, open_pr, record_pr, record_doc, pin, unpin and set_page, and for an agent's own live session, new_agent, send, wait, read,
+interrupt, set_effort, give_role, continue_on_credits, restart, pause, wake, close, handover, add_edge, remove_edge, move, arrange, map,
 zone_layout, add_note, edit_note, remove_note, prefabs, roles, set_role and remove_role. The app adds it to the agents it starts; add it to another Claude
 with:
 
   claude mcp add agent-board -- agent-board mcp`,
   },
   orchestrate: {
-    usage: 'agent-board orchestrate on|off <ref> [--scope zone|repo|board]\n       agent-board orchestrate handover <from> <to>',
+    usage: 'agent-board orchestrate handover <from> <to>',
     text: `Orchestrating: one agent leading others, as a lead hands work to workers and reviewers and
 reads what they hand back.
 
-A live agent in a zone may orchestrate there while the zone lets it, unless the user turns
-that off for the zone (${ORCHESTRATE_SETTING}) or for the agent. The agents an
-orchestrator starts do too, up to three deep: the agents its agents start never do. The user
-can also let one agent orchestrate with \`agent-board orchestrate on <ref>\`, in a terminal or
-any shell on the board; never from an agent's own session, so no agent lets itself or another
-orchestrate.
+Any agent's own live session may orchestrate, in any zone and with no role: start, message,
+watch, move and close other agents. It acts on any agent another agent started, its own or
+another's, wherever it is, and never on itself or on the ones the user started by hand: those
+it may only message if they are the Captain, or answer if they messaged it first. The agents it
+starts may start their own, at any depth.
 
 In a shell on the board (a shell tile, a tab, an ended agent's shell) or a terminal outside
 agent-board, the orchestrator commands act for the user, on any agent and in any zone, logged
 as that shell (or as you). The agents they start are the user's own.
 Zones are only groups: it may start an agent in any zone, in any repo (--zone, --repo).
---scope says which agents it didn't start it may act on:
-  zone    the agents in the zone its tile is in (the default)
-  repo    the agents of its repo, in any zone of it
-  board   any agent, in any zone
-It may always act on the agents it started, wherever they are, and never on itself. It may
-read and wait for another orchestrator, but not steer one (send, interrupt, effort, restart, pause, wake,
-close, or wire an edge into it) whose scope is wider than its own (board > repo > zone): a message
-runs under the permissions of the agent that gets it.
 
 \`agent-board orchestrate handover <from> <to>\` hands one orchestrator's crew and what it made
 (notes, lane labels, clocks, shapes, connectors, zones and edges) to another, which may then
 arrange, edit, remove and close them as its own. An orchestrator hands over its own crew, or
-takes over one in its scope, no wider than its own, whose session has ended; either way the one
-that gets the crew must have every agent in it in its scope. From a shell, the user hands over any.
+takes over one whose session has ended or that was removed. From a shell, the user hands over any.
 A removed orchestrator's crew stays its own (\`orphanedFrom\` in \`ls --json\`) until one takes it
 over: name the removed one by its old ref or name.
 
@@ -764,21 +749,18 @@ rest:
   agent-board move impl --to Done
   agent-board note add --near impl -- 'Waiting on the gate'
 Each places what it moves clear of what is there, growing the zone to hold it, never over
-another zone. You may move any tile in your scope, and yourself within your zone (at zone
-scope your zone is your scope: you can't leave it), but never an agent into a zone that would
-let it orchestrate; you may change or remove only the groups and notes you, or an agent you
-started, made. A group you make lets no agent orchestrate. A zone bound to a repo is the
-user's.
+another zone. You may move any tile but the user's own agents, and yourself, anywhere;
+you may change or remove only the groups and notes you, or an agent you started, made. A zone
+bound to a repo is the user's.
 
 What it can't do: answer a permission prompt (the user does), approve an edge's gate or
 script, change a permission mode, a model or a setting, send a harness command (a prompt or
 message starting with ! or a /command; a plugin's namespaced /plugin:command is fine) or any
 control character, start an agent from a base whose project config (.claude, .mcp.json,
-.codex) differs from the repo's HEAD, remove an agent it didn't start or an edge its crew
-didn't make, or start an agent when it is itself the third deep in a crew. An agent it starts
-works in its own worktree and branch, as any agent does.
+.codex) differs from the repo's HEAD, remove an agent it didn't start unless the user allows
+it (close --remove --ask), or remove an edge its crew didn't make. An agent it starts works
+in its own worktree and branch, as any agent does.
 
-  --scope <scope>   zone (the default), repo or board.
   --json            Print the agent as JSON.`,
   },
   new: {
@@ -832,8 +814,8 @@ agent-board: see \`agent-board help orchestrate\`. It prints the new agent's ref
                      Its reviewers start on the builder's branch each time the builder hands
                      off, a fresh one each round, and their reviews go back to it, until each
                      approves or the round limit: see \`agent-board crew\`. A lead starts its
-                     own crew, whose members count toward crew depth. Takes --zone, --repo,
-                     --issue, --description and --file; the prefab sets the rest.
+                     own crew. Takes --zone, --repo, --issue, --description and --file; the
+                     prefab sets the rest.
   --json             Print the agent as JSON.`,
   },
   prefab: {
@@ -908,13 +890,13 @@ Enter on it, as the tile's Send does, and fails, leaving it unsent, if no turn s
 --clear clears it. Both only for an agent you may steer, and never while the user is typing at its prompt.
 
 Any agent may send back to an agent that messaged it, for an hour after its latest message,
-even one outside its scope, and even if it may not orchestrate: a message it couldn't otherwise
-answer ends with a line naming who sent it. That opens a reply and nothing more: no wait,
+even one the user started by hand: a message it couldn't otherwise answer ends with a line
+naming who sent it. That opens a reply and nothing more: no wait,
 read, interrupt, restart or close, and the answer opens no way back.
 
-Any orchestrator may send the Captain a message, whatever its scope: a message only, so
---submit, --clear, waking it and every other command on the Captain stay out of its scope.
-The Captain is told who it is from.
+Any agent may send the Captain a message: a message only, as the user started the Captain, so
+--submit, --clear, waking it and every other command on the Captain are refused. The Captain
+is told who it is from.
 
 What the agent reads starts with your sender mark, so it and its chat know the message is
 yours, not the user's: \`⟨send from impl · agent:944e1234⟩ Fix the review points: ...\`
@@ -1007,6 +989,20 @@ A Codex agent, or an ended one, takes it when next started. A restart keeps it.
 
   --json   Print the agent as JSON, with when it applies.`,
   },
+  role: {
+    usage: 'agent-board role <ref> <role> [--json] | agent-board role <ref> --clear [--json]',
+    text: `Gives a running agent a role, as its tile's Role menu does: a built-in one (implementer,
+reviewer, follow-up-reviewer), or any other by its name, \`orchestrator\` among them. Its badge, its
+zone's crew lines and whatever goes by the orchestrator role (arrange's top lane, the Captain's
+list of orchestrators) take it at once. Only the role changes: its session isn't restarted, and no
+role template is sent to it. \`roles\` edits the templates, not an agent's role.
+
+An agent gives a role to an agent it may steer, or to itself (\`role me orchestrator\`). A role
+names what an agent is for: it lets it do no more than any agent may.
+
+  --clear  Take its role away.
+  --json   Print the agent as JSON.`,
+  },
   continue: {
     usage: 'agent-board continue <ref> [--json]',
     text: `Continue on credits: resumes the turn of a Claude agent its usage limit stopped (rate-limited),
@@ -1065,8 +1061,8 @@ conversation, as its tile's Wake does. Refused for an agent that is not paused.
              and never one with a reviewer the user started; in a shell, or outside
              agent-board, any. Never one with uncommitted changes or commits no other branch
              has.
-  --ask      With --remove, as an orchestrator: ask the user to remove agents in your scope that
-             you did not start. They get one Allow/Deny prompt for every ref you give, and
+  --ask      With --remove, as an orchestrator: ask the user to remove agents you did not
+             start. They get one Allow/Deny prompt for every ref you give, and
              nothing goes unless they press Allow; one still running, or with an agent it
              started still running, stays unless they tick it. Waits for the answer and says
              what was removed and what stayed, and why.
@@ -1121,7 +1117,7 @@ close, edge, hand-off, move, arrange, group and note, done or refused (and why).
     text: `Hands your finished work to the next agent: along each edge out of your tile (\`agent-board show
 me\` lists them), or with --to along your edge to that agent alone. An edge's conditions are
 checked first, so a hand-off may be held until they pass. A manual edge is left for the user to
-send. With --to an agent you have no edge to, in your zone (or your orchestrator scope), it goes
+send. With --to an agent you have no edge to (one you may steer), it goes
 at once over a one-off edge drawn from you to it, which the user sees and can send again. Each
 hand-off is logged for the user.
 
@@ -1148,8 +1144,7 @@ your tile, and no --to, that is all it does.
 every edge, as \`agent-board edges\` does, and anyone may.
 
 \`edge add\` joins <from> to <to>: when <from> hands off, what the edge carries goes to <to> as
-its next message. Both must be in your scope, or you (\`me\`); <to> may not be an orchestrator
-whose scope is wider than yours. An agent's edge is marked as made by it, and the user can
+its next message. Each must be an agent you may steer, or you (\`me\`). An agent's edge is marked as made by it, and the user can
 change or remove it like any other. \`edge remove\` removes an edge you, or an agent you
 started, made; in a shell, or outside agent-board, any edge.
 
@@ -1174,13 +1169,12 @@ cell nearest it (a column a tile wide, a row a tile tall, from the zone's first 
 the board (a board position) it moves the least distance clear of what is there.
 --near puts it a gap beside that tile or note, in its zone, below it unless --side says.
 Without --at or --near it takes the zone's first free slot. Only what arrange may move moves
-aside (shells, agents in your scope, notes and cards you or your crew made): where the user's
-notes or cards, a tile outside your scope, or an external session's tile are, it is refused.
+aside (shells, agents you may steer, notes and cards you or your crew made): where the user's
+notes or cards, an agent the user started by hand, or an external session's tile are, it is
+refused.
 
-What you may move: any tile or note in your scope (your zone, unless the user let you
-orchestrate wider), the agents you started, and yourself (at zone scope, only within your
-zone). Where: a zone in your scope, or a group you made; loose on the board (--to board) only
-at board scope. Never an agent into a zone that would let it orchestrate where it can't now.
+What you may move: any tile or note but the agents the user started by hand, and yourself.
+Where: any zone, a group, or loose on the board (--to board).
 An --at more than 1000 px past the zone's edge is put at that reach; a move that would grow
 the zone over another zone is refused.
 
@@ -1192,7 +1186,7 @@ the zone over another zone is refused.
   },
   arrange: {
     usage: 'agent-board arrange [<zone ref>] [--by issue|role|state] [--layout rows|columns|cards|grid|wrap|masonry|treemap] [--auto on|off] [--json] | arrange board [--json]',
-    text: `Lays out the tiles of your zone (or <zone ref>, in your scope) that you may move, for an
+    text: `Lays out the tiles of your zone (or <zone ref>) that you may move, for an
 orchestrator: you first, then
 
   --by issue   a lane per issue (the default), a row each, below you, the shells and your
@@ -1234,7 +1228,7 @@ labels and notes line up beside the crew until you arrange by issue again. Agent
 column's room (or a row's) past every tile and row the rail between them runs by, so the rail
 has room for its document and label at either end.
 Every tile lands on the zone's grid, so rows and columns line up across clusters. What it may
-not move (the user's notes and cards, tiles outside your scope) stays put, and the rows keep
+not move (the user's notes and cards, and the agents the user started by hand) stays put, and the rows keep
 clear of it. The zone then fits what it holds, growing or shrinking to it (and what stays put)
 plus its margin, never over another zone. A tile expanded in place counts at its expanded size,
 so its lane is taller and its column wider. The same board always arranges the
@@ -1270,7 +1264,7 @@ and what moves keeps clear of them. It is never run by itself. It takes no --by,
 
 \`zone add --group\` makes one, marked as made by you: beside your zone, or at --at (a board
 position), stepped right past any zone or loose tile there, as the app's Zone tool places one:
-never inside another zone. It lets no agent orchestrate (the user can turn that on). Its name
+never inside another zone. Its name
 is at most 80 characters, with no control characters, and it is at most 8000 px a side. Move
 tiles into it with \`agent-board move <ref> --to <its ref>\`.
 
@@ -1280,7 +1274,7 @@ zone; shrinking it past its tiles moves the ones its edge cuts through, as the a
 does, and is refused when they have nowhere to go. Removing it leaves its tiles and notes
 loose on the board, where they were.
 
-\`zone map\` reads your zone (or <ref>, in your scope) as \`arrange\` sees it, moving nothing: a
+\`zone map\` reads your zone (or <ref>) as \`arrange\` sees it, moving nothing: a
 line per lane with a cell per slot (implementer, reviewer, follow-up, notes), each tile's ref,
 name and state, a free slot as ·, and you, the shells, your crew's clocks and what is in no
 lane on the top line; then where the next lane goes, which lanes are all done, and a lint line:
@@ -1294,7 +1288,7 @@ with it in short: each shape's kind, text and how many attributes and methods it
 connector's ends, relation and labels, at most 40 lines; --sections lists a class's members
 too, a few of each and cut short. \`agent-board show <ref>\` prints one shape whole.
 
-\`zone screenshot\` writes a PNG of your zone (or <ref>, in your scope) and prints where, the
+\`zone screenshot\` writes a PNG of your zone (or <ref>) and prints where, the
 zone's size, the scale it is drawn at and the map's lint line. The app takes it in a hidden
 window, as the board draws it, with every terminal's text hidden; it never moves the user's
 view, and fails when the app isn't open. A zone over ${MAX_CAPTURE_SIDE} px a side is drawn smaller
@@ -1302,7 +1296,7 @@ to fit. --style lofi draws the zone plainly instead, from what the board knows: 
 note as a labelled box, and its edges and connectors as straight lines. Check with \`zone map\`
 first: a picture costs a model far more to read.
 
-\`zone layout\` sets how your zone (or <ref>, in your scope) draws what it holds, as the zone's
+\`zone layout\` sets how your zone (or <ref>) draws what it holds, as the zone's
 Layout menu does in the app. free: each tile where it was put (every zone starts free).
 lanes: a rule the zone keeps, a lane per ticket, laid out again whenever its work changes; a
 tile the user drags leaves the rule where it is put, and \`arrange\` there follows the rule.
@@ -1326,19 +1320,19 @@ shelves when its work is easier to follow by status, clusters or lanes when by t
   },
   note: {
     usage:
-      'agent-board note add [--text <text> | [--] <text>] [--kind sticky|text] [--color <c>] [--to <zone ref>] [--at <x>,<y>] ' +
-      '[--near <ref> [--side <s>]] | note edit <ref> [--text <text>] [--color <c>] [--size <w>x<h>] | note remove <ref>',
+      'agent-board note add [--text <text> | [--] <text>] [--kind sticky|text] [--color <c>] [--lines <n>] [--to <zone ref>] [--at <x>,<y>] ' +
+      '[--near <ref> [--side <s>]] | note edit <ref> [--text <text>] [--color <c>] [--size <w>x<h> | --lines <n>] | note remove <ref>',
     text: `Notes on the board for an orchestrator (\`agent-board help orchestrate\`), marked as made by
-you. From an agent, \`note add\` makes an agent note: a typed card with your badge (your name
-and role) and the time, never one of the user's stickies, so it has no colour (--color is
-ignored, with a warning); --kind sticky makes a sticky note and --kind text makes text, each
+you. From an agent, \`note add\` makes an agent note: a speech bubble from your face (your
+harness's mark), headed with your name, role and the time, never one of the user's stickies,
+so it has no colour (--color is ignored, with a warning); --kind sticky makes a sticky note and --kind text makes text, each
 signed with 🤖, your name and the time (signed again when edited). In a shell, or outside agent-board, it makes a sticky note (the
-default) or text. It puts the note in your zone (or --to's, in your scope or a group you made)
+default) or text. It puts the note in your zone (or --to's, any zone or a group you made)
 at its first free spot, or exactly at --at or beside --near, what is there moving aside as for
 \`agent-board move\`. A note (not text) --near an agent, with no --side, goes in its cluster's
 slot: added to the end of the note of the cluster \`agent-board arrange\` put it in, after
 what it says (arranging again keeps that text), else in the slot before the agent, which moves
-along with its row (beside it, below, for an agent outside your scope). Its text is short
+along with its row (beside it, below, for an agent the user started by hand). Its text is short
 markdown: bold, italics, \`code\`, lists and links; tabs and line breaks, but no other control
 character.
 
@@ -1348,10 +1342,16 @@ it yours again. \`note remove\` removes such a link card too.
 
 \`note edit --size\` resizes an agent note, as dragging its corner does: it keeps that size when
 you arrange (the lane is laid out round it) and when the app restarts, and text that doesn't
-fit scrolls, with a \`more\` cue. It is at least 200x96 and at most 1200x1440.
+fit scrolls, with a \`more\` cue. It is at least 238x96 and at most 1200x1440.
+
+\`--lines <n>\` gives an agent note a line budget, 1 to 40: it starts as tall as n lines of its
+text, and past them the text fades into a \`↓ N more lines\` chip the user can click to show it
+all. Rewritten, the note keeps its budget. \`note edit --lines 0\` takes the budget away, and a
+size (yours or the user's) wins over it: a budget given to a note with a size is ignored.
 
   --text <text>    Its text (or give it after --).
   --size <w>x<h>   An agent note's width and height, for \`note edit\`, such as 360x240.
+  --lines <n>      An agent note's line budget, 1 to 40; 0, for \`note edit\`, for none.
   --kind <k>       sticky or text. From an agent, a note with no --kind is an agent note and
                    --kind sticky makes a signed sticky; elsewhere sticky is the default.
   --color <c>      A sticky note's yellow, orange, pink, violet, blue, green, grey or white;
@@ -1473,8 +1473,8 @@ send again, you are told what changed. If an orchestrator started you, it answer
 instead, and is told. Naming an agent on a to-do sends it nothing: it finds its to-dos with
 \`steps ls --mine\`.
 
-  steps ls [--mine]         The cards you can read: in your zone, in zones your orchestrator
-                            scope reaches, loose ones, and any you are part of. --mine: those
+  steps ls [--mine]         The cards you can read: in your zone, loose ones, and any you
+                            are part of. --mine: those
                             with a to-do of yours not yet done.
   steps read <card>         One card in full, each step numbered, with its answer or tick.
   steps done <card> <n>...  Tick your to-dos (--undo unticks them).
@@ -1495,8 +1495,8 @@ instead, and is told. Naming an agent on a to-do sends it nothing: it finds its 
       'memory edit <memory> <entry> [--key <key>|--no-key] [--pin|--unpin] [--] [<text>...] | memory rm <memory> <entry> | ' +
       'memory history <memory> <entry> | memory restore <memory> <entry> <version> | memory confirm <memory> <entry> | memory new <title>...',
     text: `A memory is shared context on the board: what agents and people want kept, read and changed
-by anyone in its scope. In a zone, its scope is that zone's agents (and orchestrators whose scope
-reaches it); loose on the board, every agent's; set to No agents, only the user's. Read the
+by those it is for. In a zone, it is for that zone's agents; loose on the board, every
+agent's; set to No agents, only the user's. Read the
 memories you can at the start of work, and keep what the next agent needs in one.
 
 It holds facts and documents:
@@ -1526,7 +1526,7 @@ It holds facts and documents:
   memory new <title>            Put a new memory beside your tile.
 
 <memory> is its ref (item:3f2a) or its title. An entry left 30 days reads as stale. Reading a fact,
-or a document by name, counts you among its readers. Anyone in scope
+or a document by name, counts you among its readers. Anyone it is for
 may change any entry, the user's too: history takes a change back. At most 500 entries and 8 MB a
 memory, and 4,000 characters a value (keep longer text as a document).
 
@@ -1562,8 +1562,8 @@ together, use a steps card (\`steps --help\`).
       'agent-board queue ls | queue read <queue> | queue add <queue> [--kind <kind>] [--front] [--link <url>] [--body <text>] [--file <path>|-] [--] <line>... | ' +
       'queue take <queue> [<job>] | queue drop <queue> <job> | queue done <queue> <job> [--result <text>] | queue edit <queue> <job> [--link <url>] [--] [<text>...] | ' +
       'queue move <queue> <job> <before>|top|last | queue drain <queue> on|off [--most 1-3] | queue rm <queue> <job> | queue history <queue> <job> | queue restore <queue> <job> <version> | queue new [--for-user] <title>...',
-    text: `A queue holds jobs in order, for agents to take one at a time, and info to read. Its scope is
-a memory's: where it sits. What goes in and comes out is for agents in scope and the user to
+    text: `A queue holds jobs in order, for agents to take one at a time, and info to read. It is for
+the agents a memory is: where it sits. What goes in and comes out is for them and the user to
 decide. A queue for the user (--for-user) holds what is ready for them to look at: agents add to
 it, and only the user takes from it.
 
@@ -1646,7 +1646,7 @@ close, a fresh agent's options); saving under a name you saved replaces it. \`sc
 override its own. \`schedule template remove\` removes only a template you saved; in a shell, or
 outside agent-board, any.
 
-  --to <ref>         The agent it messages, in your scope.
+  --to <ref>         The agent it messages: one you may steer.
   --self             Message you: a clock of your own.
   --after <mode>     What your own clock does with you after each run: hibernate, close or idle.
   --why <text>       Why you are changing your own clock.
@@ -1658,7 +1658,7 @@ outside agent-board, any.
                      A fresh agent's, as for \`agent-board new\`.
   --keep             Leave a fresh agent open once its run is over.
   --result <r>       history (the default), note or handoff.
-  --handoff-to <ref> The agent a fresh agent's result is handed to, in your scope.
+  --handoff-to <ref> The agent a fresh agent's result is handed to: one you may steer.
   --file <path>      Read the prompt from a file.
   --json             Print the clock and its status as JSON.`,
   },
@@ -1672,13 +1672,11 @@ commands do:
 
 ${[...BOARD_CALLER_METHODS].map((method) => `  ${method}`).join('\n')}
 
-and, for an agent the user lets orchestrate, the orchestrator commands:
+and, for an agent's own live session, the orchestrator commands:
 
 ${[...ORCHESTRATOR_METHODS].map((method) => `  ${method}`).join('\n')}
 
-A shell on the board reaches those (acting for the user), and also:
-
-${[...USER_SIDE_METHODS].map((method) => `  ${method}`).join('\n')}
+A shell on the board reaches those too, acting for the user.
 
 Everything else (typing to, answering for or stopping a session directly, changing a setting) is
 refused. Outside a session it reaches every method, as the app does.`,
@@ -1834,7 +1832,6 @@ const OPTIONS = {
   remove: { type: 'boolean' },
   ask: { type: 'boolean' },
   fresh: { type: 'boolean' },
-  scope: { type: 'string' },
   of: { type: 'string' },
   limit: { type: 'string' },
   to: { type: 'string' },
@@ -1856,6 +1853,7 @@ const OPTIONS = {
   group: { type: 'boolean' },
   color: { type: 'string' },
   size: { type: 'string' },
+  lines: { type: 'string' },
   text: { type: 'string' },
   note: { type: 'string' },
   board: { type: 'boolean' },
@@ -1924,14 +1922,15 @@ export const COMMAND_OPTIONS: Record<string, readonly Option[]> = {
   watch: ['crew', 'only', 'since', 'count', 'timeout'],
   restart: ['fresh', 'file'],
   close: ['remove', 'ask', 'timeout'],
-  orchestrate: ['scope'],
+  orchestrate: [],
+  role: ['clear'],
   activity: ['of', 'limit'],
   handoff: ['to', 'message', 'handover', 'data'],
   edge: ['carries', 'path', 'trigger', 'condition'],
   move: ['to', 'at', 'near', 'side'],
   arrange: ['by', 'layout', 'auto'],
   zone: ['group', 'name', 'color', 'at', 'size', 'boxes', 'sections', 'style', 'out'],
-  note: ['text', 'kind', 'color', 'size', 'to', 'at', 'near', 'side'],
+  note: ['text', 'kind', 'color', 'size', 'lines', 'to', 'at', 'near', 'side'],
   shape: ['text', 'attribute', 'method', 'fill', 'kind', 'to', 'at', 'near', 'side'],
   connect: ['relation', 'style', 'label', 'from-label', 'to-label'],
   connector: ['relation', 'style', 'label', 'from-label', 'to-label'],
@@ -2266,6 +2265,14 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
       const [ref, level] = positionals as [string, string];
       return async (session) => print(await setAgentEffort(session, ref, level));
     }
+    case 'role': {
+      const clear = values.clear === true;
+      if (positionals.length !== (clear ? 1 : 2)) {
+        throw new UsageError('give an agent ref and a role, or --clear: agent-board role <ref> <role> | agent-board role <ref> --clear');
+      }
+      const [ref, role] = positionals as [string, string | undefined];
+      return async (session) => print(await giveAgentRole(session, ref, clear ? null : role!));
+    }
     case 'continue': {
       const ref = oneRef();
       return async (session) => print(await continueAgent(session, ref));
@@ -2302,12 +2309,7 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
         if (from === undefined || to === undefined || extra.length > 0) throw new UsageError('give the orchestrator to hand over from, and the one to hand over to');
         return async (session) => print(await handOver(session, from, to));
       }
-      const [onOff, ref, ...rest] = positionals;
-      if ((onOff !== 'on' && onOff !== 'off') || ref === undefined || rest.length > 0) throw new UsageError('give on or off, and one agent ref');
-      const scope = string('scope') ?? 'zone';
-      if (!ORCHESTRATE_SCOPES.includes(scope as OrchestrateScope)) throw new UsageError(`--scope must be ${ORCHESTRATE_SCOPES.join(', ')}`);
-      if (onOff === 'off' && string('scope') !== undefined) throw new UsageError('--scope is only for `orchestrate on`');
-      return async (session) => print(await setOrchestrate(session, ref, onOff === 'on' ? (scope as OrchestrateScope) : null));
+      throw new UsageError('give handover, the orchestrator to hand over from, and the one to hand over to');
     }
     case 'doc': {
       if (positionals.length !== 1) throw new UsageError('give the path of one .md or .html file');
@@ -2435,7 +2437,8 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
         if (rest.length > 0 && string('text') !== undefined) throw new UsageError('give the text or --text, not both');
         const noteText = string('text') ?? rest.join(' ');
         if (noteText.trim() === '') throw new UsageError('give the note its text');
-        const options = { ...place, text: noteText, kind: string('kind'), color };
+        const lines = string('lines');
+        const options = { ...place, text: noteText, kind: string('kind'), color, ...(lines === undefined ? {} : { lines }) };
         checked(() => checkNote(options));
         return async (session) => print(await addNote(session, options));
       }
@@ -2444,13 +2447,16 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
       if (sub === 'edit') {
         if (rest.length !== 1) throw new UsageError('give one note ref');
         const size = string('size');
-        if (string('text') === undefined && color === undefined && size === undefined) throw new UsageError('give its new --text, --color or --size');
+        const lines = string('lines');
+        if (string('text') === undefined && color === undefined && size === undefined && lines === undefined) throw new UsageError('give its new --text, --color, --size or --lines');
+        if (size !== undefined && lines !== undefined) throw new UsageError('give --size or --lines, not both');
         if (size !== undefined) checked(() => noteSizeOf(size));
-        return async (session) => print(await editNote(session, rest[0]!, { text: string('text'), color, size }));
+        if (lines !== undefined) checked(() => noteLinesOf(lines, true));
+        return async (session) => print(await editNote(session, rest[0]!, { text: string('text'), color, size, ...(lines === undefined ? {} : { lines }) }));
       }
       if (sub === 'remove') {
         if (rest.length !== 1) throw new UsageError('give one note ref');
-        if (string('text') !== undefined || color !== undefined) throw new UsageError('`note remove` takes no options');
+        if (string('text') !== undefined || color !== undefined || string('lines') !== undefined) throw new UsageError('`note remove` takes no options');
         return async (session) => print(await removeNote(session, rest[0]!));
       }
       throw new UsageError('the note commands are `note add`, `note edit` and `note remove`');

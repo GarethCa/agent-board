@@ -535,6 +535,21 @@ describe('fake claude', () => {
     expect(finals[2]).toBe('All tests pass.');
   });
 
+  it('with fullscreen, draws in the alternate screen and, hung up on, leaves it for how to resume, exiting 129', async () => {
+    const { child, done } = startFake('claude', { scenario: 'waiting', args: ['--session-id', 'aaaa-1111', 'pick one'], env: { FAKE_HARNESS_FULLSCREEN: '1' } });
+    await untilStdout(child, 'Postgres or SQLite?');
+
+    child.kill('SIGHUP');
+    const result = await done;
+
+    expect(result.code).toBe(129);
+    expect(result.stdout.startsWith('\x1b[?1049h')).toBe(true);
+    const after = result.stdout.slice(result.stdout.indexOf('Postgres or SQLite?'));
+    const left = after.indexOf('\x1b[?1049l');
+    expect(left).toBeGreaterThan(0);
+    expect(after.slice(left)).toMatch(/Resume this session with:[\s\S]*claude --resume aaaa-1111/);
+  });
+
   it('crash: exits non-zero mid-turn without Stop or SessionEnd', async () => {
     const result = await runFake('claude', { scenario: 'crash', args: ['-p', '--settings', settings(), 'do it'] });
 

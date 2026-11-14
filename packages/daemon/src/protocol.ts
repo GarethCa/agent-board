@@ -136,12 +136,6 @@ export interface Zone {
    */
   boardMcp: boolean;
   /**
-   * Whether the agents the user starts in it may orchestrate in it: each starts with `orchestrate` `zone`,
-   * which holds while its tile is in this zone and this stays on. On by default. Turned off, no agent in it orchestrates
-   * any more, whoever let it. An agent an orchestrator starts never orchestrates.
-   */
-  agentsOrchestrate: boolean;
-  /**
    * The merge gate: the command that checks an agent's work before it is merged, such as `pnpm check:local`, run
    * in the agent's worktree only when the user asks; null for none. It runs through `sh -c` (`gateCommandArgv`), and may
    * mark its steps (ADR-0013).
@@ -198,14 +192,14 @@ export interface Zone {
  */
 export type ZoneSnapshot = Pick<
   Zone,
-  'id' | 'name' | 'color' | 'fillOpacity' | 'x' | 'y' | 'width' | 'height' | 'codexBypassHookTrust' | 'boardMcp' | 'agentsOrchestrate' | 'gateCommand' | 'tracker' | 'defaultRepo'
+  'id' | 'name' | 'color' | 'fillOpacity' | 'x' | 'y' | 'width' | 'height' | 'codexBypassHookTrust' | 'boardMcp' | 'gateCommand' | 'tracker' | 'defaultRepo'
 > &
   Partial<Pick<Zone, 'repoRoot' | 'folder' | 'spacing' | 'groupFolder' | 'trustsFolder' | 'layoutMode' | 'layoutRule'>>;
 
 /** What `zone.restore` needs to make `zone` again: the fields of a `ZoneSnapshot`, and no others. */
 export function zoneSnapshot(zone: ZoneSnapshot): ZoneSnapshot {
-  const { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, tracker, defaultRepo, repoRoot, folder, spacing, groupFolder, trustsFolder, layoutMode, layoutRule } = zone;
-  return { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, tracker, defaultRepo, repoRoot, folder, spacing, groupFolder, trustsFolder, layoutMode, layoutRule };
+  const { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, gateCommand, tracker, defaultRepo, repoRoot, folder, spacing, groupFolder, trustsFolder, layoutMode, layoutRule } = zone;
+  return { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, gateCommand, tracker, defaultRepo, repoRoot, folder, spacing, groupFolder, trustsFolder, layoutMode, layoutRule };
 }
 
 /**
@@ -379,7 +373,6 @@ export interface ZoneSettings {
   codexBypassHookTrust: boolean;
   trustsFolder: boolean;
   boardMcp: boolean;
-  agentsOrchestrate: boolean;
   gateCommand: string | null;
   spacing: ArrangeSpacing;
   layoutMode: ZoneLayoutMode;
@@ -605,8 +598,14 @@ export interface StickyData {
 export const AGENT_NOTE_SIZE = { width: 272, height: 120 };
 /** The tallest an agent note grows to show its text: past it, it scrolls. The user can resize it taller. */
 export const MAX_AGENT_NOTE_HEIGHT = 480;
-/** The least an agent note can be resized to: its tab, a line of text and its footer still fit. */
-export const MIN_AGENT_NOTE_SIZE = { width: 200, height: 96 };
+/** How wide the agent's face beside an agent note's bubble is, with the gap to the bubble's tail, px. */
+export const AGENT_NOTE_FACE_WIDTH = 38;
+/** The least an agent note can be resized to: its face, its bubble's first line, a line of text and its footer still fit. */
+export const MIN_AGENT_NOTE_SIZE = { width: 200 + AGENT_NOTE_FACE_WIDTH, height: 96 };
+/** The most lines an agent can ask its note to show (`note add --lines`); past its budget the text fades into a chip. */
+export const MAX_AGENT_NOTE_LINES = 40;
+/** Whether `value` is a line budget an agent note can show: a whole number of lines, 1 to `MAX_AGENT_NOTE_LINES`. */
+export const isLineBudget = (value: unknown): value is number => Number.isInteger(value) && (value as number) >= 1 && (value as number) <= MAX_AGENT_NOTE_LINES;
 /** The most an agent note can be resized to, by hand or `note edit --size`: a few lane slots wide, and a few screenfuls of text tall. */
 export const MAX_AGENT_NOTE_SIZE = { width: 1200, height: 3 * MAX_AGENT_NOTE_HEIGHT };
 
@@ -637,6 +636,12 @@ export interface AgentNoteData {
   about?: string;
   /** For an Ask Claude answer: the changes to the diagram it suggests, drawn as ghosts until accepted or dismissed. */
   suggestions?: SuggestedEdit[];
+  /**
+   * How many lines of its text it shows, as its agent asked (`note add --lines`), 1 to `MAX_AGENT_NOTE_LINES`: past
+   * them, the text fades into a "↓ N more lines" chip. Null or absent, it shows all its text. A size the user gives it
+   * (`userSized`) wins over it.
+   */
+  lines?: number | null;
 }
 
 /**
@@ -1981,11 +1986,6 @@ export interface Agent {
    * git repo later.
    */
   plainFolder: boolean;
-  /**
-   * Whether it may start, message and watch other agents through the board CLI and MCP, and where: its scope,
-   * or null while it may not. Only the user sets it (`agent.setOrchestrate`); an agent an orchestrator starts never has it.
-   */
-  orchestrate: OrchestrateScope | null;
   /** The orchestrator that started it, or null for an agent the user started (or once that orchestrator is removed). */
   spawnedBy: string | null;
   /**
@@ -2596,7 +2596,7 @@ export interface RemoveAskTile {
 }
 
 /**
- * What an orchestrator asks the user to remove, in one prompt: tiles in its scope that it did not start. It
+ * What an orchestrator asks the user to remove, in one prompt: tiles it reaches that it did not start. It
  * is in the needs-you inbox and on its tile until the user allows or denies it, it times out, or the orchestrator stops
  * waiting. Only the user's press answers it: nothing allows it for them.
  */
@@ -2802,6 +2802,18 @@ export type StepKind = (typeof STEP_KINDS)[number];
 export const STEPS_CARD_SIZE = { width: 280, height: 104 };
 /** A steps card's size folded to its icon tile. */
 export const STEPS_ICON_SIZE = { width: 120, height: 120 };
+/** The least a steps card can be resized to: its three lines at rest still fit. */
+export const STEPS_CARD_MIN_SIZE = { width: 220, height: STEPS_CARD_SIZE.height };
+
+/** A card's width and height on the board. */
+export interface CardSize {
+  width: number;
+  height: number;
+}
+
+/** Whether `size` is a card's size: a width and a height, each above nought. */
+export const isCardSize = (size: unknown): size is CardSize =>
+  typeof size === 'object' && size !== null && [(size as CardSize).width, (size as CardSize).height].every((side) => typeof side === 'number' && Number.isFinite(side) && side > 0);
 
 /** The most steps a steps card holds. */
 export const MAX_STEPS = 50;
@@ -2851,8 +2863,8 @@ export interface Step {
 
 /**
  * A steps card's `data`: an ordered list of steps, each a question or a to-do, which the user or an agent made. Its
- * questions are answered by `answeredBy`, and go to its maker as one message on Send. Its scope is where it sits: in a
- * zone, that zone's agents' (and the orchestrators whose scope reaches it); loose, every agent's.
+ * questions are answered by `answeredBy`, and go to its maker as one message on Send. Who reads it is where it sits: in
+ * a zone, that zone's agents; loose, every agent.
  */
 export interface StepsData {
   title: string;
@@ -2868,6 +2880,8 @@ export interface StepsData {
   closedAt: string | null;
   /** The user folded it to its icon tile. */
   collapsed?: boolean;
+  /** The size the user gave it open, kept while it is folded so unfolding gives it back. */
+  openSize?: CardSize;
   /**
    * The agent's ask it was made from (Put on the board, or an ask that ended half-answered): while `ended` is null the
    * agent's call still waits, and Send answers it there instead of typing at its prompt.
@@ -2906,6 +2920,8 @@ export const MEMORY_CARD_SIZE = { width: 340, height: 220 };
 export const LIST_CARD_FOLDED_SIZE = { width: 128, height: 132 };
 /** A new queue card's size: its head, a line of counts, the first jobs and the add box. */
 export const QUEUE_CARD_SIZE = { width: 340, height: 244 };
+/** The least a memory or a queue card can be resized to: its head, a row and its add box still fit. */
+export const LIST_CARD_MIN_SIZE = { width: 240, height: 168 };
 
 /** The most entries a memory holds. */
 export const MAX_MEMORY_ENTRIES = 500;
@@ -2941,7 +2957,7 @@ export type QueueAudience = (typeof QUEUE_AUDIENCES)[number];
 
 /**
  * A memory card's `data`: shared context that agents read and write with a tool, and people on the board. Its entries are
- * in their own table (`MemoryEntry`). Its scope is where it sits, as a steps card's is, unless `noAgents`: then only the
+ * in their own table (`MemoryEntry`). Who reads it is where it sits, as for a steps card, unless `noAgents`: then only the
  * user reads it. `count` is how many entries it holds, kept for the card to show. `folded`, it is drawn as its icon alone.
  */
 export interface MemoryData {
@@ -2950,6 +2966,8 @@ export interface MemoryData {
   noAgents: boolean;
   count: number;
   folded?: boolean;
+  /** The size the user gave it open, kept while it is folded so unfolding gives it back. */
+  openSize?: CardSize;
 }
 
 /** How many times a job may be dropped back before a queue's drain leaves it for a person. */
@@ -2981,6 +2999,8 @@ export interface QueueData {
   noAgents: boolean;
   count: number;
   folded?: boolean;
+  /** The size the user gave it open, kept while it is folded so unfolding gives it back. */
+  openSize?: CardSize;
   drain?: QueueDrain;
 }
 
@@ -3144,6 +3164,8 @@ export type QueueChange =
 export const TODO_CARD_SIZE = { width: 300, height: 196 };
 /** A to-do list folded to its pill: its tick and how many are left. */
 export const TODO_PILL_SIZE = { width: 184, height: 36 };
+/** The least a to-do list is made by hand: its head, a line or so, and its foot. */
+export const TODO_CARD_MIN_SIZE = { width: 220, height: 132 };
 /** The most lines a to-do list holds, ticked ones too. */
 export const MAX_TODO_LINES = 100;
 /** The longest a to-do line is, in characters. */
@@ -3165,13 +3187,15 @@ export interface TodoLine {
 
 /**
  * A to-do list's `data`: reminders for the user. An agent's list (`owner` the agent) is made by its first `remind`,
- * under its tile, and stays after the agent has gone; the user's own lists are the user's. Its scope is a steps card's.
+ * under its tile, and stays after the agent has gone; the user's own lists are the user's. Who reads it is as for a steps card.
  */
 export interface TodoData {
   owner: StepsWho;
   lines: TodoLine[];
   /** Folded to its pill. */
   folded?: boolean;
+  /** The size it had open, kept while it is folded: the user may have given it one. */
+  openSize?: CardSize;
 }
 
 /**
@@ -3607,28 +3631,15 @@ export interface BoardCaller {
   /**
    * Whom it acts for: `agent` for an agent's own live session; `user` for every other, a shell tile, a tab
    * (an agent's too) and an ended agent's shell, and whatever the user runs in it by hand. The user's side
-   * orchestrates at board scope, and may turn orchestrating on and off, but never answers a permission prompt, types
-   * into a session or changes another setting (ADR-0010).
+   * orchestrates too, reaching every agent, but never answers a permission prompt, types into a session or changes a
+   * setting (ADR-0010).
    */
   side: 'agent' | 'user';
   /**
-   * The scope it may orchestrate in: its agent's, for an agent's own session (null while the user hasn't let
-   * it); `board` for the user's side.
+   * Whether it may use the orchestrator methods (ADR-0011): every agent's own live session may, and the user's side;
+   * an agent's own session once it has ended may not.
    */
-  orchestrate: OrchestrateScope | null;
-}
-
-/**
- * Where an orchestrator may act (ADR-0011): on the agents in the zone its tile is in now (`zone`), on those of
- * its own repo wherever they sit (`repo`), or on any (`board`); and on the agents it started itself, wherever they are.
- * It starts agents in its zone, or in a zone of its repo, or in any zone, the same way.
- */
-export const ORCHESTRATE_SCOPES = ['zone', 'repo', 'board'] as const;
-export type OrchestrateScope = (typeof ORCHESTRATE_SCOPES)[number];
-
-/** Where `scope` reaches, in words, as `its` agent's (or `your`): `its zone`, `your repo`, `the whole board`. */
-export function orchestrateScopeWords(scope: OrchestrateScope, whose: 'its' | 'your' = 'its'): string {
-  return scope === 'board' ? 'the whole board' : `${whose} ${scope}`;
+  orchestrates: boolean;
 }
 
 /** Whether `value` names an agent state. */
@@ -3658,35 +3669,6 @@ export function orchestratorTextRefusal(text: string): string | undefined {
   return undefined;
 }
 
-/**
- * How many agents deep a crew goes: the user's agent, the agents it starts, and theirs. The last never
- * orchestrates by its zone's switch, and no orchestrator that deep starts another, so a loop can't fan out without bound.
- */
-export const MAX_CREW_DEPTH = 3;
-
-/** Where the zone setting that lets agents orchestrate is, for messages. */
-export const ORCHESTRATE_SETTING = "Let agents orchestrate, in the zone's ⋯ menu";
-
-/**
- * Why the session `caller` may not orchestrate, for it to be told so, and what would change that. `agent` is its tile's
- * agent, if it is one's, with whether the user turned it off and how deep in a crew it is; `zones` are the board's. It
- * may not when its session has ended, the user turned it off, it is as deep in a crew as an agent goes, it is in no
- * zone, or its zone doesn't let agents orchestrate.
- */
-export function notOrchestratingReason(
-  caller: Pick<BoardCaller, 'sessionId' | 'name'>,
-  agent: (Pick<Agent, 'sessionId' | 'endedAt' | 'zoneId'> & { off: boolean; depth: number }) | undefined,
-  zones: readonly Pick<Zone, 'id' | 'name' | 'agentsOrchestrate'>[],
-): string {
-  const { name } = caller;
-  if (agent === undefined || agent.sessionId !== caller.sessionId || agent.endedAt !== null) return `${name} may not orchestrate: its session has ended`;
-  if (agent.off) return `${name} may not orchestrate: the user turned it off. The user can turn it on again (agent-board orchestrate on)`;
-  if (agent.depth >= MAX_CREW_DEPTH - 1) return `${name} may not orchestrate: it is ${MAX_CREW_DEPTH} agents deep in a crew, as deep as a crew goes`;
-  const zone = zones.find((each) => each.id === agent.zoneId);
-  if (zone === undefined) return `${name} may not orchestrate: it is in no zone, and agents orchestrate in a zone that lets them (${ORCHESTRATE_SETTING})`;
-  return `${name} may not orchestrate: orchestrating is off in ${zone.name}. The user can turn it on (${ORCHESTRATE_SETTING})`;
-}
-
 /** A conversation an agent left behind when a fresh restart started a new one in its tile. */
 export interface EarlierConversation {
   /** The id its harness knew it by (Claude's session id, Codex's conversation id). */
@@ -3711,6 +3693,7 @@ export const ORCHESTRATOR_ACTIONS = [
   'send',
   'interrupt',
   'effort',
+  'role',
   'continue',
   'restart',
   'pause',
@@ -3780,8 +3763,8 @@ export interface OrchestratorActivity {
 }
 
 /**
- * The agent an orchestrator starts (`orchestrator.spawn`): as `agent.spawn`, in a zone in its scope (its own by
- * default), without the user's own choices (another repo, a place on the board, Codex project config, orchestrating).
+ * The agent an orchestrator starts (`orchestrator.spawn`): as `agent.spawn`, in any zone (its own by default),
+ * without the user's own choices (a place on the board, Codex project config).
  */
 export interface OrchestratorSpawnParams {
   zoneId?: string;
@@ -3992,7 +3975,7 @@ export interface ZoneMap {
   spacing: ArrangeSpacing;
   /** Whether no app window measured what it draws: everything is where and as big as it is saved, or estimated. */
   unmeasured: boolean;
-  /** The lead, the shells and the clocks its crew made, then whatever is in no lane (notes, cards, tiles out of scope). */
+  /** The lead, the shells and the clocks its crew made, then whatever is in no lane (notes, cards, the user's own tiles). */
   top: string[];
   lanes: ZoneMapLane[];
   things: ZoneMapThing[];
@@ -4624,8 +4607,6 @@ export type SpawnAgentParams = TerminalSize & {
   issueZoneId?: string;
   /** Where its tile goes: in the zone (the board slots it in without), or on the board for a loose one. */
   position?: { x: number; y: number };
-  /** Lets it orchestrate in this scope from the start (`agent.setOrchestrate`). Only the user's own spawn takes it. */
-  orchestrate?: OrchestrateScope;
 };
 
 /**
@@ -5157,6 +5138,12 @@ export interface DaemonMethods {
    * `invalidParams`, as does an unknown agent. Its worktree, branch and session id stay as they are.
    */
   'agent.setName': { params: SessionRef & { name: string }; result: Agent };
+  /**
+   * Gives the agent a role (`parseRole`: a built-in one by its name, else a custom one by name, `orchestrator` among
+   * them), or none with null. Only the role changes, at once: its session isn't restarted and no template is sent to
+   * it. Fails with `invalidParams` for an unknown agent or a role name `parseRole` refuses.
+   */
+  'agent.setRole': { params: SessionRef & { role: string | null }; result: Agent };
   /** Mutes the agent's OS notifications, or unmutes them. Fails with `invalidParams` for an unknown agent. */
   'agent.setMuted': { params: SessionRef & { muted: boolean }; result: Agent };
   /**
@@ -5186,19 +5173,14 @@ export interface DaemonMethods {
    */
   'agent.readDoc': { params: SessionRef & { path: string }; result: { path: string; text: string } };
   /**
-   * Lets the agent orchestrate in `scope` (ADR-0011), or stops it with null. Takes effect on its next call. The
-   * user's alone: a board token is refused it, an orchestrator's too. Fails with `invalidParams` for an unknown agent
-   * or scope.
-   */
-  'agent.setOrchestrate': { params: SessionRef & { scope: OrchestrateScope | null }; result: Agent };
-  /**
-   * The orchestrator methods (ADR-0011). Each acts as the session holding `token`: an agent's own session,
-   * with `orchestrate` on, else `BOARD_ERROR.notAllowed`; or a user-side one (`BoardCaller.side`), at board scope. With
-   * no token, on a connection that never presented one, it acts as the user, at board scope. A target
-   * outside its scope (`OrchestrateScope`), or an agent itself, is `BOARD_ERROR.outOfScope`. Each spawn, send,
-   * interrupt, restart and close is logged, done or refused (`orchestrator.activity`).
+   * The orchestrator methods (ADR-0011). Each acts as the session holding `token`: any agent's own live session
+   * (one that has ended is refused with `BOARD_ERROR.notAllowed`), or a user-side one (`BoardCaller.side`). With no
+   * token, on a connection that never presented one, it acts as the user. No agent outranks another: an agent
+   * reaches every agent an agent started, anywhere on the board, but never one the user started by hand, nor itself
+   * (`BOARD_ERROR.outOfScope`); the user's side reaches every agent. Each spawn, send, interrupt, restart and close is
+   * logged, done or refused (`orchestrator.activity`).
    *
-   * `spawn` starts an agent as `agent.spawn` does, in a zone of its scope (its own zone by default), with
+   * `spawn` starts an agent as `agent.spawn` does, in any zone (its own zone by default), with
    * `spawnedBy` the orchestrator agent (none for the user's side, whose agents are the user's). A prompt (and a `send`'s text) is refused with `invalidParams` when
    * `orchestratorTextRefusal` says why. With `baseBranch`, also when the base's project config (`.claude`, `.mcp.json`,
    * `.codex`) differs from the repo's HEAD: the agent would start under settings the orchestrator chose.
@@ -5215,8 +5197,8 @@ export interface DaemonMethods {
   'orchestrator.send': { params: { token?: string; sessionId: string; text?: string; submit?: boolean; clear?: boolean }; result: OrchestratorSent };
   /**
    * Sets the status line of an agent in the caller's crew (the agents it started, and theirs), as the agent's own
-   * `board.setStatus` does, saying who set it. The latest of the two wins. An agent outside its crew, an orchestrator
-   * of wider scope or the caller itself is refused with `outOfScope`.
+   * `board.setStatus` does, saying who set it. The latest of the two wins. An agent outside its crew, or the caller
+   * itself, is refused with `outOfScope`.
    */
   'orchestrator.setStatus': { params: { token?: string; sessionId: string; summary?: string; progress?: number; character?: CharacterSet; description?: string } & WorkCategoryParams; result: Agent };
   /**
@@ -5230,7 +5212,7 @@ export interface DaemonMethods {
    * as it is at each check, and `sessionIds` may be left out. With `since` (a `cursor` from before, `now`, or `all` for
    * every one kept), it waits instead for the crew events after it of those agents (of `kinds`, or every kind) and
    * answers with them as soon as there is one. An event reaches the crew its agent was in as it happened, so a
-   * removed agent's end still does. Each agent named is scope-checked as for `orchestrator.read`.
+   * removed agent's end still does. Each agent named is checked as for `orchestrator.read`.
    */
   'orchestrator.wait': {
     params: {
@@ -5258,6 +5240,10 @@ export interface DaemonMethods {
    * takes it: now, once its turn ends, or when next started.
    */
   'orchestrator.setEffort': { params: { token?: string; sessionId: string; effort: Effort }; result: { agent: Agent; applies: EffortApplies } };
+  /**
+   * Gives an agent a role, or none with null (`agent.setRole`): an agent it may steer, or its own tile.
+   */
+  'orchestrator.giveRole': { params: { token?: string; sessionId: string; role: string | null }; result: Agent };
   /** Resumes a rate-limited agent's turn on usage credits (`agent.continueOnCredits`). */
   'orchestrator.continueOnCredits': { params: { token?: string; sessionId: string }; result: Agent };
   /**
@@ -5275,22 +5261,22 @@ export interface DaemonMethods {
    */
   'orchestrator.close': { params: { token?: string; sessionId: string; remove?: boolean }; result: Agent | null };
   /**
-   * Asks the user to remove tiles in the orchestrator's scope that it did not start, in one prompt, and waits
+   * Asks the user to remove tiles that it did not start, the user's own among them, in one prompt, and waits
    * for their answer: as long as `timeoutMs` (`DEFAULT_ASK_WAIT_MS` by default, at most `MAX_ASK_WAIT_MS`). It is
    * withdrawn, removing nothing, once its connection closes or the orchestrator's next turn begins (a prompt typed or
    * sent to it). Nothing is removed until the user presses Allow, and then each tile goes as the user's own Delete takes
    * it (its worktree and branch, never forced). A tile still running, with a live agent under it, or whose reviewer would
    * go with it or is itself held back, is held back unless the user ticks it, and a tile whose reviewer stays always
-   * stays. Refused (`outOfScope`) whole if any tile is out of scope; refused (`invalidParams`) if a tile is the
-   * orchestrator itself, and to the user's side, which removes them itself.
+   * stays. Refused (`invalidParams`) if a tile is the orchestrator itself, and to the user's side, which removes them
+   * itself.
    */
   'orchestrator.askRemove': { params: { token?: string; sessionIds: string[]; timeoutMs?: number }; result: RemoveAskResult };
   /**
    * Hands the orchestrator `from`'s crew (the agents it started) and what it made (notes, lane labels, clocks, shapes,
    * connectors, zones and edges) to the orchestrator `to`, as if `to` had started and made them: `to` may then arrange,
-   * edit, remove and close them. The user's side hands over any; an orchestrator hands over its own, or takes over one in
-   * its scope, no wider than its own, whose session has ended. Either way `to`'s own scope must reach every agent it
-   * gets. `to` must be an orchestrator no deeper in a crew than `from`.
+   * edit, remove and close them. The user's side hands over any; an agent hands over its own, or takes over the crew of
+   * any agent whose session has ended. `to` must be outside the crew it would get: one of `from`'s crew, or of theirs,
+   * would then lead the agent that leads it.
    */
   'orchestrator.handover': { params: { token?: string; from: string; to: string }; result: OrchestratorHandover };
   /** Pauses the agent, as `agent.pause` does, marked as paused by the orchestrator. */
@@ -5298,33 +5284,31 @@ export interface DaemonMethods {
   /** Wakes a paused agent, carrying on its conversation (`agent.resume`). Fails with `invalidParams` for one not paused. */
   'orchestrator.wake': { params: { token?: string; sessionId: string }; result: Agent };
   /**
-   * Makes a flow edge between two agents in its scope, or itself, marked as made by it (`FlowEdge.madeBy`),
-   * as `flowEdge.create` makes one. Its `from` end must be one it may look at, and its `to` end one it may steer (an
-   * edge into another orchestrator would steer it). A gate or script condition runs nothing until the user approves it
+   * Makes a flow edge between two agents it reaches, or itself, marked as made by it (`FlowEdge.madeBy`), as
+   * `flowEdge.create` makes one. A gate or script condition runs nothing until the user approves it
    * (ADR-0009): an orchestrator can't.
    */
   'orchestrator.addEdge': { params: { token?: string } & OrchestratorEdgeParams; result: FlowEdge };
   /** Deletes a flow edge it, or an agent in its crew, made; a user-side caller any. The user's are the user's. */
   'orchestrator.removeEdge': { params: { token?: string; id: string }; result: null };
   /**
-   * Moves a tile (an agent's, a shell's, or a board item) in its scope to `place` (`LayoutPlace`), as the board's drag
+   * Moves a tile (an agent's, a shell's, or a board item) it may move to `place` (`LayoutPlace`), as the board's drag
    * does (`agent.move`, `shell.move`, `item.update`): clear of every other tile and item, by the board's placing rules,
-   * its zone growing to hold it. Into a zone in its scope, or one it made; loose on the board only at board scope. An
-   * agent may move itself: where a tile sits changes nothing about its session. It never moves an agent into a zone
-   * that would let it orchestrate where it can't now.
+   * its zone growing to hold it. Into any zone, or loose on the board. An agent may move itself: where a tile sits
+   * changes nothing about its session.
    */
   'orchestrator.move': { params: { token?: string; target: LayoutTarget } & LayoutPlace; result: LayoutMoved };
   /**
-   * Lays out the tiles in a zone in its scope (its own by default) that it may move: itself first, then a lane per
+   * Lays out the tiles in a zone (its own by default) that it may move: itself first, then a lane per
    * issue (or a row per role, or state), each agent beside the ones its edges join it to (`board-arrange.ts`). What it
    * may not move (other tiles, notes, cards) stays put, and the rows keep clear of it; the zone then fits what it holds,
    * growing or shrinking. The same board arranges the same way.
    */
   'orchestrator.arrange': { params: { token?: string; zoneId?: string; by?: ArrangeBy; layout?: ArrangeLayout; auto?: boolean }; result: ArrangeResult };
-  /** Lays out the whole board: its zones and its loose tiles, never what is in a zone. Board scope only. */
+  /** Lays out the whole board: its zones and its loose tiles, never what is in a zone. */
   'orchestrator.arrangeBoard': { params: { token?: string }; result: BoardArrangeResult };
   /**
-   * A zone in its scope (its own by default) as a map: its lanes, where everything is and what is amiss
+   * A zone (its own by default) as a map: its lanes, where everything is and what is amiss
    * (`ZoneMap`). It moves nothing.
    */
   'orchestrator.map': { params: { token?: string; zoneId?: string }; result: ZoneMap };
@@ -5336,7 +5320,7 @@ export interface DaemonMethods {
    */
   'layout.measured': { params: LayoutMeasured; result: null };
   /**
-   * A picture of a zone in its scope (its own by default), as a PNG (`ZoneScreenshot`): the board as the app draws it
+   * A picture of a zone (its own by default), as a PNG (`ZoneScreenshot`): the board as the app draws it
    * (`board`, with every terminal's text hidden), or a plain drawing of the boxes and lines the daemon knows (`lofi`).
    * The app takes it in a hidden window, never moving the user's view. Fails at once with no app open to take it, and
    * after `captureTimeoutMs` with none handed back.
@@ -5363,7 +5347,7 @@ export interface DaemonMethods {
   /** Deletes a group it (or its crew) made, as the board's Delete does (`zone.dissolve`): its tiles and notes stay, loose. */
   'orchestrator.removeZone': { params: { token?: string; id: string }; result: null };
   /**
-   * Sets how a zone in its scope (its own by default) lays out what it holds (`ZoneLayoutChoice`), as the zone's Layout
+   * Sets how a zone (its own by default) lays out what it holds (`ZoneLayoutChoice`), as the zone's Layout
    * menu does: the agent's way to opt a zone into a rule (lanes), shelves or clusters, or back to free. Only a rule moves
    * tiles' saved places: the zone is laid out by it at once.
    */
@@ -5376,11 +5360,11 @@ export interface DaemonMethods {
   'zone.followRule': { params: { id: string; tiles: string[] }; result: Zone };
   /**
    * Puts a sticky note (or a text item) of `text` on the board, marked as made by it, at `place` (`LayoutPlace`; in its
-   * own zone by default), clear of the tiles and items there, in a zone in its scope or one it made.
+   * own zone by default), clear of the tiles and items there, in any zone.
    */
-  'orchestrator.addNote': { params: { token?: string; text: string; kind?: NoteKind; color?: string } & LayoutPlace; result: BoardItem };
+  'orchestrator.addNote': { params: { token?: string; text: string; kind?: NoteKind; color?: string; lines?: number } & LayoutPlace; result: BoardItem };
   /** Changes the text or colour of a note it (or its crew) made; a user-side caller any sticky note or text item. */
-  'orchestrator.editNote': { params: { token?: string; id: string; text?: string; color?: string; width?: number; height?: number }; result: BoardItem };
+  'orchestrator.editNote': { params: { token?: string; id: string; text?: string; color?: string; width?: number; height?: number; lines?: number }; result: BoardItem };
   /** Deletes a note it (or its crew) made; a user-side caller any sticky note or text item. */
   'orchestrator.removeNote': { params: { token?: string; id: string }; result: null };
   /**
@@ -5409,9 +5393,9 @@ export interface DaemonMethods {
   /** Deletes a connector it (or its crew) made; a user-side caller any connector. */
   'orchestrator.removeConnector': { params: { token?: string; id: string }; result: null };
   /**
-   * Puts a clock on the board (`ClockData` over a new clock's), marked as made by it: one that messages an agent in its
-   * scope goes on that agent's tile's left; one that starts a fresh agent goes in a zone in its scope (`zoneId`, its own
-   * by default). A hand-off's agent must be in its scope too.
+   * Puts a clock on the board (`ClockData` over a new clock's), marked as made by it: one that messages an agent (one it
+   * reaches) goes on that agent's tile's left; one that starts a fresh agent goes in a zone (`zoneId`, its own by
+   * default). A hand-off's agent must be one it reaches too.
    */
   'orchestrator.addClock': { params: { token?: string; data: Partial<ClockData>; zoneId?: string; template?: string }; result: BoardItem };
   /** Deletes a clock it (or its crew) made; a user-side caller any. */
@@ -5420,8 +5404,7 @@ export interface DaemonMethods {
   'orchestrator.roles': { params: { token?: string }; result: DefaultRole[] };
   /**
    * Sets the app's default role `name` (a custom role's name, as `parseRole` reads it), replacing one of the same name
-   * in any case; with `zoneId`, that zone's template for the name instead. The app's list is a board-scope
-   * orchestrator's (or the user's side's) alone, and a zone must be in the caller's scope: else `outOfScope`. Fails
+   * in any case; with `zoneId`, that zone's template for the name instead. Fails
    * with `invalidParams` for a built-in role, a bad name, a body over `MAX_ROLE_TEMPLATE_LENGTH`, or one
    * `orchestratorTextRefusal` refuses: it starts other agents' first messages.
    */
@@ -5439,18 +5422,16 @@ export interface DaemonMethods {
   /**
    * Saves a crew prefab from its `.crew.json` file's text, checked as `parsePrefab` reads it, to the app's library.
    * A name a prefab already has, in any case, is refused unless `replace`; a built-in's always (save a copy under a
-   * name of its own). The library reaches every board, so it is a board-scope orchestrator's (or the user's side's)
-   * alone: else `outOfScope`.
+   * name of its own).
    */
   'orchestrator.savePrefab': { params: { token?: string; text: string; replace?: boolean }; result: LibraryPrefab };
-  /** Removes a saved crew prefab, scoped as `savePrefab`. A built-in can't be removed; one with no such name fails. */
+  /** Removes a saved crew prefab. A built-in can't be removed; one with no such name fails. */
   'orchestrator.removePrefab': { params: { token?: string; name: string }; result: null };
   /**
    * Starts a crew from the prefab `name`: the member that starts on the prompt (its builder, or its lead) gets
-   * `prompt`, in `zoneId` (the caller's zone without), as `orchestrator.spawn` starts an agent, scope and logs
+   * `prompt`, in `zoneId` (the caller's zone without), as `orchestrator.spawn` starts an agent, logs
    * included. A lead's first message lists its crew, for it to start. The members that start at the hand-off are
-   * listed in `later`, and the crew (`crew`) starts them at each of its builder's hand-offs. A prefab with a lead needs
-   * two free levels of crew depth. `roundLimit` replaces the prefab's for this crew alone (the prompt box's Stop after).
+   * listed in `later`, and the crew (`crew`) starts them at each of its builder's hand-offs. `roundLimit` replaces the prefab's for this crew alone (the prompt box's Stop after).
    */
   'orchestrator.startPrefab': {
     params: { token?: string; name: string; prompt?: string; zoneId?: string; repo?: string; issueId?: string; description?: string; roundLimit?: number };
@@ -5613,7 +5594,7 @@ export interface DaemonMethods {
    */
   'board.newSteps': { params: { token: string; title: string; steps: StepDraft[] }; result: BoardItem };
   /**
-   * The steps cards the agent holding `token` can read: in its zone, in a zone its orchestrator scope reaches, loose, or
+   * The steps cards the agent holding `token` can read: in its zone, loose, or
    * ones it made, answers or is named on; with `id`, only that one (failing with `outOfScope` if it can't read it), and
    * with `mine` only those with a to-do of its not yet done.
    */
@@ -5643,7 +5624,7 @@ export interface DaemonMethods {
   'steps.send': { params: { id: string }; result: BoardItem };
   /** The live agent holding `token` puts a memory card beside its tile. Fails with `invalidParams` for a shell's token or an ended agent. */
   'board.newMemory': { params: { token: string; title: string }; result: BoardItem };
-  /** The memories the agent holding `token` reads: in its zone, in zones its orchestrator scope reaches, and loose ones; none set to No agents. */
+  /** The memories the agent holding `token` reads: in its zone and loose ones; none set to No agents. */
   'board.listMemories': { params: { token: string }; result: BoardItem[] };
   /**
    * The memory `id` with its entries, pinned first, then newest first; with `search`, only those whose key or text holds it
@@ -5670,7 +5651,7 @@ export interface DaemonMethods {
   /**
    * The orchestrator holding `token` turns the drain of a queue it made on or off: the board starts fresh agents (as an
    * earlier drain of it was set, else its own harness; `most` at once) for its waiting jobs. Fails with `notAllowed` for
-   * an agent that doesn't orchestrate, and `outOfScope` for a queue another made.
+   * an agent whose session has ended, and `outOfScope` for a queue another made.
    */
   'board.drainQueue': { params: { token: string; id: string; on: boolean; most?: number }; result: BoardItem };
   /** The versions of the queue's job `job`, newest first. */
@@ -5680,7 +5661,7 @@ export interface DaemonMethods {
    * Nothing waits on them and no one is told when they are ticked.
    */
   'board.remind': { params: { token: string; text: string[] }; result: { item: BoardItem; added: TodoLine[] } };
-  /** The to-do lists the caller reads (in its zone, zones its scope reaches, and loose ones); with `mine`, only its own. */
+  /** The to-do lists the caller reads (in its zone, and loose ones); with `mine`, only its own. */
   'board.readTodos': { params: { token: string; mine?: boolean }; result: BoardItem[] };
   /** The caller ticks, unticks or takes off a line it wrote on its own list. */
   'board.changeTodo': { params: { token: string; change: AgentTodoChange }; result: BoardItem };
@@ -5699,7 +5680,7 @@ export interface DaemonMethods {
   /** The user changes the to-do list `id`: any line on it, whoever wrote it. */
   'todo.change': { params: { id: string; change: TodoChange }; result: BoardItem };
   /**
-   * The user hands the queue `id`'s waiting job `job` to the idle agent `sessionId` in its scope: the job is taken for
+   * The user hands the queue `id`'s waiting job `job` to the idle agent `sessionId` it is for: the job is taken for
    * that agent, and `text` (what the user chose to send, nothing added) is typed at its prompt as the user's message.
    * If the message can't be sent, the job stays waiting.
    */
@@ -5967,7 +5948,7 @@ export interface DaemonMethods {
    */
   'selection.ask': { params: AskSelectionParams; result: Agent };
   /**
-   * The Captain (ADR-0019): the board's master, live or ended, or, with none, starts one at `board` scope, loose on
+   * The Captain (ADR-0019): the board's master, live or ended, or, with none, starts one loose on
    * the board left of the zones, in a folder of its own with no repo, with the master's prompt as its first message.
    * The app's alone: a board token's connection is refused it.
    */
@@ -6021,12 +6002,15 @@ export const BOARD_ERROR = {
   unknownToken: -32020,
   /**
    * The connection presented a board token, and the method isn't one of `BOARD_CALLER_METHODS`; or it is an
-   * orchestrator method, and the token's agent may not orchestrate.
+   * orchestrator method, and the token's agent's session has ended.
    */
   notAllowed: -32021,
-  /** An orchestrator acted on an agent or zone outside its scope, or on itself. */
+  /** An agent acted on an agent out of its reach (one the user started by hand), or on itself. */
   outOfScope: -32022,
 } as const;
+
+/** Why an agent may not act on `name`: the user started it by hand, and no agent acts on those. */
+export const handStartedReason = (name: string) => `${name} is one the user started by hand: agents never act on the user's own agents`;
 
 /**
  * What a connection that has presented a session's board token (`board.identify`, `board.setStatus`) may call: the
@@ -6084,7 +6068,7 @@ export const BOARD_CALLER_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMet
 
 /**
  * The orchestrator methods (ADR-0011): a board token's connection reaches them too, and each refuses unless the
- * token's agent may orchestrate, checked at every call.
+ * token's agent is in its own live session, checked at every call.
  */
 export const ORCHESTRATOR_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMethod>([
   // A queue's drain starts agents: only an orchestrator turns on its own (ADR-0011), as the maintainer's answer 10 has it.
@@ -6096,6 +6080,7 @@ export const ORCHESTRATOR_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMet
   'orchestrator.read',
   'orchestrator.interrupt',
   'orchestrator.setEffort',
+  'orchestrator.giveRole',
   'orchestrator.continueOnCredits',
   'orchestrator.restart',
   'orchestrator.pause',
@@ -6137,13 +6122,6 @@ export const ORCHESTRATOR_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMet
   'orchestrator.stopCrew',
   'orchestrator.crewRound',
 ]);
-
-/**
- * What a user-side session's connection (`BoardCaller.side`) may call beyond those: turning an agent's
- * orchestrating on and off. The daemon refuses an agent's own session it. A zone's switch, like every setting, stays the
- * app's.
- */
-export const USER_SIDE_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMethod>(['agent.setOrchestrate']);
 
 /** Most of a file `orchestrator.read` returns. */
 export const MAX_ORCHESTRATOR_READ_BYTES = 256 * 1024;

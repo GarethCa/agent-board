@@ -120,6 +120,9 @@ const NO_CHECK_GLOBS = [
   'scripts/readme-screenshots.sh',
   // The Linux visual tooling is on-request, outside the gate; it and its baselines run nothing beyond the native `visual` step.
   'scripts/visual-linux.sh',
+  // The Linux build is built by hand, outside the gate, with the same image.
+  'scripts/package-linux.sh',
+  'scripts/lib/docker.sh',
   'docker/**',
 ];
 

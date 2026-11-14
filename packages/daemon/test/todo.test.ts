@@ -84,6 +84,9 @@ describe('to-do lines', () => {
     expect(() => checkTodoData({ owner: USER, lines: [line('a', 'x'), line('a', 'y')] })).toThrow(/an id of their own/);
     expect(() => checkTodoData({ owner: USER, lines: [{ ...line('a', 'x'), done: 'yes' }] })).toThrow(/line 1/);
     expect(() => checkTodoData({ owner: USER, lines: [], folded: 'no' })).toThrow(/folded/);
+    // Folded, it keeps the size it had open, which the user may have given it.
+    expect(() => checkTodoData({ owner: USER, lines: [], folded: true, openSize: { width: 360, height: 420 } })).not.toThrow();
+    expect(() => checkTodoData({ owner: USER, lines: [], openSize: { width: 360 } })).toThrow(/openSize must be \{ width, height \}/);
   });
 
   it("shows a time today as the clock, and another day's with its date", () => {
@@ -168,10 +171,6 @@ describe('to-do lists', () => {
     expect((await cli(stranger.env, 'remind', 'ls')).out).not.toContain('Send the PR');
     // Its own list, under its own tile.
     expect(await lists()).toHaveLength(2);
-
-    // An orchestrator whose scope reaches the zone reads it.
-    await client.call('agent.setOrchestrate', { sessionId: stranger.agent.sessionId, scope: 'board' });
-    expect((await stranger.connection.call('board.readTodos', { token: stranger.token })).map((each) => each.id)).toContain(list!.id);
   });
 
   it("keeps the user's own list, and every line's tick, through a restart", async () => {

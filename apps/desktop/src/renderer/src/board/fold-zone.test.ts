@@ -22,7 +22,6 @@ const zone = (id: string, folded: boolean): Zone => ({
   codexBypassHookTrust: true,
   trustsFolder: false,
   boardMcp: true,
-  agentsOrchestrate: false,
   gateCommand: null,
   spacing: 'normal',
   layoutMode: 'free',

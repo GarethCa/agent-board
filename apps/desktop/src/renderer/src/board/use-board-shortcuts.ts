@@ -34,8 +34,6 @@ interface BoardShortcutsOptions {
   requestRename(nodeId: string): void;
   /** Cycles which connections are drawn. */
   cycleConnections(): void;
-  /** Cycles how an orchestrator's crew is shown: frames, chips, off. */
-  cycleCrewLook(): void;
   /** Opens the shape palette at `at` on the screen: where the pointer is, or undefined when it is off the board. */
   openQuickInsert(at: { x: number; y: number } | undefined): void;
   /** Opens the keyboard cheat sheet. */
@@ -63,7 +61,6 @@ export function useBoardShortcuts({
   renameRequest,
   requestRename,
   cycleConnections,
-  cycleCrewLook,
   openQuickInsert,
   openCheatSheet,
   arrangeBoard,
@@ -90,7 +87,6 @@ export function useBoardShortcuts({
       }
       else if (shortcut.kind === 'tool') setTool((current) => (current === shortcut.tool ? undefined : shortcut.tool));
       else if (shortcut.kind === 'connections') cycleConnections();
-      else if (shortcut.kind === 'crews') cycleCrewLook();
       else if (shortcut.kind === 'cheatSheet') openCheatSheet();
       else if (shortcut.kind === 'arrangeBoard') arrangeBoard();
       else if (shortcut.kind === 'insert') {
@@ -101,7 +97,7 @@ export function useBoardShortcuts({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [loaded, setTool, renameRequest, createItem, pointer, boardCentre, screenToFlowPosition, pickMode, cycleConnections, cycleCrewLook, openQuickInsert, openCheatSheet, arrangeBoard]);
+  }, [loaded, setTool, renameRequest, createItem, pointer, boardCentre, screenToFlowPosition, pickMode, cycleConnections, openQuickInsert, openCheatSheet, arrangeBoard]);
 
   // Escape, not typing: puts the armed tool down, even with a menu taking the same press; or else, with the board (or
   // nothing) focused, not a menu or dialog (which close on their own Escape), collapses the expanded tile in front.

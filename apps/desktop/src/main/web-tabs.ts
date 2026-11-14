@@ -4,6 +4,7 @@ import { isWebTabUrl, WEB_TAB_RULE } from '@agent-board/daemon/web-url';
 import { WEB_TAB_IPC, type FindResult, type WebTabBounds, type WebTabKey, type WebTabState } from '../preload/api';
 import { headless } from './background';
 import { openWebLink, openWebTabLink } from './links';
+import { addressRowHold } from './web-address-hold';
 import { takesKeyboard, webKey } from './web-keys';
 import { passkeyNotice, probePasskeys } from './web-passkeys';
 import { lockDownContents, lockDownSession } from './web-lockdown';
@@ -164,6 +165,8 @@ export function registerWebTabIpc({
   const opening = new Map<string, symbol>();
   /** Where a tab being opened was sent meanwhile (`load`), which its page loads instead of what it was opened at. */
   const sentWhileOpening = new Map<string, string>();
+  /** The tabs whose address row is being typed in, which keep the keyboard from their page. */
+  const hold = addressRowHold();
   /** How many times Keep logins between sessions has gone off: a page whose open read it on and saw this change is made private. */
   let stops = 0;
   /** The renderers whose going is already watched, so each takes its pages with it once. */
@@ -215,6 +218,8 @@ export function registerWebTabIpc({
     opening.delete(key);
     sentWhileOpening.delete(key);
     placed.delete(key);
+    // Its renderer reloading or gone sends no word that its address row is no longer typed in.
+    hold.release(key);
     const tab = tabs.get(key);
     if (tab === undefined) return;
     tabs.delete(key);
@@ -371,6 +376,8 @@ export function registerWebTabIpc({
     contents.on('did-stop-loading', changed);
     contents.on('page-title-updated', changed);
     contents.on('did-navigate-in-page', changed);
+    // Its address row being typed in, the page taking the keyboard by itself (as it loads) gives it back.
+    hold.watch(key, contents, tab.owner);
     contents.on('focus', changed);
     contents.on('blur', changed);
     contents.on('did-navigate', () => {
@@ -449,7 +456,15 @@ export function registerWebTabIpc({
   const supersedeFind = new WeakMap<WebContents, () => void>();
   // The find bar opened over the window from a key pressed in a page: its field takes the keyboard from the page.
   ipcMain.handle(WEB_TAB_IPC.focusWindow, (event, tabId: unknown) => tabOf(event, tabId)?.owner.focus());
-  ipcMain.handle(WEB_TAB_IPC.focus, (event, tabId: unknown) => tabOf(event, tabId)?.view.webContents.focus());
+  ipcMain.handle(WEB_TAB_IPC.focus, (event, tabId: unknown) => {
+    const key = keyFor(event, tabId);
+    if (key !== undefined) hold.release(key);
+    tabOf(event, tabId)?.view.webContents.focus();
+  });
+  ipcMain.on(WEB_TAB_IPC.typing, (event, tabId: unknown, on: unknown) => {
+    const key = keyFor(event, tabId);
+    if (key !== undefined) hold.typing(key, on === true);
+  });
   ipcMain.handle(WEB_TAB_IPC.find, (event, tabId: unknown, text: unknown, step: unknown): Promise<FindResult> => {
     const contents = tabOf(event, tabId)?.view.webContents;
     if (contents === undefined || contents.isDestroyed() || typeof text !== 'string' || text === '') return Promise.resolve({ active: 0, total: 0 });

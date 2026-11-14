@@ -2,8 +2,6 @@
 import { isQueueWork, type QueueAudience, type QueueData, type QueueJob, type QueueJobChange } from '@agent-board/daemon/protocol';
 import { whoText } from './memory-card';
 
-/** How many rows the open card lists; the peek lists every one. */
-export const QUEUE_CARD_ROWS = 4;
 /** How many done jobs the peek shows, under the open ones. */
 export const DONE_SHOWN = 5;
 

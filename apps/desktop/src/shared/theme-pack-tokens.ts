@@ -1,4 +1,3 @@
-import { ZONE_COLORS } from '@agent-board/daemon/protocol';
 import { contrast, fillUnder, mix, readable } from './colour';
 import { THEME_PACKS, type PackTheme } from './theme-packs';
 
@@ -18,8 +17,8 @@ export interface BaseThemes {
   simplified: { light: ReadonlyMap<string, string>; dark: ReadonlyMap<string, string> };
 }
 
-/** How much less than its text on its panel a pack's agent note tab text may read (tokens.test.ts holds the same bar). */
-export const NOTE_TAB_ROOM = 0.5;
+/** How much less than AA a pack's own ink may read where its palette leaves no more headroom (tokens.test.ts holds the same bar). */
+export const PACK_INK_ROOM = 0.5;
 /** The least contrast a light note's paper fill keeps against its theme's desk, so a loose note doesn't sink into the board. */
 const NOTE_DESK_RATIO = 1.05;
 /** ... and the least it keeps against a tile, so a note is told apart from an agent at a glance (Classic and Simplified reach 1.18). */
@@ -113,20 +112,15 @@ function packTokens(theme: PackTheme, base: BaseThemes, required: readonly strin
   const idleSoft = mix(p.text, p.tile, 0.07);
   const text = readable(p.text, [pressed, p.desk, p.tile, hover, warningSoft, accentFaint, badgeNeutral]);
   set('--text', text);
-  // An agent note's tab is a tint of its zone's colour under text that leans on it. A palette that can't hold the bar
-  // below with that tint, on any zone colour or loose, keeps the tab the panel's (the card's edge still carries the colour).
   const muted = readable(p.muted, [hover, p.desk, p.tile]);
   const share = (name: string) => Number.parseFloat(base.light.get(name) ?? '') / 100;
-  const [tabMix, inkMix] = [share('--agent-note-tab-mix'), share('--agent-note-tab-ink-mix')];
-  // The card's paper fill, the border colour over the panel, and the inks drawn on it. A light pack takes the share nearest
-  // the app's that keeps the card apart from a tile, then clear of its desk, and its tab readable, giving those up in turn
-  // when they can't be had. Its text, muted text and links, where the fill leaves them under AA, are the same colours made
-  // readable on it (`--agent-note-ink`, `-muted` and `-link`). A dark pack's fill is its panel and its inks are its own.
-  const tabReadsOn = (fill: string, ink: string) => {
-    const bar = Math.min(contrast(ink, fill) - NOTE_TAB_ROOM, 4.5);
-    return [...ZONE_COLORS, muted].every((zone) => contrast(mix(zone, ink, inkMix), mix(zone, fill, tabMix)) >= bar);
-  };
-  const fillAt = (at: number) => mix(p.border, p.panel, at);
+  // The bubble's paper fill over the panel, and the inks drawn on it. A light pack's paper is its border, a dark pack's its
+  // pressed colour, a step off its tile, as the app's own themes have it. A pack takes the share nearest its theme's that
+  // keeps the bubble apart from a tile, then (light) clear of its desk or (dark) its own inks readable, giving those up in
+  // turn when they can't be had. Its text, muted text and links, where the fill leaves them under AA, are the same colours
+  // made readable on it (`--agent-note-ink`, `-muted` and `-link`).
+  const paper = dark ? pressed : p.border;
+  const fillAt = (at: number) => mix(paper, p.panel, at);
   const chipShare = share('--agent-note-code-mix');
   // The inks on a fill: the text on the card and its chip (the chip is a share of that text, so settle it in two passes).
   const inksOn = (fill: string) => {
@@ -134,30 +128,24 @@ function packTokens(theme: PackTheme, base: BaseThemes, required: readonly strin
     for (let pass = 0; pass < 2; pass += 1) ink = readable(text, [fill, mix(ink, fill, chipShare)]);
     return { ink, muted: readable(muted, [fill]), link: readable(accentInk, [fill]) };
   };
-  const appShare = share('--agent-note-fill-mix');
+  const scheme = dark ? base.dark : base.light;
+  const appShare = Number.parseFloat(scheme.get('--agent-note-fill-mix') ?? base.light.get('--agent-note-fill-mix') ?? '') / 100;
   const grid = Array.from({ length: 21 }, (_, at) => at / 20).sort((x, y) => Math.abs(x - appShare) - Math.abs(y - appShare));
-  const pick = (ok: (fill: string, ink: string) => boolean) => grid.find((at) => ok(fillAt(at), inksOn(fillAt(at)).ink));
+  const pick = (ok: (fill: string) => boolean) => grid.find((at) => ok(fillAt(at)));
   const apart = (fill: string) => contrast(fill, p.tile) >= NOTE_TILE_RATIO;
   const clear = (fill: string) => contrast(fill, p.desk) >= NOTE_DESK_RATIO;
-  const fillShare = dark
-    ? 0
-    : (pick((fill, ink) => apart(fill) && clear(fill) && tabReadsOn(fill, ink)) ??
-      pick((fill) => apart(fill) && clear(fill)) ??
-      pick(apart) ??
-      appShare);
-  set('--agent-note-paper', 'var(--border)');
+  const ownInks = (fill: string) => {
+    const on = inksOn(fill);
+    return on.ink === text && on.muted === muted && on.link === accentInk;
+  };
+  const fillShare = pick((fill) => apart(fill) && (dark ? ownInks(fill) : clear(fill))) ?? pick(apart) ?? appShare;
+  set('--agent-note-paper', dark ? 'var(--pressed)' : 'var(--border)');
   const fill = fillAt(fillShare);
-  if (!dark && fillShare !== appShare) set('--agent-note-fill-mix', `${Math.round(fillShare * 100)}%`);
+  if (fillShare !== appShare) set('--agent-note-fill-mix', `${Math.round(fillShare * 100)}%`);
   const inks = inksOn(fill);
-  if (!dark) {
-    if (inks.ink !== text) set('--agent-note-ink', inks.ink);
-    if (inks.muted !== muted) set('--agent-note-ink-muted', inks.muted);
-    if (inks.link !== accentInk) set('--agent-note-ink-link', inks.link);
-  }
-  if (!tabReadsOn(fill, inks.ink)) {
-    set('--agent-note-tab-mix', '0%');
-    set('--agent-note-tab-ink-mix', '0%');
-  }
+  if (inks.ink !== text) set('--agent-note-ink', inks.ink);
+  if (inks.muted !== muted) set('--agent-note-ink-muted', inks.muted);
+  if (inks.link !== accentInk) set('--agent-note-ink-link', inks.link);
   set('--text-soft', readable(p.soft ?? mix(p.text, p.muted, 0.55), [hover, p.desk, p.tile]));
   set('--muted', muted);
   set('--placeholder', readable(mix(p.muted, p.tile, 0.9), [p.tile]));

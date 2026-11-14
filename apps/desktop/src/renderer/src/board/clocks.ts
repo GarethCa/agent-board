@@ -138,7 +138,7 @@ export function clockTethers(nodes: readonly Node[], statuses: ReadonlyMap<strin
         sourceHandle: 'right',
         target: tile,
         targetHandle: 'left',
-        data: { tab: false, look: 'clock' },
+        data: { look: 'clock' },
         selectable: false,
         deletable: false,
         focusable: false,

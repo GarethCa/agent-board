@@ -1,5 +1,6 @@
 import type { Step, StepsData, StepsWho } from '@agent-board/daemon/protocol';
 import { StepsCard, type StepsCardActions } from './StepsCard';
+import { StepsFull } from './StepsFull';
 import type { StepsLookup, ZoomLook } from './steps-view';
 
 const AT = '2026-01-01T00:00:00.000Z';
@@ -59,12 +60,13 @@ const LOOKUP: StepsLookup = { live: () => true, name: (sessionId) => sessionId.r
 const ACTIONS: StepsCardActions = { answer: () => {}, tick: () => {}, send: () => {}, stepIn: () => {}, leave: () => {} };
 
 /** Each look of a steps card, by the name its screenshot gives it. */
-const CARDS: { name: string; data: StepsData; look: ZoomLook; selected?: boolean; writing?: boolean }[] = [
+const CARDS: { name: string; data: StepsData; look: ZoomLook; selected?: boolean; writing?: boolean; sized?: boolean }[] = [
   { name: 'Yours, at rest', data: RUNBOOK, look: 'full' },
   { name: 'Someone else’s, at rest', data: CALM, look: 'full' },
   { name: 'Selected: the step open', data: RUNBOOK, look: 'full', selected: true },
   { name: 'Questions to answer', data: QUESTIONS, look: 'full', selected: true },
   { name: 'A long list, in sections', data: LONG, look: 'full', selected: true },
+  { name: 'Made taller, at rest: its rows scroll', data: LONG, look: 'full', sized: true },
   { name: 'An empty card of yours', data: card('New steps', [], { madeBy: USER }), look: 'full', writing: true },
   { name: 'About half size', data: LONG, look: 'mid' },
   { name: 'Far out, yours', data: LONG, look: 'icon' },
@@ -75,14 +77,18 @@ const CARDS: { name: string; data: StepsData; look: ZoomLook; selected?: boolean
 export function StepsGallery() {
   return (
     <section className="gallery-steps" data-testid="steps-gallery">
-      {CARDS.map(({ name, data, look, selected = false, writing = false }) => (
+      {CARDS.map(({ name, data, look, selected = false, writing = false, sized = false }) => (
         <figure key={name} className="gallery-steps-cell">
-          <div className="gallery-steps-card" data-look={look}>
-            <StepsCard data={data} lookup={LOOKUP} look={look} selected={selected} steppedIn={false} writing={writing} actions={ACTIONS} />
+          <div className="gallery-steps-card" data-look={look} data-sized={sized || undefined}>
+            <StepsCard data={data} lookup={LOOKUP} look={look} selected={selected} sized={sized} steppedIn={false} writing={writing} actions={ACTIONS} />
           </div>
           <figcaption>{name}</figcaption>
         </figure>
       ))}
+      <figure className="gallery-steps-cell">
+        <StepsFull data={RUNBOOK} lookup={LOOKUP} actions={ACTIONS} onClose={() => {}} inline />
+        <figcaption>In full</figcaption>
+      </figure>
     </section>
   );
 }

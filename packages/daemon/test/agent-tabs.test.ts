@@ -213,7 +213,7 @@ describe('the board', () => {
       name: agent.name,
       zoneId: agent.zoneId,
       side: 'user',
-      orchestrate: 'board',
+      orchestrates: true,
     });
   });
 

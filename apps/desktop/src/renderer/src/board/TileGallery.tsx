@@ -151,7 +151,6 @@ export const galleryAgent = (state: AgentState): Agent => ({
   ownsWorktree: true,
   master: false,
   plainFolder: false,
-  orchestrate: null,
   spawnedBy: null,
   orphanedFrom: null,
   ledBy: null,

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { QUIET_TILE } from './tile-shows';
-import { DEFAULT_VIEW_SETTINGS, followViewSettings, restoreViewSettings, setCrewLook, setViewSetting, viewSettings, viewSettingsLoaded } from './view-settings';
+import { DEFAULT_VIEW_SETTINGS, followViewSettings, restoreViewSettings, setViewSetting, viewSettings, viewSettingsLoaded } from './view-settings';
 
 /** A window whose view state holds `saved` by key, and whose change listener the test can fire. */
 function stubView(saved: Record<string, unknown> = {}) {
@@ -26,25 +26,25 @@ afterEach(() => {
 
 describe('the board view settings', () => {
   it('start as the board has always opened', () => {
-    expect(DEFAULT_VIEW_SETTINGS).toEqual({ clickOpens: 'window', crewLook: 'frames', connections: 'all', agentNoteLook: 'document', agentSidebar: 'shelves', gpuTerminals: true, keepTerminals: false, tileShows: QUIET_TILE, chatRunsShow: 'always' });
+    expect(DEFAULT_VIEW_SETTINGS).toEqual({ clickOpens: 'window', connections: 'all', tethers: false, agentNoteLook: 'document', agentSidebar: 'shelves', gpuTerminals: true, keepTerminals: false, tileShows: QUIET_TILE, chatRunsShow: 'always' });
   });
 
   it('change at once and are saved in the view state under their keys', () => {
     const { view } = stubView();
     setViewSetting('clickOpens', 'expand');
     setViewSetting('connections', 'handoffs');
-    setCrewLook('chips');
-    expect(viewSettings()).toMatchObject({ clickOpens: 'expand', connections: 'handoffs', crewLook: 'chips' });
+    setViewSetting('tethers', true);
+    expect(viewSettings()).toMatchObject({ clickOpens: 'expand', connections: 'handoffs', tethers: true });
     expect(view.set).toHaveBeenCalledWith('clickOpens', 'expand');
     expect(view.set).toHaveBeenCalledWith('connections', 'handoffs');
-    expect(view.set).toHaveBeenCalledWith('crewLook', 'chips');
+    expect(view.set).toHaveBeenCalledWith('tethers', true);
   });
 
   it('keep the same object while nothing changes, so a subscriber does not render again', () => {
     stubView();
     const before = viewSettings();
     setViewSetting('clickOpens', 'window');
-    restoreViewSettings({ crewLook: 'nonsense' });
+    restoreViewSettings({ tethers: 'nonsense' });
     expect(viewSettings()).toBe(before);
   });
 
@@ -60,14 +60,19 @@ describe('the board view settings', () => {
   });
 
   it('read back what was saved, a value it does not know as the default', () => {
-    restoreViewSettings({ clickOpens: 'expand', agentNoteLook: 'nonsense', agentSidebar: 'simple' });
-    expect(viewSettings()).toMatchObject({ clickOpens: 'expand', agentNoteLook: 'document', agentSidebar: 'shelves' });
+    restoreViewSettings({ clickOpens: 'expand', agentNoteLook: 'nonsense', agentSidebar: 'simple', tethers: 'yes' });
+    expect(viewSettings()).toMatchObject({ clickOpens: 'expand', agentNoteLook: 'document', agentSidebar: 'shelves', tethers: false });
+  });
+
+  it('ignore a crew look saved before crews showed only on focus', () => {
+    restoreViewSettings({ crewLook: 'chips' } as never);
+    expect(viewSettings()).toEqual(DEFAULT_VIEW_SETTINGS);
   });
 
   it('are read as a window follows them, and a change another window makes is heard', async () => {
-    const { change } = stubView({ crewLook: 'off', gpuTerminals: false });
+    const { change } = stubView({ tethers: true, gpuTerminals: false });
     followViewSettings();
-    await vi.waitFor(() => expect(viewSettings().crewLook).toBe('off'));
+    await vi.waitFor(() => expect(viewSettings().tethers).toBe(true));
     // Read, so what must not act on a default (a terminal taking the GPU) can go ahead.
     await vi.waitFor(() => expect(viewSettingsLoaded()).toBe(true));
     expect(viewSettings().gpuTerminals).toBe(false);
@@ -76,6 +81,6 @@ describe('the board view settings', () => {
     change('agentSidebar', 'shelves');
     expect(viewSettings().agentSidebar).toBe('shelves');
     change('viewport', { x: 1 });
-    expect(viewSettings()).toMatchObject({ clickOpens: 'expand', crewLook: 'off' });
+    expect(viewSettings()).toMatchObject({ clickOpens: 'expand', tethers: true });
   });
 });

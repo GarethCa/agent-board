@@ -1,5 +1,5 @@
 // An agent note's data as the board draws it: who wrote it, when, and whether the user has edited it since.
-import { HARNESSES, type AgentNoteData, type SuggestedEdit } from '@agent-board/daemon/protocol';
+import { HARNESSES, isLineBudget, type AgentNoteData, type SuggestedEdit } from '@agent-board/daemon/protocol';
 
 /** An agent note's data, with defaults for anything missing or of the wrong type. */
 export function agentNoteData(data: Record<string, unknown>): AgentNoteData {
@@ -18,7 +18,16 @@ export function agentNoteData(data: Record<string, unknown>): AgentNoteData {
     ...(typeof data.about === 'string' ? { about: data.about } : {}),
     // The daemon checked them as they were made; only a list is taken.
     ...(Array.isArray(data.suggestions) ? { suggestions: data.suggestions as SuggestedEdit[] } : {}),
+    ...(isLineBudget(data.lines) ? { lines: data.lines } : {}),
   };
+}
+
+/**
+ * How many lines of a note's text show before the rest fades into a "more lines" chip: its agent's budget, unless the
+ * user has sized it, which wins (then text that doesn't fit scrolls). None when it has no budget.
+ */
+export function lineBudget(data: Record<string, unknown>): number | undefined {
+  return data.userSized === true || !isLineBudget(data.lines) ? undefined : data.lines;
 }
 
 /** `iso` on the clock, as 14:02; nothing for no time. */

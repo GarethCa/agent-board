@@ -10,7 +10,7 @@ import { connectTestClient, recordEvents, sendLogLines, startTestDaemon, TEST_CL
 const SIZE = { cols: 120, rows: 40 };
 
 /**
- * A daemon whose agents play the fake harnesses' `orchestrate` scenario in one zone whose agents may orchestrate. Each
+ * A daemon whose agents play the fake harnesses' `orchestrate` scenario in one zone. Each
  * fake takes its first typed line as typed, then loses the `loseEnters` Enters after the next one, as a TUI still
  * redrawing does: a message sent then is left typed at its prompt (three are a send's), and the next Enter submits it.
  */
@@ -40,8 +40,8 @@ async function untilAgent(recorder: Setup['recorder'], sessionId: string, match:
 const sentBy = (lead: Agent, text: string) => markSender('send', lead.name, refOf(lead), text);
 
 /**
- * An orchestrator connected as itself, its board token presented, and a worker of the user's in its zone that has
- * finished its first turn: the next message typed at the worker loses its Enters.
+ * An agent connected as itself, its board token presented, and a worker it started in its zone (`orchestrator.spawn`),
+ * so the lead may act on it, that has finished its first turn: the next message typed at the worker loses its Enters.
  */
 async function leadAndWorker(setup: Setup, workerPrompt = 'Write the handover') {
   const { daemon, client, recorder, zone } = setup;
@@ -51,7 +51,8 @@ async function leadAndWorker(setup: Setup, workerPrompt = 'Write the handover') 
   const token = /identity:(.*):end\r\n/.exec(recorder.screenText(lead.sessionId))![1]!;
   const connection = await connectTestClient(daemon);
   await connection.call('board.identify', { token });
-  const worker = await client.call('agent.spawn', { zoneId: zone.id, name: 'worker', prompt: workerPrompt, ...SIZE });
+  const worker = await connection.call('orchestrator.spawn', { token, zoneId: zone.id, name: 'worker', prompt: workerPrompt });
+  await client.call('session.resize', { sessionId: worker.sessionId, ...SIZE });
   await client.call('session.attach', { sessionId: worker.sessionId });
   return { lead, token, connection, worker, ref: `agent:${worker.sessionId.slice(0, 8)}` };
 }
@@ -183,9 +184,14 @@ describe('a send whose Enter never starts a turn', () => {
       code: RPC_ERROR.invalidParams,
     });
 
-    // An agent that may not orchestrate reaches no draft.
-    await setup.client.call('zone.configure', { id: setup.zone.id, agentsOrchestrate: false });
-    await expect(connection.call('orchestrator.send', { token, sessionId: worker.sessionId, clear: true })).rejects.toMatchObject({ code: BOARD_ERROR.notAllowed });
+    // Nor the draft of an agent the user started by hand.
+    const mine = await setup.client.call('agent.spawn', { zoneId: setup.zone.id, name: 'mine', ...SIZE });
+    for (const draft of [{ submit: true }, { clear: true }]) {
+      await expect(connection.call('orchestrator.send', { token, sessionId: mine.sessionId, ...draft })).rejects.toMatchObject({
+        code: BOARD_ERROR.outOfScope,
+        message: expect.stringMatching(/started by hand/),
+      });
+    }
   });
 });
 

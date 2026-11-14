@@ -8,6 +8,7 @@ import { CAPTURE_FRAME } from './capture-mode';
 import type { ExpandedTiles } from './expanded';
 import { useWindowFocused } from './items/grow-to-fit';
 import type { AgentNoteLook } from './items/agent-note-look';
+import { lineBudget } from './items/agent-note';
 
 /**
  * An agent note's height for its text (`text`), measured `width` wide, drawn as `look` says, with what else is drawn
@@ -27,7 +28,7 @@ export interface NoteFit {
 export function noteFitContext(look: AgentNoteLook, data: Record<string, unknown>): string {
   const asked = typeof data.asked === 'string' ? data.asked : '';
   const edits = Array.isArray(data.suggestions) ? data.suggestions.length : 0;
-  return JSON.stringify([look, asked, edits]);
+  return JSON.stringify([look, asked, edits, lineBudget(data) ?? null]);
 }
 
 type Size = { width: number; height: number };

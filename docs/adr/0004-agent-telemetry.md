@@ -439,7 +439,11 @@ PTY.
   says its session is up, not only `SessionStart`. A stalled one's flag names no Send, as there is no task to send. One with
   nothing queued can be paused before it is up, as it holds nothing a pause would lose. Codex fires no hook
   before a first prompt, so its composer drawn says its session is up, as for a task (a startup screen over it holds
-  what is sent until the user answers it), and a stall flags it. A hand-off refused as busy
+  what is sent until the user answers it), and a stall flags it. A resumed conversation, which Codex redraws above
+  its composer first, is not read as that composer: its past prompts carry the same glyph, so the composer counts
+  only with the status line under it at the foot of the screen (followed by the shortcuts hint at most, never a
+  reply). Left open is a past prompt drawn last with no reply yet, its last line looking like the status line. A
+  hand-off refused as busy
   meanwhile waits for its edge to try again, so a message sent after it, queued here, may land first.
 - **Claude's trust screen.** In a folder Claude has never opened it shows a trust screen first ("Quick safety check
   … ❯ No, exit / Yes, I trust this folder" in 2.1.312) and fires no `SessionStart` until it is answered. While the

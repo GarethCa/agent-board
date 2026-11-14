@@ -1,11 +1,10 @@
-// The board's view settings: what a double-click on a tile opens, how a crew and agent notes look, which connections
-// are drawn, which sidebar an agent's window shows, whether terminals draw with the GPU, what an agent's tile shows, and when the chat's Expand all / Collapse all show. Kept in the daemon's view state, and held here once per window, so the board and the Settings window read
+// The board's view settings: what a double-click on a tile opens, how agent notes look, which connections and
+// tethers are drawn, which sidebar an agent's window shows, whether terminals draw with the GPU, what an agent's tile shows, and when the chat's Expand all / Collapse all show. Kept in the daemon's view state, and held here once per window, so the board and the Settings window read
 // and set the same values. Main tells every window of a change, so each follows live.
 import { createContext, useContext, useMemo, useSyncExternalStore } from 'react';
 import { VIEW_KEYS } from '../../../shared/view-saver';
 import { clickOpensFrom, type ClickOpens } from './click-opens';
-import { connectionsViewFrom, type ConnectionsView } from './connections-view';
-import { crewLookFrom, lightCrew, type CrewLook } from './crew-view';
+import { connectionsViewFrom, tethersShownFrom, type ConnectionsView } from './connections-view';
 import { agentNoteLookFrom, type AgentNoteLook } from './items/agent-note-look';
 import { agentSidebarFrom, type AgentSidebar } from '../session/agent-sidebar';
 import { gpuTerminalsFrom } from '../session/terminal-gpu';
@@ -15,8 +14,9 @@ import { sameLook, tileShowsFrom, type TileShows } from './tile-shows';
 
 export interface ViewSettings {
   clickOpens: ClickOpens;
-  crewLook: CrewLook;
   connections: ConnectionsView;
+  /** Whether the tethers (the Captain's, clocks' and agent notes' lines to their agents) are drawn. */
+  tethers: boolean;
   agentNoteLook: AgentNoteLook;
   agentSidebar: AgentSidebar;
   gpuTerminals: boolean;
@@ -27,8 +27,8 @@ export interface ViewSettings {
 
 export const DEFAULT_VIEW_SETTINGS: ViewSettings = {
   clickOpens: clickOpensFrom(undefined),
-  crewLook: crewLookFrom(undefined),
   connections: connectionsViewFrom(undefined),
+  tethers: tethersShownFrom(undefined),
   agentNoteLook: agentNoteLookFrom(undefined),
   agentSidebar: agentSidebarFrom(undefined),
   gpuTerminals: gpuTerminalsFrom(undefined),
@@ -40,8 +40,8 @@ export const DEFAULT_VIEW_SETTINGS: ViewSettings = {
 /** Each setting's view state key and the reader of what was saved under it (read back untyped). */
 const SETTINGS = {
   clickOpens: { key: VIEW_KEYS.clickOpens, from: clickOpensFrom },
-  crewLook: { key: VIEW_KEYS.crewLook, from: crewLookFrom },
   connections: { key: VIEW_KEYS.connections, from: connectionsViewFrom },
+  tethers: { key: VIEW_KEYS.tethers, from: tethersShownFrom },
   agentNoteLook: { key: VIEW_KEYS.agentNoteLook, from: agentNoteLookFrom },
   agentSidebar: { key: VIEW_KEYS.agentSidebar, from: agentSidebarFrom },
   gpuTerminals: { key: VIEW_KEYS.gpuTerminals, from: gpuTerminalsFrom },
@@ -76,12 +76,6 @@ export function viewSettings(): ViewSettings {
 export function setViewSetting<Name extends keyof ViewSettings>(name: Name, value: ViewSettings[Name]): void {
   update({ [name]: value });
   void window.agentBoard.view.set(SETTINGS[name].key, value).catch(() => {});
-}
-
-/** Sets how crews show, and puts out the light on a crew chip under the pointer, which may go with the change and take its mouse-leave with it. */
-export function setCrewLook(value: CrewLook): void {
-  setViewSetting('crewLook', value);
-  lightCrew(undefined);
 }
 
 /** Holds settings as the board read them with its view state, without saving them back. */

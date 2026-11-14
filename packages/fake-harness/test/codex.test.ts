@@ -300,6 +300,19 @@ describe('fake codex', () => {
     expect(result.events[1]).toMatchObject({ prompt: 'go on' });
   });
 
+  it('resume <id> with slowResume loses what is typed while its redrawn conversation sits quiet', async () => {
+    const home = tempDir('fake-home-');
+    const cwd = tempDir('fake-cwd-');
+    const first = await runWithHooks({ scenario: 'output', home, cwd, args: ['exec', TRUST, 'fix the tests'] });
+    const sessionId = first.events[0]!.session_id as string;
+
+    const resumed = await runWithHooks({ scenario: 'output', home, cwd, env: { FAKE_HARNESS_SLOW_RESUME: '1' }, args: ['resume', sessionId, TRUST], input: ['and the docs'] });
+
+    expect(resumed.stdout).toContain('› fix the tests');
+    expect(resumed.stdout).not.toContain('and the docs');
+    expect(resumed.names).not.toContain('UserPromptSubmit');
+  });
+
   it('resume <id> fails, as Codex does, when it has no saved session by that id', async () => {
     const result = await runWithHooks({ scenario: 'output', args: ['resume', 'sess-123', TRUST, 'go on'] });
 
@@ -316,7 +329,8 @@ describe('fake codex', () => {
 
     const resumed = await runWithHooks({ scenario: 'output', home, cwd, args: ['resume', sessionId, TRUST], input: ['and the docs'] });
 
-    expect(resumed.stdout.indexOf('> fix the tests')).toBeLessThan(resumed.stdout.indexOf('All tests pass.'));
+    // As the Codex TUI redraws it: each past prompt after its composer's glyph, each reply after a bullet.
+    expect(resumed.stdout.indexOf('› fix the tests')).toBeLessThan(resumed.stdout.indexOf('• All tests pass.'));
     expect(resumed.stdout).toContain('Done: and the docs.');
     expect(resumed.names).toEqual(['SessionStart', 'UserPromptSubmit', 'Stop', 'SessionEnd']);
     expect(resumed.events[0]).toMatchObject({ source: 'resume', session_id: sessionId });

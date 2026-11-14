@@ -68,7 +68,10 @@ import {
 import { CrewFaces } from '../crews/icons';
 import { crewGroups } from '../crews/prefab-store';
 import {
+  AGENT_ROLES,
   ARRANGE_SPACINGS,
+  isOrchestratorRole,
+  ORCHESTRATOR_ROLE,
   continuesOnCredits,
   ZONE_COLOR_NAMES,
   ZONE_COLORS,
@@ -93,7 +96,7 @@ import {
 import { isClosed, SPACING_GAPS } from '@agent-board/daemon/board-layout';
 import { startBlocked } from '@agent-board/daemon/review-doc';
 import type { MenuAction, MenuHeading, SliderRow, Submenu, SwatchRow } from '../ui/Menu';
-import { EFFORT_HINTS, EFFORT_LABELS } from './AgentSetup';
+import { EFFORT_HINTS, EFFORT_LABELS, ROLE_LABELS, roleText } from './AgentSetup';
 import { gated } from '../gate/gate-view';
 import { runGateShortcut } from '../session/window-keys';
 import { keyText } from '../keys/registry';
@@ -143,6 +146,7 @@ type AgentMenuActions = Pick<
   | 'linkIssue'
   | 'setMuted'
   | 'setEffort'
+  | 'setRole'
   | 'openReview'
   | 'startReview'
   | 'openGate'
@@ -210,6 +214,7 @@ export function agentMenu(input: AgentMenuInput): ModelEntry[] {
       onSelect: () => actions.setMuted(agent.sessionId, !agent.muted),
     },
     reasoningEntry(agent, actions),
+    roleEntry(agent, actions),
     'separator',
     ...reviewEntries(input),
     ...gateEntries(agent, gate, actions),
@@ -362,7 +367,7 @@ function arrangeEntries({ nodeId, agent, board, actions }: AgentTileMenuInput): 
   ];
 }
 
-/** Settings ▸: rename it, its schedule, its issue, its notifications and its reasoning. */
+/** Settings ▸: rename it, its schedule, its issue, its notifications, its reasoning and its role. */
 function settingsEntries(agent: Agent, rename: () => void, actions: AgentTileMenuActions): ModelEntry[] {
   return [
     { id: 'rename', label: 'Rename', icon: <Pencil />, shortcut: keyText('tile.rename'), onSelect: rename },
@@ -375,6 +380,7 @@ function settingsEntries(agent: Agent, rename: () => void, actions: AgentTileMen
       onSelect: () => actions.setMuted(agent.sessionId, !agent.muted),
     },
     reasoningEntry(agent, actions),
+    roleEntry(agent, actions),
   ];
 }
 
@@ -519,11 +525,11 @@ function stateRows(input: AgentTileMenuInput, run: readonly ModelEntry[]): { row
 }
 
 /**
- * An agent tile's menu as the menu bar's Agent menu shows it: its Agent ▸ is "This agent" there, not an Agent inside
+ * An agent tile's menu as the menu bar's Agent menu shows it: its Agent ▸ is "Selected agent" there, not an Agent inside
  * Agent. The tile's own menu keeps Agent ▸.
  */
 export function menuBarAgentEntries(entries: readonly ModelEntry[]): ModelEntry[] {
-  return entries.map((entry) => (entry !== 'separator' && !('heading' in entry) && entry.id === 'agent' && 'entries' in entry ? { ...entry, label: 'This agent' } : entry));
+  return entries.map((entry) => (entry !== 'separator' && !('heading' in entry) && entry.id === 'agent' && 'entries' in entry ? { ...entry, label: 'Selected agent' } : entry));
 }
 
 /** The menu without the rows `taken` names, at any depth: no heading left over nothing, no separator left at an end or doubled, no empty group. */
@@ -606,6 +612,39 @@ function reasoningEntry(agent: Agent, actions: Pick<AgentMenuActions, 'setEffort
   };
 }
 
+/**
+ * An agent's Role ▸: None, Orchestrator and the built-in roles, and its own custom role if it has one, its own ticked.
+ * Only the role changes, at once: its badge, and what goes by the role (an orchestrator's place at the top of its zone,
+ * the Captain's list), follow; the session is neither restarted nor sent a template.
+ */
+function roleEntry(agent: Agent, actions: Pick<AgentMenuActions, 'setRole'>): ModelEntry {
+  const orchestrator = isOrchestratorRole(agent.roleName);
+  const custom = agent.roleName !== null && !orchestrator ? agent.roleName : null;
+  const row = (id: string, label: string, role: string | null, ticked: boolean, hint?: string): ModelEntry => ({
+    id,
+    label,
+    icon: ticked ? <Check /> : <span className="agent-setup-blank" aria-hidden />,
+    ...(hint === undefined ? {} : { hint }),
+    onSelect: () => actions.setRole(agent.sessionId, role),
+  });
+  return {
+    id: 'role',
+    label: 'Role',
+    icon: <UserRound />,
+    detail: agent.role === null ? 'None' : roleText(agent.role, agent.roleName),
+    entries: [
+      { heading: 'Only its role changes; it carries on' },
+      row('none', 'None', null, agent.role === null),
+      row('orchestrator', 'Orchestrator', ORCHESTRATOR_ROLE, orchestrator),
+      ...BUILT_IN_ROLES.map((role) => row(role, ROLE_LABELS[role], role, agent.role === role && agent.roleName === null)),
+      ...(custom === null ? [] : [row('custom', custom, custom, true)]),
+    ],
+  };
+}
+
+/** The roles a running agent can be given by name from its menu, besides Orchestrator and its own custom one. */
+const BUILT_IN_ROLES = AGENT_ROLES.filter((role) => role !== 'custom');
+
 /** What a shell's menu is drawn from. */
 export interface ShellMenuInput {
   nodeId: string;
@@ -680,8 +719,6 @@ export interface ZoneBindingActions {
   setTrustsFolder(zone: Zone, on: boolean): void;
   /** Whether agents started in it get the board MCP server (ADR-0010). */
   setBoardMcp(zone: Zone, on: boolean): void;
-  /** Lets the agents the user starts in the zone orchestrate there, or stops every agent in it orchestrating. */
-  setAgentsOrchestrate(zone: Zone, on: boolean): void;
   /** Asks for the zone's gate command. */
   editGateCommand(zone: Zone): void;
   /** Opens the zone's role templates. */
@@ -953,13 +990,6 @@ export function zoneMenu({ zone, folded, themeFill, rename, actions }: ZoneMenuI
       onSelect: () => actions.setBoardMcp(zone, !zone.boardMcp),
     },
     {
-      id: 'orchestrate',
-      label: zone.agentsOrchestrate ? 'Stop agents orchestrating' : 'Let agents orchestrate',
-      icon: <Network />,
-      hint: zone.agentsOrchestrate ? 'Stops every agent here orchestrating now' : 'Agents you start here may start, message and close agents in this zone',
-      onSelect: () => actions.setAgentsOrchestrate(zone, !zone.agentsOrchestrate),
-    },
-    {
       id: 'gate-command',
       label: zone.gateCommand === null ? 'Set a gate command…' : 'Change the gate command…',
       icon: <ShieldCheck />,
@@ -993,7 +1023,7 @@ export interface ProjectMenuInput {
   zone: Zone;
   /** Why no agent can start in it, if one can't. */
   noAgents: string | undefined;
-  /** Whether rows use their technical names (Show technical details): "repo", "board MCP", "orchestrate". */
+  /** Whether rows use their technical names (Show technical details): "repo", "board MCP". */
   technical: boolean;
   /** The spacing new projects take, named as it is (read as the menu opens). */
   newZones: ArrangeSpacing | undefined;
@@ -1099,14 +1129,6 @@ function agentSettingEntries({ zone, technical, actions }: ProjectMenuInput): Mo
       checked: zone.boardMcp,
       hint: 'Agents started here can see and use the board',
       onSelect: () => actions.setBoardMcp(zone, !zone.boardMcp),
-    },
-    {
-      id: 'orchestrate',
-      label: technical ? 'Let agents orchestrate' : 'Let agents start and manage agents',
-      icon: zone.agentsOrchestrate ? <Check /> : <Network />,
-      checked: zone.agentsOrchestrate,
-      hint: zone.agentsOrchestrate ? 'Turning it off stops every agent here doing so now' : 'Agents you start here may start, message and close agents in it',
-      onSelect: () => actions.setAgentsOrchestrate(zone, !zone.agentsOrchestrate),
     },
     {
       id: 'gate-command',

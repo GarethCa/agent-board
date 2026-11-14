@@ -17,6 +17,8 @@
 # The visual and e2e steps hold the machine-wide e2e lock (scripts/e2e-lock), so gates in several worktrees take turns.
 # The gate is native only: the visual spec runs on this machine's own baselines.
 # On Linux with no display, the end-to-end tests run on a virtual display (scripts/e2e-headless.sh). Logs go to $CHECK_LOG_DIR (default: a temp dir).
+# The e2e and visual failure output (error context, traces, the expected, actual and diff shots) goes beside them, in
+# e2e-results and visual-results, not in apps/desktop/test-results*.
 #
 # The visual and e2e tests get two retries: a test that passes on a retry passes the gate, and the table names it as
 # flaky so it gets fixed. One that fails every try fails the gate. The e2e step's frame-time benchmark (the perf project)
@@ -50,6 +52,15 @@ e2e="pnpm test:e2e $playwright_args"
 # The visual run has its own output dir, a sibling of the e2e one (not inside it): Playwright empties its output dir at the
 # start of a run, which would wipe the other run's.
 visual="pnpm --filter @agent-board/desktop test:visual --output test-results-visual $playwright_args"
+# With an absolute log dir, each run's failure output (the error context of every failed try, a flaky test's too) goes
+# beside its logs, so it outlives the worktree's next run, which empties the worktree's own output dirs. The dir reaches
+# the command through CHECK_OUTPUT_DIR (set where the step starts), so a log dir with a space stays one argument.
+case "$log_dir" in
+  /*)
+    e2e="pnpm test:e2e $playwright_args --output \"\$CHECK_OUTPUT_DIR/e2e-results\""
+    visual="pnpm --filter @agent-board/desktop test:visual --output \"\$CHECK_OUTPUT_DIR/visual-results\" $playwright_args"
+    ;;
+esac
 if [ "$(uname -s)" = Linux ] && [ -z "${DISPLAY:-}" ]; then
   e2e="sh scripts/e2e-headless.sh $e2e"
   visual="sh scripts/e2e-headless.sh $visual"
@@ -147,9 +158,9 @@ elif [ "$(outcome_of build)" = pass ]; then
   # the e2e's apps are launching beside it. Its own spec files share its workers (3, or 2 when the load is high); five
   # clean runs in a row (166 shots, 6 to 7 minutes each, no retries, load 6 to 15) showed that is stable, and the gate's two
   # retries absorb the rare load flake. Then the e2e.
-  start visual env PLAYWRIGHT_JSON_OUTPUT_FILE="$log_dir/visual.json" node scripts/e2e-lock/main.ts visual -- $deadline visual "$visual_min" -- sh -c "$visual"
+  start visual env PLAYWRIGHT_JSON_OUTPUT_FILE="$log_dir/visual.json" CHECK_OUTPUT_DIR="$log_dir" node scripts/e2e-lock/main.ts visual -- $deadline visual "$visual_min" -- sh -c "$visual"
   wait
-  start e2e env PLAYWRIGHT_JSON_OUTPUT_FILE="$log_dir/e2e.json" node scripts/e2e-lock/main.ts e2e -- $deadline e2e "$e2e_min" -- sh -c "$e2e"
+  start e2e env PLAYWRIGHT_JSON_OUTPUT_FILE="$log_dir/e2e.json" CHECK_OUTPUT_DIR="$log_dir" node scripts/e2e-lock/main.ts e2e -- $deadline e2e "$e2e_min" -- sh -c "$e2e"
   wait
 else
   # The e2e drives the built app; with the build broken it would test a stale one.

@@ -1,8 +1,10 @@
 import { expect, type Page } from '@playwright/test';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
+import { FOLDED_ZONE_SIZE } from '@agent-board/daemon/protocol';
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { agents, claudeInTerminal, launch, SHELL_ENV, spawnAgent, TURN_MS, zoneNamed, zones } from './agent-helpers.ts';
+import { centreOf, drag, settledBox } from './board-helpers.ts';
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
 import { scratch } from './scratch.ts';
 import { openSettings, settingsSection } from './settings-helpers.ts';
@@ -232,3 +234,51 @@ for (const design of DESIGNS) {
     }
   });
 }
+
+test('two folded zones drag and sit side by side by their chips, and unfolding one onto the other moves the other aside', async () => {
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, SHELL_ENV);
+  try {
+    // A shell out of sight in the left zone once it folds, its left edge just past where the right chip is dropped.
+    const dropX = 100 + FOLDED_ZONE_SIZE.width + 30;
+    await window.evaluate(async (shellX) => {
+      const { zones, shells } = globalThis.window.agentBoard;
+      const left = await zones.addUnbound({ name: 'left', x: 100, y: 100, width: 700, height: 400 });
+      await zones.addUnbound({ name: 'right', x: 1000, y: 100, width: 700, height: 400 });
+      await shells.create({ zoneId: left.id, position: { x: shellX - 100, y: 200 } });
+    }, dropX + 4);
+    const left = zoneNamed(window, 'left');
+    const right = zoneNamed(window, 'right');
+    await expect(window.getByTestId('shell-tile')).toHaveCount(1);
+    for (const zone of [left, right]) {
+      await zone.getByRole('button', { name: /^Fold (zone|project)$/ }).click();
+      await expect(zone).toHaveAttribute('data-folded', 'true');
+    }
+    await window.getByRole('button', { name: /^Fit view/i }).click();
+    const [leftBox, rightBox] = [await settledBox(left), await settledBox(right)];
+    const scale = leftBox.width / FOLDED_ZONE_SIZE.width;
+    // The right chip dragged by its summary to just right of the left chip: inside where the left zone opens.
+    const from = centreOf(await settledBox(right.getByTestId('folded-summary')));
+    await drag(window, from, { x: from.x + leftBox.x + leftBox.width + 30 * scale - rightBox.x, y: from.y + leftBox.y + 10 * scale - rightBox.y });
+    await expect.poll(async () => (await zoneLayouts(window)).right?.x).not.toBe(1000);
+    const placed = await zoneLayouts(window);
+    // Where it was dropped: neither pushed clear of where the left zone opens, nor snapped to the shell hidden in it.
+    expect(Math.abs(placed.right!.x - dropX)).toBeLessThan(2);
+    expect(Math.abs(placed.right!.y - 110)).toBeLessThan(2);
+    expect(placed.left).toEqual({ x: 100, y: 100, width: 700, height: 400 });
+    expect(placed.right).toMatchObject({ width: 700, height: 400 });
+    await expect(right).toHaveAttribute('data-x', String(placed.right!.x));
+
+    // Unfolding the left one opens it over the right chip: the right one moves out of its way, and the left opens at its size.
+    await left.getByRole('button', { name: /^Unfold (zone|project)$/ }).click();
+    await expect(left).not.toHaveAttribute('data-folded', 'true');
+    await expect.poll(async () => {
+      const now = await zoneLayouts(window);
+      return overlap(now.left!, { ...now.right!, ...FOLDED_ZONE_SIZE });
+    }).toBe(false);
+    expect((await zoneLayouts(window)).left).toEqual({ x: 100, y: 100, width: 700, height: 400 });
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+  }
+});

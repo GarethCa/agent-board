@@ -4,7 +4,8 @@ import type { Rect } from '../../geometry';
 import { samplePath } from '../connectors/geometry';
 import { routeSelector } from '../connectors/line';
 import { crossesAny, routeLine } from '../connectors/route';
-import { endsOf, tetherPath } from './TetherEdge';
+import { AGENT_NOTE_FACE_WIDTH } from '@agent-board/daemon/protocol';
+import { bubbleOf, endsOf, tetherPath } from './TetherEdge';
 
 const note: Rect = { x: 0, y: 40, width: 200, height: 100 };
 const agent: Rect = { x: 600, y: 40, width: 256, height: 136 };
@@ -26,6 +27,12 @@ const boardOf = (rects: { a: Rect; b: Rect; c: Rect }) =>
   }) as unknown as ReactFlowState;
 
 describe('a tether between a note and its agent', () => {
+  it('leaves from the bubble, not the room under the face', () => {
+    const above: Rect = { x: 0, y: 400, width: 200, height: 100 };
+    const ends = endsOf(bubbleOf(above), { x: 0, y: 0, width: 256, height: 136 });
+    expect(ends).toMatchObject({ sourceSide: 'top', source: { x: AGENT_NOTE_FACE_WIDTH + (200 - AGENT_NOTE_FACE_WIDTH) / 2, y: 400 } });
+  });
+
   it('joins the sides that face each other', () => {
     expect(endsOf(note, agent)).toMatchObject({ sourceSide: 'right', targetSide: 'left' });
   });

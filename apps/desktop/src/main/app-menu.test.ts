@@ -239,6 +239,8 @@ describe('the menu bar', () => {
     expect(find(template, 'View', 'Zoom In').enabled).toBe(true);
     expect(find(template, 'View', 'Zoom Out').enabled).toBe(false);
     expect(find(template, 'View', 'Show Minimap').checked).toBe(true);
+    // Tethers are off until turned on, and the window here says nothing of them.
+    expect(find(template, 'View', 'Show Tethers').enabled).toBe(false);
     expect(find(template, 'Window', 'Needs You').enabled).toBe(false);
     (find(template, 'View', 'Zoom In').click as Click)(undefined, undefined, {});
     expect(b.run).toHaveBeenCalledWith({ kind: 'action', id: 'zoomIn' });

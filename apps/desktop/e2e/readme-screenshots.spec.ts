@@ -329,6 +329,9 @@ test('the README screenshots: an orchestrator with its crew frame', async () => 
     // Fit View frames the nodes as they are: let them stop growing, shrinking and moving first.
     await stillBoard(page);
     await page.getByRole('button', { name: 'Fit View' }).click();
+    // The orchestrator selected, so its crew's frame shows: at rest it waits for the orchestrator to be focused.
+    await page.locator('[data-testid="agent-tile"][data-orchestrator]').click({ position: { x: 4, y: 4 } });
+    await expect(frame).toHaveAttribute('data-focused', 'true');
     await pinRandomLooks(page);
     await pinPaths(page);
     await shoot(page, 'orchestrator-crew');

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { Check } from 'lucide-react';
 import { ZONE_COLORS, type Agent, type ExternalSession, type GateRun, type LibraryPrefab, type ReviewRound, type Shell, type Zone } from '@agent-board/daemon/protocol';
 import { keyText } from '../keys/registry';
 import { runGateShortcut } from '../session/window-keys';
@@ -62,6 +63,7 @@ describe("an agent's menu", () => {
     expect(menuIds(agentMenu(agentInput(running)))).toEqual([
       'expand', 'pop-out', 'pause', 'rename', 'schedule', 'link-issue', 'mute',
       'reasoning', 'reasoning/default', 'reasoning/low', 'reasoning/medium', 'reasoning/high', 'reasoning/xhigh', 'reasoning/max',
+      'role', 'role/none', 'role/orchestrator', 'role/implementer', 'role/reviewer', 'role/follow-up-reviewer',
       'start-review', 'run-gate', 'delete',
     ]);
   });
@@ -79,6 +81,33 @@ describe("an agent's menu", () => {
     const actions = spies<AgentMenuInput['actions']>();
     ((row(agentMenu(agentInput(running, { actions })), 'reasoning') as Extract<ModelEntry, { entries: unknown }>).entries as { id?: string; onSelect?(): void }[]).find((entry) => entry.id === 'max')!.onSelect!();
     expect(actions.calls).toEqual([['setEffort', [running.sessionId, 'max']]]);
+  });
+
+  it('gives a running agent a role, its own ticked, a custom one among them', () => {
+    type Sub = Extract<ModelEntry, { entries: unknown }>;
+    const roleRow = (agent: Agent, actions = spies<AgentMenuInput['actions']>()) => row(agentMenu(agentInput(agent, { actions })), 'role') as Sub;
+    const ticked = (sub: Sub) => (sub.entries as { label?: string; icon?: { type: unknown } }[]).filter((entry) => entry.icon?.type === Check).map((entry) => entry.label);
+    const none = roleRow({ ...running, role: null, roleName: null });
+    expect(none).toMatchObject({ label: 'Role', detail: 'None', entries: [{ heading: 'Only its role changes; it carries on' }, ...['None', 'Orchestrator', 'Implementer', 'Reviewer', 'Follow-up reviewer'].map((label) => ({ label }))] });
+    expect(ticked(none)).toEqual(['None']);
+    expect(ticked(roleRow({ ...running, role: 'reviewer', roleName: null }))).toEqual(['Reviewer']);
+    const lead = roleRow({ ...running, role: 'custom', roleName: 'orchestrator' });
+    expect(lead.detail).toBe('orchestrator');
+    expect(ticked(lead)).toEqual(['Orchestrator']);
+    // Its own custom role stays offered, so a change can be undone from the same menu.
+    const designer = roleRow({ ...running, role: 'custom', roleName: 'designer' });
+    expect(ticked(designer)).toEqual(['designer']);
+    // Orchestrator is a role like the rest: every agent may already start, message and close agents.
+    const hintOf = (agent: Agent) => (roleRow(agent).entries as { id?: string; hint?: string }[]).find((entry) => entry.id === 'orchestrator')!.hint;
+    expect(hintOf(running)).toBeUndefined();
+    expect(menuIds(agentMenu(agentInput(ended)))).toContain('role');
+    const actions = spies<AgentMenuInput['actions']>();
+    for (const id of ['orchestrator', 'none', 'follow-up-reviewer']) ((roleRow(running, actions).entries as { id?: string; onSelect?(): void }[]).find((entry) => entry.id === id)!.onSelect!());
+    expect(actions.calls).toEqual([
+      ['setRole', [running.sessionId, 'orchestrator']],
+      ['setRole', [running.sessionId, null]],
+      ['setRole', [running.sessionId, 'follow-up-reviewer']],
+    ]);
   });
 
   it('offers to open its window when a click expands it, and the other way round', () => {
@@ -158,6 +187,7 @@ describe("an agent tile's menu, grouped", () => {
       'run', 'run/interrupt', 'run/pause', 'run/stop',
       'settings', 'settings/rename', 'settings/schedule', 'settings/link-issue', 'settings/mute',
       'settings/reasoning', 'settings/reasoning/default', 'settings/reasoning/low', 'settings/reasoning/medium', 'settings/reasoning/high', 'settings/reasoning/xhigh', 'settings/reasoning/max',
+      'settings/role', 'settings/role/none', 'settings/role/orchestrator', 'settings/role/implementer', 'settings/role/reviewer', 'settings/role/follow-up-reviewer',
       'review', 'review/open-pr', 'review/start-review', 'review/run-gate',
       'arrange', 'arrange/front', 'arrange/forward', 'arrange/backward', 'arrange/back', 'arrange/align',
       'ask',
@@ -297,7 +327,6 @@ const repoZone: Zone = {
   codexBypassHookTrust: false,
   trustsFolder: false,
   boardMcp: true,
-  agentsOrchestrate: false,
   gateCommand: null,
   tracker: null,
   spacing: 'normal',
@@ -339,7 +368,6 @@ describe("a zone's ⋯ menu", () => {
       'unbind',
       'trust-folder',
       'board-mcp',
-      'orchestrate',
       'gate-command',
       'role-templates',
       'delete',
@@ -563,6 +591,36 @@ describe("every row's fields", () => {
           "id": "reasoning",
           "label": "Reasoning",
         },
+        {
+          "detail": "None",
+          "entries": [
+            {
+              "heading": "Only its role changes; it carries on",
+            },
+            {
+              "id": "none",
+              "label": "None",
+            },
+            {
+              "id": "orchestrator",
+              "label": "Orchestrator",
+            },
+            {
+              "id": "implementer",
+              "label": "Implementer",
+            },
+            {
+              "id": "reviewer",
+              "label": "Reviewer",
+            },
+            {
+              "id": "follow-up-reviewer",
+              "label": "Follow-up reviewer",
+            },
+          ],
+          "id": "role",
+          "label": "Role",
+        },
         "separator",
         {
           "disabled": false,
@@ -651,6 +709,36 @@ describe("every row's fields", () => {
           ],
           "id": "reasoning",
           "label": "Reasoning",
+        },
+        {
+          "detail": "None",
+          "entries": [
+            {
+              "heading": "Only its role changes; it carries on",
+            },
+            {
+              "id": "none",
+              "label": "None",
+            },
+            {
+              "id": "orchestrator",
+              "label": "Orchestrator",
+            },
+            {
+              "id": "implementer",
+              "label": "Implementer",
+            },
+            {
+              "id": "reviewer",
+              "label": "Reviewer",
+            },
+            {
+              "id": "follow-up-reviewer",
+              "label": "Follow-up reviewer",
+            },
+          ],
+          "id": "role",
+          "label": "Role",
         },
         "separator",
         {
@@ -752,6 +840,36 @@ describe("every row's fields", () => {
           "id": "reasoning",
           "label": "Reasoning",
         },
+        {
+          "detail": "None",
+          "entries": [
+            {
+              "heading": "Only its role changes; it carries on",
+            },
+            {
+              "id": "none",
+              "label": "None",
+            },
+            {
+              "id": "orchestrator",
+              "label": "Orchestrator",
+            },
+            {
+              "id": "implementer",
+              "label": "Implementer",
+            },
+            {
+              "id": "reviewer",
+              "label": "Reviewer",
+            },
+            {
+              "id": "follow-up-reviewer",
+              "label": "Follow-up reviewer",
+            },
+          ],
+          "id": "role",
+          "label": "Role",
+        },
         "separator",
         {
           "disabled": false,
@@ -841,6 +959,36 @@ describe("every row's fields", () => {
           ],
           "id": "reasoning",
           "label": "Reasoning",
+        },
+        {
+          "detail": "None",
+          "entries": [
+            {
+              "heading": "Only its role changes; it carries on",
+            },
+            {
+              "id": "none",
+              "label": "None",
+            },
+            {
+              "id": "orchestrator",
+              "label": "Orchestrator",
+            },
+            {
+              "id": "implementer",
+              "label": "Implementer",
+            },
+            {
+              "id": "reviewer",
+              "label": "Reviewer",
+            },
+            {
+              "id": "follow-up-reviewer",
+              "label": "Follow-up reviewer",
+            },
+          ],
+          "id": "role",
+          "label": "Role",
         },
         "separator",
         {
@@ -1043,11 +1191,6 @@ describe("every row's fields", () => {
           "label": "Turn off board MCP",
         },
         {
-          "hint": "Agents you start here may start, message and close agents in this zone",
-          "id": "orchestrate",
-          "label": "Let agents orchestrate",
-        },
-        {
           "hint": "pnpm check",
           "id": "gate-command",
           "label": "Change the gate command…",
@@ -1222,11 +1365,6 @@ describe("every row's fields", () => {
           "hint": "Agents started here stop getting the agent-board MCP server; the CLI stays",
           "id": "board-mcp",
           "label": "Turn off board MCP",
-        },
-        {
-          "hint": "Agents you start here may start, message and close agents in this zone",
-          "id": "orchestrate",
-          "label": "Let agents orchestrate",
         },
         {
           "hint": "What checks an agent's work before it is merged, run when you ask",
@@ -1420,6 +1558,11 @@ describe("every row's handler", () => {
         "reasoning/medium → setEffort("a1", "medium")",
         "reasoning/high → setEffort("a1", "high")",
         "reasoning/xhigh → setEffort("a1", "xhigh")",
+        "role/none → setRole("a1", null)",
+        "role/orchestrator → setRole("a1", "orchestrator")",
+        "role/implementer → setRole("a1", "implementer")",
+        "role/reviewer → setRole("a1", "reviewer")",
+        "role/follow-up-reviewer → setRole("a1", "follow-up-reviewer")",
         "open-review → openReview("a1")",
         "start-review → startReview(#a1)",
         "run-gate → openGate(#a1, true)",
@@ -1436,6 +1579,11 @@ describe("every row's handler", () => {
         "reasoning/medium → setEffort("a1", "medium")",
         "reasoning/high → setEffort("a1", "high")",
         "reasoning/xhigh → setEffort("a1", "xhigh")",
+        "role/none → setRole("a1", null)",
+        "role/orchestrator → setRole("a1", "orchestrator")",
+        "role/implementer → setRole("a1", "implementer")",
+        "role/reviewer → setRole("a1", "reviewer")",
+        "role/follow-up-reviewer → setRole("a1", "follow-up-reviewer")",
         "open-review → openReview("impl")",
         "run-gate → openGate(#a1, true)",
         "delete → deleteAgent("a1")",
@@ -1453,6 +1601,11 @@ describe("every row's handler", () => {
         "reasoning/high → setEffort("a2", "high")",
         "reasoning/xhigh → setEffort("a2", "xhigh")",
         "reasoning/max → setEffort("a2", "max")",
+        "role/none → setRole("a2", null)",
+        "role/orchestrator → setRole("a2", "orchestrator")",
+        "role/implementer → setRole("a2", "implementer")",
+        "role/reviewer → setRole("a2", "reviewer")",
+        "role/follow-up-reviewer → setRole("a2", "follow-up-reviewer")",
         "start-review → startReview(#a2)",
         "run-gate → openGate(#a2, true)",
         "delete → deleteAgent("a2")",
@@ -1468,6 +1621,11 @@ describe("every row's handler", () => {
         "reasoning/medium → setEffort("a3", "medium")",
         "reasoning/high → setEffort("a3", "high")",
         "reasoning/xhigh → setEffort("a3", "xhigh")",
+        "role/none → setRole("a3", null)",
+        "role/orchestrator → setRole("a3", "orchestrator")",
+        "role/implementer → setRole("a3", "implementer")",
+        "role/reviewer → setRole("a3", "reviewer")",
+        "role/follow-up-reviewer → setRole("a3", "follow-up-reviewer")",
         "start-review → startReview(#a3)",
         "run-gate → openGate(#a3, true)",
         "delete → deleteAgent("a3")",
@@ -1484,6 +1642,11 @@ describe("every row's handler", () => {
         "reasoning/high → setEffort("a4", "high")",
         "reasoning/xhigh → setEffort("a4", "xhigh")",
         "reasoning/max → setEffort("a4", "max")",
+        "role/none → setRole("a4", null)",
+        "role/orchestrator → setRole("a4", "orchestrator")",
+        "role/implementer → setRole("a4", "implementer")",
+        "role/reviewer → setRole("a4", "reviewer")",
+        "role/follow-up-reviewer → setRole("a4", "follow-up-reviewer")",
         "start-review → startReview(#a4)",
         "run-gate → openGate(#a4, true)",
         "delete → deleteAgent("a4")",
@@ -1501,6 +1664,11 @@ describe("every row's handler", () => {
         "reasoning/high → setEffort("a5", "high")",
         "reasoning/xhigh → setEffort("a5", "xhigh")",
         "reasoning/max → setEffort("a5", "max")",
+        "role/none → setRole("a5", null)",
+        "role/orchestrator → setRole("a5", "orchestrator")",
+        "role/implementer → setRole("a5", "implementer")",
+        "role/reviewer → setRole("a5", "reviewer")",
+        "role/follow-up-reviewer → setRole("a5", "follow-up-reviewer")",
         "start-review → startReview(#a5)",
         "run-gate → openGate(#a5, true)",
         "delete → deleteAgent("a5")",
@@ -1536,6 +1704,11 @@ describe("every row's handler", () => {
         "settings/reasoning/high → setEffort("a1", "high")",
         "settings/reasoning/xhigh → setEffort("a1", "xhigh")",
         "settings/reasoning/max → setEffort("a1", "max")",
+        "settings/role/none → setRole("a1", null)",
+        "settings/role/orchestrator → setRole("a1", "orchestrator")",
+        "settings/role/implementer → setRole("a1", "implementer")",
+        "settings/role/reviewer → setRole("a1", "reviewer")",
+        "settings/role/follow-up-reviewer → setRole("a1", "follow-up-reviewer")",
         "review/open-pr → openPullRequest(#a1, #?)",
         "review/open-review → openReview("a1")",
         "review/start-review → startReview(#a1)",
@@ -1612,7 +1785,6 @@ describe("every row's handler", () => {
         "unbind → unbind(#z1)",
         "trust-folder → setTrustsFolder(#z1, true)",
         "board-mcp → setBoardMcp(#z1, false)",
-        "orchestrate → setAgentsOrchestrate(#z1, true)",
         "gate-command → editGateCommand(#z1)",
         "role-templates → editRoleTemplates(#z1)",
         "delete → deleteZone(#z1)",
@@ -1632,7 +1804,6 @@ describe("every row's handler", () => {
         "default-repo → pickDefaultRepo(#g1)",
         "init-repo → initRepo(#g1)",
         "board-mcp → setBoardMcp(#g1, false)",
-        "orchestrate → setAgentsOrchestrate(#g1, true)",
         "gate-command → editGateCommand(#g1)",
         "role-templates → editRoleTemplates(#g1)",
         "delete → deleteZone(#g1)",
@@ -1812,7 +1983,6 @@ describe("a project's menus, under the Simplified design", () => {
         "options/folder/trust-folder → setTrustsFolder(#z1, false)",
         "options/folder/unbind → unbind(#z1)",
         "options/agents/board-mcp → setBoardMcp(#z1, false)",
-        "options/agents/orchestrate → setAgentsOrchestrate(#z1, true)",
         "options/agents/gate-command → editGateCommand(#z1)",
         "options/agents/role-templates → editRoleTemplates(#z1)",
         "options/delete → deleteZone(#z1)",
@@ -1848,7 +2018,6 @@ describe("a project's menus, under the Simplified design", () => {
         "options/folder/default-repo → pickDefaultRepo(#z1)",
         "options/folder/init-repo → initRepo(#z1)",
         "options/agents/board-mcp → setBoardMcp(#z1, false)",
-        "options/agents/orchestrate → setAgentsOrchestrate(#z1, true)",
         "options/agents/gate-command → editGateCommand(#z1)",
         "options/agents/role-templates → editRoleTemplates(#z1)",
         "options/delete → deleteZone(#z1)",
@@ -1894,7 +2063,6 @@ describe("a project's menus, under the Simplified design", () => {
       'folder/unbind',
       'agents',
       'agents/board-mcp',
-      'agents/orchestrate',
       'agents/gate-command',
       'agents/role-templates',
       'delete',
@@ -1917,13 +2085,9 @@ describe("a project's menus, under the Simplified design", () => {
     const entries = projectMenu(projectInput(projects[0]![1], { actions }));
     const agents = row(entries, 'agents') as { entries: ModelEntry[] };
     expect(row(agents.entries, 'board-mcp')).toMatchObject({ checked: true });
-    expect(row(agents.entries, 'orchestrate')).toMatchObject({ checked: false });
+    expect(() => row(agents.entries, 'orchestrate')).toThrow('no row orchestrate');
     (row(agents.entries, 'board-mcp') as { onSelect(): void }).onSelect();
-    (row(agents.entries, 'orchestrate') as { onSelect(): void }).onSelect();
-    expect(actions.calls).toEqual([
-      ['setBoardMcp', [projects[0]![1], false]],
-      ['setAgentsOrchestrate', [projects[0]![1], true]],
-    ]);
+    expect(actions.calls).toEqual([['setBoardMcp', [projects[0]![1], false]]]);
   });
 
   it('names rows plainly, and technically with Show technical details', () => {
@@ -1931,8 +2095,8 @@ describe("a project's menus, under the Simplified design", () => {
       const agents = row(projectMenu(projectInput(projects[0]![1], { technical })), 'agents') as { entries: ModelEntry[] };
       return agents.entries.flatMap((entry) => (entry !== 'separator' && 'label' in entry ? [entry.label] : []));
     };
-    expect(labels(false)).toEqual(['Board tools for new agents', 'Let agents start and manage agents', 'Check before merging…', 'Role templates…']);
-    expect(labels(true)).toEqual(['Board MCP for new agents', 'Let agents orchestrate', 'Gate command…', 'Role templates…']);
+    expect(labels(false)).toEqual(['Board tools for new agents', 'Check before merging…', 'Role templates…']);
+    expect(labels(true)).toEqual(['Board MCP for new agents', 'Gate command…', 'Role templates…']);
   });
 
   it("says why it can't start an agent, and Delete… is last and red", () => {
@@ -1972,10 +2136,10 @@ describe("the menu bar's Agent and Project menus", () => {
     for (const path of leaves(rows)) expect(runRow(entries, path), path).toBe(true);
   });
 
-  it("names Classic's Agent ▸ This agent in the menu bar, not Agent inside Agent, and leaves the tile's menu as it is", () => {
+  it("names Classic's Agent ▸ Selected agent in the menu bar, not Agent inside Agent, and leaves the tile's menu as it is", () => {
     const entries = stateTileMenu(tileInput(running));
     const bar = menuBarRows(menuBarAgentEntries(entries));
-    expect(bar.find((each) => each !== 'separator' && !('heading' in each) && each.id === 'agent')).toMatchObject({ label: 'This agent' });
+    expect(bar.find((each) => each !== 'separator' && !('heading' in each) && each.id === 'agent')).toMatchObject({ label: 'Selected agent' });
     expect(rowPaths(bar)).toEqual(paths(entries));
     expect(row(entries, 'agent').label).toBe('Agent');
   });

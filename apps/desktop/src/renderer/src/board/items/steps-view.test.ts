@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Step, StepsData, StepsWho } from '@agent-board/daemon/protocol';
-import { sendsWithWords, stepRows, stepsView, zoomLook, type StepsLookup } from './steps-view';
+import { sendsWithWords, stepRows, stepsView, turnSection, zoomLook, type StepsLookup } from './steps-view';
 
 const USER: StepsWho = { kind: 'user' };
 const agent = (name: string): StepsWho => ({ kind: 'agent', sessionId: `s-${name}`, name });
@@ -118,6 +118,34 @@ describe('a steps card selected', () => {
     ]);
     expect(rows.find((row) => row.kind === 'section' && row.label === 'Prepare')).toMatchObject({ open: false, finished: true });
     expect(rows.find((row) => row.kind === 'section' && row.label === 'Release')).toMatchObject({ open: true });
+  });
+
+  it('on a card made taller: every step, with no folds, and every section open but a finished one or one turned by hand', () => {
+    const flat = stepsView(card(twelve), live);
+    const rows = stepRows(flat, flat.matter!.step.id, new Set(), { every: true });
+    expect(rows.map((row) => row.kind)).toEqual(Array(12).fill('step'));
+    expect(rows.filter((row) => row.kind === 'step' && row.open)).toHaveLength(1);
+    const headed = stepsView(
+      card([step({ text: 'Freeze', section: 'Prepare', done: stamp() }), step({ text: 'Merge #214', section: 'Release' }), step({ text: 'Post notes', section: 'After' })]),
+      live,
+    );
+    const label = (row: ReturnType<typeof stepRows>[number]) => (row.kind === 'step' ? row.view.step.text : `${row.kind}: ${row.label}`);
+    expect(stepRows(headed, headed.matter!.step.id, new Set(), { every: true }).map(label)).toEqual(['section: Prepare', 'section: Release', 'Merge #214', 'section: After', 'Post notes']);
+    const turned = turnSection(turnSection(new Set(), 'section:0', false), 'section:2', true);
+    expect(stepRows(headed, headed.matter!.step.id, turned, { every: true }).map(label)).toEqual(['section: Prepare', 'Freeze', 'section: Release', 'Merge #214', 'section: After']);
+  });
+
+  it('keeps a section the user turned by hand as they left it, made taller or not', () => {
+    const headed = stepsView(card([step({ text: 'Freeze', section: 'Prepare', done: stamp() }), step({ text: 'Merge #214', section: 'Release' }), step({ text: 'Post notes', section: 'After' })]), live);
+    const cursor = headed.matter!.step.id;
+    const after = (rows: ReturnType<typeof stepRows>) => rows.find((row) => row.kind === 'section' && row.label === 'After');
+    // Opened by hand at its start, it is open once made taller too; shut by hand made taller, it is shut at its start.
+    const opened = turnSection(new Set(), 'section:2', false);
+    expect(after(stepRows(headed, cursor, opened))).toMatchObject({ open: true });
+    expect(after(stepRows(headed, cursor, opened, { every: true }))).toMatchObject({ open: true });
+    const shut = turnSection(opened, 'section:2', true);
+    expect(after(stepRows(headed, cursor, shut))).toMatchObject({ open: false });
+    expect(after(stepRows(headed, cursor, shut, { every: true }))).toMatchObject({ open: false });
   });
 
   it('opens the step the cursor is on, which may be a done one to change', () => {

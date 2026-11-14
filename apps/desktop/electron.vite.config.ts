@@ -5,9 +5,12 @@ import type { BuildInfo } from '@agent-board/daemon/protocol';
 
 /**
  * The commit being built, with `-dirty` when tracked files have changes, so a build names what it was built from.
- * Untracked files don't count: Vite writes one beside this config while it loads it.
+ * Untracked files don't count: Vite writes one beside this config while it loads it. A build from a copy with no git
+ * (a Linux build in a container) is told it by `AGENT_BOARD_BUILD_SHA` and `AGENT_BOARD_BUILD_DATE`.
  */
 function buildInfo(): BuildInfo {
+  const { AGENT_BOARD_BUILD_SHA: givenSha, AGENT_BOARD_BUILD_DATE: givenDate = '' } = process.env;
+  if (givenSha) return { sha: givenSha, date: givenDate };
   const git = (...args: string[]) => execFileSync('git', args, { cwd: import.meta.dirname, encoding: 'utf8' }).trim();
   try {
     const [sha = 'unknown', date = ''] = git('log', '-1', '--format=%h%n%cI').split('\n');

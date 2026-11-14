@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { typedOutlasts } from './web-address';
 import { ArrowLeft, ArrowRight, ExternalLink, Globe, RotateCw } from 'lucide-react';
 import type { WebSurface } from '@agent-board/daemon/window-layout';
 import { keptWebUrl, WEB_TAB_RULE, webTabLabel, webTabUrl } from '@agent-board/daemon/web-url';
@@ -47,7 +48,12 @@ export function WebTab({ web, visible, servers, keyboard, autoFocus, onNavigate,
   /** The URL the tab's page is made at: what it was kept at, or the first one typed in a new tab, which has none until then. */
   const [opened, setOpened] = useState<string | undefined>(web.url === '' ? undefined : web.url);
   const [state, setState] = useState<WebTabState>({ url: web.url, title: '', canGoBack: false, canGoForward: false, loading: web.url !== '', focused: false });
+  /** What the user typed in the address row, shown over the page's URL until Enter or Esc: kept as the row lets go of the keyboard. */
   const [typed, setTyped] = useState<string>();
+  const [addressFocused, setAddressFocused] = useState(false);
+  /** Whether the address row has the keyboard, for the page's state to read as it arrives. */
+  const addressHeld = useRef(false);
+  addressHeld.current = addressFocused;
   const [problem, setProblem] = useState<string>();
   /** The URL the page was last at, to tell a page gone elsewhere from one that only changed its title. */
   const lastUrl = useRef(web.url);
@@ -74,6 +80,8 @@ export function WebTab({ web, visible, servers, keyboard, autoFocus, onNavigate,
         onState: (next) => {
           // What the page says now outdates what the address row last said: a block, or a page gone elsewhere.
           if (next.problem !== undefined || next.url !== lastUrl.current) setProblem(undefined);
+          // A page gone elsewhere once the user has moved on from the address row (a link clicked in it) drops what was typed there.
+          if (next.url !== lastUrl.current && !typedOutlasts({ rowFocused: addressHeld.current, pageFocused: next.focused, windowFocused: document.hasFocus() })) setTyped(undefined);
           lastUrl.current = next.url;
           setState(next);
           const at = keptWebUrl(next.url);
@@ -102,6 +110,11 @@ export function WebTab({ web, visible, servers, keyboard, autoFocus, onNavigate,
     setProblem(undefined);
     action().catch((error: unknown) => setProblem(errorMessage(error)));
   };
+  /** Back, Forward, Reload and Open in browser go by where the page is: what was typed and left in the address row goes. */
+  const fromPage = (action: () => Promise<void>) => {
+    setTyped(undefined);
+    run(action);
+  };
   /** Makes the tab's page at `url`, the first it has: the address row shows it at once, and nothing said of an earlier address stays. */
   const openAt = (url: string) => {
     setTyped(undefined);
@@ -123,6 +136,13 @@ export function WebTab({ web, visible, servers, keyboard, autoFocus, onNavigate,
     setTyped(undefined);
     run(() => window.agentBoard.webTabs.load(web.id, url));
   };
+  // While the address row is typed in, the main process keeps a page that takes the keyboard as it loads from taking it from the row.
+  const typing = addressFocused && typed !== undefined;
+  useEffect(() => {
+    if (!typing) return;
+    window.agentBoard.webTabs.typing(web.id, true);
+    return () => window.agentBoard.webTabs.typing(web.id, false);
+  }, [web.id, typing]);
   const blank = opened === undefined;
   // A new tab's address takes the keyboard while its pane has it: as it mounts only if the user just opened it (a window
   // opening restored or expanding doesn't ask for it), and whenever its pane is focused after.
@@ -137,9 +157,9 @@ export function WebTab({ web, visible, servers, keyboard, autoFocus, onNavigate,
   return (
     <div className="web-view" ref={view} data-testid="web-view" data-web-tab={web.id} aria-busy={state.loading}>
       <form className="web-head" onSubmit={go}>
-        <IconButton icon={<ArrowLeft />} aria-label="Back" size="xs" disabled={!state.canGoBack} onClick={() => run(() => window.agentBoard.webTabs.back(web.id))} />
-        <IconButton icon={<ArrowRight />} aria-label="Forward" size="xs" disabled={!state.canGoForward} onClick={() => run(() => window.agentBoard.webTabs.forward(web.id))} />
-        <IconButton icon={<RotateCw />} aria-label="Reload" size="xs" disabled={blank} onClick={() => run(() => window.agentBoard.webTabs.reload(web.id))} />
+        <IconButton icon={<ArrowLeft />} aria-label="Back" size="xs" disabled={!state.canGoBack} onClick={() => fromPage(() => window.agentBoard.webTabs.back(web.id))} />
+        <IconButton icon={<ArrowRight />} aria-label="Forward" size="xs" disabled={!state.canGoForward} onClick={() => fromPage(() => window.agentBoard.webTabs.forward(web.id))} />
+        <IconButton icon={<RotateCw />} aria-label="Reload" size="xs" disabled={blank} onClick={() => fromPage(() => window.agentBoard.webTabs.reload(web.id))} />
         {(web.private === true || state.private === true) && (
           <Tag data-testid="web-private" title="A private tab: no login or cookie outlasts it">
             Private
@@ -155,7 +175,8 @@ export function WebTab({ web, visible, servers, keyboard, autoFocus, onNavigate,
           spellCheck={false}
           value={typed ?? state.url}
           onChange={(event) => setTyped(event.target.value)}
-          onBlur={() => setTyped(undefined)}
+          onFocus={() => setAddressFocused(true)}
+          onBlur={() => setAddressFocused(false)}
           onKeyDown={(event) => {
             if (event.key !== 'Escape') return;
             // Nothing typed in a new tab: the bar lets go of the keyboard.
@@ -169,7 +190,7 @@ export function WebTab({ web, visible, servers, keyboard, autoFocus, onNavigate,
           }}
         />
         {/* Its name is its tooltip: a tooltip of the window's would be drawn under the page. */}
-        <IconButton icon={<ExternalLink />} aria-label="Open in browser" size="xs" disabled={blank} onClick={() => run(() => window.agentBoard.webTabs.openInBrowser(web.id))} />
+        <IconButton icon={<ExternalLink />} aria-label="Open in browser" size="xs" disabled={blank} onClick={() => fromPage(() => window.agentBoard.webTabs.openInBrowser(web.id))} />
       </form>
       {find.finding > 0 && <FindBar finder={finder} focusSignal={find.finding} onClose={find.close} />}
       {state.offered !== undefined && (

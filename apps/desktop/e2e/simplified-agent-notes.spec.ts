@@ -5,12 +5,13 @@ import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from 
 import { scratch } from './scratch.ts';
 import { openSettings } from './settings-helpers.ts';
 
-// A note an agent writes under the Simplified design is drawn as Classic draws it: its tab names the agent and flies to
-// it, over a dashed card with no coloured side stripe. A note with no known author has a tab that reads just Note. A sticky is not touched, and Classic's Agent notes setting is not drawn.
+// A note an agent writes under the Simplified design is a speech bubble from its agent's face, as under Classic, but flat,
+// with no edge: its first line names the agent, and its face flies to it. A note with no known author reads just Note. A
+// sticky is not touched, and Classic's Agent notes setting is not drawn.
 
 const LONG = Array.from({ length: 30 }, (_, row) => `- item ${row + 1} of a long list the card must scroll or grow for`).join('\n');
 
-test("an agent note is a card under a tab that flies to its agent, long markdown stays inside it, and Classic's note look is not offered", async () => {
+test("an agent note is a bubble from a face that flies to its agent, long markdown stays inside it, and Classic's note look is not offered", async () => {
   const { dir, repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env, [], { design: 'simplified' });
@@ -39,20 +40,20 @@ test("an agent note is a card under a tab that flies to its agent, long markdown
     await expect(notes).toHaveCount(3);
     const note = notes.first();
 
-    // Classic's note, tab and all: the agent named in the tab over a dashed card, with no coloured stripe down its side.
+    // A speech bubble from its agent's face, its first line naming the agent; Simplified draws the bubble flat, with no edge.
     await expect(note).toHaveAttribute('data-look', 'document');
-    const card = note.locator('.agent-note-card');
-    await expect(card).toHaveCSS('border-left-style', 'dashed');
-    const [left, top] = await card.evaluate((element) => [getComputedStyle(element).borderLeftWidth, getComputedStyle(element).borderTopWidth]);
-    expect(left).toBe(top);
-    // The robot stands for the word Note on a named tab.
-    await expect(note.locator('.agent-note-tab').getByRole('img', { name: 'Note' })).toHaveCount(1);
-    await expect(note.locator('.agent-note-tab')).toHaveText(new RegExp(`^${agent!.name}`));
-    await expect(note.locator('.agent-note-byline, .agent-note-head')).toHaveCount(0);
-    // A note with no known author has a tab that reads just Note.
+    const bubble = note.locator('.agent-note-bubble');
+    const edge = () => bubble.evaluate((element) => getComputedStyle(element).borderTopColor);
+    expect(await edge()).toBe('rgba(0, 0, 0, 0)');
+    const face = note.getByRole('button', { name: `Note by ${agent!.name}` });
+    await expect(face).toHaveCount(1);
+    await expect(note.locator('.agent-note-head .agent-note-name')).toHaveText(agent!.name);
+    await expect(note.locator('.agent-note-tab, .agent-note-byline')).toHaveCount(0);
+    // A note with no known author reads just Note, from a face with no tile to go to.
     const nameless = notes.nth(2);
-    await expect(nameless.locator('.agent-note-tab')).toHaveText('Note');
-    await expect(nameless.locator('.agent-note-tab')).not.toContainText(/by/);
+    await expect(nameless.getByRole('button', { name: 'Note', exact: true })).toBeDisabled();
+    await expect(nameless.locator('.agent-note-name')).toHaveText('Note');
+    await expect(nameless.locator('.agent-note-head')).not.toContainText(/by/);
     await expect(note.locator('strong')).toHaveText('Round 2 of 3');
     // Its stamp says the day, and the full date and time on hover.
     const stamp = note.locator('.agent-note-time');
@@ -74,9 +75,9 @@ test("an agent note is a card under a tab that flies to its agent, long markdown
     await window.evaluate(() => globalThis.window.agentBoard.design.set('classic'));
     await expect.poll(() => window.evaluate(() => document.documentElement.dataset.design ?? null)).toBeNull();
     expect(await stickyLook()).toEqual(simplifiedSticky);
-    // Classic's tab for a note with no known author reads just Note too, with no mark.
-    await expect(nameless.locator('.agent-note-tab')).toHaveText('Note');
-    await expect(nameless.locator('.agent-note-mark')).toHaveCount(0);
+    // Classic draws the bubble's hairline edge, and a note with no known author reads just Note there too.
+    await expect.poll(edge).not.toBe('rgba(0, 0, 0, 0)');
+    await expect(nameless.locator('.agent-note-name')).toHaveText('Note');
     await window.evaluate(() => globalThis.window.agentBoard.design.set('simplified'));
     await expect.poll(() => window.evaluate(() => document.documentElement.dataset.design ?? null)).toBe('simplified');
 
@@ -89,7 +90,7 @@ test("an agent note is a card under a tab that flies to its agent, long markdown
     expect(foot.y + foot.height).toBeLessThanOrEqual(longCard.y + longCard.height + 1);
     expect((await body.boundingBox())!.y + (await body.boundingBox())!.height).toBeLessThanOrEqual(longCard.y + longCard.height + 1);
 
-    // The tab flies to its agent: the board is panned away from it first, and the click brings its tile into view and selects it.
+    // The face flies to its agent: the board is panned away from it first, and the click brings its tile into view and selects it.
     const inView = async () => {
       const box = await lead.boundingBox();
       const view = window.viewportSize()!;
@@ -98,7 +99,7 @@ test("an agent note is a card under a tab that flies to its agent, long markdown
     // A window too short for its tile, with the notes above it still in view.
     await window.setViewportSize({ width: 1280, height: 520 });
     await expect.poll(inView).toBe(false);
-    await note.locator('.agent-note-tab').getByRole('button').click();
+    await face.click();
     await expect(lead.locator('xpath=ancestor::*[contains(@class, "react-flow__node")][1]')).toHaveClass(/selected/);
     await expect.poll(inView).toBe(true);
 

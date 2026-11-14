@@ -40,8 +40,8 @@ import {
   pauseRefusal,
   waitsOnUser,
   isStatusProgress,
-  MAX_CREW_DEPTH,
   MAX_FLAG_LENGTH,
+  parseRole,
   MAX_PURPOSE_LENGTH,
   MAX_STATUS_LENGTH,
   type Agent,
@@ -62,8 +62,6 @@ import {
   type AgentFlag,
   type UndeliveredMessage,
   type DaemonMethods,
-  ORCHESTRATE_SCOPES,
-  type OrchestrateScope,
   type PermissionDecision,
   type PromptAnswer,
   type PromptQuestion,
@@ -388,6 +386,11 @@ export interface AgentHost {
   /** Renames the agent's tile. */
   setName(sessionId: string, name: string): Agent;
   /**
+   * Gives the agent a role, as typed (`parseRole`), or none with null: its tile's badge, and whatever is keyed on the
+   * role, take it at once. Only the role changes: the session isn't restarted, and no template is sent to it.
+   */
+  setRole(sessionId: string, role: string | null): Agent;
+  /**
    * Sets what the agent says it is doing now (ADR-0010), replacing what was there: a summary, trimmed and at most
    * `MAX_STATUS_LENGTH`, and a progress 0-100 or null; its character's pose; and its work category (ADR-0024), whole:
    * a label or who it waits on left out goes. Each left out keeps what it had, but one must be given. `done` says its
@@ -398,13 +401,6 @@ export interface AgentHost {
   waitsAtPrompt(sessionId: string): boolean;
   /** Notes that the agent says its work is finished (`Agent.workFinishedAt`) and is Done, as `done` does, until its next prompt. */
   markFinished(sessionId: string): Agent;
-  /** Lets the agent orchestrate in `scope`, or stops it with null. */
-  setOrchestrate(sessionId: string, scope: OrchestrateScope | null): Agent;
-  /**
-   * Why the agent may not orchestrate, beyond its zone (`notOrchestratingReason`): whether the user turned it off, and
-   * how deep in a crew it is (0 for one the user started).
-   */
-  orchestrateFacts(sessionId: string): { off: boolean; depth: number };
   /**
    * Makes the agents `from` started `to`'s, as if `to` had started them, `from` on the board or removed. Returns their ids; the caller tells the clients,
    * once whatever it runs this in has committed.
@@ -412,11 +408,6 @@ export interface AgentHost {
   handCrew(from: string, to: string): string[];
   /** The removed orchestrator `sessionId` while some of its crew is still on the board (`Agent.orphanedFrom`), else undefined. */
   removedOrchestrator(sessionId: string): RemovedOrchestrator | undefined;
-  /**
-   * Hears a zone's `agentsOrchestrate` change. Off, it stops every agent in it orchestrating (a grant by hand goes for
-   * good), and on, they do again; tells the clients of each.
-   */
-  zoneOrchestrateChanged(zoneId: string, on: boolean): void;
   /** Moves the agent's tile within its zone, into any other, or out onto the board. Only its tile moves. */
   move(sessionId: string, move: TileMove): Agent;
   /** The zone of the agent's own repo that speaks for it (`repoZoneOf`), if any. */
@@ -571,10 +562,6 @@ interface ConversationRow {
 export interface RemovedOrchestrator {
   sessionId: string;
   name: string;
-  /** The scope it orchestrated at as it was removed, or null for none. */
-  orchestrate: OrchestrateScope | null;
-  /** How deep in a crew it was started: its crew is one deeper. */
-  depth: number;
 }
 
 export interface AgentRow extends PositionColumns {
@@ -662,14 +649,13 @@ export interface AgentRow extends PositionColumns {
   hibernated_fold: string | null;
   /** When it said its work is finished (`Agent.workFinishedAt`), or null. */
   work_finished_at: string | null;
-  /** The scope the user let it orchestrate in by hand, or null to follow its zone's switch. */
-  orchestrate: OrchestrateScope | null;
-  /** 1 once the user turned it off: no zone lets it orchestrate then, until the user turns it on. */
-  orchestrate_off: number;
   spawned_by: string | null;
   /** The removed orchestrator that started it, until another takes its crew over (`Agent.orphanedFrom`). */
   orphaned_from: string | null;
-  /** How deep in a crew it was started (0 for the user's), fixed at spawn: removing an agent above it never lowers it. */
+  /**
+   * How deep in a crew it was started (0 for the user's), fixed at spawn. Nothing limits it any more (a crew goes any
+   * depth); it is still written so that an older daemon on this database finds it.
+   */
   crew_depth: number;
 }
 
@@ -698,7 +684,6 @@ export interface ZoneRow {
   codex_bypass_hook_trust: number;
   trusts_folder: number;
   board_mcp: number;
-  agents_orchestrate: number;
   tracker_provider: string | null;
   tracker_scope: string | null;
   tracker_project: string | null;
@@ -720,7 +705,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   const selectAll = db.prepare(`${select} ORDER BY a.rowid`);
   const selectOne = db.prepare(`${select} WHERE a.session_id = ?`);
   const zoneColumns =
-    'id, name, repo_root, folder, default_repo, group_folder, codex_bypass_hook_trust, trusts_folder, board_mcp, agents_orchestrate, tracker_provider, tracker_scope, tracker_project, clone_repo, created_at';
+    'id, name, repo_root, folder, default_repo, group_folder, codex_bypass_hook_trust, trusts_folder, board_mcp, tracker_provider, tracker_scope, tracker_project, clone_repo, created_at';
   const selectZone = db.prepare(`SELECT ${zoneColumns} FROM zones WHERE id = ?`);
   const selectZones = db.prepare(`SELECT ${zoneColumns} FROM zones`);
   const updatePlace = db.prepare('UPDATE agents SET zone_id = ?, x = ?, y = ?, z = ? WHERE session_id = ?');
@@ -778,6 +763,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   const updateSeen = db.prepare('UPDATE agents SET seen = ? WHERE session_id = ?');
   const updateBranch = db.prepare('UPDATE agents SET branch = ?, current_branch = ?, detached = ? WHERE session_id = ?');
   const updateName = db.prepare('UPDATE agents SET name = ? WHERE session_id = ?');
+  const updateRole = db.prepare('UPDATE agents SET role = ?, role_name = ? WHERE session_id = ?');
   // The Captain was named "Board master" before it was called the Captain: an unchanged name follows (a name the user chose stays).
   db.prepare("UPDATE agents SET name = 'Captain' WHERE master = 1 AND name = 'Board master'").run();
   const updateStatus = db.prepare(
@@ -806,11 +792,6 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   db.prepare(`UPDATE agents SET ${NO_CHARACTER} WHERE character_pose NOT IN (${RESTING_SQL})`).run();
   /** Cancels the timer that redraws a working pose's tile as it lapses (`CHARACTER_EXPIRY_MS`), one per agent. */
   const characterLapses = new Map<string, () => void>();
-  const updateOrchestrate = db.prepare('UPDATE agents SET orchestrate = ?, orchestrate_off = ? WHERE session_id = ?');
-  /** The agents a zone's setting reaches: those in it. */
-  const selectReachedBy = db.prepare('SELECT session_id FROM agents WHERE zone_id = ?');
-  /** The agents in a zone the user let orchestrate by hand: not the Captain, whose scope is what it is (ADR-0019). */
-  const clearHandGrantsIn = db.prepare('UPDATE agents SET orchestrate = NULL WHERE zone_id = ? AND orchestrate IS NOT NULL AND master = 0');
   const updateHarnessSession = db.prepare('UPDATE agents SET harness_session_id = ? WHERE session_id = ?');
   const selectConversations = db.prepare(
     'SELECT harness_session_id, transcript_path, ended_at FROM agent_conversations WHERE session_id = ? ORDER BY id',
@@ -1452,15 +1433,15 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   const selectHandedCrew = db.prepare('SELECT session_id FROM agents WHERE spawned_by = ? OR orphaned_from = ?');
   // Only while a crew agent still names it: a removed orchestrator with none left has nothing to hand over.
   const selectRemovedLead = db.prepare(
-    'SELECT session_id, name, orchestrate, crew_depth FROM removed_orchestrators r WHERE session_id = ? AND EXISTS (SELECT 1 FROM agents WHERE orphaned_from = r.session_id)',
+    'SELECT session_id, name FROM removed_orchestrators r WHERE session_id = ? AND EXISTS (SELECT 1 FROM agents WHERE orphaned_from = r.session_id)',
   );
   const selectRemovedLeadName = db.prepare('SELECT name FROM removed_orchestrators WHERE session_id = ?');
   const deleteRemovedLead = db.prepare('DELETE FROM removed_orchestrators WHERE session_id = ?');
 
   /** The removed orchestrator `id` whose crew is still on the board, as a handover needs it; undefined for none. */
   const removedLead = (id: string): RemovedOrchestrator | undefined => {
-    const row = selectRemovedLead.get(id) as { session_id: string; name: string; orchestrate: OrchestrateScope | null; crew_depth: number } | undefined;
-    return row === undefined ? undefined : { sessionId: row.session_id, name: row.name, orchestrate: row.orchestrate, depth: row.crew_depth };
+    const row = selectRemovedLead.get(id) as { session_id: string; name: string } | undefined;
+    return row === undefined ? undefined : { sessionId: row.session_id, name: row.name };
   };
 
   /** The name of the agent's orchestrator while that one is live; null for a loose agent, the Captain's, or one whose orchestrator ended. */
@@ -1605,7 +1586,6 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       master: row.master === 1,
       // Agents in the app's own group folders from before the column are still known by where they run.
       plainFolder: row.plain_folder === 1 || inGroupFolder(options.groupsDir, row.worktree),
-      orchestrate: orchestrateNow(row),
       spawnedBy: row.spawned_by,
       orphanedFrom: row.orphaned_from === null ? null : { sessionId: row.orphaned_from, name: (selectRemovedLeadName.get(row.orphaned_from) as { name: string } | undefined)?.name ?? 'a removed orchestrator' },
       ledBy: led(row),
@@ -1632,18 +1612,6 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   };
 
   const getRow = (sessionId: string) => selectOne.get(sessionId) as AgentRow | undefined;
-
-  /**
-   * The scope the agent may orchestrate in now (ADR-0011): the user's by hand, if they set one; else `zone` while the
-   * zone its tile is in now lets its agents orchestrate, unless the user turned it off, or it is as deep in a crew as
-   * an agent may be (`MAX_CREW_DEPTH`).
-   */
-  const orchestrateNow = (row: AgentRow): OrchestrateScope | null => {
-    if (row.orchestrate !== null) return row.orchestrate;
-    if (row.orchestrate_off === 1 || row.zone_id === null) return null;
-    const zone = selectZone.get(row.zone_id) as ZoneRow | undefined;
-    return zone?.agents_orchestrate === 1 && row.crew_depth < MAX_CREW_DEPTH - 1 ? 'zone' : null;
-  };
 
   /** The zone of the agent's own repo that speaks for it, wherever its tile sits (`repoZoneOf`). */
   const repoZone = (row: AgentRow): ZoneRow | undefined => repoZoneFor(row.zone_id, row.repo_root);
@@ -2247,6 +2215,16 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       return agent;
     },
 
+    setRole(sessionId, role) {
+      requireAgent(sessionId);
+      const parsed = role === null ? { role: null, name: null } : parseRole(role);
+      if ('error' in parsed) throw invalidParams(parsed.error);
+      updateRole.run(parsed.role, parsed.name, sessionId);
+      const agent = get(sessionId)!;
+      options.broadcast({ type: 'agent.updated', agent });
+      return agent;
+    },
+
     setStatus(sessionId, { summary = null, progress = null, done = false, character, category, purpose }, setBy = null) {
       requireAgent(sessionId);
       if (summary === null && character === undefined && category === undefined && purpose === undefined) {
@@ -2286,20 +2264,6 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       return agent;
     },
 
-    setOrchestrate(sessionId, scope) {
-      requireAgent(sessionId);
-      if (scope !== null && !ORCHESTRATE_SCOPES.includes(scope)) throw invalidParams(`unknown orchestrate scope ${String(scope)}`);
-      updateOrchestrate.run(scope, scope === null ? 1 : 0, sessionId);
-      const agent = get(sessionId)!;
-      options.broadcast({ type: 'agent.updated', agent });
-      return agent;
-    },
-
-    orchestrateFacts(sessionId) {
-      const row = requireRow(sessionId);
-      return { off: row.orchestrate_off === 1, depth: row.crew_depth };
-    },
-
     handCrew(from, to) {
       const crew = (selectHandedCrew.all(from, from) as { session_id: string }[]).map((row) => row.session_id).filter((id) => id !== to);
       for (const id of crew) updateLead.run(to, id);
@@ -2309,13 +2273,6 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
 
     removedOrchestrator: removedLead,
 
-    zoneOrchestrateChanged(zoneId, on) {
-      // Its agents follow it (`orchestrateNow`); a grant by hand in it goes for good when it goes off.
-      if (!on) clearHandGrantsIn.run(zoneId);
-      for (const { session_id: sessionId } of selectReachedBy.all(zoneId) as { session_id: string }[]) {
-        options.broadcast({ type: 'agent.updated', agent: get(sessionId)! });
-      }
-    },
 
     onHook(sessionId, payload, signal) {
       const row = getRow(sessionId);
@@ -2492,7 +2449,6 @@ function spawnParams(params: unknown): SpawnAgentParams {
     issueId: optionalStringParam(p, 'issueId'),
     purpose: optionalStringParam(p, 'purpose'),
     position: optionalPlaceParam(p),
-    orchestrate: optionalStringParam(p, 'orchestrate') as OrchestrateScope | undefined,
     cols: dimensionParam(p, 'cols'),
     rows: dimensionParam(p, 'rows'),
   };
@@ -2603,9 +2559,9 @@ export function agentHandlers<Context>(
       const p = paramsObject(params);
       return agents.setName(stringParam(p, 'sessionId'), requiredNameParam(p, 'name'));
     },
-    'agent.setOrchestrate': (params) => {
+    'agent.setRole': (params) => {
       const p = paramsObject(params);
-      return agents.setOrchestrate(stringParam(p, 'sessionId'), p.scope === null ? null : (stringParam(p, 'scope') as OrchestrateScope));
+      return agents.setRole(stringParam(p, 'sessionId'), p.role === null ? null : stringParam(p, 'role'));
     },
     'agent.markSeen': (params) => agents.markSeen(stringParam(paramsObject(params), 'sessionId')),
     'agent.setEffort': (params) => {

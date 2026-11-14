@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { continuesOnCredits, lineSplitter, normalisedAngle, notOrchestratingReason, parseRole, roleLabel, validZoneFillOpacity, ZONE_COLOR_NAMES, ZONE_COLORS } from '../src/protocol.ts';
+import { continuesOnCredits, lineSplitter, normalisedAngle, parseRole, roleLabel, validZoneFillOpacity, ZONE_COLOR_NAMES, ZONE_COLORS } from '../src/protocol.ts';
 
 function split(chunks: string[], maxLength?: number) {
   const lines: string[] = [];
@@ -60,27 +60,6 @@ describe('normalisedAngle', () => {
     expect(normalisedAngle(180)).toBe(-180);
     expect(normalisedAngle(720)).toBe(0);
     expect(Object.is(normalisedAngle(-360), 0)).toBe(true);
-  });
-});
-
-describe('notOrchestratingReason', () => {
-  const caller = { sessionId: 'impl', name: 'impl' };
-  const agent = { sessionId: 'impl', endedAt: null, zoneId: 'z', off: false, depth: 0 };
-  const zones = (agentsOrchestrate: boolean) => [{ id: 'z', name: 'web', agentsOrchestrate }];
-
-  it("points at the zone's setting when it is off", () => {
-    expect(notOrchestratingReason(caller, agent, zones(false))).toBe(
-      "impl may not orchestrate: orchestrating is off in web. The user can turn it on (Let agents orchestrate, in the zone's ⋯ menu)",
-    );
-  });
-
-  it('says truly why otherwise', () => {
-    expect(notOrchestratingReason(caller, { ...agent, off: true }, zones(true))).toMatch(/the user turned it off/);
-    expect(notOrchestratingReason(caller, { ...agent, depth: 2 }, zones(true))).toMatch(/3 agents deep in a crew/);
-    expect(notOrchestratingReason(caller, { ...agent, zoneId: null }, zones(true))).toMatch(/it is in no zone/);
-    expect(notOrchestratingReason(caller, { ...agent, endedAt: '2026-10-13T00:00:00Z' }, zones(true))).toMatch(/its session has ended/);
-    expect(notOrchestratingReason({ sessionId: 'pane', name: 'impl' }, agent, zones(true))).toMatch(/its session has ended/);
-    expect(notOrchestratingReason({ sessionId: 'sh', name: 'sh' }, undefined, zones(true))).toMatch(/its session has ended/);
   });
 });
 

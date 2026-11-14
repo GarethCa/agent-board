@@ -64,7 +64,7 @@ The mode is item data, so an older daemon reads a hibernating clock as one that 
 
 ## Orchestrators
 
-`agent-board schedule add|list|remove` and the MCP's `add_schedule`, `list_schedules` and `remove_schedule` reach `orchestrator.addClock` and `orchestrator.removeClock`, logged as `add-clock` and `remove-clock`. The agent a clock messages, a fresh agent's zone and a hand-off's agent must each be in the caller's scope; a clock is marked as made by its caller, and only its crew (or the user's side) removes it. A fresh agent an orchestrator's clock starts is in its crew (`spawnedBy` the orchestrator), so it is no shallower in the crew than one the orchestrator starts itself, and `MAX_CREW_DEPTH` holds: a clock can't give an orchestrator at the limit agents that orchestrate. Once that orchestrator is deleted its clock starts none (each fire time is skipped, saying why), while the user's clocks start the user's agents.
+`agent-board schedule add|list|remove` and the MCP's `add_schedule`, `list_schedules` and `remove_schedule` reach `orchestrator.addClock` and `orchestrator.removeClock`, logged as `add-clock` and `remove-clock`. The agent a clock messages, a fresh agent's zone and a hand-off's agent must each be in the caller's scope; a clock is marked as made by its caller, and only its crew (or the user's side) removes it. A fresh agent an orchestrator's clock starts is in its crew (`spawnedBy` the orchestrator), as one the orchestrator starts itself is. Once that orchestrator is deleted its clock starts none (each fire time is skipped, saying why), while the user's clocks start the user's agents.
 
 ## Considered options
 

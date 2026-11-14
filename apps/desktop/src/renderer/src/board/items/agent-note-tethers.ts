@@ -1,6 +1,7 @@
 // An agent note is tied to its agent's tile by a dashed tether, so a note beside a crew says who keeps
-// it without an edge into the crew. Derived, never stored: the note's agent is all it needs. Drawn with every
-// connection shown, and never counted as one hidden.
+// it without an edge into the crew. Derived, never stored: the note's agent is all it needs. Drawn only while the
+// board shows its tethers (View › Show Tethers, off by default) and with every connection shown, and never counted as
+// one hidden.
 import type { Edge, Node } from '@xyflow/react';
 import { tileNodeId } from '../tiles';
 import { agentNoteData } from './agent-note';

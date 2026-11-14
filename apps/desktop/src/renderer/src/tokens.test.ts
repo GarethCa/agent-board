@@ -7,7 +7,7 @@ import { RAIL_TOKEN_ROOM } from '@agent-board/daemon/board-layout';
 import { COLOR_SLOTS, FILL_SLOTS, STICKY_COLORS, ZONE_COLORS } from '@agent-board/daemon/protocol';
 import { boardPaint } from './board-colors';
 import { contrast, mix } from '../../shared/colour';
-import { NOTE_TAB_ROOM, NOTE_TILE_RATIO, themePacksCss } from '../../shared/theme-pack-tokens';
+import { PACK_INK_ROOM, NOTE_TILE_RATIO, themePacksCss } from '../../shared/theme-pack-tokens';
 import { THEMES } from '../../shared/themes';
 
 /*
@@ -176,6 +176,8 @@ const LOCAL = [
   '--backdrop-radius',
   '--backdrop-cell',
   '--backdrop-row',
+  // A steps card's saved height, set inline (`StepsNode`): the least it is drawn while its frame grows round its rows.
+  '--steps-least',
   // The dock sets how much room it leaves each side from script (`useDockScroll`).
   '--dock-left',
   '--dock-right',
@@ -204,9 +206,9 @@ const LOCAL = [
   '--overview-cat',
   '--overview-cat-ink',
   '--overview-cat-soft',
-  // The colour of the zone a note sits in, set on the note, and the edge colour derived from it.
-  '--agent-note-zone',
-  '--agent-note-edge',
+  // An agent note's harness colour, set on its face, and its line budget, set on its text.
+  '--agent-note-harness',
+  '--agent-note-lines',
   '--rename-gap',
   // An agent tile's own fill, set by the state rules that change it, under its head's hover buttons.
   '--tile-fill',
@@ -363,7 +365,6 @@ const SAME_IN_EVERY_THEME = new Set([
   '--window-chat-you',
   '--window-chat-you-ink',
   '--agent-note-term-strong',
-  '--agent-note-term-edited',
   '--agent-note-term-link',
   '--window-diff-added',
   '--window-diff-hunk',
@@ -765,7 +766,7 @@ describe('the Simplified design', () => {
 /** A shape's fills in its slots, the tile's own aside: `--shape-fill-blue`. */
 const SHAPE_FILL_TOKENS = FILL_SLOTS.filter((slot) => slot !== 'tile').map((slot) => `--shape-fill-${slot}`);
 
-describe.each(LOOKS)('text contrast in the $id look', ({ id, stack }) => {
+describe.each(LOOKS)('text contrast in the $id look', ({ stack }) => {
   it.each(TEXT_PAIRS)('%s on %s meets WCAG AA', (text, background) => {
     expect(contrast(hexOf(text, stack), hexOf(background, stack))).toBeGreaterThanOrEqual(4.5);
   });
@@ -819,8 +820,6 @@ describe.each(LOOKS)('text contrast in the $id look', ({ id, stack }) => {
     expect(contrast(hexOf(paint, stack), hexOf('--surface', stack))).toBeGreaterThanOrEqual(3);
   });
 
-  // The tab is a tint of its zone's colour with text leaning on it; a theme whose own text has no more headroom than
-  // that on its panel can't be asked for more: the bar is AA, or for a pack, within half a point of its text on its panel.
   // The fill the CSS declares is the paper colour over the panel; this suite computes it the same way, so the two can't drift.
   const noteMix = () => Number.parseFloat([...stack, ':root'].map((at) => scopes.get(at)?.get('--agent-note-fill-mix')).find((v) => v !== undefined)!) / 100;
   const noteFill = () => {
@@ -835,7 +834,6 @@ describe.each(LOOKS)('text contrast in the $id look', ({ id, stack }) => {
   });
 
   it("an agent note's `code` chip and rules stay visible on the card, and its code text at AA on the chip", () => {
-    if (noteMix() === 0) return; // a dark look's chip and rules are the hover and separator colours, as they were
     const [fill, ink] = [noteFill(), hexOf('--agent-note-ink', stack)];
     const chip = mix(ink, fill, declared('--agent-note-code-mix'));
     expect(contrast(chip, fill)).toBeGreaterThanOrEqual(1.1);
@@ -843,19 +841,8 @@ describe.each(LOOKS)('text contrast in the $id look', ({ id, stack }) => {
     expect(contrast(ink, chip)).toBeGreaterThanOrEqual(4.5);
   });
 
-  it('a light look keeps its note fill apart from its tile', () => {
-    if (noteMix() === 0) return; // a dark look's note is the panel, darker than its tile
+  it('keeps its note fill apart from its tile', () => {
     expect(contrast(noteFill(), hexOf('--raised', stack))).toBeGreaterThanOrEqual(NOTE_TILE_RATIO - 0.001);
-  });
-
-  it.each([...ZONE_COLORS, 'loose'])("an agent note's tab text meets WCAG AA on a %s tab, or nearly as well as the theme's text on its panel", (zone) => {
-    const share = (name: string) => Number.parseFloat([...stack, ':root'].map((at) => scopes.get(at)?.get(name)).find((v) => v !== undefined)!) / 100;
-    const [panel, text] = [hexOf('--panel', stack), hexOf('--agent-note-ink', stack)];
-    const tint = zone === 'loose' ? hexOf('--agent-note-loose', stack) : zone;
-    const fill = mix(hexOf('--agent-note-paper', stack), panel, share('--agent-note-fill-mix'));
-    const tab = mix(tint, fill, share('--agent-note-tab-mix'));
-    const ink = mix(tint, text, share('--agent-note-tab-ink-mix'));
-    expect(contrast(ink, tab)).toBeGreaterThanOrEqual(['light', 'dark', 'simplified', 'simplified-dark'].includes(id) ? 4.5 : Math.min(contrast(text, fill) - NOTE_TAB_ROOM, 4.5));
   });
 });
 
@@ -874,8 +861,8 @@ describe.each([...SIMPLIFIED_SCOPES, ...SIMPLIFIED_PACK_SCOPES])("a project well
   });
 
   // The "need you" count is the status's ink, as Classic draws that status as text. The app's own looks keep it at AA
-  // on the desk and on any well; a pack's ink is the pack's (tuned to its tiles), so gets the room an agent note's tab does.
-  const needYouBar = SIMPLIFIED_SCOPES.some((look) => look.stack === stack) ? 4.5 : 4.5 - NOTE_TAB_ROOM;
+  // on the desk and on any well; a pack's ink is the pack's (tuned to its tiles), so gets some room (PACK_INK_ROOM).
+  const needYouBar = SIMPLIFIED_SCOPES.some((look) => look.stack === stack) ? 4.5 : 4.5 - PACK_INK_ROOM;
 
   it('keeps its "need you" count readable on the desk', () => {
     expect(contrast(hexOf('--state-waiting-ink', stack), surface)).toBeGreaterThanOrEqual(needYouBar);

@@ -1,11 +1,11 @@
 // An agent's model and role at spawn: the harness, model and role chips in New agent, a zone's Role
 // templates dialog, and the tile's model and role badges, with a reviewer's detached branch line.
-// A named custom role shows its name on the chip and the badge.
+// A named custom role shows its name on the chip and the badge. A running agent takes a new role from its tile's menu.
 import { expect } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import { rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { agents, launch, pickInChip, screen, tile, zoneNamed } from './agent-helpers.ts';
+import { agents, launch, openSubmenu, pickInChip, screen, spawnAgent, tile, tileGroup, zoneNamed } from './agent-helpers.ts';
 import { test, browseForZone, pickFolderNext, removeDataDir, tempDataDir } from './launch.ts';
 import { scratch } from './scratch.ts';
 import { showTileParts } from './settings-helpers.ts';
@@ -133,6 +133,47 @@ test('an agent started in a named role shows the name on its badge, and its zone
   }
 });
 
+test('a running agent takes a role from its tile menu at once, orchestrator among them, and carries on', async () => {
+  const { dir, repo, env } = scratch('waiting');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, env);
+  try {
+    await showTileParts(window, ['chips']);
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await spawnAgent(window, 'monorepo', 'Plan the release');
+    const agentTile = tile(window).filter({ hasText: 'Plan the release' });
+    await expect(agentTile.getByTestId('tile-role')).toHaveCount(0);
+    const [before] = await agents(window);
+
+    // ⋯ › Settings › Role ▸ ticks its own (None), and a pick is the agent's role at once.
+    const pick = async (role: string) => {
+      await agentTile.getByRole('button', { name: 'More' }).click();
+      await openSubmenu(window, tileGroup('Settings'));
+      await openSubmenu(window, 'Role');
+      await window.getByRole('menuitem', { name: role, exact: true }).click();
+    };
+    await pick('Orchestrator');
+    const badge = agentTile.getByTestId('tile-role');
+    await expect(badge).toHaveText('orchestrator');
+    await expect(badge).toHaveAttribute('data-orchestrator-role', 'true');
+    await expect.poll(async () => (await agents(window))[0]).toMatchObject({ role: 'custom', roleName: 'orchestrator' });
+
+    await pick('Reviewer');
+    await expect(badge).toHaveText('Reviewer');
+    await pick('None');
+    await expect(badge).toHaveCount(0);
+
+    // Only the role changed: the same session, still running.
+    const [after] = await agents(window);
+    expect(after).toMatchObject({ sessionId: before!.sessionId, role: null, roleName: null, endedAt: null });
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('the Orchestrator role in New agent adds a Checkout row and fills the task from its template; it starts in the main checkout, with the violet badge', async () => {
   const { dir, repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
@@ -154,7 +195,7 @@ test('the Orchestrator role in New agent adds a Checkout row and fills the task 
 
     await expect.poll(async () => (await agents(window)).length).toBe(1);
     const [orchestrator] = await agents(window);
-    expect(orchestrator).toMatchObject({ roleName: 'orchestrator', orchestrate: 'zone', ownsWorktree: false, worktree: repo });
+    expect(orchestrator).toMatchObject({ roleName: 'orchestrator', ownsWorktree: false, worktree: repo });
     const badge = tile(window).getByTestId('tile-role');
     await expect(badge).toHaveText('orchestrator');
     await expect(badge).toHaveAttribute('data-orchestrator-role', 'true');

@@ -27,8 +27,8 @@ export type MenuBarRow =
   | { heading: string }
   | 'separator';
 
-/** Menu bar items with no key of their own that a window runs: the board's zoom controls and the Needs-you pill. */
-export const MENU_BAR_ACTIONS = ['zoomIn', 'zoomOut', 'zoomToFit', 'snapToGrid', 'minimap', 'needsYou'] as const;
+/** Menu bar items with no key of their own that a window runs: the board's zoom controls, its tethers and the Needs-you pill. */
+export const MENU_BAR_ACTIONS = ['zoomIn', 'zoomOut', 'zoomToFit', 'snapToGrid', 'minimap', 'tethers', 'needsYou'] as const;
 export type MenuBarAction = (typeof MENU_BAR_ACTIONS)[number];
 
 /** The menus a selection fills. */

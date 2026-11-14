@@ -470,9 +470,9 @@ describe('an orchestrator started from New agent', () => {
     const zone = await zoneFor(client, repo);
     const before = branches(repo);
 
-    const agent = await client.call('agent.spawn', { zoneId: zone.id, role: 'orchestrator', orchestrate: 'zone', checkout: 'main', ...SIZE });
+    const agent = await client.call('agent.spawn', { zoneId: zone.id, role: 'orchestrator', checkout: 'main', ...SIZE });
 
-    expect(agent).toMatchObject({ role: 'custom', roleName: 'orchestrator', orchestrate: 'zone', ownsWorktree: false, worktree: zone.repoRoot });
+    expect(agent).toMatchObject({ role: 'custom', roleName: 'orchestrator', ownsWorktree: false, worktree: zone.repoRoot });
     expect(agent.branch).toBe('');
     expect(branches(repo)).toEqual(before);
     expect(await firstPrompt(recorder, agent.sessionId)).toContain('Orchestrate this zone');

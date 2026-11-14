@@ -32,10 +32,10 @@ export const VIEW_KEYS = {
   windowFrame: 'windowFrame',
   /** What a double-click on an agent's or shell tile opens: its session window or the tile expanded in place. */
   clickOpens: 'clickOpens',
-  /** How the board shows the agents an orchestrator started: in a crew frame beside it, or with a "from" chip. */
-  crewLook: 'crewLook',
   /** Which connections the board draws, all, hand-offs only or none. */
   connections: 'connections',
+  /** Whether the board draws its tethers: the Captain's to the orchestrators it watches, and clocks' and agent notes' lines to their agents. Off by default. */
+  tethers: 'tethers',
   /** How agent notes look: document cards or terminal cards. */
   agentNoteLook: 'agentNoteLook',
   /** Which sidebar an agent's window shows under Classic: the shelves or the full details strip. */

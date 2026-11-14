@@ -5,7 +5,7 @@
 // it nothing. What a change tells is typed only once the change is saved.
 import { createHash, randomUUID } from 'node:crypto';
 import { boardCaller, connectionAgent, isOwnLiveSession, type BoardCallerSources, type BoardConnection } from './board.ts';
-import { readsItem, type ReachesZone } from './item-scope.ts';
+import { readsItem } from './item-scope.ts';
 import { isObject } from './json.ts';
 import { keyedQueue } from './keyed-queue.ts';
 import type { DaemonCall } from './orchestrator-layout.ts';
@@ -20,6 +20,7 @@ import {
   STEP_KINDS,
   STEPS_ASK_ENDS,
   STEPS_CARD_SIZE,
+  isCardSize,
   type Agent,
   type AgentAsk,
   type AgentStepsWait,
@@ -50,7 +51,6 @@ export interface StepsHostOptions extends BoardCallerSources {
   call: DaemonCall;
   /** Where a new card of the agent's goes: beside its tile. */
   place(sessionId: string, size: { width: number; height: number }): Promise<BoardPlace | undefined>;
-  reachesZone: ReachesZone;
   /** Types `text` at the agent's prompt once it is ready for its next message. */
   tell(sessionId: string, text: string): void;
   /**
@@ -207,6 +207,7 @@ export function checkStepsData(data: Record<string, unknown>): void {
   if (!sentOk) throw fail('sent must be null or { at, answers }');
   if (!(data.closedAt === null || typeof data.closedAt === 'string')) throw fail('closedAt must be null or a time');
   if (data.collapsed !== undefined && typeof data.collapsed !== 'boolean') throw fail('collapsed must be true or false');
+  if (data.openSize !== undefined && !isCardSize(data.openSize)) throw fail('openSize must be { width, height }');
   const fromAsk = data.fromAsk;
   const endedOk = (ended: unknown) => ended === null || (isObject(ended) && typeof ended.at === 'string' && (STEPS_ASK_ENDS as readonly unknown[]).includes(ended.how));
   if (fromAsk !== undefined && !(isObject(fromAsk) && typeof fromAsk.askId === 'string' && endedOk(fromAsk.ended))) {
@@ -273,7 +274,7 @@ const stepsOf = (item: BoardItem) => item.data as unknown as StepsData;
 const involved = (me: StepsWho, data: StepsData) => sameWho(data.madeBy, me) || sameWho(data.answeredBy, me) || data.steps.some((step) => sameWho(step.who, me));
 
 export interface StepsHost {
-  /** `items` as the connection may see them: a board-token agent sees only the steps cards in its scope. */
+  /** `items` as the connection may see them: a board-token agent sees only the steps cards it reads (`readsItem`). */
   visible(items: BoardItem[], connection: BoardConnection): BoardItem[];
   /**
    * Puts the agent's ask on the board as a steps card beside its tile, holding the answers so far: while `ended` is null
@@ -378,7 +379,7 @@ export function createStepsHost(options: StepsHostOptions): StepsHost {
   /** Who answers the set now: its orchestrator while it is live, else the user. */
   const answerer = (data: StepsData): StepsWho => (data.answeredBy.kind === 'agent' && !live(data.answeredBy) ? USER : data.answeredBy);
 
-  const reads = (agent: Agent, item: BoardItem) => readsItem(agent, item, involved(agentWho(agent), stepsOf(item)), options.reachesZone);
+  const reads = (agent: Agent, item: BoardItem) => readsItem(agent, item, involved(agentWho(agent), stepsOf(item)));
 
   /** The live agent whose own session holds the call's board token: never a shell's, nor an ended agent's. */
   const caller = (p: Record<string, unknown>, connection: BoardConnection): Agent => {
@@ -641,7 +642,7 @@ export function createStepsHost(options: StepsHostOptions): StepsHost {
           const id = optionalStringParam(p, 'id');
           const mine = optionalBooleanParam(p, 'mine') === true;
           const all = id === undefined ? await cards() : [await card(id)];
-          if (id !== undefined && !reads(me, all[0]!)) throw outOfScope('that steps card is outside your scope: in a zone you are not in, nor reach');
+          if (id !== undefined && !reads(me, all[0]!)) throw outOfScope('that steps card is in a zone you are not in');
           const self = agentWho(me);
           return all.filter((item) => reads(me, item) && (!mine || stepsOf(item).steps.some((step) => step.done === null && sameWho(step.who, self))));
         },
@@ -652,7 +653,7 @@ export function createStepsHost(options: StepsHostOptions): StepsHost {
           const change = checkedChange(p.change);
           return queue(id, async () => {
             const item = await card(id);
-            if (!reads(me, item)) throw outOfScope('that steps card is outside your scope: in a zone you are not in, nor reach');
+            if (!reads(me, item)) throw outOfScope('that steps card is in a zone you are not in');
             return save(item, changed(item, stepsOf(item), me, change), change.action === 'add' ? 'those steps' : 'that change');
           });
         },

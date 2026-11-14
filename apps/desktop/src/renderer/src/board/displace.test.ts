@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Agent, BoardItem, Shell, TilePosition, Zone } from '@agent-board/daemon/protocol';
+import { FOLDED_ZONE_SIZE, type Agent, type BoardItem, type Shell, type TilePosition, type Zone } from '@agent-board/daemon/protocol';
 import { rotatedBounds, type Rect } from '../geometry';
 import { apart, clearOfExpanded, displaced, droppedOnto, heldFrom, pushedAside, type Movable } from './displace';
 import { bringToFront, EXPANDED_SIZE, expandTile, resizeExpanded } from './expanded';
@@ -646,6 +646,34 @@ describe('apart', () => {
   });
 });
 
+describe('displaced, with a zone folded', () => {
+  const s = (id: string) => tileNodeId('shell', id);
+  const folded = (id: string, x: number, y: number, width = 800, height = 300): ZoneNodeType => {
+    const node = zone(id, x, y, width, height);
+    return { ...node, data: { zone: { ...node.data.zone, folded: true } } };
+  };
+
+  it('keeps a folded zone clear of an expanded tile by its chip, not by the size it opens to', () => {
+    // The expanded tile is below the chip, but inside where the zone would open.
+    const zones = [folded('chip', 0, 0)];
+    const shells = [shell('open', null, at(40, FOLDED_ZONE_SIZE.height + 80))];
+    const expanded = expandTile([], s('open'));
+    const nodes = withTiles(zones, [], shells, [], new Map(), expanded);
+    const shown = displaced(nodes, expanded);
+    expect(shown.find((node) => node.id === 'chip')).toBe(nodes.find((node) => node.id === 'chip'));
+  });
+
+  it("doesn't push a neighbour off a folded zone by the expanded tile hidden in it", () => {
+    // Expanded before its zone folded: it stays expanded, out of sight, and the chip beside it is where it was dropped.
+    const zones = [folded('a', 0, 0), folded('b', FOLDED_ZONE_SIZE.width + 20, 0)];
+    const shells = [shell('in-a', 'a', at(ZONE_PADDING, ZONE_PADDING + PERCH_ROOM))];
+    const expanded = expandTile([], s('in-a'));
+    const nodes = withTiles(zones, [], shells, [], new Map(), expanded);
+    const shown = displaced(nodes, expanded);
+    for (const id of ['a', 'b']) expect(shown.find((node) => node.id === id), id).toBe(nodes.find((node) => node.id === id));
+  });
+});
+
 describe('displaced, with several tiles expanded', () => {
   const s = (id: string) => tileNodeId('shell', id);
   const step = AGENT_TILE_SIZE.width + TILE_GAP;
@@ -986,7 +1014,7 @@ function randomBoard(random: () => number) {
 
 describe('displaced, with a crew in the way', () => {
   const agent = (sessionId: string, zoneId: string | null, position: TilePosition, spawnedBy: string | null = null) =>
-    ({ sessionId, zoneId, position, spawnedBy, orchestrate: null, repoRoot: '/code/app', name: sessionId, harness: 'claude' }) as Agent;
+    ({ sessionId, zoneId, position, spawnedBy, repoRoot: '/code/app', name: sessionId, harness: 'claude' }) as Agent;
   const a = (id: string) => tileNodeId('agent', id);
   const { width, height } = AGENT_TILE_SIZE;
   const boss = { x: ZONE_PADDING, y: ZONE_PADDING + PERCH_ROOM };

@@ -164,7 +164,7 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
   const updateCutOff = db.prepare('UPDATE agents SET turn_cut_off = ? WHERE session_id = ?');
   const selectChildren = db.prepare('SELECT session_id FROM agents WHERE spawned_by = ?');
   const orphanCrew = db.prepare('UPDATE agents SET spawned_by = NULL, orphaned_from = ? WHERE spawned_by = ?');
-  const keepRemovedLead = db.prepare('INSERT OR REPLACE INTO removed_orchestrators (session_id, name, orchestrate, crew_depth) VALUES (?, ?, ?, ?)');
+  const keepRemovedLead = db.prepare('INSERT OR REPLACE INTO removed_orchestrators (session_id, name, crew_depth) VALUES (?, ?, ?)');
   const dropBareLeads = db.prepare('DELETE FROM removed_orchestrators WHERE session_id NOT IN (SELECT orphaned_from FROM agents WHERE orphaned_from IS NOT NULL)');
   const keepConversation = db.prepare('INSERT INTO agent_conversations (session_id, harness_session_id, transcript_path) VALUES (?, ?, ?)');
   const startConversation = db.prepare('UPDATE agents SET harness_session_id = ?, transcript_path = NULL, had_turn = 0 WHERE session_id = ?');
@@ -465,15 +465,14 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
         deleting.delete(sessionId);
       }
       options.onRemoving(sessionId);
-      // The scope set by hand: one that follows its zone's switch orchestrates at `zone`, which nothing is narrower than.
-      const { orchestrate = null, crew_depth: depth = 0 } = getRow(sessionId) ?? {};
+      const { crew_depth: depth = 0 } = getRow(sessionId) ?? {};
       // The agents it started stay, led by no one now but kept apart from the user's: another orchestrator may take
       // them over (`orchestrator.handover`). The activity log keeps who did what.
       const children = (selectChildren.all(sessionId) as { session_id: string }[]).map((child) => child.session_id);
       db.exec('BEGIN');
       try {
         remove.run(sessionId);
-        if (children.length > 0) keepRemovedLead.run(sessionId, agent.name, orchestrate, depth);
+        if (children.length > 0) keepRemovedLead.run(sessionId, agent.name, depth);
         orphanCrew.run(sessionId, sessionId);
         // A removed orchestrator whose last crew agent this was has nothing left to hand over.
         dropBareLeads.run();

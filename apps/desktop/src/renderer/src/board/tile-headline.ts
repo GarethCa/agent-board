@@ -2,6 +2,7 @@
 // now, its state in a word with a time that moves in steps, and at most one button. Pure, so the rules are unit-tested;
 // HybridTile draws them. The Simplified tile (`calm-tile.ts`) keeps its own.
 import { needsYouKind, planPending, statusLine, type Agent, type AgentState, type NeedsYouShows, type WorkCategory } from '@agent-board/daemon/protocol';
+import { agentPill, TILE_STATE_LABELS } from '../states';
 
 /** The seven states the tile tells apart, each with its word in the tile's bottom row. */
 export type TileState = 'thinking' | 'needs-you' | 'waiting' | 'idle' | 'done' | 'paused' | 'failed';
@@ -174,3 +175,43 @@ export function tileButton(agent: Pick<Agent, 'state' | 'pullRequests'>, state: 
       return undefined;
   }
 }
+
+/** The pill an agent's tile draws, its state on the tile and its one button: the parts of its footer's line that are not chips. */
+export interface TileMark {
+  pill: { state: AgentState; label: string };
+  state: TileState;
+  button: TileButton | undefined;
+}
+
+/**
+ * Its tile's mark, from its record: `sending` while it hands work on, `receiving` while work comes to it. These change
+ * with no change to its state (an ask landing makes a finished turn need the user, with a wider pill and an Open
+ * button), so what measures the footer must take them in, not its state alone.
+ */
+export function tileMark(agent: Agent, shows: NeedsYouShows, sending: boolean, receiving: boolean): TileMark {
+  const pill = sending ? { state: 'handing-off' as const, label: TILE_STATE_LABELS['handing-off'] } : agentPill(agent, shows, TILE_STATE_LABELS);
+  const state = tileState(agent, shows, pill.state);
+  return { pill, state, button: sending || receiving ? undefined : tileButton(agent, state) };
+}
+
+/** What the footer's fold must measure again on, of its mark: its pill's face, its state on the tile and its button. */
+export const tileMarkKey = ({ pill, state, button }: TileMark): string => JSON.stringify([pill.state, pill.label, state, button?.label ?? null]);
+
+/** The parts of a tile's mark, beside the mark itself, that change its width in the footer's line. */
+export interface FooterMark {
+  mark: TileMark;
+  /** The tile part that shows its state as a pill, not as a word and a time. */
+  statePill: boolean;
+  /** The pill's age and the word's time: each changes as the minutes pass. */
+  age: string | undefined;
+  stateTime: string | undefined;
+  character: string;
+  onCredits: boolean;
+}
+
+/**
+ * The key the footer's fold measures again on: the footer's own parts, then its mark. The mark sits in the same line
+ * and changes with no change to the agent's state, so a key without it keeps a fold measured for a narrower mark.
+ */
+export const footerFoldKey = (line: readonly unknown[], { mark, statePill, age, stateTime, character, onCredits }: FooterMark): string =>
+  JSON.stringify([...line, tileMarkKey(mark), statePill, age ?? null, stateTime ?? null, character, onCredits]);

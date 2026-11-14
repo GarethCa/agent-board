@@ -182,22 +182,39 @@ function runRows(steps: StepView[], at: number, key: string, expanded: ReadonlyS
 /**
  * The rows the card shows selected, its cursor on step `cursor`: with no headings, a run around the cursor; with
  * headings, a head for each section, the one the cursor is in open around it and the rest folded with their counts. A
- * section's key in `expanded` turns it the other way, and a fold's opens it.
+ * fold's key in `expanded` opens it. A section the user turned by hand (`turnSection`) stays as they left it.
+ *
+ * With `every` (a card the user made taller, which has room and scrolls), every step shows with no folds, and every
+ * section is open but a finished one, which stays folded so the steps still to do come first.
  */
-export function stepRows(view: StepsView, cursor: string, expanded: ReadonlySet<string>): StepRow[] {
+export function stepRows(view: StepsView, cursor: string, expanded: ReadonlySet<string>, { every = false }: { every?: boolean } = {}): StepRow[] {
+  const row = (each: StepView): StepRow => ({ kind: 'step', view: each, open: each.step.id === cursor });
   const all = view.sections.flatMap((section) => section.steps);
-  if (!view.headed) return runRows(all, all.findIndex((each) => each.step.id === cursor), '', expanded, cursor);
+  if (!view.headed) return every ? all.map(row) : runRows(all, all.findIndex((each) => each.step.id === cursor), '', expanded, cursor);
   // Keyed by its place: a heading may be written twice.
   return view.sections.flatMap((section, index): StepRow[] => {
     const key = String(index);
     const at = section.steps.findIndex((each) => each.step.id === cursor);
-    const open = (at >= 0) !== expanded.has(`section:${key}`);
+    const turned = expanded.has(`section:${key}:open`) ? true : expanded.has(`section:${key}:shut`) ? false : undefined;
+    const open = turned ?? (at >= 0 || (every && section.done < section.total));
     const head: StepRow = { kind: 'section', key: `section:${key}`, label: section.title ?? 'First', count: `${section.done}/${section.total}`, open, finished: section.done === section.total };
     if (!open) return [head];
     // A section opened by hand shows all its steps; the cursor's, a run around it.
-    const rows = at >= 0 ? runRows(section.steps, at, key, expanded, cursor) : section.steps.map((each): StepRow => ({ kind: 'step', view: each, open: false }));
+    const rows = at >= 0 && !every ? runRows(section.steps, at, key, expanded, cursor) : section.steps.map(row);
     return [head, ...rows];
   });
+}
+
+/**
+ * `expanded` with the section `key` (a section row's key) turned by hand from `open`: the choice itself is kept, not a
+ * toggle, so it means the same on a card left at its start and one made taller.
+ */
+export function turnSection(expanded: ReadonlySet<string>, key: string, open: boolean): ReadonlySet<string> {
+  const next = new Set(expanded);
+  next.delete(`${key}:open`);
+  next.delete(`${key}:shut`);
+  next.add(`${key}:${open ? 'shut' : 'open'}`);
+  return next;
 }
 
 /** How a steps card is drawn at `zoom`: in full, at about half size in larger type, or below about 40% as its icon tile. */

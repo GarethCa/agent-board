@@ -11,6 +11,7 @@ const VERBS: Record<OrchestratorAction, { done: string; tried: string; of?: stri
   send: { done: 'sent', tried: 'send' },
   interrupt: { done: 'interrupted', tried: 'interrupt' },
   effort: { done: 'changed the reasoning effort of', tried: 'change the reasoning effort of' },
+  role: { done: 'changed the role of', tried: 'change the role of' },
   continue: { done: 'continued', tried: 'continue', after: ' on credits' },
   restart: { done: 'restarted', tried: 'restart' },
   pause: { done: 'paused', tried: 'pause' },

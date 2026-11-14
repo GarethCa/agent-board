@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.6.24 (2026-11-14)
+
+- Agent notes as a speech bubble from the agent's face, with a line budget
+- Any agent acts on any agent but the user's hand-started ones: no orchestrate switch, scope or rank
+- Queues, memories, steps and to-do lists resize and scroll inside, and steps open in full
+- Tethers off by default behind View › Show Tethers; a crew frame shows only while its orchestrator is focused
+- A paused, ended or crashed agent's window shows its last Claude screen
+- Give a running agent a role, orchestrator among them, from its tile menu, the CLI and MCP
+- An orchestrator reaches any agent an orchestrator started, and a crew goes any depth
+- A folded zone moves and sits beside other zones by its folded size, not its full size
+- A tile's footer folds again when its pill or button changes; the GitHub zone test expects what the tile shows; the gate keeps its failure output
+- The menu bar names the selected agent's submenu Selected agent
+- A resumed Codex conversation redrawn above its composer is never read as that composer
+- A web tab's address row keeps what is typed, and a loading page can't take the keyboard from it
+- Build the Linux app in Docker with pnpm package:linux, and smoke-test the installed .deb
+
 ## v0.6.23 (2026-11-13)
 
 - The Classic tile says what an agent is for and what's true now

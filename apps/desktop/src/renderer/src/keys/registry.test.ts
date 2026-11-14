@@ -107,9 +107,6 @@ describe('pressing a key', () => {
     // ⇧E asks for Shift; plain E is nothing.
     expect(pressed('move.connections', press('E', 'KeyE', { shiftKey: true }), MAC)).toBe(true);
     expect(pressed('move.connections', press('e', 'KeyE'), MAC)).toBe(false);
-    // ⇧C cycles the crew look; plain C is nothing.
-    expect(pressed('move.crews', press('C', 'KeyC', { shiftKey: true }), MAC)).toBe(true);
-    expect(pressed('move.crews', press('c', 'KeyC'), MAC)).toBe(false);
   });
 
   it('takes the command key as ⌘ on macOS and Ctrl elsewhere, Shift told apart', () => {

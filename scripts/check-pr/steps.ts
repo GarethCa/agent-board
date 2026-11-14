@@ -49,9 +49,15 @@ export interface StepContext {
   headless: boolean;
   /** `--quick`: the static steps and the unit tests only. The build and the Electron runs (e2e, visual) are left out. */
   quick?: boolean;
+  /**
+   * An absolute dir the Electron runs keep their failure output in (the error context of every failed try, a flaky
+   * test's too): `e2e-results` and `visual-results` in it. Without one they use the app's own output dirs, which the
+   * worktree's next run empties.
+   */
+  outputDir?: string;
 }
 
-export function stepsFor(plan: Plan, { leakCheck, exists, headless: onVirtualDisplay, quick = false }: StepContext): Step[] {
+export function stepsFor(plan: Plan, { leakCheck, exists, headless: onVirtualDisplay, quick = false, outputDir }: StepContext): Step[] {
   const headless = onVirtualDisplay ? ['sh', 'scripts/e2e-headless.sh'] : [];
   const steps: Step[] = [
     // A merge conflict with main, a left conflict marker or a clashing migration number (scripts/preflight).
@@ -84,7 +90,7 @@ export function stepsFor(plan: Plan, { leakCheck, exists, headless: onVirtualDis
       name: 'e2e',
       needsBuild: true,
       playwright: true,
-      argv: [...headless, 'pnpm', '--filter', '@agent-board/desktop', 'exec', 'playwright', 'test', '--project=app', ...(plan.perf ? ['--project=perf'] : []), ...PLAYWRIGHT_ARGS, ...specs],
+      argv: [...headless, 'pnpm', '--filter', '@agent-board/desktop', 'exec', 'playwright', 'test', '--project=app', ...(plan.perf ? ['--project=perf'] : []), ...(outputDir === undefined ? [] : ['--output', `${outputDir}/e2e-results`]), ...PLAYWRIGHT_ARGS, ...specs],
     });
   }
   if (plan.visual || visualFiles.length > 0) {
@@ -93,7 +99,7 @@ export function stepsFor(plan: Plan, { leakCheck, exists, headless: onVirtualDis
       needsBuild: true,
       playwright: true,
       // Its own output dir, beside the e2e one: Playwright empties its output dir at the start of a run.
-      argv: [...headless, 'pnpm', '--filter', '@agent-board/desktop', 'test:visual', '--output', 'test-results-visual', ...PLAYWRIGHT_ARGS, ...(plan.visual ? [] : visualFiles)],
+      argv: [...headless, 'pnpm', '--filter', '@agent-board/desktop', 'test:visual', '--output', outputDir === undefined ? 'test-results-visual' : `${outputDir}/visual-results`, ...PLAYWRIGHT_ARGS, ...(plan.visual ? [] : visualFiles)],
     });
   }
   return steps;

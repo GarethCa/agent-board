@@ -7,38 +7,23 @@ import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from 
 import { scratch } from './scratch.ts';
 import { openSettings, settingsSection } from './settings-helpers.ts';
 
-// Orchestrators on the board: a zone that lets its agents orchestrate, the crew frame or from chips
-// that show who started whom, and the orchestrator's Activity tab.
+// Orchestrators on the board: agents that orchestrate, the crew frame that shows who started whom
+// while the orchestrator is focused, and the orchestrator's Activity tab.
 
 /** The tile of the agent named `name`. */
 const agentTile = (window: Page, name: string) => tile(window).filter({ has: window.getByTitle(name, { exact: true }) });
 
-type CrewLookLabel = 'In a crew frame' | 'With a “from” chip' | 'Off';
-
-/**
- * Picks how the board shows an orchestrator's agents, in the Settings window's Board › Crews, after it shows `from`,
- * the look the board has now. A Settings window left open hears of a change made on the board a moment after the board
- * shows it: until then it may still show `look` checked, and checking it again would save nothing.
- */
-async function setCrewLook(window: Page, from: CrewLookLabel, look: CrewLookLabel): Promise<void> {
-  const settings = await openSettings(window, 'board.crews');
-  const looks = settingsSection(settings, 'Crews').getByRole('radiogroup', { name: 'Agents an orchestrator starts' });
-  await expect(looks.getByRole('radio', { name: from })).toBeChecked();
-  const choice = looks.getByRole('radio', { name: look });
-  await choice.check();
-  await expect(choice).toBeChecked();
-}
-
-test('an orchestrator in a zone that lets it starts two workers: they sit in its crew frame, or carry from chips, or neither, and its Activity tab lists them', async () => {
+test('an orchestrator in any zone starts two workers: their crew frame shows while it is hovered or selected, the rest dims, and its Activity tab lists them', async () => {
   const { dir, repo, env } = scratch('orchestrate');
   const dataDir = tempDataDir();
   let { app, window } = await launch(dataDir, { ...env, ...SHELL_ENV });
   try {
     await pickFolderNext(app, repo);
     await browseForZone(window);
-    // On for a new zone: its menu offers to stop it.
+    // Every agent may orchestrate: the zone's menu has no switch for it.
     await zoneNamed(window, 'monorepo').getByRole('button', { name: 'Zone options' }).click();
-    await expect(window.getByRole('menuitem', { name: 'Stop agents orchestrating' })).toBeVisible();
+    await expect(window.getByRole('menuitem', { name: /board MCP/ })).toBeVisible();
+    await expect(window.getByRole('menuitem', { name: /orchestrat|start and manage agents/i })).toHaveCount(0);
     await window.keyboard.press('Escape');
 
     await spawnAgent(window, 'monorepo', 'Lead two: Fix the flaky test');
@@ -51,38 +36,54 @@ test('an orchestrator in a zone that lets it starts two workers: they sit in its
     await expect(lead.getByTestId('crew-count')).toHaveText('2');
     const workers = [agentTile(window, 'worker one'), agentTile(window, 'worker two')];
     const ids = await Promise.all(workers.map((worker) => worker.getAttribute('data-session-id')));
+    // A session of the user's own, in no crew.
+    await spawnAgent(window, 'monorepo', 'Tidy the docs');
+    if (await sessionWindow(window).isVisible()) await sessionWindow(window).getByRole('button', { name: 'Close session window' }).click();
+    await expect(tile(window)).toHaveCount(4);
+    const stranger = window.locator('[data-testid="agent-tile"]:not([data-crew])');
+    await expect(stranger).toHaveCount(1);
+
+    // At rest the frame is there, round the crew, but not shown, and nothing dims.
     const frame = window.getByTestId('crew-frame');
     await expect(frame).toHaveCount(1);
     await expect(frame).toHaveAttribute('data-members', ids.join(' '));
     await expect(frame).toContainText(/'s crew$/);
+    await expect(frame).toHaveCSS('opacity', '0');
     await expect(window.getByTestId('from-chip')).toHaveCount(0);
+    await expect(stranger).toHaveCSS('opacity', '1');
 
-    await setCrewLook(window, 'In a crew frame', 'With a “from” chip');
-    await expect(frame).toHaveCount(0);
-    await expect(window.getByTestId('from-chip')).toHaveCount(2);
-    await workers[0]!.getByTestId('from-chip').hover();
-    for (const member of [lead, ...workers]) await expect(member).toHaveAttribute('data-crew-lit', '');
+    // Hovering the orchestrator shows its frame, lights its crew and dims the user's own session.
+    await lead.hover();
+    await expect(frame).toHaveAttribute('data-focused', 'true');
+    await expect(frame).toHaveCSS('opacity', '1');
+    for (const member of [lead, ...workers]) await expect(member).toHaveAttribute('data-crew-lit', 'true');
+    await expect(stranger).toHaveCSS('opacity', '0.4');
+    await stranger.hover();
+    await expect(frame).toHaveCSS('opacity', '0');
+    await expect(stranger).toHaveCSS('opacity', '1');
 
-    // The zoom bar's View popover turns both off, and the choice is saved; ⇧C cycles on to frames again.
+    // Selected, it keeps them shown after the pointer leaves, until it is unselected.
+    await lead.click();
+    await stranger.hover();
+    await expect(frame).toHaveCSS('opacity', '1');
+    await expect(stranger).toHaveCSS('opacity', '0.4');
+    await window.keyboard.press('Escape');
+    await expect(frame).toHaveCSS('opacity', '0');
+    await expect(stranger).toHaveCSS('opacity', '1');
+
+    // The View popover has no crew row now; its Tethers switch is off by default and saved, as Settings shows.
     await window.getByRole('button', { name: 'View', exact: true }).click();
     const view = window.getByRole('dialog', { name: 'View', exact: true });
-    await view.getByRole('group', { name: 'Crews' }).getByRole('button', { name: 'Off' }).click();
-    await expect(frame).toHaveCount(0);
-    await expect(window.getByTestId('from-chip')).toHaveCount(0);
-    await expect.poll(() => window.evaluate(() => globalThis.window.agentBoard.view.get('crewLook'))).toBe('off');
+    await expect(view.getByRole('group', { name: 'Crews' })).toHaveCount(0);
+    const tethers = view.getByRole('switch', { name: 'Tethers' });
+    await expect(tethers).not.toBeChecked();
+    await tethers.check();
+    await expect.poll(() => window.evaluate(() => globalThis.window.agentBoard.view.get('tethers'))).toBe(true);
     await window.keyboard.press('Escape');
     await expect(view).toBeHidden();
-    await window.keyboard.press('Shift+C');
-    await expect(frame).toHaveCount(1);
-    await expect(window.getByTestId('from-chip')).toHaveCount(0);
-
-    // Settings has the same choice: Off there is checked in the popover too, and the other way round.
-    await setCrewLook(window, 'In a crew frame', 'Off');
-    await expect(frame).toHaveCount(0);
-    await window.getByRole('button', { name: 'View', exact: true }).click();
-    await expect(view.getByRole('group', { name: 'Crews' }).getByRole('button', { name: 'Off' })).toHaveAttribute('aria-pressed', 'true');
-    await window.keyboard.press('Escape');
-    await expect(view).toBeHidden();
+    const settings = await openSettings(window, 'board.connections');
+    await expect(settingsSection(settings, 'Connections').getByRole('switch', { name: 'Show tethers' })).toBeChecked();
+    await settings.close();
 
     await lead.dblclick();
     await sessionWindow(window).getByRole('tab', { name: 'Activity' }).click();
@@ -91,15 +92,15 @@ test('an orchestrator in a zone that lets it starts two workers: they sit in its
     await expect(lines.nth(0)).toContainText('started worker two');
     await expect(lines.nth(1)).toContainText('started worker one');
 
-    // Off is kept across a restart: the crew comes back with no frame and no chip.
+    // Tethers on is kept across a restart; the crew comes back framed, the frame still waiting for focus.
     await app.close();
     const again = await launch(dataDir, { ...env, ...SHELL_ENV });
     app = again.app;
     window = again.window;
-    await expect(tile(window)).toHaveCount(3);
-    await expect(window.getByTestId('crew-frame')).toHaveCount(0);
-    await expect(window.getByTestId('from-chip')).toHaveCount(0);
-    await expect.poll(() => window.evaluate(() => globalThis.window.agentBoard.view.get('crewLook'))).toBe('off');
+    await expect(tile(window)).toHaveCount(4);
+    await expect(window.getByTestId('crew-frame')).toHaveCount(1);
+    await expect(window.getByTestId('crew-frame')).toHaveCSS('opacity', '0');
+    await expect.poll(() => window.evaluate(() => globalThis.window.agentBoard.view.get('tethers'))).toBe(true);
   } finally {
     await app.close();
     await removeDataDir(dataDir);

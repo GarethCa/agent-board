@@ -202,7 +202,7 @@ export function NewAgentDialog({ zone, agents, issue: initialIssue, issueZoneId,
           : {}),
         ...(reviews(role) ? reviewSpawn(zone, candidates.find((agent) => agent.sessionId === reviewed)) : {}),
         prompt,
-        ...(orchestrator ? { orchestrate: 'zone' as const, ...(inMain ? { checkout: 'main' as const } : {}) } : {}),
+        ...(inMain ? { checkout: 'main' as const } : {}),
         // The task holds the template, if it still does: then the daemon doesn't add it again.
         ...(template !== undefined && prompt.includes(template) ? { noTemplate: true } : {}),
         name: name.trim() || undefined,

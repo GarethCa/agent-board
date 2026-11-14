@@ -274,11 +274,6 @@ describe('memories', () => {
     });
     expect((await stranger.connection.call('item.list')).some((item) => item.id === card.id)).toBe(false);
 
-    // An orchestrator whose scope reaches the zone reads it.
-    await client.call('agent.setOrchestrate', { sessionId: stranger.agent.sessionId, scope: 'board' });
-    expect((await stranger.connection.call('board.readMemory', { token: stranger.token, id: card.id })).item.id).toBe(card.id);
-    await client.call('agent.setOrchestrate', { sessionId: stranger.agent.sessionId, scope: null });
-
     // Loose, every agent writes to it.
     await client.call('item.update', { id: card.id, zoneId: null, x: 9000, y: 0 });
     await stranger.connection.call('board.changeMemory', { token: stranger.token, id: card.id, change: { action: 'add', text: 'billing was here' } });
@@ -644,6 +639,9 @@ describe('a memory made on the board', () => {
     const folded = await client.call('item.update', { id: card.id, data: { folded: true }, width: 128, height: 132 });
     expect(folded.data).toMatchObject({ folded: true, count: 1, title: 'Notes' });
     await expect(client.call('item.update', { id: card.id, data: { folded: 'yes' } })).rejects.toThrow(/folded must be true or false/);
+    // Folded, it keeps the size the user gave it open, so unfolding gives it back.
+    expect((await client.call('item.update', { id: card.id, data: { openSize: { width: 420, height: 360 } } })).data).toMatchObject({ openSize: { width: 420, height: 360 } });
+    await expect(client.call('item.update', { id: card.id, data: { openSize: { width: 420 } } })).rejects.toThrow(/openSize must be \{ width, height \}/);
 
     // An undo sends the card's whole data back, its count as it was then: the count stays its entries'.
     expect((await client.call('item.update', { id: card.id, data: { ...folded.data, count: 7 } })).data).toMatchObject({ count: 1 });
@@ -779,17 +777,12 @@ describe('draining a queue', () => {
     expect((await jobs()).find((job) => job.text === 'Three')).toMatchObject({ state: 'queued', drops: 2 });
   });
 
-  it('is turned on by an orchestrator for a queue it made, never by an agent that does not orchestrate, nor by another', async () => {
+  it('is turned on by the agent that made the queue, with no role, and never by another', async () => {
     const { client, start, cardOf } = await boardDaemon();
     const lead = await start('Queue: Backlog', undefined, 'Lead');
     const card = await cardOf('queue', lead.agent);
     await cli(lead.env, 'queue', 'add', 'Backlog', '--', 'Fix the login');
-    // Only an orchestrator turns a drain on: the maker that doesn't orchestrate is refused.
-    await client.call('agent.setOrchestrate', { sessionId: lead.agent.sessionId, scope: null });
-    expect((await cli(lead.env, 'queue', 'drain', 'Backlog', 'on')).err).toContain('only for an orchestrator');
-    await client.call('agent.setOrchestrate', { sessionId: lead.agent.sessionId, scope: 'zone' });
     const other = await start('Memory: Mine', undefined, 'Other');
-    await client.call('agent.setOrchestrate', { sessionId: other.agent.sessionId, scope: 'zone' });
     expect((await cli(other.env, 'queue', 'drain', 'Backlog', 'on')).err).toContain("isn't yours");
     expect((await cli(lead.env, 'queue', 'drain', 'Backlog', 'on', '--most', '4')).err).toContain('--most is 1, 2 or 3');
     expect((await cli(lead.env, 'queue', 'drain', 'Backlog', 'on', '--most', '1')).out).toContain('at most 1 at once');
@@ -826,6 +819,7 @@ describe('a queue made on the board', () => {
     const folded = await client.call('item.update', { id: card.id, data: { folded: true }, width: 128, height: 140 });
     expect(folded.data).toMatchObject({ folded: true, count: 3, audience: 'agents' });
     await expect(client.call('item.update', { id: card.id, data: { folded: 1 } })).rejects.toThrow(/folded must be true or false/);
+    await expect(client.call('item.update', { id: card.id, data: { openSize: { width: 0, height: 300 } } })).rejects.toThrow(/openSize must be \{ width, height \}/);
     // An undo's stale count is put right, as a memory's is.
     expect((await client.call('item.update', { id: card.id, data: { ...folded.data, count: 9 } })).data).toMatchObject({ count: 3 });
 

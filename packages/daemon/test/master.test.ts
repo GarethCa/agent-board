@@ -1,4 +1,4 @@
-// The Captain (ADR-0019): one agent per board, started only by the user, at board scope, in a folder of its own.
+// The Captain (ADR-0019): one agent per board, started only by the user, in a folder of its own.
 import { existsSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -56,7 +56,7 @@ async function masterSide(setup: Setup) {
 }
 
 describe('the Captain', () => {
-  it('starts loose on the board left of the zones, at board scope, in a folder of its own with no repo or branch', async () => {
+  it('starts loose on the board left of the zones, in a folder of its own with no repo or branch', async () => {
     const { client, dataDir } = await masterDaemon();
     await client.call('zone.add', { path: tempRepo(), x: 400, y: 200, name: 'web' });
     await client.call('zone.addUnbound', { name: 'docs', x: 1200, y: -100 });
@@ -66,7 +66,6 @@ describe('the Captain', () => {
     expect(master).toMatchObject({
       master: true,
       zoneId: null,
-      orchestrate: 'board',
       spawnedBy: null,
       orphanedFrom: null,
       ownsWorktree: false,
@@ -130,7 +129,7 @@ describe('the Captain', () => {
   it("is the user's to start: a board token's connection is refused it", async () => {
     const { daemon, client, recorder } = await masterDaemon();
     const zone = await client.call('zone.add', { path: tempRepo(), x: 0, y: 0, name: 'web' });
-    const agent = await client.call('agent.spawn', { zoneId: zone.id, prompt: 'Print your board identity', orchestrate: 'board', ...SIZE });
+    const agent = await client.call('agent.spawn', { zoneId: zone.id, prompt: 'Print your board identity', ...SIZE });
     await client.call('session.attach', { sessionId: agent.sessionId });
     await recorder.waitForText(agent.sessionId, ':end\r\n');
     const token = /identity:(.*):end\r\n/.exec(recorder.screenText(agent.sessionId))![1]!;
@@ -141,49 +140,39 @@ describe('the Captain', () => {
     expect((await client.call('agent.list')).some((each) => each.master)).toBe(false);
   });
 
-  it("keeps board scope when moved into a zone whose switch then goes off", async () => {
+  it("can be moved into a zone, and stays the Captain there", async () => {
     const { client } = await masterDaemon();
     const zone = await client.call('zone.add', { path: tempRepo(), x: 0, y: 0, name: 'web' });
     const master = await client.call('master.start', SIZE);
 
     await client.call('agent.move', { sessionId: master.sessionId, zoneId: zone.id, x: 40, y: 40 });
-    await client.call('zone.configure', { id: zone.id, agentsOrchestrate: false });
 
-    expect((await client.call('agent.list')).find((agent) => agent.master)).toMatchObject({ zoneId: zone.id, orchestrate: 'board' });
+    expect((await client.call('agent.list')).find((agent) => agent.master)).toMatchObject({ zoneId: zone.id, master: true });
   });
 
-  it("routes a request to a zone's orchestrator: sends it to the live one, and starts one in a zone with none", async () => {
+  it("routes a request to a zone's orchestrator: starts one in a zone with none and sends to it, and never sends to one the user started", async () => {
     const setup = await masterDaemon();
     const { client } = setup;
     const web = await client.call('zone.add', { path: tempRepo(), x: 0, y: 0, name: 'web' });
     const docs = await client.call('zone.add', { path: tempRepo('docs'), x: 2000, y: 0, name: 'docs' });
-    const lead = await client.call('agent.spawn', { zoneId: web.id, role: 'orchestrator', orchestrate: 'zone', name: 'web lead', ...SIZE });
-    await until(client, lead.sessionId, atPrompt);
+    const handStarted = await client.call('agent.spawn', { zoneId: web.id, role: 'orchestrator', name: 'web lead', ...SIZE });
+    await until(client, handStarted.sessionId, atPrompt);
     const { master, token, connection } = await masterSide(setup);
 
-    // A zone with an orchestrator: the request goes to it.
-    await client.call('session.attach', { sessionId: lead.sessionId });
-    await connection.call('orchestrator.send', { token, sessionId: lead.sessionId, text: 'Fix the flaky merge-gate test' });
-    await setup.recorder.waitForText(lead.sessionId, 'Fix the flaky merge-gate test');
+    // A zone's lead the user started is the user's to tell: the Captain asks them (needs-you) instead.
+    await expect(connection.call('orchestrator.send', { token, sessionId: handStarted.sessionId, text: 'Fix the flaky merge-gate test' })).rejects.toMatchObject({
+      code: BOARD_ERROR.outOfScope,
+      message: expect.stringMatching(/started by hand/),
+    });
 
-    // A zone with none: it starts one there, its own lead, which orchestrates by the zone.
+    // A zone with none: it starts one there, its own lead, and sends it the next request.
     const started = await connection.call('orchestrator.spawn', { token, zoneId: docs.id, role: 'orchestrator', prompt: 'Print your board identity' });
     // Its questions are the user's (ADR-0019), so the Captain never leads it in the status sense.
-    expect(started).toMatchObject({ zoneId: docs.id, roleName: 'orchestrator', spawnedBy: master.sessionId, orchestrate: 'zone', ledBy: null });
-  });
-
-  it("won't start an orchestrator in a zone that doesn't let its agents orchestrate: the user is the one to hear of it", async () => {
-    const setup = await masterDaemon();
-    const { client } = setup;
-    const zone = await client.call('zone.add', { path: tempRepo(), x: 0, y: 0, name: 'web' });
-    await client.call('zone.configure', { id: zone.id, agentsOrchestrate: false });
-    const { token, connection } = await masterSide(setup);
-
-    await expect(connection.call('orchestrator.spawn', { token, zoneId: zone.id, role: 'orchestrator', prompt: 'Fix it' })).rejects.toMatchObject({
-      code: RPC_ERROR.invalidParams,
-      message: expect.stringContaining('needs-you'),
-    });
-    expect((await client.call('agent.list')).filter((agent) => agent.zoneId === zone.id)).toEqual([]);
+    expect(started).toMatchObject({ zoneId: docs.id, roleName: 'orchestrator', spawnedBy: master.sessionId, ledBy: null });
+    await until(client, started.sessionId, atPrompt);
+    await client.call('session.attach', { sessionId: started.sessionId });
+    await connection.call('orchestrator.send', { token, sessionId: started.sessionId, text: 'Fix the docs build' });
+    await setup.recorder.waitForText(started.sessionId, 'Fix the docs build');
   });
 
   it('shows the usage reading but has no pacing: the hold, release, pause and priorities methods are gone', async () => {
@@ -257,14 +246,14 @@ describe('the Captain', () => {
 });
 
 describe('a message to the Captain', () => {
-  it('comes from any orchestrator, whatever its scope, and waits for a busy Captain’s turn to end; steering it stays out of scope', async () => {
+  it('comes from any agent, though the user started both, and waits for a busy Captain’s turn to end; steering it stays refused', async () => {
     const setup = await masterDaemon();
     const { client } = setup;
     const master = await client.call('master.start', SIZE);
     await until(client, master.sessionId, atPrompt);
     const zone = await client.call('zone.add', { path: tempRepo(), x: 400, y: 200, name: 'kobo' });
     // A zone's lead the user started: the Captain never messaged it, so it has no reply path to answer by.
-    const lead = await client.call('agent.spawn', { zoneId: zone.id, name: 'kobo lead', prompt: 'Print your board identity', orchestrate: 'zone', ...SIZE });
+    const lead = await client.call('agent.spawn', { zoneId: zone.id, name: 'kobo lead', prompt: 'Print your board identity', ...SIZE });
     const { token, connection } = await sideOf(setup, lead.sessionId);
     await until(client, lead.sessionId, atPrompt);
 
@@ -278,7 +267,7 @@ describe('a message to the Captain', () => {
     await until(client, master.sessionId, (agent) => atPrompt(agent) && agent.messagesWaiting === 0 && /Slow work done\.[\s\S]*Morning summary/.test(setup.recorder.screenText(master.sessionId)));
 
     // The Captain is told who it is from: it hears from leads all over the board.
-    expect(setup.recorder.screenText(master.sessionId)).toContain(`[agent-board] From kobo lead (agent:${lead.sessionId.slice(0, 8)}).`);
+    expect(setup.recorder.screenText(master.sessionId)).toContain(`[agent-board] From kobo lead (agent:${lead.sessionId.slice(0, 8)})`);
     expect(await connection.call('orchestrator.send', { token, sessionId: master.sessionId, text: 'One more thing' })).toMatchObject({ delivery: 'started' });
     await until(client, master.sessionId, atPrompt);
     const id = { token, sessionId: master.sessionId };
@@ -299,7 +288,7 @@ describe('a message to the Captain', () => {
     await until(client, master.sessionId, (agent) => agent.state === 'hibernated');
     await expect(connection.call('orchestrator.send', { ...id, text: 'Wake up' })).rejects.toMatchObject({
       code: BOARD_ERROR.outOfScope,
-      message: expect.stringMatching(/is paused: only the user, or an orchestrator that may steer it, wakes it/),
+      message: expect.stringMatching(/is paused: only the user wakes it/),
     });
   }, 60_000);
 });

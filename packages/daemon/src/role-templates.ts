@@ -10,7 +10,6 @@ import type { ActivityEntry, OrchestratorAccess } from './orchestrators.ts';
 import { invalidParams, optionalStringParam, paramsObject, stringParam } from './params.ts';
 import {
   AGENT_ROLES,
-  BOARD_ERROR,
   isOrchestratorRole,
   ORCHESTRATOR_ROLE,
   MAX_ROLE_TEMPLATE_LENGTH,
@@ -22,7 +21,7 @@ import {
   type RoleTemplate,
   type Zone,
 } from './protocol.ts';
-import { RpcMethodError, type RpcHandlers } from './rpc.ts';
+import type { RpcHandlers } from './rpc.ts';
 import { resolveZoneFolder } from './zones.ts';
 
 /** What a template's `{{name}}`s are filled with. The first four are the ones offered to write; the rest serve the seeds. */
@@ -165,8 +164,8 @@ export interface RoleTemplates {
   describe(zoneId: string | null, repoRoot: string, choice: RoleChoice): string;
   handlers<Context>(): RpcHandlers<RoleTemplateMethods, Context>;
   /**
-   * `orchestrator.roles`, `setRole` and `removeRole`: the app's default roles (a board-scope orchestrator's), or a zone's
-   * template for a name (a zone in the caller's scope), checked and logged as `access` does.
+   * `orchestrator.roles`, `setRole` and `removeRole`: the app's default roles, or a zone's template for a name (any
+   * zone), checked and logged as `access` does.
    */
   defaultRoleHandlers<Context extends BoardConnection>(access: OrchestratorAccess, zones: () => Zone[]): RpcHandlers<DefaultRoleMethods, Context>;
 }
@@ -256,24 +255,12 @@ export function createRoleTemplates(db: DatabaseSync): RoleTemplates {
     return name;
   };
 
-  /**
-   * Where `setRole` and `removeRole` write: `zoneId`'s templates, a zone in `me`'s scope; else the app's list, which
-   * reaches every zone, so a board-scope orchestrator's (or the user's side's) alone.
-   */
-  const target = (access: OrchestratorAccess, me: Parameters<OrchestratorAccess['reachesZone']>[0], fields: Record<string, unknown>, zones: () => Zone[]) => {
+  /** Where `setRole` and `removeRole` write: `zoneId`'s templates; else the app's list, which reaches every zone. */
+  const target = (fields: Record<string, unknown>, zones: () => Zone[]) => {
     const zoneId = optionalStringParam(fields, 'zoneId');
-    if (zoneId === undefined) {
-      if (me.orchestrate !== 'board') {
-        throw new RpcMethodError(
-          BOARD_ERROR.outOfScope,
-          `the app's default roles reach every zone, so they are for an orchestrator of the whole board; your scope is ${access.scopeText(me)}: set your zone's template with --zone`,
-        );
-      }
-      return undefined;
-    }
+    if (zoneId === undefined) return undefined;
     const zone = zones().find((each) => each.id === zoneId);
     if (zone === undefined) throw invalidParams(`no zone ${zoneId}`);
-    if (!access.reachesZone(me, zone)) throw new RpcMethodError(BOARD_ERROR.outOfScope, `${zone.name} is outside your scope (${access.scopeText(me)})`);
     return zone;
   };
 
@@ -346,7 +333,7 @@ export function createRoleTemplates(db: DatabaseSync): RoleTemplates {
             const name = defaultName(fields);
             entry.detail = name;
             entry.on = logged(name, undefined);
-            const zone = target(access, me, fields, zones);
+            const zone = target(fields, zones);
             entry.on = logged(name, zone);
             const body = templateBody(fields);
             checkNamedTemplate(name, body);
@@ -366,7 +353,7 @@ export function createRoleTemplates(db: DatabaseSync): RoleTemplates {
             const name = defaultName(fields);
             entry.detail = name;
             entry.on = logged(name, undefined);
-            const zone = target(access, me, fields, zones);
+            const zone = target(fields, zones);
             entry.on = logged(name, zone);
             const removed = zone === undefined ? removeDefault.run(name).changes : removeOne.run(zone.id, name).changes;
             if (removed === 0) throw invalidParams(zone === undefined ? `the app has no default role ${name}` : `${zone.name} has no template of its own for ${name}`);

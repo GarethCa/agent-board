@@ -56,7 +56,7 @@ describe('the board env', () => {
       name: shell.name,
       zoneId: shell.zoneId,
       side: 'user',
-      orchestrate: 'board',
+      orchestrates: true,
     });
 
     await client.call('shell.move', { shellId: shell.id, zoneId: null, x: 2000, y: 0 });
@@ -77,7 +77,7 @@ describe('the board env', () => {
       name: shell.name,
       zoneId: zone.id,
       side: 'user',
-      orchestrate: 'board',
+      orchestrates: true,
     });
   });
 

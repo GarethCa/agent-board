@@ -1,4 +1,6 @@
 import { expect, type Page } from '@playwright/test';
+import { agentNoteSize } from '@agent-board/daemon/agent-notes';
+import { MIN_AGENT_NOTE_SIZE } from '@agent-board/daemon/protocol';
 import { existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { agents, launch, listFinishedTurns, spawnAgent, tile, TURN_MS, zones } from '../agent-helpers.ts';
@@ -94,7 +96,10 @@ export async function launchGallery(dataDir: string, theme: string, scheme: 'lig
   return launched;
 }
 
-/** The Simplified design's agent notes: under a tab, one with no author, beside a sticky and a waiting agent tile, one with long markdown. */
+/** The text of the Simplified shot's note with a line budget. */
+const BUDGETED_TEXT = '**ENG-199 · round 2 of 3**\n\n- Implementer: fixing findings, `2 of 3` done\n- Reviewer: idle until `R2` arrives\n- Then the gate, and I merge **#185**';
+
+/** The Simplified design's agent notes: bubbles from their agents' faces, one cut to its line budget, one with no author, beside a sticky and a waiting agent tile, one with long markdown. */
 export async function shootSimplifiedNotes(appearanceTheme: string, scheme: 'light' | 'dark', shot: string) {
   const { dir, repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
@@ -119,7 +124,7 @@ export async function shootSimplifiedNotes(appearanceTheme: string, scheme: 'lig
     const [lead] = await agents(window);
     const [zone] = await zones(window);
     await window.evaluate(
-      async ({ zoneId, sessionId }) => {
+      async ({ zoneId, sessionId, budgetedText, budgetedHeight }) => {
         const board = globalThis.window.agentBoard;
         const agent = { sessionId, name: 'Master Orchestrator', harness: 'claude', role: 'orchestrator' };
         // A time of its own, in the render's UTC, so the shot doesn't change with the clock.
@@ -132,8 +137,9 @@ export async function shootSimplifiedNotes(appearanceTheme: string, scheme: 'lig
           x: 270,
           y: 40,
           width: 272,
-          height: 200,
-          data: { text: '**ENG-199 · round 2 of 3**\n\n- Implementer: fixing findings, `2 of 3` done\n- Reviewer: idle until `R2` arrives\n- Then the gate, and I merge **#185**', agent, about: sessionId, writtenAt, editedByUser: true },
+          // Given a line budget, and as tall as the daemon makes it for those lines: its text fades into a chip that counts the lines past it.
+          height: budgetedHeight,
+          data: { text: budgetedText, agent, about: sessionId, writtenAt, editedByUser: true, lines: 3 },
         });
         await board.items.create({
           kind: 'agent-note',
@@ -152,18 +158,18 @@ export async function shootSimplifiedNotes(appearanceTheme: string, scheme: 'lig
             userSized: true,
           },
         });
-        // No known author: its tab reads just Note.
+        // No known author: its first line reads just Note.
         await board.items.create({
           kind: 'agent-note',
           zoneId,
           x: 30,
           y: 240,
-          width: 200,
+          width: 240,
           height: 100,
           data: { text: 'Nobody signed this one.', agent: { sessionId: '', name: '', harness: 'claude', role: null }, writtenAt, editedByUser: false },
         });
       },
-      { zoneId: zone!.id, sessionId: lead!.sessionId },
+      { zoneId: zone!.id, sessionId: lead!.sessionId, budgetedText: BUDGETED_TEXT, budgetedHeight: agentNoteSize(BUDGETED_TEXT, 272, MIN_AGENT_NOTE_SIZE.height, 3).height },
     );
     await expect(window.getByTestId('agent-note')).toHaveCount(3);
     // The zone grows round its moved crew and the notes take their size after they mount: fit the view to the board they

@@ -360,7 +360,9 @@ kbd {
 .hybrid-tile-agent {
   outline: 2.5px solid transparent;
   outline-offset: -1px;
-  transition: outline-color var(--motion-base) var(--ease-out);
+  transition:
+    outline-color var(--motion-base) var(--ease-out),
+    opacity var(--motion-fast) var(--ease-out);
 }
 
 /* While it needs you now, as the needs-you inbox lists it: seen (its session was opened since it began asking) is still
@@ -430,9 +432,14 @@ kbd {
   text-align: center;
 }
 
-/* Its crew lit while a chip or the orchestrator is hovered. */
+/* Its crew lit while the orchestrator is focused: hovered or selected, or a chip naming it hovered. */
 .hybrid-tile-agent[data-crew-lit] {
   box-shadow: var(--shadow-tile), 0 0 0 var(--space-1) var(--crew-halo);
+}
+
+/* While a crew is focused, the board's agent and shell tiles outside it dim. Notes, clocks and other items don't. */
+:root[data-crew-focus] .react-flow__node .hybrid-tile-agent:not([data-crew-lit]) {
+  opacity: 0.4;
 }
 
 /* "↳ from <orchestrator>" on an agent an orchestrator started, or one outside its crew frame. */
@@ -454,6 +461,20 @@ kbd {
   border: 1.5px dashed var(--crew-edge);
   border-radius: var(--radius-xl);
   pointer-events: none;
+  /* There, for its geometry, but shown only while its orchestrator is focused. */
+  opacity: 0;
+  transition: opacity var(--motion-fast) var(--ease-out);
+}
+
+.crew-frame[data-focused] {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .crew-frame,
+  .hybrid-tile-agent {
+    transition: none;
+  }
 }
 
 .crew-frame-label {
@@ -5815,11 +5836,11 @@ button.chat-chip[aria-expanded='true'] {
   box-shadow: var(--shadow-overlay);
 }
 
-/* Agent notes: a document card or a terminal card, as the Agent notes setting says */
+/* Agent notes: a speech bubble from the agent's face, its text a document or a cut of a terminal, as the Agent notes setting says */
 
 .agent-note {
   display: flex;
-  flex-direction: column;
+  align-items: flex-start;
   width: 100%;
   height: 100%;
   box-sizing: border-box;
@@ -5828,29 +5849,93 @@ button.chat-chip[aria-expanded='true'] {
   font-size: var(--font-size-sm);
   line-height: var(--leading-roomy);
   overflow-wrap: anywhere;
-  /* --agent-note-zone is the colour of the zone the note sits in, set on the note; loose, it falls back to neutral. */
-  --agent-note-edge: color-mix(in srgb, var(--agent-note-zone, var(--agent-note-loose)) var(--agent-note-edge-mix), var(--border));
 }
 
-/* The tab sits on the card's top-left corner: a tint of the note's zone colour that reads NOTE and names the agent. */
-.agent-note-tab {
+/* The agent's face: its harness's mark in a round face, ringed in the harness's colour (set on it); it selects the agent's tile. */
+.agent-note-face {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: var(--agent-note-face-size);
+  height: var(--agent-note-face-size);
+  margin: var(--space-0-5) var(--agent-note-face-gap) 0 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--raised);
+  box-shadow:
+    var(--shadow-tile),
+    0 0 0 var(--agent-note-face-ring) color-mix(in srgb, var(--agent-note-harness) var(--agent-note-face-ring-mix), var(--border));
+  cursor: pointer;
+}
+
+.agent-note-face:disabled {
+  cursor: default;
+}
+
+.agent-note-mark {
+  flex: none;
+  width: var(--agent-note-face-mark);
+  height: var(--agent-note-face-mark);
+}
+
+/* The bubble, its tail pointing at the face, in a hairline edge. */
+.agent-note-bubble {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-self: stretch;
+  min-width: 0;
+  min-height: 0;
+  border: var(--space-px) solid var(--agent-note-bubble-edge);
+  border-radius: var(--agent-note-bubble-radius) var(--agent-note-bubble-radius) var(--agent-note-bubble-radius) var(--agent-note-bubble-corner);
+  background: var(--agent-note-fill);
+  box-shadow: var(--shadow-tile);
+}
+
+/* The tail: its edge, then its fill over the bubble's edge where the two meet. */
+.agent-note-bubble::before,
+.agent-note-bubble::after {
+  position: absolute;
+  top: var(--agent-note-tail-top);
+  left: calc(-1 * var(--agent-note-tail) - var(--space-px));
+  border: var(--agent-note-tail) solid transparent;
+  border-right-color: var(--agent-note-bubble-edge);
+  border-left: 0;
+  content: '';
+}
+
+.agent-note-bubble::after {
+  left: calc(-1 * var(--agent-note-tail) + var(--space-px) / 2);
+  border-right-color: var(--agent-note-fill);
+}
+
+/* Under Simplified the bubble is a flat fill with no edge, and its face is lifted by its shadow alone. */
+:root[data-design='simplified'] .agent-note-bubble {
+  border-color: transparent;
+}
+
+:root[data-design='simplified'] .agent-note-bubble::before {
+  border-right-color: transparent;
+}
+
+:root[data-design='simplified'] .agent-note-face {
+  box-shadow: var(--shadow-tile);
+}
+
+/* The bubble's first line: who wrote it, their role, and when. */
+.agent-note-head {
   display: flex;
   flex: none;
+  gap: var(--space-1-25);
   align-items: center;
-  align-self: flex-start;
   min-width: 0;
-  max-width: 100%;
-  height: var(--agent-note-tab-height);
-  overflow: hidden;
-  box-sizing: border-box;
-  padding: 0 var(--space-2);
-  border-radius: var(--radius-md) var(--radius-md) 0 0;
-  border: 1.5px dashed var(--agent-note-edge);
-  border-bottom: 0;
-  background: color-mix(in srgb, var(--agent-note-zone, var(--agent-note-loose)) var(--agent-note-tab-mix), var(--agent-note-fill));
-  color: color-mix(in srgb, var(--agent-note-zone, var(--agent-note-loose)) var(--agent-note-tab-ink-mix), var(--agent-note-ink));
+  padding: var(--space-1-75) var(--space-3) 0;
+  color: var(--agent-note-ink-muted);
   font-size: var(--font-size-2xs);
   font-weight: var(--weight-bold);
+  white-space: nowrap;
 }
 
 .agent-note-card {
@@ -5859,13 +5944,10 @@ button.chat-chip[aria-expanded='true'] {
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
-  border: 1.5px dashed var(--agent-note-edge);
-  border-radius: 0 var(--agent-note-radius) var(--agent-note-radius) var(--agent-note-radius);
-  background: var(--agent-note-fill);
-  box-shadow: var(--shadow-tile);
+  border-radius: inherit;
 }
 
-.agent-note-foot > :not(time) {
+.agent-note-foot > * {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -5882,48 +5964,10 @@ button.chat-chip[aria-expanded='true'] {
   font-size: var(--font-size-2xs);
 }
 
-.agent-note-badge {
-  display: inline-flex;
-  gap: var(--space-1);
-  align-items: center;
-  min-width: 0;
-  max-width: 100%;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: inherit;
-  font: inherit;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.agent-note-label {
-  flex: none;
-}
-
-.agent-note-badge:hover:enabled .agent-note-name {
-  text-decoration: underline;
-}
-
-.agent-note-badge:disabled {
-  cursor: default;
-}
-
-.agent-note-mark {
-  flex: none;
-  width: var(--space-3);
-  height: var(--space-3);
-}
-
-.agent-note-robot {
-  flex: none;
-  width: var(--icon-xs);
-  height: var(--icon-xs);
-}
-
 .agent-note-name {
   flex: 0 1 auto;
   overflow: hidden;
+  color: var(--agent-note-ink);
   text-overflow: ellipsis;
 }
 
@@ -5938,9 +5982,10 @@ button.chat-chip[aria-expanded='true'] {
 
 .agent-note-time {
   flex: none;
-  order: 1;
   margin-left: auto;
+  padding-left: var(--space-2);
   font-family: var(--font-mono);
+  font-weight: var(--weight-regular);
   white-space: nowrap;
 }
 
@@ -5959,24 +6004,50 @@ button.chat-chip[aria-expanded='true'] {
   overflow: auto;
 }
 
-/* The cue that a note sized shorter than its text scrolls on: stuck to the foot of what shows, taking no room of its own. */
-.agent-note-more {
-  position: sticky;
-  bottom: 0;
-  height: 0;
-  pointer-events: none;
+/* A line budget: that many lines of its text show; the rest is below, behind the chip. */
+.agent-note-body[data-budget] {
+  max-height: calc(var(--agent-note-lines) * 1lh + var(--space-1-75) + var(--space-2));
+  overflow: hidden;
 }
 
-.agent-note-more > span {
+
+/* The chip that says how many lines are below what shows, and shows them: on the foot of the text, taking no room of its own. */
+.agent-note-more {
+  position: relative;
+  flex: none;
+  height: 0;
+}
+
+/* With more below what shows, its last lines fade into the fill they sit on, gone by the foot of its text: the next
+   line, cut, would show in the padding under it. A layer over the text, not a mask, so the terminal's well keeps its
+   colour and its corners. */
+.agent-note-more::before {
   position: absolute;
   right: 0;
   bottom: 0;
-  padding: 0 var(--space-1-5);
-  border-radius: var(--radius-sm);
-  background: var(--agent-note-fill);
+  left: 0;
+  height: calc(var(--agent-note-fade) + var(--space-2));
+  background: linear-gradient(to bottom, transparent, var(--agent-note-fill) var(--agent-note-fade));
+  content: '';
+  pointer-events: none;
+}
+
+.agent-note-chip {
+  position: absolute;
+  right: var(--space-3);
+  bottom: var(--space-1);
+  display: inline-flex;
+  align-items: center;
+  padding: var(--space-px) var(--space-1-75);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--agent-note-chip);
   color: var(--agent-note-ink);
+  font: inherit;
   font-size: var(--font-size-2xs);
-  box-shadow: 0 0 var(--space-2) var(--space-2) var(--agent-note-fill);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+  cursor: pointer;
 }
 
 .agent-note-body p,
@@ -6413,7 +6484,35 @@ button.chat-chip[aria-expanded='true'] {
 .listcard-rows {
   flex: 1;
   min-height: 0;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+/* A list that scrolls inside its card fades out at each edge with rows past it: a short fade, so a row in view reads whole. */
+:is(.listcard-rows, .steps-rows, .todo-lines)[data-fade='bottom'] {
+  mask-image: linear-gradient(to bottom, var(--text) calc(100% - var(--space-3)), transparent);
+}
+
+:is(.listcard-rows, .steps-rows, .todo-lines)[data-fade='top'] {
+  mask-image: linear-gradient(to top, var(--text) calc(100% - var(--space-3)), transparent);
+}
+
+:is(.listcard-rows, .steps-rows, .todo-lines)[data-fade='both'] {
+  mask-image: linear-gradient(to bottom, transparent, var(--text) var(--space-3), var(--text) calc(100% - var(--space-3)), transparent);
+}
+
+/* Not while a line in it is being written, so the field and its key hints read whole. */
+:is(.listcard-rows, .steps-rows, .todo-lines):has(:is(input, textarea):focus) {
+  mask-image: none;
+}
+
+/* On the selected card every line cut short wraps in full; pointed at or focused, one shows whole laid over its row (whole-line.ts). */
+.react-flow__node.selected .listcard-rows :is(.listcard-value, .memory-key, .memory-key-name, .memory-doc-title, .memory-doc-title b) {
+  overflow: visible;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .listcard-row,
@@ -6466,6 +6565,28 @@ button.chat-chip[aria-expanded='true'] {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/*
+ * A line cut short, pointed at or focused: its whole text laid over it in the card's node, wrapped to its width, on
+ * the card's own colour, so no row under it moves. Its font and colours are the cell's, set by whole-line.ts.
+ */
+.whole-line {
+  position: absolute;
+  z-index: 1;
+  box-sizing: content-box;
+  margin: calc(-1 * var(--space-1)) 0 0 calc(-1 * var(--space-1));
+  padding: var(--space-1);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-overlay);
+  overflow-wrap: anywhere;
+  white-space: normal;
+  pointer-events: none;
+}
+
+/* A row with nothing in its corner gives its text the corner's room too. */
+.listcard-value:last-child {
+  grid-column: 2 / 4;
 }
 
 .listcard-who {
@@ -6748,7 +6869,7 @@ button.chat-chip[aria-expanded='true'] {
   white-space: pre-wrap;
 }
 
-/* A memory's card, its notebook look: documents by title, then facts, each under a small heading. */
+/* A memory's card, its notebook look: pinned facts, documents by title, then facts, each under a small heading. */
 .memory-section {
   display: flex;
   grid-column: 1 / 4;
@@ -7818,47 +7939,35 @@ button.chat-chip[aria-expanded='true'] {
   stroke-dasharray: 6 5;
 }
 
-/* The agent's terminal, cut out and pinned. */
-.agent-note[data-look='terminal'] {
+/* The agent's terminal, cut out and pinned inside the bubble. */
+.agent-note[data-look='terminal'] .agent-note-body {
+  margin: var(--space-1-5) var(--space-1-5) 0;
+  border-radius: var(--radius-lg);
+  background: var(--window-bg);
+  color: var(--window-ink);
   font-family: var(--font-mono);
   font-size: var(--font-size-badge);
 }
 
-.agent-note[data-look='terminal'] .agent-note-card {
-  background: var(--window-bg);
+.agent-note[data-look='terminal'] .agent-note-more::before {
+  right: var(--space-1-5);
+  left: var(--space-1-5);
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+  background: linear-gradient(to bottom, transparent, var(--window-bg) var(--agent-note-fade));
+}
+
+.agent-note[data-look='terminal'] .agent-note-chip {
+  right: var(--space-3-5);
+  background: var(--window-line);
   color: var(--window-ink);
 }
 
-.agent-note[data-look='terminal'] .agent-note-more > span {
-  background: var(--window-bg);
-  color: var(--window-ink-soft);
-  box-shadow: 0 0 var(--space-2) var(--space-2) var(--window-bg);
-}
-
-.agent-note[data-look='terminal'] .agent-note-foot,
-.agent-note[data-look='terminal'] .agent-note-dismiss {
-  color: var(--window-ink-soft);
-}
-
-.agent-note[data-look='terminal'] .agent-note-edits {
-  border-top-color: var(--window-line);
-  color: var(--window-ink-soft);
-}
-
-.agent-note[data-look='terminal'] .agent-note-accept {
-  color: var(--agent-note-term-link);
-}
-
-.agent-note[data-look='terminal'] .agent-note-asked {
-  color: var(--window-ink-soft);
-}
-
-.agent-note[data-look='terminal'] strong {
+.agent-note[data-look='terminal'] .agent-note-body strong {
   color: var(--agent-note-term-strong);
   font-weight: var(--weight-semibold);
 }
 
-.agent-note[data-look='terminal'] code {
+.agent-note[data-look='terminal'] .agent-note-body code {
   padding: 0;
   border: 0;
   background: none;
@@ -7866,16 +7975,8 @@ button.chat-chip[aria-expanded='true'] {
   font: inherit;
 }
 
-.agent-note[data-look='terminal'] .sticky-link,
-.agent-note[data-look='terminal'] .agent-note-show {
+.agent-note[data-look='terminal'] .sticky-link {
   color: var(--agent-note-term-link);
-}
-
-.agent-note[data-look='terminal'] .agent-note-edited {
-  padding: 0;
-  background: none;
-  color: var(--agent-note-term-edited);
-  font-weight: var(--weight-regular);
 }
 
 .agent-note-line {
@@ -14290,7 +14391,7 @@ button.agent-shelves-row:hover {
   display: flex;
   flex-direction: column;
   width: 100%;
-  min-height: 100%;
+  min-height: var(--steps-least, 100%);
   box-sizing: border-box;
   overflow: hidden;
   border: 1px solid var(--border);
@@ -14490,6 +14591,199 @@ button.agent-shelves-row:hover {
   max-height: 330px;
   overflow: auto;
   border-top: 1px solid var(--separator);
+}
+
+/* A card the user made taller fills its size: its rows take the rest, and scroll within. */
+.steps-card[data-sized] {
+  height: 100%;
+}
+
+.steps-card[data-sized] .steps-rows {
+  flex: 1 1 auto;
+  align-content: start;
+  min-height: 0;
+  max-height: none;
+  overscroll-behavior: contain;
+}
+
+/* On the selected card every line cut short wraps in full; pointed at or focused, one shows whole laid over its row (whole-line.ts). */
+.react-flow__node.selected .steps-rows :is(.steps-row-text, .steps-answer),
+.react-flow__node.selected .steps-now-text :is(b, span) {
+  overflow: visible;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+/* A steps card in full (StepsFull.tsx), over the board: every step under its section, whole. */
+.steps-full {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: var(--layer-dialog);
+  display: flex;
+  flex-direction: column;
+  width: min(640px, calc(100vw - var(--space-8)));
+  max-height: min(820px, calc(100vh - var(--space-8)));
+  overflow: hidden;
+  translate: -50% -50%;
+  border-top: var(--steps-edge) solid var(--steps);
+  color: var(--text);
+  font-size: var(--font-size-sm);
+  line-height: var(--leading-snug);
+  animation: ui-rise var(--motion-fast) var(--ease-out);
+}
+
+.steps-full[data-inline='true'] {
+  position: relative;
+  top: auto;
+  left: auto;
+  z-index: auto;
+  translate: none;
+  animation: none;
+}
+
+.steps-full-head {
+  display: flex;
+  gap: var(--space-2-5);
+  align-items: center;
+  padding: var(--space-3) var(--space-4) var(--space-2);
+}
+
+.steps-full-title {
+  min-width: 0;
+  margin: 0;
+  font-size: var(--font-size-lg);
+  font-weight: var(--weight-bold);
+  overflow-wrap: anywhere;
+}
+
+.steps-full .steps-bar {
+  padding: 0 var(--space-4) var(--space-3);
+  border-bottom: 1px solid var(--separator);
+}
+
+.steps-full-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--space-1) var(--space-4) var(--space-4);
+}
+
+/* It holds the focus as the view opens, for ↑↓ and esc: the view round it shows where that is. */
+.steps-full-body:focus {
+  outline: none;
+}
+
+.steps-full-section + .steps-full-section {
+  margin-top: var(--space-3);
+}
+
+.steps-full-section-head {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  margin: 0;
+  padding: var(--space-2) 0 var(--space-1);
+  color: var(--muted);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+}
+
+.steps-full-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.steps-full-step {
+  display: grid;
+  grid-template-columns: auto auto auto minmax(0, 1fr) auto;
+  gap: var(--space-2);
+  align-items: start;
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--separator);
+}
+
+.steps-full-step > :is(.steps-dot, .steps-full-tick, .steps-kind) {
+  margin-top: var(--space-0-5);
+}
+
+.steps-full-place {
+  color: var(--muted);
+  font-size: var(--font-size-2xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.steps-full-text {
+  display: grid;
+  gap: var(--space-0-5);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.steps-full-step:last-child {
+  border-bottom: none;
+}
+
+.steps-full-step[data-state='done'] .steps-full-text > span:first-child {
+  color: var(--muted);
+}
+
+/* A to-do done is struck through, as on the card; an answered question keeps its words. */
+.steps-full-step[data-state='done']:not([data-question]) .steps-full-text > span:first-child {
+  text-decoration: line-through;
+  text-decoration-color: var(--muted);
+}
+
+.steps-full-text .steps-required {
+  margin-left: var(--space-2);
+}
+
+.steps-full-note {
+  color: var(--muted);
+  font-size: var(--font-size-2xs);
+}
+
+.steps-full-state {
+  color: var(--muted);
+  font-size: var(--font-size-3xs);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+}
+
+.steps-full-step[data-state='yours'] :is(.steps-full-state, .steps-full-note) {
+  color: var(--steps-yours-ink);
+}
+
+.steps-full-tick {
+  display: grid;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+
+.steps-full-tick:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.steps-full-foot {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  padding: var(--space-2-5) var(--space-4);
+  border-top: 1px solid var(--separator);
+}
+
+.steps-full-none {
+  margin: 0;
+  padding: var(--space-3) 0;
+  color: var(--muted);
 }
 
 .steps-row,
@@ -14990,6 +15284,10 @@ button.steps-link-open:focus-visible {
 
 .gallery-steps-card[data-look='icon'] {
   height: 120px;
+}
+
+.gallery-steps-card[data-sized] {
+  height: 300px;
 }
 
 .gallery-steps-cell figcaption {

@@ -64,7 +64,6 @@ interface ZoneRow {
   codex_bypass_hook_trust: number;
   trusts_folder: number;
   board_mcp: number;
-  agents_orchestrate: number;
   gate_command: string | null;
   spacing: ArrangeSpacing;
   layout_mode: ZoneLayoutMode;
@@ -242,7 +241,6 @@ export function createZoneTable(
     codexBypassHookTrust: row.codex_bypass_hook_trust === 1,
     trustsFolder: row.trusts_folder === 1,
     boardMcp: row.board_mcp === 1,
-    agentsOrchestrate: row.agents_orchestrate === 1,
     gateCommand: row.gate_command,
     spacing: row.spacing,
     layoutMode: row.layout_mode,
@@ -357,14 +355,12 @@ export function createZoneTable(
 
 /**
  * The `zone.*` RPC handlers that need no clone, backed by the `zones` table. They don't use the calling connection. A
- * zone is only bound to a tracker scope that `trackers` confirms. `onOrchestrateChanged` hears a zone's
- * `agentsOrchestrate` change, to stop or start the agents it reaches orchestrating.
+ * zone is only bound to a tracker scope that `trackers` confirms.
  */
 export function zoneHandlers<Context>(
   db: DatabaseSync,
   zones: ZoneTable,
   trackers: Pick<TrackerHost, 'checkScope'>,
-  onOrchestrateChanged: (zoneId: string, on: boolean) => void,
   /** The zone is being removed: the agents being started in it are dismissed, so none runs on with no tile. */
   onRemoving: (zoneId: string) => void = () => {},
 ): RpcHandlers<ZoneMethods, Context> {
@@ -375,7 +371,6 @@ export function zoneHandlers<Context>(
   const updateBypass = db.prepare('UPDATE zones SET codex_bypass_hook_trust = ? WHERE id = ?');
   const updateTrustsFolder = db.prepare('UPDATE zones SET trusts_folder = ? WHERE id = ?');
   const updateBoardMcp = db.prepare('UPDATE zones SET board_mcp = ? WHERE id = ?');
-  const updateAgentsOrchestrate = db.prepare('UPDATE zones SET agents_orchestrate = ? WHERE id = ?');
   const updateGateCommand = db.prepare('UPDATE zones SET gate_command = ? WHERE id = ?');
   const updateSpacing = db.prepare('UPDATE zones SET spacing = ? WHERE id = ?');
   const updateLayoutMode = db.prepare('UPDATE zones SET layout_mode = ? WHERE id = ?');
@@ -508,13 +503,12 @@ export function zoneHandlers<Context>(
       const bypass = optionalBooleanParam(fields, 'codexBypassHookTrust');
       const trustsFolder = optionalBooleanParam(fields, 'trustsFolder');
       const boardMcp = optionalBooleanParam(fields, 'boardMcp');
-      const agentsOrchestrate = optionalBooleanParam(fields, 'agentsOrchestrate');
       const gateCommand = gateCommandParam(fields);
       const spacing = fields.spacing === undefined ? undefined : oneOf(fields, 'spacing', ARRANGE_SPACINGS);
       const layoutMode = fields.layoutMode === undefined ? undefined : oneOf(fields, 'layoutMode', ZONE_LAYOUT_MODES);
       const layoutRule = fields.layoutRule === undefined ? undefined : oneOf(fields, 'layoutRule', ZONE_LAYOUT_RULES);
-      if (bypass === undefined && trustsFolder === undefined && boardMcp === undefined && agentsOrchestrate === undefined && gateCommand === undefined && spacing === undefined && layoutMode === undefined && layoutRule === undefined) {
-        throw invalidParams('give codexBypassHookTrust, trustsFolder, boardMcp, agentsOrchestrate, gateCommand, spacing, layoutMode or layoutRule');
+      if (bypass === undefined && trustsFolder === undefined && boardMcp === undefined && gateCommand === undefined && spacing === undefined && layoutMode === undefined && layoutRule === undefined) {
+        throw invalidParams('give codexBypassHookTrust, trustsFolder, boardMcp, gateCommand, spacing, layoutMode or layoutRule');
       }
       // A rule moves the tiles' saved places and a view only draws them elsewhere, so a zone never has both.
       if (layoutRule !== undefined && layoutRule !== 'off' && layoutMode !== undefined && layoutMode !== 'free') {
@@ -535,9 +529,6 @@ export function zoneHandlers<Context>(
       if (bypass !== undefined) updateBypass.run(bypass ? 1 : 0, id);
       if (trustsFolder !== undefined) updateTrustsFolder.run(trustsFolder ? 1 : 0, id);
       if (boardMcp !== undefined) updateBoardMcp.run(boardMcp ? 1 : 0, id);
-      if (agentsOrchestrate !== undefined) updateAgentsOrchestrate.run(agentsOrchestrate ? 1 : 0, id);
-      // Off, no agent in it orchestrates any more, whoever let it; on, the agents it let orchestrate do again (ADR-0011).
-      if (agentsOrchestrate !== undefined) onOrchestrateChanged(id, agentsOrchestrate);
       return changed(id);
     },
     // The colour is any #rrggbb, not only a `ZONE_COLORS` one: the pickers offer those, and zones keep whatever they had.
@@ -607,7 +598,6 @@ export function zoneHandlers<Context>(
         updateBypass.run(optionalBooleanParam(fields, 'codexBypassHookTrust') === false ? 0 : 1, id);
         updateTrustsFolder.run(bound !== null && optionalBooleanParam(fields, 'trustsFolder') === true ? 1 : 0, id);
         updateBoardMcp.run(optionalBooleanParam(fields, 'boardMcp') === false ? 0 : 1, id);
-        updateAgentsOrchestrate.run(optionalBooleanParam(fields, 'agentsOrchestrate') === false ? 0 : 1, id);
         updateGateCommand.run(gateCommandParam(fields) ?? null, id);
         updateDefaultRepo.run(repo, id);
         if (repo !== null) zones.rememberFolder(repo);

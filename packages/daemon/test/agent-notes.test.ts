@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { agentNoteSize } from '../src/agent-notes.ts';
-import { AGENT_NOTE_SIZE, MAX_AGENT_NOTE_HEIGHT } from '../src/protocol.ts';
+import { AGENT_NOTE_SIZE, MAX_AGENT_NOTE_HEIGHT, MIN_AGENT_NOTE_SIZE } from '../src/protocol.ts';
 
 describe('agentNoteSize', () => {
   it('starts a note tall enough for its lines, list items wrapping sooner: this one needs about 200 px', () => {
@@ -47,5 +47,39 @@ describe('agentNoteSize', () => {
   it('keeps a short note at the least height, and a long one at most a screenful, scrolling past that', () => {
     expect(agentNoteSize('Done').height).toBe(AGENT_NOTE_SIZE.height);
     expect(agentNoteSize('word '.repeat(2000)).height).toBe(MAX_AGENT_NOTE_HEIGHT);
+  });
+
+  it("leaves room beside the bubble for the agent's face: the least a note is wide takes it in", () => {
+    expect(MIN_AGENT_NOTE_SIZE.width).toBeGreaterThanOrEqual(200 + 38);
+    // The text column is narrower by the face: the same text wraps as it would 38 px narrower without it.
+    const text = '- **impl**: fixing the review findings on the merge gate · PR #12 Notes fit their text and more besides';
+    expect(agentNoteSize(text, 272, 0).height).toBeGreaterThan(agentNoteSize(text, 310, 0).height);
+  });
+});
+
+describe('agentNoteSize with a line budget', () => {
+  const long = Array.from({ length: 12 }, (_, index) => `Step ${index + 1} is done`).join('\n');
+
+  it('starts a note with a budget at the height of its lines, shorter than its whole text', () => {
+    const whole = agentNoteSize(long, 272, 0).height;
+    const three = agentNoteSize(long, 272, 0, 3).height;
+    const six = agentNoteSize(long, 272, 0, 6).height;
+    expect(three).toBeLessThan(whole);
+    expect(six).toBeGreaterThan(three);
+    // Each line more is a line's height more, whichever look draws it.
+    expect(six - three).toBeGreaterThanOrEqual(3 * 16);
+    expect(six - three).toBeLessThanOrEqual(3 * 17.5 + 1);
+  });
+
+  it('is the height of the whole text when the text is within its budget', () => {
+    expect(agentNoteSize('Done\nShipped', 272, 0, 10)).toEqual(agentNoteSize('Done\nShipped', 272, 0));
+  });
+
+  it('starts no shorter than the least a note can be resized to, not the least a new note starts at', () => {
+    expect(agentNoteSize(long, 272, AGENT_NOTE_SIZE.height, 1).height).toBe(MIN_AGENT_NOTE_SIZE.height);
+  });
+
+  it('keeps a budget past a screenful at most a screenful', () => {
+    expect(agentNoteSize('word '.repeat(2000), 272, 0, 40).height).toBe(MAX_AGENT_NOTE_HEIGHT);
   });
 });

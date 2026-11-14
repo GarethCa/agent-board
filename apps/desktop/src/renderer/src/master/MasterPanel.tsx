@@ -151,15 +151,12 @@ export function MasterPanel({ agents, zones, items, side, focusRequest, onSettin
             </span>
           )}
           <h2>Captain</h2>
-          {/* Short of room, its scope gives way before its model, and then the model is cut too. */}
+          {/* Short of room, its model is cut. */}
           <small className="master-panel-scope">
             {master === undefined ? (
               <span className="master-panel-scope-what">not started</span>
             ) : (
-              <>
-                <span className="master-panel-scope-what">board scope</span>
-                <span className="master-panel-scope-model"> · {master.model ?? master.harness}</span>
-              </>
+              <span className="master-panel-scope-model">{master.model ?? master.harness}</span>
             )}
           </small>
           <span className="master-panel-actions">
@@ -240,7 +237,7 @@ function StartMaster() {
       >
         Start the Captain
       </Button>
-      <p className="master-panel-muted">Claude · Opus, at board scope, in a folder of its own.</p>
+      <p className="master-panel-muted">Claude · Opus, in a folder of its own.</p>
       {error && <ErrorText>{error}</ErrorText>}
     </section>
   );

@@ -57,7 +57,6 @@ const zoneOf = (id: string, fields: Partial<Zone> = {}): Zone => ({
   codexBypassHookTrust: true,
   trustsFolder: false,
   boardMcp: true,
-  agentsOrchestrate: false,
   gateCommand: null,
   spacing: 'normal',
   layoutMode: 'free',

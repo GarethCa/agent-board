@@ -25,7 +25,6 @@ async function setUp() {
   const recorder = recordEvents(client);
   const zone = await client.call('zone.add', { path: tempRepo(), x: 0, y: 0, name: 'web' });
   const other = await client.call('zone.add', { path: tempRepo('other'), x: 4000, y: 0, name: 'other' });
-  for (const { id } of [zone, other]) await client.call('zone.configure', { id, agentsOrchestrate: false });
   return { daemon, client, recorder, zone, other };
 }
 
@@ -40,9 +39,9 @@ async function untilAgent(setup: Setup, sessionId: string, match: (agent: Agent)
 }
 
 /** An orchestrator in `zoneId`, connected as itself: its board token presented, as its CLI does. */
-async function orchestratorIn(setup: Setup, zoneId: string, orchestrate: 'zone' | 'repo' | 'board' = 'zone') {
+async function orchestratorIn(setup: Setup, zoneId: string) {
   const { daemon, client, recorder } = setup;
-  const agent = await client.call('agent.spawn', { zoneId, name: 'master', prompt: 'Print your board identity', orchestrate, ...SIZE });
+  const agent = await client.call('agent.spawn', { zoneId, name: 'master', prompt: 'Print your board identity', ...SIZE });
   await client.call('session.attach', { sessionId: agent.sessionId });
   await recorder.waitForText(agent.sessionId, ':end\r\n');
   const token = /identity:(.*):end\r\n/.exec(recorder.screenText(agent.sessionId))![1]!;
@@ -263,14 +262,13 @@ describe('asking the user to remove tiles', () => {
     expect(await names(setup)).not.toContain(reviewer.name);
   });
 
-  it('refuses the whole ask when any tile is outside its scope or is itself, and asks nothing', async () => {
+  it('refuses the whole ask when any tile is itself, and asks nothing', async () => {
     const setup = await setUp();
     const { agent: me, token, connection } = await orchestratorIn(setup, setup.zone.id);
     const mine = await finishedAgent(setup, setup.zone.id, 'mine');
     const far = await finishedAgent(setup, setup.other.id, 'far');
-    const wider = await orchestratorIn(setup, setup.zone.id, 'board');
 
-    for (const sessionIds of [[mine.sessionId, far.sessionId], [me.sessionId], [mine.sessionId, wider.agent.sessionId]]) {
+    for (const sessionIds of [[me.sessionId], [mine.sessionId, far.sessionId, me.sessionId]]) {
       await expect(connection.call('orchestrator.askRemove', { token, sessionIds })).rejects.toMatchObject({ code: BOARD_ERROR.outOfScope });
     }
     for (const sessionIds of [[], [mine.sessionId, mine.sessionId], 'mine']) {
@@ -282,6 +280,28 @@ describe('asking the user to remove tiles', () => {
     expect(await names(setup)).toEqual(expect.arrayContaining(['mine', 'far']));
   });
 
+  it('asks for a tile another orchestrator started in another zone, as for any tile it did not start', async () => {
+    const setup = await setUp();
+    const { agent: me, token, connection } = await orchestratorIn(setup, setup.zone.id);
+    const lead = await orchestratorIn(setup, setup.other.id);
+    const far = await lead.connection.call('orchestrator.spawn', { token: lead.token, name: 'far' });
+    await setup.client.call('agent.stop', { sessionId: far.sessionId });
+    await untilAgent(setup, far.sessionId, (seen) => seen.endedAt !== null);
+
+    await expect(connection.call('orchestrator.close', { token, sessionId: far.sessionId, remove: true })).rejects.toMatchObject({
+      code: BOARD_ERROR.outOfScope,
+      message: expect.stringMatching(/--remove --ask/),
+    });
+    expect(await names(setup)).toContain('far');
+    const answer = connection.call('orchestrator.askRemove', { token, sessionIds: [far.sessionId] });
+    const ask = await askOf(setup, me.sessionId);
+    expect(ask.tiles).toEqual([{ sessionId: far.sessionId, name: 'far', held: null }]);
+    expect(await names(setup)).toContain('far');
+    await setup.client.call('removeAsk.decide', { sessionId: me.sessionId, askId: ask.id, allow: true });
+    expect(await answer).toEqual({ outcome: 'allowed', removed: [{ sessionId: far.sessionId, name: 'far' }], kept: [] });
+    expect(await names(setup)).not.toContain('far');
+  });
+
   it('never lets an orchestrator, or any board token, answer an ask', async () => {
     const setup = await setUp();
     const { agent: me, token, connection } = await orchestratorIn(setup, setup.zone.id);
@@ -290,7 +310,7 @@ describe('asking the user to remove tiles', () => {
     const ask = await askOf(setup, me.sessionId);
 
     await expect(connection.call('removeAsk.decide', { sessionId: me.sessionId, askId: ask.id, allow: true })).rejects.toMatchObject({ code: BOARD_ERROR.notAllowed });
-    const other = await orchestratorIn(setup, setup.zone.id, 'board');
+    const other = await orchestratorIn(setup, setup.zone.id);
     await expect(other.connection.call('removeAsk.decide', { sessionId: me.sessionId, askId: ask.id, allow: true })).rejects.toMatchObject({ code: BOARD_ERROR.notAllowed });
     // A second ask waits for the first.
     await expect(connection.call('orchestrator.askRemove', { token, sessionIds: [a.sessionId] })).rejects.toMatchObject({ code: RPC_ERROR.invalidParams });

@@ -5,13 +5,14 @@
 // one queue, so a line an agent adds while the user ticks another is never lost.
 import { randomUUID } from 'node:crypto';
 import { boardCaller, connectionAgent, isOwnLiveSession, type BoardCallerSources, type BoardConnection } from './board.ts';
-import { readsItem, type ReachesZone } from './item-scope.ts';
+import { readsItem } from './item-scope.ts';
 import { isObject } from './json.ts';
 import { keyedQueue } from './keyed-queue.ts';
 import type { DaemonCall } from './orchestrator-layout.ts';
 import { invalidParams, paramsObject, stringParam } from './params.ts';
 import {
   BOARD_ERROR,
+  isCardSize,
   MAX_TODO_LINES,
   MAX_TODO_TEXT,
   TODO_CARD_SIZE,
@@ -36,7 +37,6 @@ export interface TodoHostOptions extends BoardCallerSources {
   call: DaemonCall;
   /** Where an agent's new list goes: under its tile. */
   place(sessionId: string, size: { width: number; height: number }): Promise<BoardPlace | undefined>;
-  reachesZone: ReachesZone;
   now?: () => Date;
 }
 
@@ -67,6 +67,7 @@ export function checkTodoData(data: Record<string, unknown>): void {
   }
   if (new Set(lines.map((line) => (line as TodoLine).id)).size !== lines.length) throw fail('lines must each have an id of their own');
   if (data.folded !== undefined && typeof data.folded !== 'boolean') throw fail('folded must be true or false');
+  if (data.openSize !== undefined && !isCardSize(data.openSize)) throw fail('openSize must be { width, height }');
 }
 
 /** A line's text as kept: on one line, its ends trimmed; refused if empty or too long. */
@@ -142,7 +143,7 @@ function agentTodoChange(value: unknown): AgentTodoChange {
 }
 
 export interface TodoHost {
-  /** The items an agent's connection sees: only the to-do lists in its scope. */
+  /** The items an agent's connection sees: only the to-do lists it reads (`readsItem`). */
   visible(items: BoardItem[], connection: BoardConnection): BoardItem[];
   handlers<Context extends BoardConnection>(): RpcHandlers<TodoMethods, Context>;
 }
@@ -164,7 +165,7 @@ export function createTodoHost(options: TodoHostOptions): TodoHost {
   const ownList = async (sessionId: string) => (await lists()).find((item) => isAgentWho(dataOf(item).owner, sessionId));
   const save = (item: BoardItem, lines: TodoLine[]) => options.call('item.update', { id: item.id, data: { lines } });
 
-  const reads = (agent: Agent, item: BoardItem) => readsItem(agent, item, isAgentWho(dataOf(item).owner, agent.sessionId), options.reachesZone);
+  const reads = (agent: Agent, item: BoardItem) => readsItem(agent, item, isAgentWho(dataOf(item).owner, agent.sessionId));
 
   /** The agent whose board token the call holds; with `live`, only its own live session. */
   const caller = (p: Record<string, unknown>, connection: BoardConnection, live: boolean): Agent => {
