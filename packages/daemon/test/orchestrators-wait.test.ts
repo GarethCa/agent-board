@@ -28,6 +28,8 @@ function host(agents = new Map<string, Agent>()) {
       plan: null,
       spawnedBy: null,
       orphanedFrom: null,
+      ticket: null,
+      ticketChat: false,
       flag: null,
       unsent: null,
       untypedPrompt: null,
@@ -54,6 +56,7 @@ function host(agents = new Map<string, Agent>()) {
       list: () => [...agents.values()],
       fallbackOwner: () => undefined,
       announce: () => {},
+      roleTemplate: () => '',
       handCrew: () => [],
       removedOrchestrator: () => undefined,
       answer: async () => ({ queued: false }),
@@ -73,6 +76,7 @@ function host(agents = new Map<string, Agent>()) {
       queueAfterTurn: () => {
         throw new Error('not here');
       },
+      dropNotices: () => 0,
       deliverAfterTurn: () => {},
       resume: () => Promise.reject(new Error('not here')),
       stop: () => Promise.reject(new Error('not here')),
@@ -94,6 +98,7 @@ function host(agents = new Map<string, Agent>()) {
       remove: () => {},
     },
     deleteAgent: async () => {},
+    closeAgent: async () => null,
     removeAsks: { ask: () => Promise.reject(new Error('not here')) },
     broadcast: () => {},
     log: () => {},
@@ -263,15 +268,15 @@ describe('crew events', () => {
     expect((await heard(start, { crew: true, kinds: ['finished'] })).lines).toEqual(['worker finished']);
   });
 
-  it("hears its crew's agents alone, and refuses an agent the user started by hand as read does", async () => {
+  it("hears its crew's agents alone, and waits on an agent the user started by hand when named", async () => {
     const { update, heard, handlers } = host();
     const { cursor: start } = await heard('now');
     update('failed', {}, 'outsider');
     update('failed');
     expect((await heard(start)).lines).toEqual(['worker failed']);
-    await expect(handlers['orchestrator.wait']({ token: 'me-token', sessionIds: ['outsider'], since: 'now', timeoutMs: 30 }, {})).rejects.toThrow(
-      /outsider is one the user started by hand: agents never act on the user's own agents/,
-    );
+    await expect(handlers['orchestrator.wait']({ token: 'me-token', sessionIds: ['outsider'], since: 'now', timeoutMs: 30 }, {})).resolves.toMatchObject({
+      agents: [{ sessionId: 'outsider' }],
+    });
   });
 
   it('waits on its whole crew without naming them', async () => {

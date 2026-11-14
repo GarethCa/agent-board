@@ -220,6 +220,7 @@ const CHANNELS: string[] = [
   'technical:set',
   'tracker:connect',
   'tracker:disconnect',
+  'tracker:issueFilters',
   'tracker:issues',
   'tracker:openLink',
   'tracker:projects',

@@ -1,8 +1,10 @@
 import {
   issueBranchName,
   TrackerError,
+  type IssueListOptions,
   type Tracker,
   type TrackerIssue,
+  type TrackerMilestone,
   type TrackerProject,
   type TrackerScope,
 } from './tracker.ts';
@@ -12,6 +14,11 @@ export const LINEAR_API_URL = 'https://api.linear.app/graphql';
 
 /** Linear's own page size cap. */
 const MAX_PAGE = 250;
+/**
+ * Projects, and milestones in each, that the picker's filters ask for. Linear refuses a query scored over 10,000
+ * points, and nested pages multiply: 50 × 50 keeps this one near 3,000, where 250 × 250 was about 75,000.
+ */
+const FILTER_PAGE = 50;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DEFAULT_LIMIT = 50;
 const SOURCE = 'Linear';
@@ -32,6 +39,12 @@ const QUERIES = {
   teams: 'query Teams { teams(first: 250) { nodes { key name } } }',
   projects: `query Projects($filter: ProjectFilter, $first: Int) {
     projects(filter: $filter, first: $first, orderBy: updatedAt) { nodes { ${PROJECT_FIELDS} } }
+  }`,
+  // Its own query, not `projects` with more fields, so that one's recorded answers still match.
+  issueFilters: `query IssueFilters($filter: ProjectFilter, $first: Int) {
+    projects(filter: $filter, first: $first, orderBy: updatedAt) {
+      nodes { id name projectMilestones(first: ${FILTER_PAGE}) { nodes { id name } } }
+    }
   }`,
   issues: `query Issues($filter: IssueFilter, $first: Int) {
     issues(filter: $filter, first: $first, orderBy: updatedAt) { nodes { ${ISSUE_FIELDS} } }
@@ -84,10 +97,12 @@ export function createLinearTracker(options: LinearTrackerOptions): Tracker {
   };
 
   const page = (limit = DEFAULT_LIMIT) => Math.max(1, Math.min(limit, MAX_PAGE));
-  const teamFilter = (scope: string, project?: string) => ({
+  const teamFilter = (scope: string, { project, milestone }: IssueListOptions) => ({
     team: { key: { eq: scope } },
     ...(project === undefined ? {} : { project: { id: { eq: project } } }),
+    ...(milestone === undefined ? {} : { projectMilestone: { id: { eq: milestone } } }),
   });
+  const openProjects = { status: { type: { nin: ['completed', 'canceled'] } } };
   const projectsOf = async (scope: string, filter: Record<string, unknown>) => {
     const data = await request<unknown>(QUERIES.projects, {
       // accessibleTeams is a collection filter: it takes `some` (or `every`) of the teams, not a team's fields.
@@ -110,21 +125,37 @@ export function createLinearTracker(options: LinearTrackerOptions): Tracker {
       // Teams are few: one page of them holds every team.
       return (await this.scopes()).find((team) => team.key === key);
     },
-    projects: (scope) => projectsOf(scope, { status: { type: { nin: ['completed', 'canceled'] } } }),
+    projects: (scope) => projectsOf(scope, openProjects),
+    async issueFilters(scope) {
+      const data = await request<unknown>(QUERIES.issueFilters, {
+        filter: { accessibleTeams: { some: { key: { eq: scope } } }, ...openProjects },
+        first: FILTER_PAGE,
+      });
+      const projects = nodesOf(data, 'projects', SOURCE).map((node) => {
+        const project = objectOf(node, 'a project', SOURCE);
+        return {
+          id: stringOf(project, 'id', 'a project id', SOURCE),
+          name: stringOf(project, 'name', 'a project name', SOURCE),
+          milestones: nodesOf(project, 'projectMilestones', SOURCE).map(toMilestone),
+        };
+      });
+      // A Linear milestone is always a project's.
+      return { projects, milestones: [] };
+    },
     async getProject(scope, id) {
       // Linear answers an ID that is not a UUID with an invalid-argument error, not an empty list.
       if (!UUID.test(id)) return undefined;
       return (await projectsOf(scope, { id: { eq: id } }))[0];
     },
-    async listIssues(scope, { limit, project } = {}) {
-      const filter = { ...teamFilter(scope, project), state: { type: { nin: ['completed', 'canceled'] } } };
+    async listIssues(scope, { limit, ...only } = {}) {
+      const filter = { ...teamFilter(scope, only), state: { type: { nin: ['completed', 'canceled'] } } };
       const data = await request<unknown>(QUERIES.issues, { filter, first: page(limit) });
       return nodesOf(data, 'issues', SOURCE).map(toIssue);
     },
-    async searchIssues(scope, text, { limit, project } = {}) {
+    async searchIssues(scope, text, { limit, ...only } = {}) {
       const data = await request<unknown>(QUERIES.search, {
         term: text,
-        filter: teamFilter(scope, project),
+        filter: teamFilter(scope, only),
         first: page(limit),
       });
       return nodesOf(data, 'searchIssues', SOURCE).map(toIssue);
@@ -181,6 +212,14 @@ function toProject(node: unknown): TrackerProject {
     description: typeof project.description === 'string' ? project.description : '',
     state: stringOf(objectOf(project.status, 'a project status', SOURCE), 'name', 'a project status', SOURCE),
     progress: typeof project.progress === 'number' ? project.progress : 0,
+  };
+}
+
+function toMilestone(node: unknown): TrackerMilestone {
+  const milestone = objectOf(node, 'a milestone', SOURCE);
+  return {
+    id: stringOf(milestone, 'id', 'a milestone id', SOURCE),
+    name: stringOf(milestone, 'name', 'a milestone name', SOURCE),
   };
 }
 

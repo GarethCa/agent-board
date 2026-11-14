@@ -54,6 +54,8 @@ export type ZoneNodeType = Node<
     shelves?: ShelfView;
     /** A zone in clusters' outlines and labels, as drawn (`withShelves`). */
     clusters?: ClusterView;
+    /** Whether it holds its stage board, as drawn (`withStageBoards`). */
+    stageBoard?: true;
   },
   'zone'
 >;
@@ -127,6 +129,7 @@ export const ZoneBindingContext = createContext<ZoneBindingActions>({
   editRoleTemplates: () => {},
   startCrew: () => {},
   crewLibrary: () => {},
+  addStageBoard: () => {},
 });
 
 /** The fill opacity the theme gives a zone that has none of its own, in percent. */
@@ -192,7 +195,7 @@ export function zoneNode(zone: Zone): ZoneNodeType {
 
 /** A zone under Classic: a tinted region with a labelled tab. */
 function ClassicZone({
-  data: { zone, tileCount = 0, resizeMin, shelves, clusters },
+  data: { zone, tileCount = 0, resizeMin, shelves, clusters, stageBoard },
   selected,
   positionAbsoluteX,
   positionAbsoluteY,
@@ -381,7 +384,7 @@ function ClassicZone({
   });
   // Its New crew lists the library as it is now, and this zone is drawn only when something of its own changes.
   usePrefabs();
-  const menu = zoneMenu({ zone, folded: foldedEntries, themeFill: themeFillOpacity(), rename: renaming.startSoon, actions: binding });
+  const menu = zoneMenu({ zone, folded: foldedEntries, themeFill: themeFillOpacity(), rename: renaming.startSoon, stageBoard, actions: binding });
   useMenuBarSection('project', selected === true, menu);
   return (
     <div

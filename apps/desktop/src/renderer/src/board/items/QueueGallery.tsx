@@ -1,4 +1,4 @@
-import { QUEUE_CARD_SIZE, LIST_CARD_FOLDED_SIZE, ZONE_COLORS, type QueueJob } from '@agent-board/daemon/protocol';
+import { QUEUE_CARD_SIZE, LIST_CARD_FOLDED_SIZE, ZONE_COLORS, QUEUE_LATER, type QueueJob } from '@agent-board/daemon/protocol';
 import { PopoverPreview } from '../../ui';
 import { jobBrief } from '@agent-board/daemon/memory-lines';
 import type { Agent } from '@agent-board/daemon/protocol';
@@ -51,6 +51,7 @@ const JOBS: QueueJob[] = [
   job('j4', 'Paginate /orders', { state: 'taken', takenBy: impl3, takenAt: at(11, 5) }),
   job('j5', 'Retry failed refunds', { link: 'https://example.test/acme/api/issues/91' }),
   job('j6', 'Fix the flaky cart test', { madeBy: you }),
+  job('j8', 'Move the docs to the new site', { hiddenUntil: QUEUE_LATER, madeBy: you }),
   job('j7', 'Cache product images', { state: 'done', doneBy: impl2, doneAt: at(9, 40) }),
 ];
 
@@ -60,6 +61,9 @@ const TO_LOOK_AT: QueueJob[] = [
   job('u2', 'Split the checkout: the plan', { madeBy: { kind: 'agent', sessionId: 'lead-web', name: 'lead · web' }, kind: 'backlog', link: 'docs/plans/checkout-split.md' }),
   job('u3', 'Load-test findings', { kind: 'read', madeBy: impl3 }),
 ];
+
+/** The user's queue open as a card, with one item marked Later at its foot. */
+const TO_LOOK_AT_LATER: QueueJob[] = [...TO_LOOK_AT, job('u4', 'Rename the billing tables', { kind: 'backlog', hiddenUntil: QUEUE_LATER, link: 'https://example.test/acme/api/issues/97' })];
 
 const noop = () => {};
 const NOW = new Date(2026, 10, 5, 15, 0);
@@ -89,10 +93,10 @@ export function QueueGallery() {
     <section className="listcard-gallery" data-testid="queue-gallery" aria-label="Queue">
       <div className="listcard-gallery-row">
         <div style={card} data-testid="queue-gallery-card">
-          <QueueCardView title="api jobs" scope="Zone · api" zoneColor={ZONE} zoneName="api" audience="agents" jobs={JOBS} onAdd={noop} onOpen={noop} fresh="j4" />
+          <QueueCardView title="api jobs" scope="Zone · api" zoneColor={ZONE} zoneName="api" audience="agents" jobs={JOBS} onAdd={noop} onOpen={noop} onMoveUp={noop} fresh="j4" />
         </div>
         <div style={card} data-testid="queue-gallery-inbox">
-          <QueueCardView title="To look at" scope="Board" audience="user" jobs={TO_LOOK_AT} onAdd={noop} onOpen={noop} />
+          <QueueCardView title="To look at" scope="Board" audience="user" jobs={TO_LOOK_AT_LATER} onAdd={noop} onOpen={noop} onMoveUp={noop} />
         </div>
         <div style={card} data-testid="queue-gallery-empty">
           <QueueCardView title="web jobs" scope="Zone · web" zoneName="web" audience="agents" jobs={[]} onAdd={noop} onOpen={noop} onAudience={noop} />
@@ -126,6 +130,7 @@ export function QueueGallery() {
               onMove={noop}
               onDone={noop}
               onDrop={noop}
+              onLater={noop}
               onRemove={noop}
               autoFocus={false}
             />

@@ -4,11 +4,11 @@ import { migrate } from '../src/migrate.ts';
 import { COMPACT_WINDOW_RANGE } from '../src/protocol.ts';
 import { createSettings, defaultEffort } from '../src/settings.ts';
 
-function setup() {
+function setup(env: NodeJS.ProcessEnv = {}) {
   const db = new DatabaseSync(':memory:');
   migrate(db);
   onTestFinished(() => db.close());
-  const settings = createSettings(db, () => {});
+  const settings = createSettings(db, () => {}, env);
   const set = (params: object) => (settings.handlers<null>()['settings.set'] as (params: object, context: null) => unknown)(params, null);
   return { settings, set };
 }
@@ -21,6 +21,25 @@ describe('the spacing new zones take', () => {
     expect(settings.get().arrangeSpacing).toBe('compact');
     expect(() => set({ arrangeSpacing: 'huge' })).toThrow(/arrangeSpacing must be one of compact, normal, roomy/);
     expect(settings.get().arrangeSpacing).toBe('compact');
+  });
+});
+
+describe('a FORCE_HYPERLINK in the environment agents start from', () => {
+  it('is reported as on or off when the user set it, and null when they did not', () => {
+    expect(setup().settings.get().clickableLinksFromEnvironment).toBeNull();
+    expect(setup({ FORCE_HYPERLINK: '1' }).settings.get().clickableLinksFromEnvironment).toBe(true);
+    expect(setup({ FORCE_HYPERLINK: '' }).settings.get().clickableLinksFromEnvironment).toBe(true);
+    expect(setup({ FORCE_HYPERLINK: '0' }).settings.get().clickableLinksFromEnvironment).toBe(false);
+  });
+
+  it("is not the user's when it carries agent-board's marker", () => {
+    expect(setup({ FORCE_HYPERLINK: '1', AGENT_BOARD_FORCED_HYPERLINK: '1' }).settings.get().clickableLinksFromEnvironment).toBeNull();
+  });
+
+  it('cannot be changed with settings.set, and the switch underneath keeps its own value', () => {
+    const { settings, set } = setup({ FORCE_HYPERLINK: '1' });
+    set({ clickableLinksFromEnvironment: false, clickableLinks: false });
+    expect(settings.get()).toMatchObject({ clickableLinksFromEnvironment: true, clickableLinks: false });
   });
 });
 

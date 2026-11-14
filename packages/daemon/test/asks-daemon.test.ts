@@ -7,12 +7,13 @@ import { connectTestClient, recordEvents, startTestDaemon, tempDataDir, tempRepo
 const SIZE = { cols: 120, rows: 40 };
 
 /** A daemon whose agents run the fake harnesses' `ask-plan` scenario, and a zone to start them in. */
-async function askDaemon({ mcpCancel = true } = {}) {
-  const daemon = await startTestDaemon({ worktreesDir: tempDataDir(), agentEnv: fakeHarnessEnv({ scenario: 'ask-plan', home: tempDataDir(), mcpCancel }) });
+/** A daemon on the fake harness's ask-plan scenario; given `dataDir` and `home` again, the same board after a restart. */
+async function askDaemon({ mcpCancel = true, dataDir = tempDataDir(), home = tempDataDir() } = {}) {
+  const daemon = await startTestDaemon({ dataDir, worktreesDir: tempDataDir(), agentEnv: fakeHarnessEnv({ scenario: 'ask-plan', home, mcpCancel }) });
   const client = await connectTestClient(daemon);
   const recorder = recordEvents(client);
-  const zone = await client.call('zone.add', { path: tempRepo(), x: 0, y: 0, name: 'storefront' });
   const start = async (prompt: string, harness: Harness = 'claude') => {
+    const zone = (await client.call('zone.list')).at(0) ?? (await client.call('zone.add', { path: tempRepo(), x: 0, y: 0, name: 'storefront' }));
     const agent = await client.call('agent.spawn', { zoneId: zone.id, harness, prompt, name: 'Pick a cache', ...SIZE });
     await client.call('session.attach', { sessionId: agent.sessionId });
     return agent;
@@ -153,6 +154,25 @@ describe('an agent asking the user through the board MCP', () => {
     await recorder.waitForText(agent.sessionId, '[agent-board] The user asked for changes to plan v1.');
     await recorder.waitForText(agent.sessionId, 'Add a down step');
     expect((await until(agent.sessionId, (seen) => seen.plan?.decision?.outcome === 'changes-requested')).plan).toMatchObject({ version: 1, decision: { comments: 'Add a down step' } });
+  });
+
+  it('keeps a left plan through a daemon restart, and types a decision made meanwhile once the agent is resumed', async () => {
+    const dataDir = tempDataDir();
+    const home = tempDataDir();
+    const first = await askDaemon({ dataDir, home });
+    const agent = await first.start('Plan doc by CLI: docs/migration.md');
+    await first.recorder.waitForText(agent.sessionId, 'Plan left with the board.');
+    await first.until(agent.sessionId, (seen) => seen.plan?.decision === null && seen.plan.left && seen.state === 'idle');
+    await first.daemon.stop();
+
+    const second = await askDaemon({ dataDir, home });
+    const kept = (await second.client.call('plan.list', { sessionId: agent.sessionId })).at(-1)!;
+    expect(kept).toMatchObject({ version: 1, left: true, decision: null });
+    // Decided while the agent is stopped by the restart: it is typed once the agent is back at its prompt.
+    await second.client.call('plan.decide', { sessionId: agent.sessionId, planId: kept.id, outcome: 'approved' });
+    await second.client.call('agent.resume', { sessionId: agent.sessionId });
+    await second.client.call('session.attach', { sessionId: agent.sessionId });
+    await second.recorder.waitForText(agent.sessionId, '[agent-board] The user approved plan v1. Go ahead with it.');
   });
 
   it('keeps a left plan through an interrupt, which an idle agent refuses, and types the decision once', async () => {

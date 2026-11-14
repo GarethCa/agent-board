@@ -19,6 +19,7 @@ import {
   type NodeChange,
   type NodeTypes,
   type Rect,
+  type XYPosition,
 } from '@xyflow/react';
 import {
   DEFAULT_ZONE_SIZE,
@@ -46,6 +47,7 @@ import {
   type ZoneBinding,
   type TileMove,
   type ZoneLayout,
+  isLayoutRule,
   zoneLayoutChoiceFields,
   zoneLayoutChoiceOf,
   zoneSnapshot,
@@ -125,10 +127,13 @@ import { DrainSheetHost } from './items/DrainSheet';
 import { QueueFocusHost } from './items/QueueFocus';
 import { FLOW_EDGE_TYPE, flowEdgeIdOf, flowEdgeIdsOf, flowEdges, type FlowRailData, handoffEnds, HandoffsContext, isFlowEdge, NEW_EDGE_LABEL, panClear } from './flow-edges';
 import { useFlowEdges } from './use-flow-edges';
+import { withTuckedClocks } from './tucked-clocks';
 import { foldedSessionIds, foldedToast, roomOf, unfoldedToast, unfoldMoves, withFoldedExternals, withFoldedZones } from './fold-zone';
 import { letGoFoldedTerminals } from '../session/TerminalPane';
 import { foldedStack, laidOutTile, pinnedLead, withShelves } from './shelves';
+import { newStageBoardPlace, stageBoardDropPlace, stageBoardDrops, stageBoardResizes, withStageBoards } from './stage-boards';
 import { ShelvesContext } from './ShelvesView';
+import { useStageLater } from './use-stage-later';
 import { useShelves } from './use-shelves';
 import { useIncoming } from './use-incoming';
 import { ConnectionLine, HandingOffContext } from './ConnectionLine';
@@ -142,7 +147,9 @@ import { handlesLost } from './handle-bounds';
 import { IssueCardDialog } from './IssueCardDialog';
 import type { PickedIssue } from './IssuePicker';
 import { IssueCardContext, type IssueCardActions } from './items/IssueNode';
-import { withSavedLayout, withZone } from './zone-nodes';
+import { rebasedReplaces } from './node-replace';
+import { runOnceCreated } from './once-created';
+import { droppedLayout, withSavedLayout, withZone } from './zone-nodes';
 import type { States } from './editing/history';
 import { SelectionBox, SnapGuides } from './editing/SelectionOverlays';
 import { useAskClaude } from './ask/AskClaude';
@@ -159,7 +166,7 @@ import { useEditing } from './editing/use-editing';
 import { renameDirect, renameKey, paneLabel, RenameRequestContext, type RenameTarget } from './rename';
 import { zoneDeleteText, type ZoneToDelete } from './editing/delete-zones';
 import { historyKey, itemChange, patched, useHistory, type BoardState, type Change, type DissolvedGroup } from './editing/use-history';
-import { layoutChoiceStep, resizeMove, tileMoveStep, tileStepAction } from './hand-moves';
+import { layoutChoiceStep, resizeMove, tileMoveStep, tileStepAction, zoneTidy } from './hand-moves';
 import { useSnapping } from './editing/use-snapping';
 import { tidySize, VIEW_FOLLOW_DELAY_MS } from './expanded';
 import { tileOpenAction } from './click-opens';
@@ -199,7 +206,8 @@ import type { BoardRequest, ScreenPoint, WindowTarget } from '../../../preload/a
 import { VIEW_KEYS, viewSaver } from '../../../shared/view-saver';
 import { useProvideBoardCommands, type BoardCommands } from './commands';
 import { tileSizeOf, withTileSize } from './tile-size';
-import { AGENT_TILE_SIZE, freeItemSpot, freeSpotFor, isFolded, rotatedBounds, sizedFootprint, TILE_GAP, ZONE_PADDING, type Point } from '@agent-board/daemon/board-layout';
+import { AGENT_TILE_SIZE, freeItemSpot, freeSpotFor, isFolded, rotatedBounds, sizedFootprint, TILE_GAP, ZONE_PADDING, zoneGrid, type Point } from '@agent-board/daemon/board-layout';
+import { STAGE_BOARD_KIND } from '@agent-board/daemon/stage-board';
 import { arrangeBoard as arrangeBoardLayout } from '@agent-board/daemon/arrange-board';
 import { tidyLoose as tidyLooseLayout, tidyZone as tidyZoneLayout } from '@agent-board/daemon/board-tidy';
 import { LinkIssueDialog } from './LinkIssueDialog';
@@ -523,12 +531,26 @@ function BoardView() {
     () => (crewsKey === '' ? [] : crewsKey.split('\n').map((members) => members.split(' ').map((id) => tileNodeId('agent', id)))),
     [crewsKey],
   );
-  /** React Flow's node changes applied, with an orchestrator's crew dragged along with it. */
+  /** Where the changes put each node they moved since the drag began, snapped: ahead of what the board has drawn. */
+  const placed = useRef(new Map<string, XYPosition>());
+  const flowStore = useStoreApi<BoardNode>();
+  /**
+   * React Flow's node changes applied, with an orchestrator's crew dragged along with it. A replace is laid over the
+   * board's node as it is by then, from the copy React Flow made it from (read now, before that copy catches up).
+   */
   const applyNodeChanges = useCallback(
     (changes: NodeChange<BoardNode>[]) => {
-      setNodes((current) => applyFlowNodeChanges(withCrewFollowing(changes, current), current));
+      const bases = new Map<string, BoardNode>();
+      const { nodeLookup } = flowStore.getState();
+      for (const change of changes) {
+        if (change.type === 'position' && change.position !== undefined) placed.current.set(change.id, change.position);
+        if (change.type !== 'replace') continue;
+        const base = nodeLookup.get(change.id)?.internals.userNode;
+        if (base !== undefined) bases.set(change.id, base);
+      }
+      setNodes((current) => applyFlowNodeChanges(withCrewFollowing(rebasedReplaces(changes, bases, current), current), current));
     },
-    [setNodes],
+    [setNodes, flowStore],
   );
   /** The agent the user asked to open from its notification, until the board has its agents to open it. */
   const [openRequest, setOpenRequest] = useState<string>();
@@ -555,7 +577,6 @@ function BoardView() {
   /** The external session being resumed in agent-board, and where the board draws a tile it slotted into its zone. */
   const [resumingExternal, setResumingExternal] = useState<{ session: ExternalSession; position?: { x: number; y: number } }>();
   const { flowToScreenPosition, getInternalNode, getNodes, getZoom, screenToFlowPosition, setViewport, updateNodeData } = useReactFlow<BoardNode>();
-  const flowStore = useStoreApi<BoardNode>();
 
   /**
    * Brings a part of the board into view, zooming out if it must but never in. Not `fitView({ nodes })`: that waits for
@@ -715,15 +736,24 @@ function BoardView() {
   useCaptureReady(loaded);
   useChromeFolds(container, loaded);
   useMeasuredBoxes(nodes, shown, expandedRef.current, agentNoteLook);
-  // The shelved zones' work on their shelves, as drawn only: what the user dragged and saved stays as it was.
+  // The shelved zones' work on their shelves, and a stage board's on its block, as drawn only: what the user dragged and
+  // saved stays as it was.
   const shelves = useShelves();
+  const stageLater = useStageLater(shown);
   const shelfLinks = useMemo(() => flow.edges.map((edge) => ({ from: tileNodeId('agent', edge.from), to: tileNodeId('agent', edge.to) })), [flow.edges]);
   const shelved = useMemo(
-    () => withShelves(shown, { agents, links: shelfLinks, shows: needsYouShows, choice: shelves.choice }),
-    [shown, agents, shelfLinks, needsYouShows, shelves.choice],
+    () =>
+      withStageBoards(withShelves(shown, { agents, links: shelfLinks, shows: needsYouShows, choice: shelves.choice }), {
+        agents,
+        links: shelfLinks,
+        shows: needsYouShows,
+        later: stageLater,
+      }),
+    [shown, agents, shelfLinks, needsYouShows, shelves.choice, stageLater],
   );
   const shelvedRef = useRef(shelved);
   shelvedRef.current = shelved;
+  const dragFrom = useRef(new Map<string, { position: { x: number; y: number }; zIndex: number | undefined }>());
   const { openStack, showDone } = shelves;
   /**
    * An agent folded out of sight in a zone laid out by status, shown: Done shown if that is where it is, its stack fanned
@@ -739,8 +769,9 @@ function BoardView() {
     [openStack, showDone],
   );
   const shelvesActions = useMemo(() => ({ toggleStack: shelves.toggleStack, toggleDone: shelves.toggleDone, shows: needsYouShows }), [shelves.toggleStack, shelves.toggleDone, needsYouShows]);
-  // The board's nodes as drawn: a shelved zone's work on its shelves, a folded zone as a chip with nothing of its inside.
-  const drawn = useMemo(() => withFoldedZones(shelved), [shelved]);
+  // The board's nodes as drawn: a shelved zone's work on its shelves, the clocks a Spine zone set aside as its "+N" chip,
+  // a folded zone as a chip with nothing of its inside.
+  const drawn = useMemo(() => withFoldedZones(withTuckedClocks(shelved)), [shelved]);
   // A folded zone's terminals are let go whatever the keep-terminals setting says: that is the memory it frees.
   const foldedSessions = useMemo(
     () => [...foldedSessionIds(nodes.filter(isZone).map((node) => node.data.zone), agents, shells ?? [])].sort().join('\n'),
@@ -1005,8 +1036,11 @@ function BoardView() {
           const when = applies === 'after-turn' ? 'once it is back at its prompt' : applies === 'restart' ? 'when it restarts' : undefined;
           if (when !== undefined) toasts.show({ tone: 'info', message: `${agent.name} takes ${effort === null ? 'its default' : EFFORT_LABELS[effort]} reasoning ${when}.` });
         }, report("change the agent's reasoning")),
-      setRole: (sessionId, role) =>
-        void window.agentBoard.agents.setRole(sessionId, role).then(agentHeard, report("change the agent's role")),
+      setRole: (sessionId, role, sendTemplate) =>
+        void window.agentBoard.agents.setRole(sessionId, role, sendTemplate).then(({ template, ...agent }) => {
+          agentHeard(agent);
+          if (template === 'none') toasts.show({ tone: 'info', message: `${agent.roleName ?? agent.role ?? 'That role'} has no template, so nothing was sent to ${agent.name}.` });
+        }, report(sendTemplate === true ? "give the agent its role's template" : "change the agent's role")),
       openLink: (url) => void window.agentBoard.trackers.openLink(url).catch(report('open the link')),
       // An ended one is forgotten at once; one still running is only taken off the board, which it is told first.
       dismissExternal(id) {
@@ -1263,7 +1297,7 @@ function BoardView() {
   const absoluteOf = (node: BoardNode) => getInternalNode(node.id)?.internals.positionAbsolute ?? node.position;
 
   /** Moves a dragged tile into the zone it was dropped on, or out onto the board, in front of the others, and saves where it is. */
-  const tileDropped = (node: TileNodeType) => {
+  const tileDropped = (node: TileNodeType, coalesce?: string) => {
     const at = absoluteOf(node);
     // Dropped onto another tile, one of the two expanded, the two may overlap: after the move, which ends any pair before.
     const shown = getNodes();
@@ -1274,7 +1308,7 @@ function BoardView() {
     // Measured from where it is drawn, as its crew is.
     const drawn = shown.find((known): known is TileNodeType => known.id === node.id && isSessionTile(known)) ?? node;
     const crew = crewMoves(shown, drawn, move, landingRects(shown, move.zoneId, drawn));
-    const step = crew.length === 0 ? undefined : `crew:${node.id}:${Date.now()}`;
+    const step = coalesce ?? (crew.length === 0 ? undefined : `crew:${node.id}:${Date.now()}`);
     moveTile(node.id, node.data, move, step);
     if (crew.length > 0) {
       const following = new Set(crew.map((member) => member.node.id));
@@ -1420,11 +1454,21 @@ function BoardView() {
     [getNodes],
   );
 
-  /** Runs `call` once the daemon has the item `id`: at once, or when the create this window sent for it is done. */
-  const onceCreated = useCallback(<T,>(id: string, call: () => Promise<T>): Promise<T> => {
-    const pending = pendingCreates.current.get(id);
-    return pending === undefined ? call() : pending.then(call);
+  /** Whether the window is going (closed, reloaded, the app quits): no answer comes back to it from then on. */
+  const leaving = useRef(false);
+  useEffect(() => {
+    const leave = () => (leaving.current = true);
+    // Capturing, so it is set before the editors' own `pagehide` saves run: their effects, and so their listeners, come
+    // before the board's. It is never set back, as Electron keeps no page in a back/forward cache to show again.
+    window.addEventListener('pagehide', leave, true);
+    return () => window.removeEventListener('pagehide', leave, true);
   }, []);
+
+  /** Runs `call` once the daemon has the item `id` (see `runOnceCreated`). */
+  const onceCreated = useCallback(
+    <T,>(id: string, call: () => Promise<T>): Promise<T> => runOnceCreated(pendingCreates.current.get(id), leaving.current, call),
+    [],
+  );
 
   /**
    * Stops a crew card's crew, the user having said yes, then runs `then`: the daemon checks and logs the stop as any
@@ -1516,6 +1560,12 @@ function BoardView() {
       openLink: (url) => void window.agentBoard.trackers.openLink(url).catch(report('open the link')),
     };
   }, [setNodes, report, itemLabel, onceCreated, history, crewCards, takeItem]);
+
+  // A stage board is as big as its stages: its size is saved as it changes, out of the undo history, so the zone's layout
+  // keeps out of its way.
+  useEffect(() => {
+    for (const size of stageBoardResizes(shelved)) itemActions.update(size, undefined, { silent: true });
+  }, [shelved, itemActions]);
 
   /** The `z` above every item's. */
   const topZ = useCallback(() => Math.max(0, ...nodesRef.current.filter(isItemNode).map((node) => node.data.item.z)), []);
@@ -1934,9 +1984,15 @@ function BoardView() {
     (node: ItemNodeType) => {
       const absolute = getInternalNode(node.id)?.internals.positionAbsolute ?? node.position;
       const size = { width: node.width ?? node.data.item.width, height: node.height ?? node.data.item.height };
-      itemActions.update({ id: node.data.item.id, ...placeOnBoard(absolute, size, zoneLayouts()) });
+      // A stage board belongs to its zone: the daemon would refuse it anywhere else, so it stays in it.
+      const zone = node.data.item.kind === STAGE_BOARD_KIND ? getNodes().filter(isZone).find((each) => each.id === node.parentId) : undefined;
+      const place =
+        zone === undefined
+          ? placeOnBoard(absolute, size, zoneLayouts())
+          : stageBoardDropPlace(absolute, size, { id: zone.id, ...layoutOf(zone) }, zoneGrid(zone.data.zone.spacing).gaps.padding);
+      itemActions.update({ id: node.data.item.id, ...place });
     },
-    [getInternalNode, zoneLayouts, itemActions],
+    [getInternalNode, getNodes, zoneLayouts, itemActions],
   );
 
   /** Shows a zone's new tracker setting on its node. */
@@ -2021,9 +2077,11 @@ function BoardView() {
     (zoneId: string, spacing?: ArrangeSpacing) => {
       const zone = nodesRef.current.filter(isZone).find((node) => node.id === zoneId);
       // On shelves or in clusters the zone lays itself out: a tidy would move the places its tiles aren't drawn at, and
-      // Free would no longer be as it was.
-      // With a layout rule, the rule lays it out.
-      if (zone === undefined || zone.data.zone.layoutMode !== 'free' || zone.data.zone.layoutRule !== 'off') return;
+      // Free would no longer be as it was. Spine keeps the column each band went to, so a Tidy has the daemon lay them out
+      // afresh; another rule lays the zone out itself.
+      const tidy = zone === undefined ? undefined : zoneTidy(zone.data.zone, window.agentBoard.zones);
+      if (tidy?.kind === 'byRule') tidy.saved.then((saved) => setNodes((current) => withZone(current, saved)), report('tidy the zone'));
+      if (zone === undefined || tidy?.kind !== 'rows') return;
       const children = nodesRef.current.filter((node) => node.parentId === zoneId);
       const tiles = children.filter(isSessionTile);
       const items = children.filter(isItemNode).map((node) => node.data.item);
@@ -2038,7 +2096,7 @@ function BoardView() {
       freeOverlaps([...positions.keys()]);
       if (size.width !== layout.width || size.height !== layout.height) saveZoneLayout(zoneId, { ...layout, ...size });
     },
-    [moveTilesTo, saveZoneLayout, tidySizeOf],
+    [moveTilesTo, report, saveZoneLayout, setNodes, tidySizeOf],
   );
 
   /** What deleting `zones` leaves of each: the tiles that stay loose and the connectors that go with it. */
@@ -2747,9 +2805,9 @@ function BoardView() {
       setLayoutMode(zone, choice) {
         const was = zoneLayoutChoiceOf(zone);
         // Shelves and clusters only draw the zone: no tile's saved place changes, so Free again shows it as it was. A rule
-        // (lanes) moves its tiles, so picking one, or leaving one, is a step to undo: the layout, and each tile's place.
+        // (spine, lanes) moves its tiles, so picking one, or leaving one, is a step to undo: the layout, and each tile's place.
         const ruledBefore = zone.layoutRule !== 'off';
-        const places = choice === 'lanes' || ruledBefore ? zoneTilePlaces(zone.id) : [];
+        const places = isLayoutRule(choice) || ruledBefore ? zoneTilePlaces(zone.id) : [];
         window.agentBoard.zones.configure(zone.id, zoneLayoutChoiceFields(choice)).then((saved) => {
           setNodes((current) => withZone(current, saved));
           const step = layoutChoiceStep(zone.id, was, choice, ruledBefore, places);
@@ -2842,8 +2900,16 @@ function BoardView() {
         if (prefab !== undefined) setCrewFlow({ kind: 'prompt', prefab, zone });
       },
       crewLibrary: (zone: Zone) => setCrewFlow({ kind: 'library', zone }),
+      // Under what stays outside it, selected so it can be dragged where it is wanted; the daemon keeps it to one a zone.
+      addStageBoard: (zone: Zone) => {
+        const { size, newData } = ITEM_KINDS.stages;
+        const id = crypto.randomUUID();
+        const at = newStageBoardPlace(zone.id, shelvedRef.current, agentsRef.current);
+        putItem({ id, kind: 'stages', zoneId: zone.id, ...at, ...size, z: topZ() + 1, rotation: 0, data: newData?.({}) ?? {}, createdAt: '', updatedAt: '' });
+        selectOnly(new Set([`${ITEM_NODE_PREFIX}${id}`]));
+      },
     }),
-    [setNodes, reloadExternals, toasts, report, tidyZone, deleteZones, history, makeRoomToUnfold, zoneTilePlaces],
+    [setNodes, reloadExternals, toasts, report, tidyZone, deleteZones, history, makeRoomToUnfold, zoneTilePlaces, putItem, topZ, selectOnly],
   );
   /**
    * Starts a shell tile loose on the board and opens its window, typing `command` into it if given (the PTY holds it
@@ -3268,6 +3334,7 @@ function BoardView() {
       className={handingOff ? 'board board-connecting board-drawing-flow' : connecting !== undefined ? 'board board-connecting' : 'board'}
       ref={container}
       data-mode={mode}
+      data-click-opens={clickOpens}
       onPointerMove={(event) => {
         pointer.current = { x: event.clientX, y: event.clientY };
       }}
@@ -3413,8 +3480,14 @@ function BoardView() {
                               // A press that moves less than this is a click.
                               nodeDragThreshold={DRAG_THRESHOLD}
                               onNodeDragStart={(event, _node, dragged) => {
+                                // Where each was saved, for a tile dropped on a stage board, which keeps that place.
+                                dragFrom.current = new Map(dragged.flatMap((node) => {
+                                  const stored = nodesRef.current.find((known) => known.id === node.id);
+                                  return stored === undefined ? [] : [[node.id, { position: stored.position, zIndex: stored.zIndex }] as const];
+                                }));
                                 tileMoves.onDragStart('touches' in event ? event.touches[0] : event, dragged);
                                 snapping.onDragStart(dragged);
+                                placed.current.clear();
                                 // A dragged tile comes to the front, over notes too, until it lands. An expanded one is over them already.
                                 const lifted = new Set(dragged.filter((node) => isSessionTile(node) && node.data.expanded !== true).map((node) => node.id));
                                 if (lifted.size > 0) {
@@ -3454,12 +3527,28 @@ function BoardView() {
                                   void moveTab({ kind: 'tab', shellId: (dragged[0] as TileNodeType).data.shell!.id, to: { owner: adopter } });
                                   return;
                                 }
-                                // Where it was last drawn: snapped, and under the pointer, which React Flow's own reckoning isn't.
+                                // Where the drag last put it: snapped, and under the pointer, which React Flow's own reckoning
+                                // isn't. A busy window may not have drawn it there yet, so not where it was last drawn.
                                 for (const node of dragged.filter(isZone)) {
-                                  saveLayout(node.id, layoutOf(nodesRef.current.filter(isZone).find((known) => known.id === node.id) ?? node));
+                                  const drawnZone = nodesRef.current.filter(isZone).find((known) => known.id === node.id) ?? node;
+                                  saveLayout(node.id, droppedLayout(drawnZone, placed.current.get(node.id)));
                                 }
                                 for (const node of dragged.filter(isItemNode)) itemDropped(node);
-                                for (const node of dragged.filter(isSessionTile)) tileDropped(node);
+                                for (const node of dragged.filter(isSessionTile)) {
+                                  // Dropped on a stage board's block, an agent joins it; dragged off the one it was on, it
+                                  // leaves. One that stays in its zone's block keeps the place it had, for when it leaves.
+                                  const subject = tileSubject(node.id);
+                                  const { width, height } = sizeOfNode(node);
+                                  const corner = absoluteOf(node);
+                                  const drop = subject?.kind === 'agent' ? stageBoardDrops(subject.id, { x: corner.x + width / 2, y: corner.y + height / 2 }, shelvedRef.current, agents) : undefined;
+                                  // The block's change and the tile's move undo as one step.
+                                  const step = drop === undefined || drop.changes.length === 0 ? undefined : `stage-drop:${node.id}:${Date.now()}`;
+                                  for (const change of drop?.changes ?? []) itemActions.update({ id: change.id, data: { ...change.data } }, step);
+                                  const from = dragFrom.current.get(node.id);
+                                  if (drop?.kept === true && from !== undefined) {
+                                    setNodes((current) => current.map((known) => (known.id === node.id ? ({ ...known, ...from } as BoardNode) : known)));
+                                  } else tileDropped(node, step);
+                                }
                                 // A start's tile goes where it was dropped, in a zone or out of one; it has no crew or undo yet.
                                 for (const node of dragged.filter(isStartTile)) {
                                   tileMoves.moveTile(node.id, node.data, placeOnBoard(absoluteOf(node), compactSizeOf(node), zoneLayouts()));

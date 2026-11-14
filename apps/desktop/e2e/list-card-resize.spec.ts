@@ -159,8 +159,14 @@ test('a memory, a queue, a steps card and a to-do list resize from a corner, kee
     const full = window.getByTestId('steps-full');
     await expect(full).toBeVisible();
     await expect(full.getByTestId('steps-full-step')).toHaveCount(24);
-    await expect(full.getByTestId('steps-full-step').first()).toContainText(LONG);
-    await expect(full.getByTestId('steps-full-step').first()).toHaveAttribute('data-state', 'done');
+    // What is left comes first, then the finished steps under Done, in place order.
+    await expect(full.getByTestId('steps-full-step').first()).toContainText('Step 3');
+    await expect(full.getByTestId('steps-full-step').first()).not.toHaveAttribute('data-state', 'done');
+    const done = full.getByRole('region', { name: 'Done' }).getByTestId('steps-full-step');
+    await expect(done).toHaveCount(2);
+    await expect(done.first()).toContainText(LONG);
+    await expect(done.nth(1)).toContainText('Step 2');
+    await expect(done.first()).toHaveAttribute('data-state', 'done');
     await window.keyboard.press('Escape');
     await expect(full).toBeHidden();
 

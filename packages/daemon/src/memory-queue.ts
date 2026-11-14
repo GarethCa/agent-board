@@ -38,6 +38,7 @@ import {
   defaultQueueKind,
   isCardSize,
   isQueueWork,
+  QUEUE_LATER,
   queueKindOn,
   queueKindsFor,
   type Agent,
@@ -627,8 +628,13 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
     if (typeof result !== 'string' || result.trim().length > MAX_JOB_RESULT) throw invalidParams(`a result is at most ${MAX_JOB_RESULT} characters`);
     return result.trim();
   };
-  /** Put off for later, and not back yet: the user's queue doesn't show it. */
+  /** Put off, and not back yet: marked Later, or put off until a time still ahead. No take without a job, nor a drain, starts it. */
   const hidden = (row: JobRow, at = now()) => row.hidden_until !== null && row.hidden_until > at;
+  /** Refuses to start a job put off: it is moved up first. */
+  const notPutOff = (row: JobRow) => {
+    if (!hidden(row)) return;
+    throw invalidParams(row.hidden_until === QUEUE_LATER ? `#${row.id.slice(0, 8)} is marked Later: move it up first` : `#${row.id.slice(0, 8)} is put off until ${row.hidden_until}: show it again first`);
+  };
   /** When a job put off for later comes back: a time, as ISO 8601. */
   const laterParam = (until: unknown): string => {
     const at = typeof until === 'string' ? Date.parse(until) : Number.NaN;
@@ -670,14 +676,27 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
       };
       /** An open job of the user's queue, changed by the user alone: `doing` it is theirs to do. */
       const userOnly = (queue: BoardItem, ref: string, doing: string): JobRow => {
-        if (data.audience !== 'user') throw invalidParams(`“${data.title}” is for agents: only the user's queue has later and skip`);
+        if (data.audience !== 'user') throw invalidParams(`“${data.title}” is for agents: only the user's queue has skip`);
+        return ownRow(queue, ref, doing);
+      };
+      /** An open row of the user's queue, changed by the user alone. */
+      const ownRow = (queue: BoardItem, ref: string, doing: string): JobRow => {
         if (me !== null) throw outOfScope(`only the user ${doing} a row on their queue`);
         const row = jobFor(queue, ref);
         if (row.done_at !== null) throw invalidParams(`#${row.id.slice(0, 8)} is done: only an open one ${doing === 'skips' ? 'is skipped' : 'is put off'}`);
         return row;
       };
+      /** A waiting job of an agents' queue, marked Later or moved up by an agent or the user: not info, nor one taken, or starting. */
+      const waitingRow = (queue: BoardItem, ref: string): JobRow => {
+        const row = jobFor(queue, ref);
+        if (!agentsWork(row.kind)) throw invalidParams(`#${row.id.slice(0, 8)} is info: only a task, a request or a prompt is marked Later`);
+        if (row.done_at !== null) throw invalidParams(`#${row.id.slice(0, 8)} is done: only an open one is put off`);
+        if (row.taken_by !== null) throw invalidParams(`#${row.id.slice(0, 8)} is taken: it is its taker's until done, or dropped back`);
+        notStarting(row);
+        return row;
+      };
       // Finished, dropped or removed meanwhile, it would leave the starting agent with nothing: an edit or a move is fine.
-      if (change.action === 'done' || change.action === 'drop' || change.action === 'remove') {
+      if (change.action === 'done' || change.action === 'drop' || change.action === 'remove' || change.action === 'later') {
         const named = pick(jobRows(item.id), change.job, 'job');
         if (named !== undefined) notStarting(named);
       }
@@ -705,7 +724,7 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
           if (me === null) throw invalidParams('the user takes no job: hand one to an agent instead');
           if (data.audience === 'user') throw outOfScope(`“${data.title}” is the user's queue: its jobs are for them, not taken by agents`);
           const rows = jobRows(item.id);
-          const row = change.job === undefined ? rows.find((each) => agentsWork(each.kind) && each.taken_by === null && each.done_at === null && !starting.has(each.id)) : jobFor(item, change.job);
+          const row = change.job === undefined ? rows.find((each) => agentsWork(each.kind) && each.taken_by === null && each.done_at === null && !starting.has(each.id) && !hidden(each)) : jobFor(item, change.job);
           if (row === undefined) throw invalidParams(`“${data.title}” has no job waiting to be taken`);
           notStarting(row);
           if (!agentsWork(row.kind)) throw invalidParams(`#${row.id.slice(0, 8)} is ${row.kind}: only a task, a request or a prompt is taken`);
@@ -715,6 +734,7 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
             if (sameWho(taker, by)) return toJob(row);
             throw outOfScope(`${whoName(taker)} has job #${row.id.slice(0, 8)} already`);
           }
+          notPutOff(row);
           return putJob(item, { ...row, taken_by: JSON.stringify(by), taken_at: now() }, by, 'take');
         }
         case 'drop': {
@@ -732,8 +752,13 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
           return putJob(item, { ...row, taken_by: null, taken_at: null, done_by: JSON.stringify(by), done_at: now(), result, hidden_until: null }, by, 'done');
         }
         case 'later': {
-          const row = userOnly(item, change.job, 'puts off');
-          const until = change.until === null ? null : laterParam(change.until);
+          // Without `until`, marked Later (a time that never comes); null moves it up. A time is for the user's queue alone:
+          // nothing wakes an agents' drain as one passes.
+          const row = data.audience === 'user' ? ownRow(item, change.job, 'puts off') : waitingRow(item, change.job);
+          if (data.audience !== 'user' && change.until !== undefined && change.until !== null) throw invalidParams(`“${data.title}” is for agents: its jobs are marked Later, with no time, until moved up`);
+          const until = change.until === undefined ? QUEUE_LATER : change.until === null ? null : laterParam(change.until);
+          // Told it moved up, an agent that named the wrong job would never know.
+          if (data.audience !== 'user' && until === null && row.hidden_until === null) throw invalidParams(`#${row.id.slice(0, 8)} isn't marked Later: it waits in its place already`);
           if (until === row.hidden_until) return toJob(row);
           // Not a version, as a move isn't: the row is as it was, and twenty put-offs would push its edits out of its history.
           sql.hideJob.run(until, now(), row.id);
@@ -851,6 +876,7 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
       if (!agentsWork(before.kind)) throw invalidParams(`#${before.id.slice(0, 8)} is ${before.kind}: only a task, a request or a prompt is handed on`);
       if (before.done_at !== null || before.taken_by !== null) throw invalidParams(`job #${before.id.slice(0, 8)} isn't waiting: only a waiting job is handed on`);
       if (starting.has(before.id)) throw invalidParams(`an agent is starting for job #${before.id.slice(0, 8)}: it is that agent's`);
+      notPutOff(before);
       return putJob(item, { ...before, taken_by: taker, taken_at: now() }, USER, 'take');
     });
     /**
@@ -936,7 +962,7 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
       const rows = jobRows(item.id);
       const held = rows.filter((row) => row.taken_by !== null && row.done_at === null).length;
       // A job dropped back MAX_DRAIN_DROPS times is left for a person: drain doesn't start agent after agent on it.
-      const next = rows.find((row) => agentsWork(row.kind) && row.taken_by === null && row.done_at === null && row.drops < MAX_DRAIN_DROPS && !starting.has(row.id));
+      const next = rows.find((row) => agentsWork(row.kind) && row.taken_by === null && row.done_at === null && row.drops < MAX_DRAIN_DROPS && !starting.has(row.id) && !hidden(row));
       if (next === undefined || held >= settings.most) return;
       starting.add(next.id);
       let agent: Agent;

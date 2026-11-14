@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import type { DaemonSettings } from '@agent-board/daemon/protocol';
 import { useSimplified } from '../design';
-import { NOTIFY_WHEN, needsYouShowsFrom, showsInFrontSwitch } from './notify-when';
+import { mutedAgentsText, NOTIFY_WHEN, needsYouShowsFrom, showsInFrontSwitch } from './notify-when';
 import { useTechnicalDetails } from '../technical';
-import { Choice, Choices, Fieldset, Field, Hint, Select, Switch, Tag } from '../ui';
+import { Choice, Choices, Fieldset, Field, Hint, Readout, Select, Switch, Tag } from '../ui';
 
 type NotificationSettings = Pick<DaemonSettings, 'needsYouShows' | 'notifications' | 'notifyInFront'>;
 
@@ -72,9 +72,9 @@ export function NotificationsSetting({ muted, onError }: { muted: number; onErro
 
   const disabled = settings === undefined || busy;
   const mutedHint = (
-    <Hint data-testid="muted-agents">
-      {muted === 0 ? 'No agent is muted.' : `${muted} muted agent${muted === 1 ? '' : 's'}.`} A tile muted from its ⋯ menu never notifies. It still shows in the list.
-    </Hint>
+    <Readout label="Muted agents" data-testid="muted-agents" hint="Mute a tile from its ⋯ menu. It never notifies, but it still shows in the list.">
+      {mutedAgentsText(muted)}
+    </Readout>
   );
   if (simplified) {
     return (

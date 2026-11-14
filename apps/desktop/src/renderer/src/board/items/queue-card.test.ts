@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { QueueJob } from '@agent-board/daemon/protocol';
+import { QUEUE_LATER, type QueueJob } from '@agent-board/daemon/protocol';
 import {
   agentLine,
   countsText,
@@ -72,6 +72,21 @@ describe('a queue card', () => {
     expect(doneJobs(jobs).map((each) => each.id)).toEqual(['d']);
     expect(nextJob(jobs)?.id).toBe('a');
     expect(nextJob([job('n', { kind: 'info' })])).toBeUndefined();
+  });
+
+  it('lists the jobs marked Later at its foot, says so, and never takes one next', () => {
+    const jobs = [job('l', { hiddenUntil: QUEUE_LATER }), job('a'), job('t', { state: 'taken', takenBy: agent }), job('b')];
+    expect(openInCardOrder(jobs).map((each) => each.id)).toEqual(['t', 'a', 'b', 'l']);
+    expect(nextJob(jobs)?.id).toBe('a');
+    expect(nextJob([job('l', { hiddenUntil: QUEUE_LATER })])).toBeUndefined();
+    expect(jobState(jobs[0]!, nextJob(jobs))).toEqual({ text: 'later', tone: 'later' });
+    expect(countsText(jobs)).toBe('2 queued · 1 taken · 1 later');
+    // A taken job is listed with those taken, once, whatever its mark says.
+    expect(openInCardOrder([job('x', { state: 'taken', takenBy: agent, hiddenUntil: QUEUE_LATER }), job('a')]).map((each) => each.id)).toEqual(['x', 'a']);
+    // Put off until a time gone by, it waits in its place again.
+    const back = job('p', { hiddenUntil: '2026-01-01T00:00:00.000Z' });
+    expect(openInCardOrder([back, job('a')]).map((each) => each.id)).toEqual(['p', 'a']);
+    expect(jobState(back, back).text).toBe('next');
   });
 
   it('says where each row is, a job dropped back dashed, with the try that comes next in its corner', () => {

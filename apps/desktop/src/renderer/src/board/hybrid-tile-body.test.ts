@@ -272,3 +272,44 @@ describe("a tile's head gives its name the room its buttons leave", () => {
     expect(controls.indexOf('aria-label="Rename"')).toBeLessThan(controls.indexOf('aria-label="Fold to a chip"'));
   });
 });
+
+describe('a paused tile is frosted', () => {
+  const calm = (agent: Agent): string => renderToStaticMarkup(createElement(CalmTile, { id: 't1', agent } as never));
+  const rootClass = (html: string): string => /^<div class="([^"]*)"/.exec(html)?.[1] ?? '';
+
+  it('carries the frosted class and a snowflake in its head, in Classic and Simplified, only while it is paused', () => {
+    for (const draw of [render, calm]) {
+      const paused = draw(galleryAgent('hibernated'));
+      expect(rootClass(paused).split(' ')).toContain('tile-frosted');
+      expect(paused).toMatch(/class="hybrid-tile-head[^"]*">.*data-testid="tile-frost-mark"/);
+      // Woken, the frost is gone at once: it follows the agent's state and nothing else.
+      for (const state of ['idle', 'waiting', 'rate-limited', 'stopped-by-restart'] as const) {
+        const html = draw(galleryAgent(state));
+        expect(rootClass(html).split(' ')).not.toContain('tile-frosted');
+        expect(html).not.toContain('tile-frost-mark');
+      }
+    }
+  });
+
+  it('washes the tile in its own cool colour, under its buttons, with no motion', () => {
+    const wash = /\.hybrid-tile\.tile-frosted::after \{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(wash).toContain('pointer-events: none');
+    expect(wash).toContain('var(--frost)');
+    expect(wash).not.toMatch(/animation|transition/);
+  });
+
+  // An expanded tile renders nothing until its view settings load, so its root and head are read from its source.
+  it('frosts an expanded tile too, its terminal and chat included, which stay usable', () => {
+    const source = readFileSync(join(import.meta.dirname, 'ExpandedTile.tsx'), 'utf8');
+    expect(source).toContain("className={agent ? frostedClasses('expanded-tile', agent) : 'expanded-tile'}");
+    expect(source).toContain('{agent && <FrostMark agent={agent} />}');
+    const body = /\.expanded-tile\.tile-frosted \.expanded-tile-body::after \{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(body).toContain('pointer-events: none');
+    expect(body).toContain('var(--frost)');
+    expect(body).not.toMatch(/animation|transition/);
+  });
+
+  it("keeps the snowflake from a screen reader, as the tile's status says Paused already", () => {
+    expect(render(galleryAgent('hibernated'))).toMatch(/<span class="tile-frost-mark" data-testid="tile-frost-mark" aria-hidden="true"/);
+  });
+});

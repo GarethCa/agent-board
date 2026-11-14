@@ -55,4 +55,33 @@ describe("an agent's reply as Markdown", () => {
       expect(html).toContain('click');
     }
   });
+
+  test('a review in the chat stays as it was: no ids, no folding', () => {
+    const html = render('## Findings\n\n1. **[blocker] Broken.** Details.');
+    expect(html).toContain('<h2>Findings</h2>');
+    expect(html).toContain('<strong>[blocker] Broken.</strong>');
+    expect(html).not.toMatch(/details|sev|id=/);
+  });
+});
+
+describe('a document as Markdown, to read', () => {
+  const read = (text: string, variant: 'read' | 'card' = 'read') => renderToStaticMarkup(createElement(Markdown, { text, onOpenLink: () => {}, variant }));
+
+  test('is styled to read, with heading ids and folded findings under their tools line', () => {
+    const html = read('## Findings\n\n1. **[blocker] Broken.** Details.\n2. **[minor] Nit.**');
+    expect(html).toMatch(/^<div class="doc-read">/);
+    expect(html).toContain('<h2 id="read-findings">Findings</h2>');
+    expect(html).toMatch(/<div class="findings-tools"><span>2 findings, folded to their headlines.<\/span><button type="button">Open all<\/button><\/div>\s*<div class="findings">/);
+    expect(html).toContain('<details class="finding" id="read-finding-broken" data-severity="blocker">');
+  });
+
+  test('drops raw HTML as the chat does', () => {
+    expect(read('<div class="findings-tools">x</div>\n\n<script>alert(1)</script>')).not.toMatch(/findings-tools|script/);
+  });
+
+  test('a card has the reading styles, without ids', () => {
+    const html = read('## Heading\n\n- [minor] Nit.', 'card');
+    expect(html).toMatch(/^<div class="doc-read doc-read-card">/);
+    expect(html).not.toMatch(/id=|details/);
+  });
 });

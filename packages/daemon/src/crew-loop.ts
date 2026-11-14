@@ -113,6 +113,11 @@ export interface CrewLoop {
    * such crew.
    */
   card(crewId: string): CrewCardData | undefined;
+  /**
+   * The round a crew's reviewer reviews and the last round's review it was given to check, as the crew started it;
+   * undefined for an agent that is no crew's reviewer.
+   */
+  reviewOf(sessionId: string): { round: number; previous: string | null } | undefined;
   /** Settles once no crew is moving on: for tests. */
   idle(): Promise<void>;
   /** Stops moving crews on, as the daemon shuts down: its agents stop as it goes, which is no news to a crew. */
@@ -178,6 +183,7 @@ export function createCrewLoop(db: DatabaseSync, options: CrewLoopOptions): Crew
   const selectCrew = db.prepare('SELECT * FROM crews WHERE id = ?');
   const selectRunning = db.prepare('SELECT * FROM crews WHERE stopped IS NULL');
   const selectReviewers = db.prepare('SELECT * FROM crew_reviewers WHERE crew_id = ? ORDER BY round, rowid');
+  const selectReviewer = db.prepare('SELECT * FROM crew_reviewers WHERE session_id = ? ORDER BY rowid DESC LIMIT 1');
   const insertReviewer = db.prepare('INSERT INTO crew_reviewers (crew_id, session_id, member, round) VALUES (?, ?, ?, ?)');
   const setReview = db.prepare('UPDATE crew_reviewers SET verdict = ?, review = ?, blockers = ? WHERE crew_id = ? AND session_id = ?');
   const setPhase = db.prepare('UPDATE crews SET phase = ?, phase_at = ?, round = ? WHERE id = ?');
@@ -202,6 +208,12 @@ export function createCrewLoop(db: DatabaseSync, options: CrewLoopOptions): Crew
   const stillRunning = (id: string) => !closing && row(id)?.stopped === null;
   /** Where the crew keeps its copy of a review. */
   const keptReview = (crew: CrewRow, member: string, round: number) => join(options.dir, crew.id, `round-${round}-${member}.md`);
+
+  /** The member's review of the round before `round`, if the crew kept one. */
+  const lastReviewOf = (crew: CrewRow, member: string, round: number): string | null => {
+    const previous = round === 1 ? undefined : keptReview(crew, member, round - 1);
+    return previous !== undefined && writtenAt(previous) !== undefined ? previous : null;
+  };
 
   const view = (row: CrewRow): Crew => {
     const reviewers = reviewersOf(row.id);
@@ -245,11 +257,12 @@ export function createCrewLoop(db: DatabaseSync, options: CrewLoopOptions): Crew
   const startReviewers = async (crew: CrewRow, builder: Agent) => {
     const prefab = parsePrefab(crew.body);
     const already = new Set(reviewersOf(crew.id, crew.round).map((each) => each.member));
+    // A builder in a ticket tile has its reviewers there too, as its helpers: the ticket's chat sees what they flag.
+    const ticket = builder.ticketChat ? builder.sessionId : builder.ticket;
     for (const member of prefab.members.filter((each) => each.starts === 'handoff' && !already.has(each.id))) {
       // Stopped while an earlier one started: no more start.
       if (!stillRunning(crew.id)) return;
-      const previous = crew.round === 1 ? undefined : keptReview(crew, member.id, crew.round - 1);
-      const lastReview = previous !== undefined && writtenAt(previous) !== undefined ? previous : null;
+      const lastReview = lastReviewOf(crew, member.id, crew.round);
       const prompt =
         lastReview === null ? crew.prompt : [crew.prompt, `The last round's review is ${lastReview}: check each of its findings is fixed.`].filter(Boolean).join('\n\n');
       const reviewer = await options.spawn(
@@ -262,6 +275,7 @@ export function createCrewLoop(db: DatabaseSync, options: CrewLoopOptions): Crew
           // Its own name, not the builder's (both would be made from the prompt), with its round.
           name: `${member.name ?? member.id} (round ${crew.round})`,
           baseBranch: builder.branch,
+          ...(ticket === null ? {} : { ticket }),
           prompt,
           ...REVIEWER_SIZE,
         },
@@ -473,6 +487,12 @@ export function createCrewLoop(db: DatabaseSync, options: CrewLoopOptions): Crew
   };
 
   return {
+    reviewOf(sessionId) {
+      const reviewer = selectReviewer.get(sessionId) as unknown as ReviewerRow | undefined;
+      const crew = reviewer === undefined ? undefined : row(reviewer.crew_id);
+      if (reviewer === undefined || crew === undefined) return undefined;
+      return { round: reviewer.round, previous: lastReviewOf(crew, reviewer.member, reviewer.round) };
+    },
     start(prefab, builderId, startedBy, prompt) {
       const builder = options.agent(builderId);
       if (builder === undefined || !prefab.members.some((member) => member.starts === 'handoff')) return null;
@@ -529,15 +549,12 @@ export function createCrewLoop(db: DatabaseSync, options: CrewLoopOptions): Crew
     },
 
     handlers<Context extends BoardConnection>(access: OrchestratorAccess): RpcHandlers<CrewMethods, Context> {
-      /** Whether `me` reaches the crew: by its builder, while it is on the board, else as the one that started it. */
-      const reaches = (me: ReturnType<OrchestratorAccess['caller']>, crew: CrewRow) => {
-        if (me.agent === null) return true;
-        const builder = options.agent(crew.builder);
-        return builder === undefined ? crew.started_by === me.sessionId : access.reachesAgent(me, builder);
-      };
+      /** Whether `me` reaches the crew: any agent does while its builder is on the board, else the one that started it. */
+      const reaches = (me: ReturnType<OrchestratorAccess['caller']>, crew: CrewRow) =>
+        me.agent === null || options.agent(crew.builder) !== undefined || crew.started_by === me.sessionId;
       const reached = (me: ReturnType<OrchestratorAccess['caller']>, crewId: string): CrewRow => {
         const crew = crewNamed(crewId);
-        if (!reaches(me, crew)) throw new RpcMethodError(BOARD_ERROR.outOfScope, `crew:${crew.id} was built by one the user started by hand: agents never act on the user's own agents`);
+        if (!reaches(me, crew)) throw new RpcMethodError(BOARD_ERROR.outOfScope, `crew:${crew.id}'s builder is gone, and you didn't start it`);
         return crew;
       };
       const logged = (crew: CrewRow) => ({ id: `crew:${crew.id}`, name: crew.prefab });

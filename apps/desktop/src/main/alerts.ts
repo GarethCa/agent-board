@@ -70,8 +70,8 @@ function requestsOf(agent: Agent, settings: AlertSettings): { kind: NeedsYouKind
   // Claude's question tool asks in its own dialog: a request of its own, which the banner never answers.
   const questions = questionPrompt(agent);
   if (questions !== undefined) requests.push({ kind: 'asks', key: `questions:${questions.id}` });
-  // By its wait, which a version the user edits keeps: their own edit is no new request.
-  if (planPending(agent)) requests.push({ kind: 'plan', key: `plan:${agent.plan.expiresAt ?? agent.plan.id}` });
+  // By the version it shows; the user's own edit of it is no new request (`track` keeps the key it had).
+  if (planPending(agent)) requests.push({ kind: 'plan', key: `plan:${agent.plan.id}` });
   // A steps card it waits on: by the step that matters, so a new one is news and an answer to the last isn't.
   if (agent.stepsWait !== null) requests.push({ kind: agent.stepsWait.kind, key: stepsWaitKey(agent.stepsWait) });
   if (agent.flag?.to === 'user') requests.push({ kind: 'flagged', key: `flagged:${agent.flag.id}` });
@@ -151,8 +151,10 @@ export function createAgentAlerts(options: AgentAlertsOptions): AgentAlerts {
   const track = (agent: Agent) => {
     const before = agents.get(agent.sessionId);
     agents.set(agent.sessionId, agent);
-    const requests = requestsOf(agent, settings);
     const told = notified.get(agent.sessionId);
+    // A version the user made is the plan they were already asked about: it keeps that one's key, left or not.
+    const edited = agent.plan?.author === 'user' ? [...(told ?? [])].find((key) => key.startsWith('plan:')) : undefined;
+    const requests = requestsOf(agent, settings).map((request) => (request.kind === 'plan' && edited !== undefined ? { ...request, key: edited } : request));
     // Each request is told of once while it stands, muted or not; one that goes is forgotten, so its return is news.
     notified.set(agent.sessionId, new Set(requests.map((request) => request.key)));
     if (before === undefined || told === undefined || agent.muted) return;

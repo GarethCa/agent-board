@@ -33,7 +33,7 @@ function Face({ at, small = false }: { at: Date; small?: boolean }) {
 /**
  * A schedule on the board: a tile-wide card with a small clock face on its rounded left end, the schedule in words,
  * what it does and when, and a strip of its last runs. Folded, it is a pill with the face, the words and when it
- * next runs. Double-click (or Edit) opens its editor.
+ * next runs. Double-click (or Edit) opens its editor. Standing for the clocks a Spine zone set aside, it is a "+N" chip.
  */
 export const ClockNode = memo(function ClockNode({ data, selected: picked, dragging }: NodeProps<ItemNodeType>) {
   const selected = useOnlySelected(picked);
@@ -48,6 +48,18 @@ export const ClockNode = memo(function ClockNode({ data, selected: picked, dragg
   const next = status?.nextRunAt == null ? now : new Date(status.nextRunAt);
   const fold = (folded: boolean) => update({ id: item.id, data: { folded }, ...(folded ? CLOCK_FOLDED_SIZE : CLOCK_SIZE) });
   const title = `${card.words}: ${card.detail}`;
+
+  if (data.more !== undefined) {
+    // The clocks its zone set aside, as the row along its top has no room for them: one chip says how many, and when they run.
+    const { count, names } = data.more;
+    const more = `${count} more ${count === 1 ? 'clock' : 'clocks'}: ${names.join(', ')}`;
+    return (
+      <div className="clock clock-pill clock-more" data-testid="clock-more" role="img" aria-label={more} title={more} onDoubleClick={(event) => event.stopPropagation()}>
+        <Face at={now} small />
+        <b className="clock-words">+{count}</b>
+      </div>
+    );
+  }
 
   return (
     <div

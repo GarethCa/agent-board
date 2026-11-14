@@ -12,6 +12,7 @@ import { carryClaudeTranscript } from './claude-transcript.ts';
 import { projectCodexConfig } from './codex-config-guard.ts';
 import { runGit } from './git.ts';
 import { CODEX_HOOK_TIMEOUTS, codexHookCommand, HOOK_ENV_PREFIX, HOOK_TOKEN_ENV, HOOK_URL_ENV } from './hook-forwarder.ts';
+import { FORCED_HYPERLINK_ENV, userForcedHyperlink } from './hyperlink-env.ts';
 import { keyedQueue } from './keyed-queue.ts';
 import { loginShellKind } from './login-path.ts';
 import { invalidParams } from './params.ts';
@@ -26,6 +27,7 @@ import {
   MODEL_NAME,
   REVIEWER_ROLES,
   type Agent,
+  type AgentRole,
   type Effort,
   type Harness,
   type LinkedIssue,
@@ -73,6 +75,37 @@ const START_STEP_TIMEOUT_MS = 3 * 60_000;
 
 /** How far a loose implementer's reviewer starts from it, down and right, in board units. */
 const REVIEWER_OFFSET = 48;
+
+/** The columns an agent starts with: a chat of its own ticket, a helper of one, or neither. */
+interface TicketPlace {
+  ticket: string | null;
+  ticketChat: boolean;
+}
+
+/**
+ * Where a new agent belongs, or `invalidParams` saying why it can't start so. `ticketChat` starts a chat, in no other ticket; `ticket` names
+ * the chat it helps, by session id; without either, it helps the ticket its starter is in, or is the chat of.
+ * `chatOf(id)` is the agent `id` as far as tickets go, undefined when there is none.
+ */
+function ticketPlace(
+  asked: { ticket?: string; ticketChat?: boolean },
+  starter: string | undefined,
+  chatOf: (sessionId: string) => (TicketPlace & { name: string }) | undefined,
+): TicketPlace {
+  if (asked.ticketChat === true) {
+    if (asked.ticket !== undefined) throw invalidParams("a ticket's chat belongs to no other ticket: give ticketChat or ticket, not both");
+    return { ticket: null, ticketChat: true };
+  }
+  if (asked.ticket !== undefined) {
+    const chat = chatOf(asked.ticket);
+    if (chat === undefined) throw invalidParams(`no agent ${asked.ticket}`);
+    if (!chat.ticketChat) throw invalidParams(`${chat.name} is not a ticket's chat: name the chat of the ticket it helps`);
+    return { ticket: asked.ticket, ticketChat: false };
+  }
+  const by = starter === undefined ? undefined : chatOf(starter);
+  if (by === undefined) return { ticket: null, ticketChat: false };
+  return { ticket: by.ticketChat ? starter! : by.ticket, ticketChat: false };
+}
 
 /** What starting an agent reads of the host. */
 interface AgentSpawnOptions
@@ -200,6 +233,13 @@ export function createAgentSpawns(
   pending: Pick<AgentStarts, 'has' | 'retry' | 'update' | 'dismiss' | 'dismissIn'>;
   /** The first message the agent was started with, if any, while it is on the board. */
   firstMessage(sessionId: string): string | undefined;
+  /**
+   * The template of `choice`, a role for the running agent, filled in for it as its start would have filled it (its
+   * issue, branch, worktree and the review it does), trimmed: empty when its role has no template. A reviewer's round
+   * and previous review are those before its own review, or `crewReview`'s, a crew's reviewer's. Not checked: it is
+   * only ever sent, and a send checks its text.
+   */
+  roleTemplate(row: AgentRow, choice: { role: AgentRole; name: string | null }, crewReview?: SpawnUsed['crewReview']): string;
   /** Whether the Claude agent's session was started with our `FORCE_HYPERLINK=1`; undefined when this daemon never started it. */
   hyperlinked(sessionId: string): boolean | undefined;
   /** The agent was deleted. */
@@ -218,6 +258,7 @@ export function createAgentSpawns(
   const setReadOnly = db.prepare('UPDATE agents SET read_only = 1 WHERE session_id = ?');
   const setPurpose = db.prepare('UPDATE agents SET purpose = ? WHERE session_id = ?');
   const setMaster = db.prepare('UPDATE agents SET master = 1 WHERE session_id = ?');
+  const setTicket = db.prepare('UPDATE agents SET ticket = ?, ticket_chat = ? WHERE session_id = ?');
   const selectBranchReviews = db.prepare('SELECT * FROM branch_reviews WHERE repo_root = ? AND branch = ? ORDER BY id');
   const insertBranchReview = db.prepare('INSERT INTO branch_reviews (repo_root, branch, head, session_id) VALUES (?, ?, ?, ?)');
   /** One deeper than the agent that started it; its crew depth is kept even if that agent is deleted later. */
@@ -296,14 +337,15 @@ export function createAgentSpawns(
     const compactWindow = options.compactWindow();
     if (harness === 'claude' && compactWindow > 0) env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = String(compactWindow);
     // A `FORCE_HYPERLINK` that carries our marker was set by an agent-board this daemon was started from (inside one of
-    // its Claude agents): not the user's, so it goes, and the setting decides afresh.
+    // its Claude agents): not the user's, so it goes, and the setting decides afresh. The same rule as Settings reports.
+    const own = userForcedHyperlink(env);
     if (env[FORCED_HYPERLINK_ENV] !== undefined) {
       delete env.FORCE_HYPERLINK;
       delete env[FORCED_HYPERLINK_ENV];
     }
     // Claude Code prints OSC 8 links only when it thinks the terminal wants them. A value of the user's own wins.
     if (harness === 'claude') {
-      const forced = options.clickableLinks() && env.FORCE_HYPERLINK === undefined;
+      const forced = options.clickableLinks() && own === null;
       if (forced) {
         env.FORCE_HYPERLINK = '1';
         env[FORCED_HYPERLINK_ENV] = '1';
@@ -393,14 +435,15 @@ export function createAgentSpawns(
   /**
    * What a new agent's role template is filled with. A reviewer's issue, when it starts from none, is that of the agent
    * whose branch it reviews; its round counts the reviewers of the branch before it, and its previous review is the
-   * last one's review file, if it left one.
+   * last one's review file, if it left one. A running agent (`sessionId`) counts only the reviews before its own.
    */
   const templateValues = (agent: {
     repoRoot: string;
     branch: string;
     worktree: string;
     reviews: { branch: string } | null;
-    issue: LinkedIssue | null;
+    issue: Pick<LinkedIssue, 'provider' | 'id'> | null;
+    sessionId?: string;
   }): TemplateValues => {
     const reviewed = agent.reviews?.branch;
     const implementer =
@@ -408,7 +451,9 @@ export function createAgentSpawns(
         ? undefined
         : rows().findLast((row) => row.repo_root === agent.repoRoot && row.branch === reviewed);
     // Every earlier review of the branch, its reviewer on the board or not.
-    const earlier = reviewed === undefined ? [] : (selectBranchReviews.all(agent.repoRoot, reviewed) as unknown as BranchReviewRow[]);
+    const all = reviewed === undefined ? [] : (selectBranchReviews.all(agent.repoRoot, reviewed) as unknown as BranchReviewRow[]);
+    const own = agent.sessionId === undefined ? -1 : all.findIndex((review) => review.session_id === agent.sessionId);
+    const earlier = own === -1 ? all : all.slice(0, own);
     const previous = earlier.at(-1);
     const implementerIssue = implementer?.issue_provider != null && implementer.issue_id !== null ? { provider: implementer.issue_provider, id: implementer.issue_id } : null;
     const issue = agent.issue ?? implementerIssue;
@@ -541,6 +586,10 @@ export function createAgentSpawns(
       throw invalidParams("an agent in the repo's own checkout takes no branch, base branch or reviewer role: it works on the branch checked out there");
     }
     const fromZone = issueId === undefined ? undefined : issueZone({ ...params, issueId }, zone, spawnedBy);
+    const ticket = ticketPlace(params, spawnedBy, (sessionId) => {
+      const row = getRow(sessionId);
+      return row === undefined ? undefined : { name: row.name, ticket: row.ticket, ticketChat: row.ticket_chat === 1 };
+    });
     const id = randomUUID();
     // Named for now by what it was given; one started from an issue is named after it once the issue is read.
     const shownName = name?.trim() || (issueId !== undefined ? issueId : prompt.trim() === '' ? freeAgentName() : defaultName(prompt.trim()));
@@ -548,7 +597,7 @@ export function createAgentSpawns(
     reservedNames.set(id, shownName);
     const shown: NewStart = { sessionId: id, zoneId, position: position ?? null, name: shownName, harness, model, effort, spawnedBy: spawnedBy ?? null };
     const run = (progress: StartProgress, allowProjectCodexConfig: boolean) =>
-      startAgent({ id, shownName, params, spawnedBy, place: at, plain: folder !== undefined, used, zone, harness, model, effort, choice, reviewer, mainCheckout, fromZone, allowProjectCodexConfig }, progress);
+      startAgent({ id, shownName, params, spawnedBy, place: at, plain: folder !== undefined, used, zone, harness, model, effort, choice, reviewer, mainCheckout, fromZone, ticket, allowProjectCodexConfig }, progress);
     const progress = starts.open(shown, {
       retry: (again, allow) => void run(again, allow).catch(() => {}),
       dismissed: () => reservedNames.delete(id),
@@ -583,11 +632,13 @@ export function createAgentSpawns(
       /** It works in the repo's own checkout: no worktree is made for it. */
       mainCheckout: boolean;
       fromZone: string | undefined;
+      /** The ticket it is the chat or a helper of, as asked for and checked. */
+      ticket: TicketPlace;
       allowProjectCodexConfig: boolean;
     },
     progress: StartProgress,
   ): Promise<Agent> => {
-    const { id, shownName, params, spawnedBy, place, plain, used, zone, harness, model, effort, choice, reviewer, mainCheckout, fromZone, allowProjectCodexConfig } = start;
+    const { id, shownName, params, spawnedBy, place, plain, used, zone, harness, model, effort, choice, reviewer, mainCheckout, fromZone, ticket, allowProjectCodexConfig } = start;
     const { zoneId, prompt = '', name, issueId, cols, rows } = params;
     const role = choice?.role ?? null;
     // What was made for it so far, undone if it fails to start: its harness, its worktree and branch, then any scratch repo.
@@ -762,6 +813,7 @@ export function createAgentSpawns(
       if (readOnly) setReadOnly.run(id);
       if (plain) setPlainFolder.run(id);
       if (place?.master === true) setMaster.run(id);
+      if (ticket.ticket !== null || ticket.ticketChat) setTicket.run(ticket.ticket, ticket.ticketChat ? 1 : 0, id);
       if (spawnedBy !== undefined) {
         setCrewDepth.run(spawnedBy, id);
         options.records.put(spawnedBy, { kind: 'crew', key: id });
@@ -774,6 +826,8 @@ export function createAgentSpawns(
       // Its tile turns into the agent's: the agent first, so the board never shows neither.
       options.broadcast({ type: 'agent.updated', agent });
       if (spawnedBy !== undefined) announce(spawnedBy);
+      // A helper the chat didn't start itself shows in its ticket all the same.
+      if (ticket.ticket !== null && ticket.ticket !== spawnedBy) announce(ticket.ticket);
       progress.end();
       watch(id, harness, cwd, worktree, bypassed, null);
       return get(id)!;
@@ -803,6 +857,14 @@ export function createAgentSpawns(
     pending: starts,
 
     firstMessage: (sessionId) => firstMessages.get(sessionId),
+
+    roleTemplate(row, choice, crewReview) {
+      const zoneId = row.zone_id ?? repoZoneFor(null, row.repo_root)?.id ?? null;
+      const issue = row.issue_provider !== null && row.issue_id !== null ? { provider: row.issue_provider, id: row.issue_id } : null;
+      const reviews = row.reviews_branch === null ? null : { branch: row.reviews_branch };
+      const values = templateValues({ repoRoot: row.repo_root, branch: row.branch, worktree: row.worktree, reviews, issue, sessionId: row.session_id });
+      return fillTemplate(options.roleTemplates.body(zoneId, row.repo_root, choice), crewValues(values, crewReview)).trim();
+    },
 
     hyperlinked: (sessionId) => hyperlinked.get(sessionId),
     forget: (sessionId) => {
@@ -1054,12 +1116,6 @@ export function claudeSettings(hookUrl: string, permissionHoldMs: number, ownSta
 
 /** What the board MCP server is called in a harness's MCP config. */
 const BOARD_MCP_SERVER = 'agent-board';
-
-/**
- * Set beside the `FORCE_HYPERLINK=1` that agent-board gives a Claude agent, so an agent-board started from inside that
- * agent can tell its inherited `FORCE_HYPERLINK` from one the user set.
- */
-export const FORCED_HYPERLINK_ENV = 'AGENT_BOARD_FORCED_HYPERLINK';
 
 /** The status line Codex draws under its composer for an agent: its model and reasoning effort, then its folder. */
 const CODEX_STATUS_LINE = '["model-with-reasoning","current-dir"]';

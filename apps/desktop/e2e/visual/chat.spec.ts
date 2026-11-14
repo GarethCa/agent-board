@@ -111,6 +111,9 @@ for (const style of ['Cards', 'Timeline', 'Status line'] as const) {
         await pinChatTimes(window);
         restorePointer = await ignorePointer(window);
         await settle(window);
+        // Its chat at its end, where it follows the conversation to, the usage limit's row in view.
+        const log = panel.getByTestId('chat-view');
+        await expect.poll(() => log.evaluate((element) => element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThanOrEqual(1);
         await expect.soft(panel).toHaveScreenshot(`${shots[1]}.png`, SHOT);
         await restorePointer();
       } finally {

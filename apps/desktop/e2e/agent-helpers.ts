@@ -147,9 +147,20 @@ export async function spawnAgent(
   if (started) await untilStarted(window);
 }
 
+/**
+ * How long a start may take: it adds a worktree, runs the zone's setup and launches the harness, about a second on a
+ * quiet machine and many more on a loaded one, where five seconds (the default) ran out before it ended.
+ */
+const START_TIMEOUT = 30_000;
+
 /** The New agent dialog closes as soon as the start's tile is on the board: waits until every start is an agent, or failed. */
 export async function untilStarted(window: Page): Promise<void> {
-  await expect.poll(() => window.evaluate(async () => (await self.agentBoard.agents.starts()).some((start) => start.error === null))).toBe(false);
+  await expect
+    .poll(() => window.evaluate(async () => (await self.agentBoard.agents.starts()).filter((start) => start.error === null).map((start) => start.name)), {
+      message: 'every start has become an agent',
+      timeout: START_TIMEOUT,
+    })
+    .toEqual([]);
 }
 
 /**
@@ -200,6 +211,9 @@ export async function setClickOpens(window: Page, opens: 'Session window' | 'Max
   const choice = settings.getByRole('radiogroup', { name: 'Double-clicking a tile opens' }).getByRole('radio', { name: new RegExp(`^${opens}`) });
   await choice.check();
   await expect(choice).toBeChecked();
+  // The board hears of the change from the Settings window a moment later: a double-click before then opens the old way.
+  const opensAs = { 'Session window': 'window', 'Maximised session window': 'maximised', 'Expand in place': 'expand' }[opens];
+  await expect(window.locator('.board[data-click-opens]')).toHaveAttribute('data-click-opens', opensAs);
   if (!wasOpen) await settings.close();
 }
 
@@ -248,11 +262,19 @@ export function groupName(name: string): RegExp {
 
 const startsWith = (name: string) => new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`);
 
-/** Opens the group `name` of the menu open, as a click on its row does, and waits for its rows. */
-export async function openSubmenu(page: Page, name: string): Promise<void> {
+/**
+ * Opens the group `name` of the menu open, as a click on its row does, and waits for its rows to be placed in the
+ * window. Until it is placed, a group's menu is drawn out of sight above the window, and a click aimed at a row there
+ * lands on the page, which closes the group. Returns the group's own menu, named by its row: a row is picked there,
+ * never from the menu under it, which may hold a row of the same name.
+ */
+export async function openSubmenu(page: Page, name: string): Promise<Locator> {
   const row = page.getByRole('menuitem', { name: startsWith(name) });
   await row.click();
   await expect(row).toHaveAttribute('aria-expanded', 'true');
+  const menu = page.getByRole('menu', { name: startsWith(name) });
+  await expect(menu).toBeInViewport();
+  return menu;
 }
 
 /**

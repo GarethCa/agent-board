@@ -809,6 +809,22 @@ describe.each(LOOKS)('text contrast in the $id look', ({ stack }) => {
     },
   );
 
+  // A paused tile's frost: the slate in its corners over its fill, as the CSS layers them. All its text is drawn in
+  // --text there, and its snowflake, a glyph, in the state's ink, held to 3:1.
+  describe('on a paused tile at its densest frost', () => {
+    const frostPeak = () => {
+      const frost = /^color-mix\(in srgb, var\(--state-hibernated\) ([\d.]+)%, transparent\)$/.exec(scopes.get(':root')!.get('--frost')!.trim());
+      expect(frost, '--frost is the slate at a share, over nothing').not.toBeNull();
+      return mix(hexOf('--state-hibernated', stack), hexOf('--frost-fill', stack), Number(frost![1]) / 100);
+    };
+    it('its text meets WCAG AA', () => {
+      expect(contrast(hexOf('--text', stack), frostPeak())).toBeGreaterThanOrEqual(4.5);
+    });
+    it('its snowflake reads at 3:1', () => {
+      expect(contrast(hexOf('--frost-mark', stack), frostPeak())).toBeGreaterThanOrEqual(3);
+    });
+  });
+
   // In the Settings window, an unchecked switch's track, a box's and a field's edge are the muted text mixed into the box.
   it.each(['--raised', '--panel'])("the Settings window's switch tracks and field edges read at 3:1 on %s", (surface) => {
     const share = Number.parseFloat(scopes.get(':root')!.get('--settings-control-edge-mix')!) / 100;
@@ -839,6 +855,15 @@ describe.each(LOOKS)('text contrast in the $id look', ({ stack }) => {
     expect(contrast(chip, fill)).toBeGreaterThanOrEqual(1.1);
     expect(contrast(mix(ink, fill, declared('--agent-note-rule-mix')), fill)).toBeGreaterThanOrEqual(1.1);
     expect(contrast(ink, chip)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  // The bubble sits on the desk or in a zone's well: its hairline edge shows where it ends on either (WCAG's 3:1 for a
+  // shape's edge), at the zone's default tint, whatever the zone's colour.
+  it.each(ZONE_COLORS)("keeps an agent note's bubble edge at 3:1 on the desk and on a %s well", (zone) => {
+    const edge = mix(hexOf('--agent-note-ink-muted', stack), noteFill(), declared('--agent-note-bubble-edge-mix'));
+    expect(scopes.get(':root')!.get('--agent-note-bubble-edge')).toBe('color-mix(in srgb, var(--agent-note-ink-muted) var(--agent-note-bubble-edge-mix), var(--agent-note-fill))');
+    const surface = hexOf('--surface', stack);
+    for (const board of [surface, mix(zone, surface, declared('--zone-fill-mix'))]) expect(contrast(edge, board)).toBeGreaterThanOrEqual(3);
   });
 
   it('keeps its note fill apart from its tile', () => {

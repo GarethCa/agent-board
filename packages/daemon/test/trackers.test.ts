@@ -177,6 +177,56 @@ describe('a zone tracker', () => {
     expect(await client.call('tracker.issues', { zoneId: zone.id, query: '  ' })).toEqual(open);
   });
 
+  it("narrows a team zone's issues to one of the team's projects, for listing and for searching", async () => {
+    const { client } = await trackerDaemon();
+    const zone = await linearZone(client);
+    const project = 'fake-project-tracker';
+
+    const listed = await client.call('tracker.issues', { zoneId: zone.id, project });
+    expect(listed.map((issue) => issue.id)).toEqual(['ACME-16']);
+    expect(await client.call('tracker.issues', { zoneId: zone.id, query: 'spawn', project })).toEqual([]);
+    const found = await client.call('tracker.issues', { zoneId: zone.id, query: 'keychain', project });
+    expect(found.map((issue) => issue.id)).toEqual(['ACME-16']);
+  });
+
+  it("lists a project zone's own project by default, and widens to the team or another of its projects", async () => {
+    const { client } = await trackerDaemon();
+    await client.call('tracker.connect', { provider: 'linear', credential: GOOD_KEY });
+    const zone = await client.call('zone.addUnbound', { name: 'Tracker integration', x: 0, y: 0 });
+    const tracker = { provider: 'linear' as const, scope: 'ACME', project: 'fake-project-tracker' };
+    await client.call('zone.setTracker', { id: zone.id, tracker });
+    const ids = async (params: object) => (await client.call('tracker.issues', { zoneId: zone.id, ...params })).map((issue) => issue.id);
+
+    expect(await ids({})).toEqual(['ACME-16']);
+    expect(await ids({ project: null })).toEqual(['ACME-16', 'ACME-12']);
+    expect(await ids({ project: 'fake-project-agents' })).toEqual([]);
+    expect(await ids({ project: null, query: 'spawn' })).toEqual(['ACME-12']);
+  });
+
+  it("narrows a zone's issues to a milestone of its project", async () => {
+    const { client } = await trackerDaemon();
+    const zone = await linearZone(client);
+    const ids = async (params: object) => (await client.call('tracker.issues', { zoneId: zone.id, ...params })).map((issue) => issue.id);
+
+    expect(await ids({ project: 'fake-project-tracker', milestone: 'fake-milestone-beta' })).toEqual(['ACME-16']);
+    expect(await ids({ project: 'fake-project-tracker', milestone: 'fake-milestone-later' })).toEqual([]);
+  });
+
+  it("lists what a zone's issues can be narrowed to: the team's projects, each with its milestones", async () => {
+    const { client } = await trackerDaemon();
+    const zone = await linearZone(client);
+
+    const filters = await client.call('tracker.issueFilters', { zoneId: zone.id });
+    expect(filters.milestones).toEqual([]);
+    expect(filters.projects.map((project) => project.id)).toEqual(['fake-project-tracker', 'fake-project-agents']);
+    expect(filters.projects[0]!.milestones).toEqual([
+      { id: 'fake-milestone-beta', name: 'Beta' },
+      { id: 'fake-milestone-later', name: 'Later' },
+    ]);
+    const unbound = await client.call('zone.addUnbound', { name: 'No tracker', x: 0, y: 0 });
+    expect((await rpcError(client.call('tracker.issueFilters', { zoneId: unbound.id }))).message).toBe('the zone has no tracker');
+  });
+
   it("lists a team's open projects", async () => {
     const { client } = await trackerDaemon();
     const notConnected = await rpcError(client.call('tracker.projects', { provider: 'linear', scope: 'ACME' }));
@@ -337,7 +387,7 @@ describe('agents and issues', () => {
     expect(linked.message).toBe('ACME has no issue OPS-3');
   });
 
-  it("refuses an issue from a project other than the project zone's, for starting and for linking", async () => {
+  it("takes any issue of its team in a project zone, from no project or another, and still refuses other teams'", async () => {
     const { client } = await trackerDaemon();
     await client.call('tracker.connect', { provider: 'linear', credential: GOOD_KEY });
     const zone = await client.call('zone.add', { path: tempRepo(), x: 0, y: 0 });
@@ -345,18 +395,18 @@ describe('agents and issues', () => {
     await client.call('zone.setTracker', { id: zone.id, tracker });
 
     // The first is in no project, the second in another one; both are in team ACME.
-    for (const issueId of ['ACME-12', 'ACME-2']) {
-      const spawned = await rpcError(client.call('agent.spawn', { zoneId: zone.id, prompt: '', issueId, ...SIZE }));
-      expect(spawned.code).toBe(RPC_ERROR.invalidParams);
-      expect(spawned.message).toBe(`ACME's project fake-project-tracker has no issue ${issueId}`);
-    }
-    const agent = await client.call('agent.spawn', { zoneId: zone.id, prompt: 'Look around', ...SIZE });
-    const inOtherProject = 'ACME-2';
-    const linked = await rpcError(client.call('agent.link', { sessionId: agent.sessionId, issueId: inOtherProject }));
-    expect(linked.message).toBe(`ACME's project fake-project-tracker has no issue ${inOtherProject}`);
+    const inNoProject = await client.call('agent.spawn', { zoneId: zone.id, prompt: '', issueId: 'ACME-12', ...SIZE });
+    expect(inNoProject.issue).toMatchObject({ id: 'ACME-12' });
+    const inOtherProject = await client.call('agent.spawn', { zoneId: zone.id, prompt: '', issueId: 'ACME-2', ...SIZE });
+    expect(inOtherProject.issue).toMatchObject({ id: 'ACME-2' });
+    const relinked = await client.call('agent.link', { sessionId: inNoProject.sessionId, issueId: 'ACME-2' });
+    expect(relinked.issue).toMatchObject({ id: 'ACME-2' });
 
-    const started = await client.call('agent.spawn', { zoneId: zone.id, prompt: '', issueId: 'ACME-16', ...SIZE });
-    expect(started.sessionId).toBeDefined();
+    const spawned = await rpcError(client.call('agent.spawn', { zoneId: zone.id, prompt: '', issueId: 'OPS-3', ...SIZE }));
+    expect(spawned.code).toBe(RPC_ERROR.invalidParams);
+    expect(spawned.message).toBe('ACME has no issue OPS-3');
+    const linked = await rpcError(client.call('agent.link', { sessionId: inNoProject.sessionId, issueId: 'OPS-3' }));
+    expect(linked.message).toBe('ACME has no issue OPS-3');
   });
 
   it('refuses an issue the tracker does not have, and leaves no worktree behind', async () => {

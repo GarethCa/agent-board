@@ -16,7 +16,7 @@ export type ShelfStage = (typeof SHELF_STAGES)[number];
 export const SHELF_NAMES: Record<ShelfStage, string> = { todo: 'To do', doing: 'Doing', waiting: 'Waiting', done: 'Done' };
 
 /** States an agent is at work in: someone has it. */
-const WORKING_STATES: ReadonlySet<AgentState> = new Set<AgentState>(['running', 'thinking', 'on-command', 'handing-off', 'starting', 'rate-limited']);
+export const WORKING_STATES: ReadonlySet<AgentState> = new Set<AgentState>(['running', 'thinking', 'on-command', 'handing-off', 'starting', 'rate-limited']);
 
 /**
  * Whether the agent waits on the user now, exactly as the Needs-you pill counts it: a permission prompt, a question or

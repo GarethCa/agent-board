@@ -4,7 +4,7 @@ import { Check, ListTodo, Send, X } from 'lucide-react';
 import type { StepsData } from '@agent-board/daemon/protocol';
 import { Button, ErrorText, IconButton } from '../../ui';
 import { Bar, Dot, KIND_ICON, KIND_NAME, StepLink, type StepsCardActions } from './StepsCard';
-import { stepsView, type StepsLookup, type StepView } from './steps-view';
+import { fullSections, kindMarked, settledSteps, stepsView, yoursText, type StepsLookup, type StepView } from './steps-view';
 
 /** What a step's state reads as, beside it. */
 const STATE_WORD: Record<StepView['state'], string> = { done: 'Done', yours: 'Yours', now: 'Now', later: '' };
@@ -35,9 +35,6 @@ function FullStep({ view, tick }: { view: StepView; tick: StepsCardActions['tick
         <Dot view={view} />
       )}
       <span className="steps-full-place">{view.place}</span>
-      <span className="steps-kind" title={KIND_NAME[step.kind]} aria-label={KIND_NAME[step.kind]}>
-        {KIND_ICON[step.kind]}
-      </span>
       <span className="steps-full-text">
         <span>
           {step.text}
@@ -46,6 +43,14 @@ function FullStep({ view, tick }: { view: StepView; tick: StepsCardActions['tick
         {step.link !== null && <StepLink link={step.link} />}
         <span className="steps-full-note">{view.answer !== null ? `Answered: ${view.answer}` : view.note}</span>
       </span>
+      {/* A question's kind trails its text, small, so it never sits beside the state dot; a to-do's dot already says it is one. */}
+      {kindMarked(step.kind) ? (
+        <span className="steps-kind steps-kind-trail" title={KIND_NAME[step.kind]} aria-label={KIND_NAME[step.kind]}>
+          {KIND_ICON[step.kind]}
+        </span>
+      ) : (
+        <span className="steps-kind" aria-hidden="true" />
+      )}
       {STATE_WORD[view.state] !== '' && <span className="steps-full-state">{STATE_WORD[view.state]}</span>}
     </li>
   );
@@ -95,6 +100,9 @@ type Frame = Omit<HTMLAttributes<HTMLDivElement>, keyof StepsFullProps> & { ref?
 /** The card in full: its head, bar, sections and foot. */
 function FullBody({ data, lookup, actions, error, onClose, inline = false, ...frame }: StepsFullProps & Frame) {
   const view = useMemo(() => stepsView(data, lookup), [data, lookup]);
+  // What is under Done is fixed as the view opens, so a tick leaves its row, and the focus, where they are.
+  const [settled] = useState(() => settledSteps(view));
+  const left = yoursText(view);
   return (
     <div
       {...frame}
@@ -121,14 +129,14 @@ function FullBody({ data, lookup, actions, error, onClose, inline = false, ...fr
       {data.steps.length > 0 && <Bar view={view} />}
       <div className="steps-full-body" tabIndex={-1}>
         {data.steps.length === 0 && <p className="steps-full-none">No steps yet</p>}
-        {view.sections.map((section, index) => (
-          <section key={index} className="steps-full-section" aria-label={section.title ?? (view.headed ? 'First' : 'Steps')}>
-            {view.headed && (
-              <h3 className="steps-full-section-head" data-finished={section.done === section.total || undefined}>
-                <span>{section.title ?? 'First'}</span>
+        {fullSections(view, settled).map((section) => (
+          <section key={section.done ? 'done' : `left:${section.title ?? ''}`} className="steps-full-section" aria-label={section.title ?? 'Steps'} data-done={section.done}>
+            {section.title !== null && (
+              <h3 className="steps-full-section-head" data-finished={section.done}>
+                <span>{section.title}</span>
                 <span className="steps-section-count">
-                  {section.done === section.total && <Check />}
-                  {section.done}/{section.total}
+                  {section.done && <Check />}
+                  {section.steps.length}
                 </span>
               </h3>
             )}
@@ -140,9 +148,10 @@ function FullBody({ data, lookup, actions, error, onClose, inline = false, ...fr
           </section>
         ))}
       </div>
-      {(error !== undefined || view.send.kind === 'ready' || view.send.kind === 'blocked') && (
+      {(error !== undefined || left !== null || view.send.kind === 'ready' || view.send.kind === 'blocked') && (
         <div className="steps-full-foot">
           {error !== undefined && <ErrorText>{error}</ErrorText>}
+          {left !== null && <span className="steps-full-note" data-testid="steps-full-left">{left}</span>}
           <span className="steps-spacer" />
           {view.send.kind === 'blocked' && <span className="steps-full-note">Step {view.send.place} is required before Send</span>}
           {(view.send.kind === 'ready' || view.send.kind === 'blocked') && (

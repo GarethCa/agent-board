@@ -90,5 +90,8 @@
   "0089_queue_kinds": "c4ecf2ae04fc661918e6440002ea7c0be88d7852b89aab5c6d176ebac407fd59",
   "0090_agent_purpose": "27cead02fc17bddc82b7e1441aae77ea11a454b836bbf83fb6cec4fd075e280e",
   "0091_zone_layout_rule": "98209bfe84e9fb903942cf6c8b9567e931bc5f7d6a11489e737f81bdbcc9348f",
-  "0092_orphaned_crews": "060dce42f4fb205b5b8ba72546ea4a8d7a5d4d3b9c213573af23f7aad6887e2e"
+  "0092_orphaned_crews": "060dce42f4fb205b5b8ba72546ea4a8d7a5d4d3b9c213573af23f7aad6887e2e",
+  "0093_waiting_messages": "5e62d012d12b45f30886603ac3c08f7dde86bba8fd9469e60da8d84e283816d9",
+  "0094_agent_tickets": "7c19564c89897446a4fe6dac7eaf0e25b99d70d1cb47b5865573e043ca661e1d",
+  "0095_plan_untold": "03281e3f9d61391cdb910575921f6b1f39f5d9866f5edb946c6a394a8cede0db"
 }

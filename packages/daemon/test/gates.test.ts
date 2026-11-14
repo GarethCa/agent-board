@@ -312,7 +312,7 @@ describe('the merge gate', () => {
  * A daemon with one agent whose repo's origin is acme/app on the fake GitHub for gh, and a bare repo here for pushes, in
  * a zone whose gate passes. Its worktree has a commit of work, a pull request template and a handover.
  */
-async function pullRequestDaemon({ gated = true, printsToken = false }: { gated?: boolean; printsToken?: boolean } = {}) {
+async function pullRequestDaemon({ gated = true, printsToken = false, ticketChat = false }: { gated?: boolean; printsToken?: boolean; ticketChat?: boolean } = {}) {
   const github = createFakeGitHub({ ...FAKE_GITHUB_STATE });
   onTestFinished(github.dispose);
   const daemon = await startTestDaemon({
@@ -336,7 +336,7 @@ async function pullRequestDaemon({ gated = true, printsToken = false }: { gated?
   git(repo, '-c', 'user.name=T', '-c', 'user.email=t@e', 'commit', '-q', '-m', 'template');
   const zone = await client.call('zone.add', { path: repo, x: 0, y: 0 });
   if (gated) await client.call('zone.configure', { id: zone.id, gateCommand: gateCommand('pass') });
-  const agent = await client.call('agent.spawn', { zoneId: zone.id, prompt: printsToken ? 'Print your board identity' : 'Fix checkout', name: 'Fix checkout flake', ...SIZE });
+  const agent = await client.call('agent.spawn', { zoneId: zone.id, prompt: printsToken ? 'Print your board identity' : 'Fix checkout', name: 'Fix checkout flake', ticketChat, ...SIZE });
   writeFileSync(join(agent.worktree, 'cart.ts'), 'export const validated = true;\n');
   git(agent.worktree, 'add', '.');
   git(agent.worktree, '-c', 'user.name=T', '-c', 'user.email=t@e', 'commit', '-q', '-m', 'Validate the cart');
@@ -512,6 +512,29 @@ describe('Open PR and Merge', { timeout: 20_000 }, () => {
     expect(merged).toEqual({ done: ['close'], failed: [] });
     expect(existsSync(agent.worktree)).toBe(true);
     expect(git(repo, 'branch', '--list', agent.branch)).toContain(agent.branch);
+  });
+
+  /** A ticket chat's pull request, ready to merge, and a helper of its ticket, with `draft.txt` unsaved if asked. */
+  const mergeTicket = async (unsaved: boolean) => {
+    const { github, client, zone, agent, passed } = await pullRequestDaemon({ ticketChat: true });
+    const run = await passed();
+    await client.call('gate.openPullRequest', { sessionId: agent.sessionId });
+    setChecks(github, 'COMPLETED', 'SUCCESS');
+    const builder = await client.call('agent.spawn', { zoneId: zone.id, name: 'builder', ticket: agent.sessionId, ...SIZE });
+    if (unsaved) writeFileSync(join(builder.worktree, 'draft.txt'), 'unsaved');
+    const merged = await client.call('gate.merge', { sessionId: agent.sessionId, number: PR, headCommit: run.commit, cleanup: { ...NO_CLEANUP, close: true } });
+    return { merged, left: (await client.call('agent.list')).map((each) => each.name).sort() };
+  };
+
+  it("closes a ticket chat's helpers with it, leaving none without its ticket", async () => {
+    expect(await mergeTicket(false)).toEqual({ merged: { done: ['close'], failed: [] }, left: [] });
+  });
+
+  it('closes none of a ticket while a helper holds unsaved work, and says which', async () => {
+    expect(await mergeTicket(true)).toEqual({
+      merged: { done: [], failed: [{ step: 'close', why: expect.stringMatching(/^builder: /) }] },
+      left: ['Fix checkout flake', 'builder'],
+    });
   });
 
   it('refuses to merge when the gate passed on an older commit than the PR head', async () => {

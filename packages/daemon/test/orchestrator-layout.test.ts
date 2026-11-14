@@ -5,10 +5,12 @@ import { createFakeGitHub, FAKE_GITHUB_STATE } from '@agent-board/tracker/testin
 import { agentNoteSize } from '../src/agent-notes.ts';
 import { BOARD_ARRANGE_GAP } from '../src/arrange-board.ts';
 import { CLUSTER_LABEL_SIZE } from '../src/board-arrange.ts';
-import { AGENT_TILE_SIZE, clearOf, overlaps as rectsOverlap, CREW_GAP, GRID_COLUMN as COLUMN, GRID_ORIGIN as FIRST, gridPoint, PERCH_ROOM, RAIL_GAP, ROW_STEP, sizedFootprint, SPACING_GAPS, TILE_GAP, tileSlot, ZONE_PADDING, type Rect } from '../src/board-layout.ts';
+import { AGENT_TILE_SIZE, clearOf, overlaps as rectsOverlap, CREW_GAP, GRID_COLUMN as COLUMN, GRID_ORIGIN as FIRST, gridPoint, PERCH_ROOM, RAIL_GAP, ROW_STEP, sizedFootprint, SPACING_GAPS, TILE_GAP, tileSizeKey, tileSlot, ZONE_PADDING, type Rect } from '../src/board-layout.ts';
 import type { DaemonClient } from '../src/client.ts';
 import { spotBesideAgent, type DaemonCall } from '../src/orchestrator-layout.ts';
+import { SPINE_GAPS } from '../src/spine-layout.ts';
 import { daemonPaths } from '../src/paths.ts';
+import { RULE_SETTLE_MS } from '../src/zone-rules.ts';
 import { lintLine, spareSlots } from '../src/zone-map.ts';
 import { AGENT_NOTE_SIZE, BOARD_ERROR, FOLDED_ZONE_SIZE, measuredText, RPC_ERROR, STICKY_SIZE, type Agent, type AgentUpdatedEvent, type ArrangeLayout, type BoardItem, type DaemonEvent, type DaemonMethod, type ExpandedBox, type MeasuredBox, type Zone } from '../src/protocol.ts';
 import { connectTestClient, git, recordEvents, startTestDaemon, TEST_CLI_LAUNCHER, tempDataDir, tempRepo } from './helpers.ts';
@@ -203,7 +205,7 @@ describe('orchestrator.move', () => {
     expect((await setup.client.call('item.list')).find((item) => item.id === users.id)).toMatchObject(gridPoint(2, 1));
   });
 
-  it('moves an agent another agent started into any zone, or loose on the board, but never one the user started by hand', async () => {
+  it('moves an agent another agent started into any zone, or loose on the board, and one the user started by hand', async () => {
     const setup = await layoutDaemon();
     const me = await lead(setup, setup.zone.id);
     const elsewhere = await userAgent(setup.client, setup.other.id, 'elsewhere');
@@ -212,11 +214,10 @@ describe('orchestrator.move', () => {
     expect(await me.connection.call('orchestrator.move', { token: me.token, target: { kind: 'agent', id: mine.sessionId }, zoneId: null, at: { x: 0, y: 2000 } })).toMatchObject({
       zoneId: null,
     });
-    await expect(me.connection.call('orchestrator.move', { token: me.token, target: { kind: 'agent', id: elsewhere.sessionId }, zoneId: setup.zone.id })).rejects.toMatchObject({
-      code: BOARD_ERROR.outOfScope,
-      message: "elsewhere is one the user started by hand: agents never act on the user's own agents",
+    expect(await me.connection.call('orchestrator.move', { token: me.token, target: { kind: 'agent', id: elsewhere.sessionId }, zoneId: setup.zone.id })).toMatchObject({
+      zoneId: setup.zone.id,
     });
-    expect(await lastLine(setup.client)).toMatchObject({ action: 'move', outcome: 'refused', reason: expect.stringMatching(/started by hand/) });
+    expect(await lastLine(setup.client)).toMatchObject({ action: 'move', outcome: 'done', targetName: 'elsewhere' });
   });
 
   it("sets its zone's layout, or another zone's, moving no tile, logging each", async () => {
@@ -1062,7 +1063,7 @@ describe('the zone map and arranging by itself', () => {
     expect(map.lanes[1]!.note).toBe(`item:${note.id}`);
     expect([map.overlaps, map.offGrid]).toEqual([[], []]);
 
-    // Closed, its zone is arranged again: a closed agent folded to a chip is laid out at a chip's size.
+    // Closed, its tile leaves the board and its zone is arranged again, closing up the room it took.
     await me.connection.call('orchestrator.close', { token: me.token, sessionId: other.sessionId });
     expect(await lastLine(setup.client)).toMatchObject({ action: 'arrange', detail: expect.stringMatching(/, by itself$/) });
     map = await me.connection.call('orchestrator.map', { token: me.token });
@@ -1779,6 +1780,13 @@ describe('the layout tools and commands', () => {
     const budgeted = await mcp.callTool('add_note', { text: 'Budgeted', lines: 4 });
     expect(budgeted).toMatchObject({ isError: false });
     expect((await setup.client.call('item.list')).find((item) => item.kind === 'agent-note' && item.data.text === 'Budgeted')).toMatchObject({ data: { lines: 4 } });
+    // Passed to the worker, which holds it from then on.
+    const budgetedNote = (await setup.client.call('item.list')).find((item) => item.kind === 'agent-note' && item.data.text === 'Budgeted')!;
+    expect(await mcp.callTool('pass_note', { note: `item:${budgetedNote.id}`, to: 'worker' })).toMatchObject({
+      isError: false,
+      text: expect.stringMatching(/^Passed item:\S+ to agent:\S+ worker: it goes off the board with worker now\.$/),
+    });
+    expect(await mcp.callTool('pass_note', { note: `item:${budgetedNote.id}`, to: 'worker' })).toMatchObject({ isError: true, text: expect.stringContaining('worker holds it already') });
     expect(await mcp.callTool('remove_note', { note: `item:${note.id}` })).toMatchObject({ isError: false, text: expect.stringMatching(/^Removed item:/) });
     expect(await mcp.callTool('move', { tile: 'worker', to: 'other' })).toMatchObject({ isError: false, text: expect.stringMatching(/^Moved agent:\w+ worker \(in zone:\w+ other\)/) });
   });
@@ -1862,7 +1870,7 @@ function overlapping(a: Zone, b: Zone): boolean {
 }
 
 describe('orchestrator.addClock and removeClock', () => {
-  it("puts a clock on the board, marked as its own: messaging a worker beside its tile, or starting fresh agents in any zone; messaging an agent outside its scope is refused, and logged", async () => {
+  it("puts a clock on the board, marked as its own: messaging a worker beside its tile, or starting fresh agents in any zone, or messaging one the user started; messaging one that is gone is refused, and logged", async () => {
     const setup = await layoutDaemon();
     const me = await lead(setup, setup.zone.id);
     const worker = await me.connection.call('orchestrator.spawn', { token: me.token, name: 'worker' });
@@ -1877,9 +1885,10 @@ describe('orchestrator.addClock and removeClock', () => {
     const away = await me.connection.call('orchestrator.addClock', { token: me.token, zoneId: setup.other.id, data: { cron: '@daily', does: 'fresh', prompt: 'Go' } });
     expect(away).toMatchObject({ zoneId: setup.other.id, data: { does: 'fresh', agent: null } });
 
-    await expect(me.connection.call('orchestrator.addClock', { token: me.token, data: { cron: '@daily', agent: elsewhere.sessionId, prompt: 'Go' } })).rejects.toMatchObject({
-      code: BOARD_ERROR.outOfScope,
-    });
+    const theirs = await me.connection.call('orchestrator.addClock', { token: me.token, data: { cron: '@daily', agent: elsewhere.sessionId, prompt: 'Go' } });
+    expect(theirs).toMatchObject({ data: { does: 'message', agent: elsewhere.sessionId } });
+    await setup.client.call('agent.delete', { sessionId: elsewhere.sessionId, force: true });
+    await expect(me.connection.call('orchestrator.addClock', { token: me.token, data: { cron: '@daily', agent: elsewhere.sessionId, prompt: 'Go' } })).rejects.toThrow();
     expect(await lastLine(setup.client)).toMatchObject({ action: 'add-clock', outcome: 'refused' });
 
     // Its own goes; the user's stays.
@@ -1887,7 +1896,7 @@ describe('orchestrator.addClock and removeClock', () => {
     await expect(me.connection.call('orchestrator.removeClock', { token: me.token, id: users.id })).rejects.toMatchObject({ code: BOARD_ERROR.outOfScope });
     await me.connection.call('orchestrator.removeClock', { token: me.token, id: fresh.id });
     await me.connection.call('orchestrator.removeClock', { token: me.token, id: away.id });
-    expect((await setup.client.call('item.list')).filter((item) => item.kind === 'clock').map((item) => item.id).sort()).toEqual([messaging.id, users.id].sort());
+    expect((await setup.client.call('item.list')).filter((item) => item.kind === 'clock').map((item) => item.id).sort()).toEqual([messaging.id, theirs.id, users.id].sort());
   });
 
   it("starts a clock from a template: one that starts its own agent goes in the caller's zone; one that messages an agent needs it named", async () => {
@@ -2665,23 +2674,149 @@ describe('a second orchestrator in a zone the first one arranged', () => {
     expect((await second.connection.call('orchestrator.close', { token: second.token, sessionId: impl.sessionId, remove: true }))).toBeNull();
   });
 
-  it('hands over only its own crew, never to one the user started by hand, or one whose session ended; the user hands over any', async () => {
+  it('hands over only its own crew, to one the user started by hand too; the user hands over any', async () => {
     const { setup, first, second } = await takenOver();
     const third = await lead(setup, setup.zone.id, 'third');
     await expect(third.connection.call('orchestrator.handover', { token: third.token, from: first.agent.sessionId, to: second.agent.sessionId })).rejects.toMatchObject({
       code: BOARD_ERROR.outOfScope,
     });
     await expect(setup.client.call('orchestrator.handover', { from: first.agent.sessionId, to: first.agent.sessionId })).rejects.toMatchObject({ code: RPC_ERROR.invalidParams });
-    // The first one may not give its own to an agent the user started by hand, though the user may.
-    await expect(first.connection.call('orchestrator.handover', { token: first.token, from: first.agent.sessionId, to: second.agent.sessionId })).rejects.toMatchObject({
-      code: BOARD_ERROR.outOfScope,
-      message: expect.stringContaining('second is one the user started by hand'),
-    });
-    const handed = await setup.client.call('orchestrator.handover', { from: first.agent.sessionId, to: second.agent.sessionId });
+    // The first one gives its own to an agent the user started by hand.
+    const handed = await first.connection.call('orchestrator.handover', { token: first.token, from: first.agent.sessionId, to: second.agent.sessionId });
     expect(handed.crew.map((agent) => agent.name)).toEqual(['menu']);
     // And the user hands it on again.
     const again = await setup.client.call('orchestrator.handover', { from: second.agent.sessionId, to: third.agent.sessionId });
     expect(again.crew.map((agent) => agent.name)).toEqual(['menu']);
     expect(again.made).toBe(2);
+  });
+});
+
+describe('a zone on the Spine rule, with an orchestrator', () => {
+  const PAD = SPACING_GAPS.normal.padding;
+  const positionOf = async (client: DaemonClient, sessionId: string) => (await client.call('agent.list')).find((each) => each.sessionId === sessionId)!.position!;
+
+  it("stands the orchestrator at the left as the lead, its crew in bands right of it, and sets aside the clocks with no room", async () => {
+    const setup = await layoutDaemon();
+    const { client, zone } = setup;
+    const me = await lead(setup, zone.id, 'orch', 'orchestrator' as Agent['role']);
+    const impl = await me.connection.call('orchestrator.spawn', { token: me.token, name: 'impl', role: 'implementer' });
+    const impl2 = await me.connection.call('orchestrator.spawn', { token: me.token, name: 'impl2', role: 'implementer' });
+    // The user started the orchestrator, so the rule never moves it: the column is laid where it stands (here clear of
+    // the clocks' row along the top, as nothing is laid over it).
+    const stands = { x: PAD, y: 300 };
+    await client.call('agent.move', { sessionId: me.agent.sessionId, zoneId: zone.id, ...stands });
+    await client.call('orchestrator.zoneLayout', { zoneId: zone.id, mode: 'spine' });
+    const firstLine = PAD + AGENT_TILE_SIZE.width + SPINE_GAPS.normal.across + SPINE_GAPS.normal.band;
+    await vi.waitFor(async () => expect((await positionOf(client, impl.sessionId)).x).toBe(firstLine), { timeout: 5000 });
+    // The lead alone in the head column; each of its crew a band of its own, in the first column right of it.
+    expect(await positionOf(client, me.agent.sessionId)).toMatchObject(stands);
+    expect(await positionOf(client, impl.sessionId)).toMatchObject({ x: firstLine, y: PAD + PERCH_ROOM });
+    expect(await positionOf(client, impl2.sessionId)).toMatchObject({ x: firstLine });
+    expect((await positionOf(client, impl2.sessionId)).y).toBeGreaterThan(PAD + PERCH_ROOM + AGENT_TILE_SIZE.height);
+
+    // Three of the crew's clocks: one fits along the top with the chip, within the width the tiles take; two are set aside.
+    for (const prompt of ['one', 'two', 'three']) {
+      const clock = await client.call('clock.add', { place: { zoneId: zone.id, x: 900, y: 500 }, data: { prompt } });
+      markMadeBy(setup, clock.id, me.agent.sessionId);
+    }
+    await client.call('zone.followRule', { id: zone.id, tiles: [] });
+    const clocks = (await client.call('item.list')).filter((item) => item.kind === 'clock');
+    expect(clocks.map((clock) => clock.data.tucked === true)).toEqual([false, true, true]);
+    const width = firstLine + AGENT_TILE_SIZE.width + PAD;
+    expect((await client.call('zone.list')).find((each) => each.id === zone.id)!.width).toBe(width);
+    // Free again, none is set aside.
+    await client.call('orchestrator.zoneLayout', { zoneId: zone.id, mode: 'free' });
+    await vi.waitFor(async () => expect((await client.call('item.list')).filter((item) => item.data.tucked === true)).toEqual([]), { timeout: 5000 });
+    expect(await client.call('view.get', { key: `spine:${zone.id}` })).toBeNull();
+  });
+
+  it("leaves the agents the user started where they are, whoever lays the zone out, until the user drags one onto it", async () => {
+    const setup = await layoutDaemon();
+    const { client, zone } = setup;
+    const me = await lead(setup, zone.id, 'orch', 'orchestrator' as Agent['role']);
+    const impl = await me.connection.call('orchestrator.spawn', { token: me.token, name: 'impl', role: 'implementer' });
+    const impl2 = await me.connection.call('orchestrator.spawn', { token: me.token, name: 'impl2', role: 'implementer' });
+    const mine = await userAgent(client, zone.id, 'mine');
+    const head = { x: PAD + 300, y: PAD + PERCH_ROOM };
+    const aside = { x: PAD, y: 400 };
+    await client.call('agent.move', { sessionId: me.agent.sessionId, zoneId: zone.id, ...head });
+    await client.call('agent.move', { sessionId: mine.sessionId, zoneId: zone.id, ...aside });
+    // Picking Spine lays out the orchestrator's crew, right of where the user's orchestrator stands; the user's own stay put.
+    await client.call('orchestrator.zoneLayout', { zoneId: zone.id, mode: 'spine' });
+    const firstLine = head.x + AGENT_TILE_SIZE.width + SPINE_GAPS.normal.across + SPINE_GAPS.normal.band;
+    await vi.waitFor(async () => expect((await positionOf(client, impl.sessionId)).x).toBe(firstLine), { timeout: 5000 });
+    const crew = await positionOf(client, impl.sessionId);
+    const stayPut = async () => {
+      expect(await positionOf(client, me.agent.sessionId)).toMatchObject(head);
+      expect(await positionOf(client, mine.sessionId)).toMatchObject(aside);
+    };
+    await stayPut();
+    // Nor does an agent's arrange, the user's, a Tidy, or a tile going.
+    await me.connection.call('orchestrator.arrange', { token: me.token });
+    await stayPut();
+    await client.call('orchestrator.arrange', { zoneId: zone.id });
+    await stayPut();
+    await client.call('zone.followRule', { id: zone.id, tiles: [], reflow: true });
+    await stayPut();
+    await client.call('agent.delete', { sessionId: impl2.sessionId, force: true });
+    await new Promise((resolve) => setTimeout(resolve, RULE_SETTLE_MS * 3));
+    await stayPut();
+    expect(await positionOf(client, impl.sessionId)).toMatchObject(crew);
+
+    // Dragged elsewhere, it stays where it was dropped, still the user's.
+    const elsewhere = { x: PAD, y: 480 };
+    await client.call('agent.move', { sessionId: mine.sessionId, zoneId: zone.id, ...elsewhere, byHand: true });
+    await new Promise((resolve) => setTimeout(resolve, RULE_SETTLE_MS * 3));
+    expect(await positionOf(client, mine.sessionId)).toMatchObject(elsewhere);
+    // Dropped on a band, it joins: laid out as a band of its own under it, no longer pinned, and kept through a Tidy.
+    await client.call('agent.move', { sessionId: mine.sessionId, zoneId: zone.id, x: crew.x + 40, y: crew.y + 20, byHand: true });
+    await vi.waitFor(async () => expect((await positionOf(client, mine.sessionId)).x).toBe(firstLine), { timeout: 5000 });
+    expect((await positionOf(client, mine.sessionId)).y).toBeGreaterThan(crew.y + AGENT_TILE_SIZE.height);
+    expect(await positionOf(client, impl.sessionId)).toMatchObject(crew);
+    expect((await client.call('zone.list')).find((each) => each.id === zone.id)!.handPlaced).toEqual([]);
+    const joined = await positionOf(client, mine.sessionId);
+    await client.call('zone.followRule', { id: zone.id, tiles: [], reflow: true });
+    expect(await positionOf(client, mine.sessionId)).toMatchObject({ x: joined.x, y: joined.y });
+    expect(await positionOf(client, me.agent.sessionId)).toMatchObject(head);
+  });
+
+  it('lays out an agent the user started once it is put back under the rule, and again once one dragged off is dropped back on a band', async () => {
+    const setup = await layoutDaemon();
+    const { client, zone } = setup;
+    const me = await lead(setup, zone.id, 'orch', 'orchestrator' as Agent['role']);
+    const impl = await me.connection.call('orchestrator.spawn', { token: me.token, name: 'impl', role: 'implementer' });
+    const mine = await userAgent(client, zone.id, 'mine');
+    const head = { x: PAD + 300, y: PAD + PERCH_ROOM };
+    await client.call('agent.move', { sessionId: me.agent.sessionId, zoneId: zone.id, ...head });
+    await client.call('orchestrator.zoneLayout', { zoneId: zone.id, mode: 'spine' });
+    const firstLine = head.x + AGENT_TILE_SIZE.width + SPINE_GAPS.normal.across + SPINE_GAPS.normal.band;
+    await vi.waitFor(async () => expect((await positionOf(client, impl.sessionId)).x).toBe(firstLine), { timeout: 5000 });
+    const crew = await positionOf(client, impl.sessionId);
+    const handPlaced = async () => (await client.call('zone.list')).find((each) => each.id === zone.id)!.handPlaced;
+
+    // Dragged off the layout, it stays; put back under the rule, it joins.
+    const elsewhere = { x: PAD, y: 480 };
+    await client.call('agent.move', { sessionId: mine.sessionId, zoneId: zone.id, ...elsewhere, byHand: true });
+    await new Promise((resolve) => setTimeout(resolve, RULE_SETTLE_MS * 3));
+    expect(await positionOf(client, mine.sessionId)).toMatchObject(elsewhere);
+    await client.call('zone.followRule', { id: zone.id, tiles: [tileSizeKey('agent', mine.sessionId)] });
+    expect((await positionOf(client, mine.sessionId)).x).toBe(firstLine);
+    expect(await handPlaced()).toEqual([]);
+    const joined = await positionOf(client, mine.sessionId);
+
+    // Dragged off again, it stays where it was dropped.
+    await client.call('agent.move', { sessionId: mine.sessionId, zoneId: zone.id, ...elsewhere, byHand: true });
+    await new Promise((resolve) => setTimeout(resolve, RULE_SETTLE_MS * 3));
+    expect(await positionOf(client, mine.sessionId)).toMatchObject(elsewhere);
+    // Dropped on a band again, it joins again: back in its place, no longer pinned.
+    await client.call('agent.move', { sessionId: mine.sessionId, zoneId: zone.id, x: crew.x + 40, y: crew.y + 20, byHand: true });
+    await vi.waitFor(async () => expect(await positionOf(client, mine.sessionId)).toMatchObject({ x: joined.x, y: joined.y }), { timeout: 5000 });
+    expect(await handPlaced()).toEqual([]);
+    expect(await positionOf(client, impl.sessionId)).toMatchObject(crew);
+    // Nudged within its own band, it is left where it was put, as any tile dragged by hand.
+    const nudged = { x: joined.x + 30, y: joined.y + 10 };
+    await client.call('agent.move', { sessionId: mine.sessionId, zoneId: zone.id, ...nudged, byHand: true });
+    await new Promise((resolve) => setTimeout(resolve, RULE_SETTLE_MS * 3));
+    expect(await positionOf(client, mine.sessionId)).toMatchObject(nudged);
   });
 });

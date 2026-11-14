@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Bell, Bot, ChevronRight, Gauge, LayoutDashboard, Search, SlidersHorizontal, UserRound, Wrench } from 'lucide-react';
+import { WINDOW_QUERY } from '../../../preload/api';
 import { errorMessage } from '../../../shared/errors';
 import { ExternalHooksToggle } from '../board/ExternalHooksToggle';
 import { GpuTerminalsSetting } from './GpuTerminalsSetting';
 import { KeepTerminalsSetting } from './KeepTerminalsSetting';
 import { HeldPayloadsSetting } from '../board/HeldPayloadsSetting';
-import { daemonStatusText, useDaemonStatus } from '../DaemonStatus';
+import { daemonStatusText, RestartDaemon, useDaemonStatus } from '../DaemonStatus';
 import { useSimplified } from '../design';
 import { storedValue } from '../stored-value';
-import { Hint, useToast } from '../ui';
+import { Readout, useToast } from '../ui';
 import { useLiveLists } from '../windows/use-live-lists';
 import { AgentSidebarSetting } from './AgentSidebarSetting';
 import { AppearanceSetting } from './AppearanceSetting';
@@ -83,8 +84,18 @@ function AgentTilesSettings() {
   );
 }
 
+/** Settings › Advanced › Background service: the daemon's build, version and pid, and Restart. */
 function DaemonStatusSetting() {
-  return <Hint data-testid="daemon-details">{daemonStatusText(useDaemonStatus())}</Hint>;
+  return (
+    <Readout
+      label="Background service"
+      data-testid="daemon-details"
+      end={<RestartDaemon label="Restart" />}
+      hint="It runs your agents and shells. Restarting it stops them, and the board offers to resume them."
+    >
+      {daemonStatusText(useDaemonStatus())}
+    </Readout>
+  );
 }
 
 /** What each section draws: every control in `SETTINGS_CONTROLS` is in the section it names as its home. */
@@ -200,9 +211,13 @@ export function SettingsWindow({ initial }: { initial: string }) {
 
   useEffect(() => window.agentBoard.setup.onSettingsPane((asked) => show(drawnPane(settingsPaneFrom(asked), simplified))), [show, simplified]);
 
-  // Kept as it changes, and the page brought to the section picked, or to its top.
+  // Kept as it changes, and the page brought to the section picked, or to its top. The window's address names it too,
+  // so a reload (a restart of the background service) comes back to it, not to the pane the window opened on.
   useEffect(() => {
     lastPane.set(settingsPaneText(pane));
+    const address = new URL(location.href);
+    address.searchParams.set(WINDOW_QUERY.settings, settingsPaneText(pane));
+    history.replaceState(history.state, '', address);
     const target = pane.section === undefined ? undefined : page.current?.querySelector(`#settings-section-${pane.group}-${pane.section}`);
     if (target) target.scrollIntoView({ block: 'start' });
     else page.current?.scrollTo({ top: 0 });

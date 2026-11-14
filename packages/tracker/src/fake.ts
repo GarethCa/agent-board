@@ -2,8 +2,10 @@ import {
   issueBranchName,
   TrackerError,
   type IssueLink,
+  type IssueListOptions,
   type Tracker,
   type TrackerIssue,
+  type TrackerMilestone,
   type TrackerProject,
   type TrackerScope,
 } from './tracker.ts';
@@ -72,6 +74,12 @@ export const FAKE_PROJECTS: readonly (TrackerProject & { scope: string })[] = [
   { scope: 'ACME', id: 'fake-project-harness', name: 'Harness', description: '', state: 'Completed', progress: 1 },
 ];
 
+/** The milestones of the fake's open projects, and the issues in each: Tracker integration's Beta holds its keychain issue. */
+export const FAKE_MILESTONES: readonly (TrackerMilestone & { project: string; issues: readonly string[] })[] = [
+  { project: 'fake-project-tracker', id: 'fake-milestone-beta', name: 'Beta', issues: ['ACME-16'] },
+  { project: 'fake-project-tracker', id: 'fake-milestone-later', name: 'Later', issues: [] },
+];
+
 const withoutScope = ({ id, name, description, state, progress }: TrackerProject): TrackerProject => ({
   id,
   name,
@@ -105,8 +113,9 @@ export function createFakeTracker(
     if (!FAKE_SCOPES.some((s) => s.key === scope)) throw new TrackerError('rejected', `no team ${scope}`);
     return issues.filter((issue) => issue.scope === scope);
   };
-  const inProject = (issue: TrackerIssue, project?: string) =>
-    project === undefined || issue.project === project;
+  const inProject = (issue: TrackerIssue, { project, milestone }: IssueListOptions) =>
+    (project === undefined || issue.project === project) &&
+    (milestone === undefined || FAKE_MILESTONES.some((m) => m.id === milestone && m.issues.includes(issue.id)));
   const known = async (id: string) => {
     await check();
     if (!issues.some((issue) => issue.id === id)) throw new TrackerError('rejected', `no issue ${id}`);
@@ -131,17 +140,27 @@ export function createFakeTracker(
       await check();
       return FAKE_PROJECTS.filter((p) => p.scope === scope && p.id === id).map(withoutScope)[0];
     },
-    async listIssues(scope, { limit = 50, project } = {}) {
+    async issueFilters(scope) {
+      return {
+        projects: (await this.projects!(scope)).map(({ id, name }) => ({
+          id,
+          name,
+          milestones: FAKE_MILESTONES.filter((m) => m.project === id).map((m) => ({ id: m.id, name: m.name })),
+        })),
+        milestones: [],
+      };
+    },
+    async listIssues(scope, { limit = 50, ...only } = {}) {
       return (await inScope(scope))
-        .filter((issue) => issue.state !== 'Done' && inProject(issue, project))
+        .filter((issue) => issue.state !== 'Done' && inProject(issue, only))
         .slice(0, limit);
     },
-    async searchIssues(scope, text, { limit = 50, project } = {}) {
+    async searchIssues(scope, text, { limit = 50, ...only } = {}) {
       const needle = text.toLowerCase();
       return (await inScope(scope))
         .filter(
           (issue) =>
-            inProject(issue, project) &&
+            inProject(issue, only) &&
             `${issue.id} ${issue.title} ${issue.description}`.toLowerCase().includes(needle),
         )
         .slice(0, limit);

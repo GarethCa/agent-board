@@ -30,6 +30,25 @@ export interface FakeGitHubState {
   rateLimited?: boolean;
   /** Repos whose pull requests `gh pr view` can't read, as in an org whose SAML session has lapsed: it fails, not "not found". */
   unreadableRepos?: string[];
+  /** GitHub Projects (`gh api graphql`), most recently updated first: each lists the repos it is linked to and its issues. */
+  projects?: FakeGitHubProject[];
+  /** Each repo's open milestones, by `nameWithOwner`, soonest due first. */
+  milestones?: Record<string, { number: number; title: string }[]>;
+  /** False: gh's login lacks the `read:project` scope, so GitHub refuses every query of projects. True by default. */
+  projectScope?: boolean;
+  /** How many of a project's items one page of GraphQL answers: 100, as GitHub's `first: 100`, by default. */
+  projectPageSize?: number;
+}
+
+export interface FakeGitHubProject {
+  /** Its node ID, as GitHub's GraphQL API names it (`PVT_…`). */
+  id: string;
+  title: string;
+  closed?: boolean;
+  /** The repos it is linked to: those whose `projectsV2` list it. */
+  repos: string[];
+  /** Its items: issues of any repo, by repo and number. */
+  issues: { repo: string; number: number }[];
 }
 
 export interface FakeGitHubIssue {
@@ -40,6 +59,8 @@ export interface FakeGitHubIssue {
   state: 'OPEN' | 'CLOSED';
   /** Its labels' names; none when left out. */
   labels?: string[];
+  /** The number of its repo's milestone it is in; none when left out. */
+  milestone?: number;
 }
 
 export interface FakeGitHubPullRequest {
@@ -98,10 +119,31 @@ export const FAKE_GITHUB_STATE: FakeGitHubState = {
       body: 'Users land on a blank page after signing in with the keychain.',
       state: 'OPEN',
     },
-    { repo: 'acme/app', number: 12, title: 'Add a dark theme', body: '', state: 'OPEN' },
+    { repo: 'acme/app', number: 12, title: 'Add a dark theme', body: '', state: 'OPEN', milestone: 1 },
     { repo: 'acme/app', number: 3, title: 'Set up CI', body: 'Run the tests on every push.', state: 'CLOSED' },
     { repo: 'acme/ops', number: 5, title: 'Rotate the deploy keys', body: '', state: 'OPEN' },
   ],
+  // One project, linked to acme/app, holding issues of both repos; and acme/app's two milestones.
+  projects: [
+    {
+      id: 'PVT_fakeRoadmap',
+      title: 'Roadmap',
+      repos: ['acme/app'],
+      issues: [
+        { repo: 'acme/app', number: 34 },
+        { repo: 'acme/app', number: 12 },
+        { repo: 'acme/app', number: 3 },
+        { repo: 'acme/ops', number: 5 },
+      ],
+    },
+    { id: 'PVT_fakeOld', title: 'Old plans', closed: true, repos: ['acme/app'], issues: [] },
+  ],
+  milestones: {
+    'acme/app': [
+      { number: 1, title: 'v1.0' },
+      { number: 2, title: 'v1.1' },
+    ],
+  },
   pullRequests: [],
 };
 

@@ -288,13 +288,19 @@ test('a zone from a Linear project is named after it, and its issue picker lists
       tracker: { provider: 'linear', scope, project: project.id },
     });
 
-    // Its picker lists the project's issues, and only them.
+    // Its picker starts on the zone's own project and lists that project's issues, and only them. (Its project or
+    // milestone select can widen it to the team; that select's choices are options too, so count the list's alone.)
     await zone.getByRole('button', { name: 'Add issue' }).click();
     const picker = window.getByRole('dialog', { name: 'Add an issue' });
-    await expect(picker.getByRole('option').filter({ hasText: knownIssue.id })).toBeVisible();
-    await expect(picker.getByRole('option')).toHaveCount(inProject.length);
-    await expect(picker.getByRole('option').filter({ hasText: 'ACME-9999' })).toHaveCount(0);
-    await picker.getByRole('option').filter({ hasText: knownIssue.id }).click();
+    const issues = picker.getByRole('listbox', { name: 'Issues' }).getByRole('option');
+    await expect(issues.filter({ hasText: knownIssue.id })).toBeVisible();
+    const projectName = project.name.replace(/[.*+?^$()|[\]{}\\]/g, '\\$&');
+    await expect(picker.getByLabel('Project or milestone').locator('option:checked')).toHaveText(
+      new RegExp(`^All of (${projectName}|this zone's project)$`),
+    );
+    await expect(issues).toHaveCount(inProject.length);
+    await expect(issues.filter({ hasText: 'ACME-9999' })).toHaveCount(0);
+    await issues.filter({ hasText: knownIssue.id }).click();
     await picker.getByRole('button', { name: 'Start agent' }).click();
     await expect(picker).toBeHidden();
     const newAgent = window.getByRole('dialog', { name: 'New agent' });

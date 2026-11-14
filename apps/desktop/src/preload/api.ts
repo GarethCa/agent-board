@@ -5,6 +5,7 @@ import type {
   LibraryPrefab,
   PrefabStarted,
   Effort,
+  GivenRole,
   EffortApplies,
   AgentRecordKind,
   AgentRemovedEvent,
@@ -91,6 +92,8 @@ import type {
   StartMasterParams,
   SplitDirection,
   TerminalSize,
+  IssueFilters,
+  IssuePick,
   TrackerIssue,
   TrackerProject,
   TrackerProvider,
@@ -307,8 +310,11 @@ export interface ZonesApi {
   update(id: string, layout: ZoneLayout): Promise<Zone>;
   /** Changes a zone's settings. */
   configure(id: string, settings: Partial<ZoneSettings>): Promise<Zone>;
-  /** Puts `tiles` (tile keys) the user placed by hand back under the zone's layout rule, and lays the zone out by it. */
-  followRule(id: string, tiles: string[]): Promise<Zone>;
+  /**
+   * Puts `tiles` (tile keys) the user placed by hand back under the zone's layout rule, and lays the zone out by it;
+   * `reflow`, as a Tidy, afresh (a Spine zone's bands out of the columns they kept).
+   */
+  followRule(id: string, tiles: string[], reflow?: boolean): Promise<Zone>;
   /** Folds a zone to a chip: its agents that can pause are paused, and the result says which were kept live and why. */
   fold(id: string): Promise<ZoneFoldResult>;
   /** Unfolds a zone. Its paused agents stay paused unless `wake` asks for them. */
@@ -1016,8 +1022,12 @@ export interface AgentsApi {
   setMuted(sessionId: string, muted: boolean): Promise<Agent>;
   /** Sets the agent's reasoning effort, and says when it takes it: now, after its turn, or on its next restart. */
   setEffort(sessionId: string, effort: Effort | null): Promise<{ agent: Agent; applies: EffortApplies }>;
-  /** Gives the agent a role, as typed (a built-in one or any name), or none with null. Only its role changes. */
-  setRole(sessionId: string, role: string | null): Promise<Agent>;
+  /**
+   * Gives the agent a role, as typed (a built-in one or any name), or none with null. Only its role changes, unless
+   * `sendTemplate` asks to send it the role's template as a message too: `template` then says how that went, `none` for
+   * a role with no template, when nothing is sent.
+   */
+  setRole(sessionId: string, role: string | null, sendTemplate?: boolean): Promise<GivenRole>;
   /** Deletes one of the agent's records from its sidebar, or with `deleted` false brings it back. */
   setRecordDeleted(sessionId: string, kind: AgentRecordKind, key: string, deleted: boolean): Promise<Agent>;
   /** Reads one of the agent's hand-off docs, for its Doc tab. */
@@ -1210,6 +1220,7 @@ export const TRACKER_IPC = {
   scopes: 'tracker:scopes',
   projects: 'tracker:projects',
   issues: 'tracker:issues',
+  issueFilters: 'tracker:issueFilters',
   openLink: 'tracker:openLink',
 } as const;
 
@@ -1234,8 +1245,10 @@ export interface TrackersApi {
   scopes(provider: TrackerProvider): Promise<ScopesResult>;
   /** The scope's open projects, most recently updated first; Linear only. Fails if the tracker can't be asked. */
   projects(provider: TrackerProvider, scope: string): Promise<TrackerProject[]>;
-  /** The zone's open issues (its project's, if it has one), or those matching `query`. */
-  issues(zoneId: string, query?: string): Promise<TrackerIssue[]>;
+  /** The zone's open issues, or those matching `query`, narrowed by `pick` (its own project's, if it has one, without). */
+  issues(zoneId: string, query?: string, pick?: IssuePick): Promise<TrackerIssue[]>;
+  /** What the zone's issue picker can be narrowed to: its scope's projects and milestones. */
+  issueFilters(zoneId: string): Promise<IssueFilters>;
   /** Opens a link from a tracker (an issue, a pull request) in the browser. Only https links. */
   openLink(url: string): Promise<void>;
 }

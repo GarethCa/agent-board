@@ -164,9 +164,15 @@
   --state-stopped-by-restart: #868e96; /* the dashed outline of a tile waiting to be resumed */
   --state-stopped-by-restart-ink: #495057;
   --state-stopped-by-restart-soft: #eef0f3;
-  --state-hibernated: #5f6fa3; /* a paused tile's slate border and stripes */
+  --state-hibernated: #5f6fa3; /* a paused tile's slate border, its frost and, with hatching on, its stripes */
   --state-hibernated-ink: #4c5a8c;
   --state-hibernated-soft: #eceff8;
+  /* A paused tile's frost: its cool fill, and the frost gathered in two of its corners over it. Its text is drawn in
+     --text, which tokens.test holds to AA on the frost at its densest, and its snowflake in --frost-mark, the state's
+     ink as the theme sets it (worked out here, so the tile's own full-ink text doesn't reach it), held to 3:1. */
+  --frost-fill: color-mix(in srgb, var(--state-hibernated-soft) 45%, var(--raised));
+  --frost: color-mix(in srgb, var(--state-hibernated) 8%, transparent);
+  --frost-mark: var(--state-hibernated-ink);
   --state-on-command: #0b7285; /* a command left running: its row on the tile, the running count and the stopwatch */
   --state-on-command-ink: var(--state-on-command);
   --state-on-command-soft: #e3f6f8;
@@ -269,8 +275,8 @@
   --agent-note-bubble-corner: var(--radius-sm); /* the bubble's corner under its tail, nearest the face */
   --agent-note-tail: 7px; /* how far the tail reaches out to the face */
   --agent-note-tail-top: 10px; /* from the bubble's top to its tail */
-  --agent-note-bubble-edge-mix: 14%; /* the ink in the bubble's hairline edge, over its fill */
-  --agent-note-bubble-edge: color-mix(in srgb, var(--agent-note-ink) var(--agent-note-bubble-edge-mix), var(--agent-note-fill));
+  --agent-note-bubble-edge-mix: 85%; /* the muted ink in the bubble's hairline edge, over its fill: 3:1 on the desk and on a zone's well in every look, as a paper fill can be the board's own colour */
+  --agent-note-bubble-edge: color-mix(in srgb, var(--agent-note-ink-muted) var(--agent-note-bubble-edge-mix), var(--agent-note-fill));
   --agent-note-fade: 28px; /* the fade over the last lines of a note's text past its line budget */
   --agent-note-chip-mix: 8%; /* the ink in the "more lines" chip, over the fill */
   --agent-note-chip: color-mix(in srgb, var(--agent-note-ink) var(--agent-note-chip-mix), var(--agent-note-fill));
@@ -497,6 +503,8 @@
   --line-bow-size: 12px; /* the one handle on a curve's middle that bows it */
   --line-bow-edge-width: 2px;
   --line-insert-opacity: 0.6;
+  --stage-board-header: 34px; /* a stage board's top bar, as its layout has it */
+  --stage-board-fill-mix: 62%; /* how much of the raised surface a stage board's block is filled with */
   --connector-label-gap: 2px;
   --connector-bar-gap: 10px; /* between the style bar and the line it is over */
   --connector-end-label-height: 16px; /* a label at a line's end: a multiplicity or a role */
@@ -778,6 +786,27 @@
   --tracking-heading: -0.025em; /* an onboarding step's title */
   --tracking-display: -0.03em; /* onboarding's welcome */
   --leading-roomy: 1.45; /* onboarding's longer copy */
+  /* A long document in its reading view (doc/ReadingView.tsx): a book's measure and size, not a chat message's. */
+  --measure-read: 68ch; /* its column */
+  --font-size-read: 15px; /* its body */
+  --font-size-read-h2: 19px;
+  --font-size-read-h3: 16px;
+  --font-size-read-code: 13px;
+  --font-size-read-table: 13.5px;
+  --leading-read: 1.6;
+  --leading-read-heading: 1.25;
+  --leading-read-card: 1.55; /* the decision card's points, a finding's headline */
+  --tracking-read-h2: -0.015em;
+  --space-read-block: 0.85em; /* between its paragraphs, lists and tables */
+  --space-read-item: 0.45em; /* between a list's items */
+  --space-read-indent: 1.3em; /* a list's numbers */
+  --space-read-h2: 2.1em; /* about two lines above a section */
+  --space-read-h3: 1.6em;
+  --space-read-h2-pad: 0.2em;
+  --space-read-finding: 0.75em; /* between the parts of an open finding */
+  --space-read-findings: 1em; /* above the findings */
+  --space-read-code-y: 0.05em;
+  --space-read-code-x: 0.35em;
 
   /* Sizes */
   --size-badge: 18px; /* a count badge's height and minimum width; a key cap's */
@@ -1068,6 +1097,14 @@
   --shadow-focus: 0 0 0 3px var(--focus-halo);
   --shadow-control: none;
   --shadow-input: none;
+}
+
+/* The reading view's own colours, worked out from the window's on it, so a theme's window reaches them. */
+.read-view {
+  --read-fraction: 0; /* how far down the reader is, 0 to 1: set as they scroll */
+  --read-card: var(--window-chrome);
+  --read-card-edge: color-mix(in srgb, var(--window-edge) 50%, var(--window-line));
+  --read-link: color-mix(in srgb, var(--window-focus) 55%, var(--window-ink));
 }
 
 /*

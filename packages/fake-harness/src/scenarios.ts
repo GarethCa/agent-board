@@ -489,7 +489,7 @@ const scripts: Record<FakeScenario, Script> = {
    * `two` and `three` with the CLI, ending on `Started three.`.
    * `Finish: <summary>` sets that status with `--done` and ends on `Finished.`; `Ask to remove: <a>, <b>` asks the user to remove those agents with `ask_to_remove` and says the answer.
    * `Lead a crowded crew: <task>` starts a worker with a long name, a role and a model, sets its status line, and starts a reviewer of it, leaving both running.
-   * `Print your board identity` echoes the board token. `Gate in the background` ends two turns, each followed by its
+   * `Print your board identity`, as the prompt or a line of it, echoes the board token. `Gate in the background` ends two turns, each followed by its
    * idle prompt, as a gate runs in its background, then writes its handover and runs `agent-board handoff`.
    * `Work until interrupted` says so and holds the turn open until the user interrupts it, `Work until interrupted, Stop in flight` then
    * fires its `Stop` too, after the interrupt;
@@ -618,7 +618,8 @@ const scripts: Record<FakeScenario, Script> = {
       await session.say('Started three.');
       return session.stop();
     }
-    if (prompt === 'Print your board identity') {
+    // A line of its own in a longer first message too: after its role's template, or before a lead's brief.
+    if (prompt.split('\n').includes('Print your board identity')) {
       await session.runShell('echo "identity:$AGENT_BOARD_IDENTITY:end"');
       return session.stop();
     }

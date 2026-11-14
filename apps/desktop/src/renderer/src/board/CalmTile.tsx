@@ -29,6 +29,8 @@ import { quickAskOf, tileDialogOf } from './quick-ask';
 import { TileQuickAsk } from './TileQuickAsk';
 import { TileDialogAsk } from './DialogQuickAsk';
 import { HandPlacedMark } from './HandPlacedMark';
+import { FrostMark } from './FrostMark';
+import { frostedClasses } from './paused';
 
 type CalmTileProps = { id: string; selected: boolean; agent: Agent } & Pick<TileData, 'repo' | 'from' | 'crew' | 'crewFlags' | 'implementer'>;
 
@@ -77,7 +79,7 @@ export function CalmTile({ id, selected, agent, repo, from, crew, crewFlags, imp
   return (
     <HoverCard label={card?.label ?? 'Last message'} content={card?.text}>
       <div
-        className="hybrid-tile hybrid-tile-agent calm-tile"
+        className={frostedClasses('hybrid-tile hybrid-tile-agent calm-tile', agent)}
         data-testid="agent-tile"
         data-representation="hybrid"
         data-corner="hover"
@@ -107,6 +109,7 @@ export function CalmTile({ id, selected, agent, repo, from, crew, crewFlags, imp
         <div className="hybrid-tile-head calm-tile-head">
           {startup !== null && !startup.failed && <Spinner />}
           <EditableName className={nameClass(agent.name)} value={agent.name} title={agent.name} renaming={renaming} clicks={nameClicks} label="Agent name" />
+          <FrostMark agent={agent} />
           <HandPlacedMark nodeId={id} />
           <span className="calm-tile-controls" data-testid="tile-controls">
             <RenameButton renaming={renaming} />

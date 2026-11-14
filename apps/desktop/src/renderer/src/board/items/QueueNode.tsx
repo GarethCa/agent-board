@@ -164,6 +164,7 @@ export const QueueNode = memo(function QueueNode({ id: nodeId, data, selected: p
       dragFrom={queue.noAgents ? undefined : { queueId: item.id, zoneId: item.zoneId }}
       drain={queue.drain}
       onDrain={() => openDrain(item.id)}
+      onMoveUp={(job) => void change({ action: 'later', job: job.id, until: null })}
       fresh={fresh?.id}
       focusAdd={focusAdd}
     >
@@ -202,6 +203,7 @@ export const QueueNode = memo(function QueueNode({ id: nodeId, data, selected: p
           onMove={(job, before) => change({ action: 'move', job: job.id, before: before?.id ?? null })}
           onDone={(job) => void change({ action: 'done', job: job.id })}
           onDrop={(job) => void change({ action: 'drop', job: job.id })}
+          onLater={(job, later) => void change({ action: 'later', job: job.id, ...(later ? {} : { until: null }) })}
           onRemove={removeJob}
           onGone={(job, draft) =>
             toast.show({

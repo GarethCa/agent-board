@@ -192,7 +192,7 @@ describe('the board MCP tools and the agent-board CLI', () => {
     { tool: 'read', command: 'read', positional: ['agent', 'path'] },
     { tool: 'interrupt', command: 'interrupt', positional: ['agent'] },
     { tool: 'set_effort', command: 'effort', positional: ['agent', 'effort'] },
-    { tool: 'give_role', command: 'role', positional: ['agent', 'role'] },
+    { tool: 'give_role', command: 'role', positional: ['agent', 'role'], renamed: { send_template: 'send-template' } },
     { tool: 'continue_on_credits', command: 'continue', positional: ['agent'] },
     { tool: 'restart', command: 'restart', positional: ['agent'], renamed: { prompt: 'file' } },
     { tool: 'pause', command: 'pause', positional: ['agent'] },
@@ -214,6 +214,7 @@ describe('the board MCP tools and the agent-board CLI', () => {
     { tool: 'add_note', command: 'note', options: ['text', 'kind', 'color', 'lines', 'to', 'at', 'near', 'side'] },
     { tool: 'edit_note', command: 'note', positional: ['note'], options: ['text', 'color', 'size', 'lines'] },
     { tool: 'remove_note', command: 'note', positional: ['note'], options: [] },
+    { tool: 'pass_note', command: 'note', positional: ['note', 'to'], options: [] },
     {
       tool: 'add_shape',
       command: 'shape',

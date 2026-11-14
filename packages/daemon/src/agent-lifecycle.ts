@@ -70,6 +70,7 @@ interface AgentLifecycleOptions
     | 'env'
     | 'onRemoving'
     | 'endTabs'
+    | 'beforeWorktreeRemoved'
     | 'isRunningSomething'
     | 'broadcast'
     | 'log'
@@ -164,6 +165,9 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
   const updateCutOff = db.prepare('UPDATE agents SET turn_cut_off = ? WHERE session_id = ?');
   const selectChildren = db.prepare('SELECT session_id FROM agents WHERE spawned_by = ?');
   const orphanCrew = db.prepare('UPDATE agents SET spawned_by = NULL, orphaned_from = ? WHERE spawned_by = ?');
+  const selectHelpers = db.prepare('SELECT session_id FROM agents WHERE ticket = ?');
+  /** A removed ticket's helpers are in no ticket now. */
+  const clearTicket = db.prepare('UPDATE agents SET ticket = NULL WHERE ticket = ?');
   const keepRemovedLead = db.prepare('INSERT OR REPLACE INTO removed_orchestrators (session_id, name, crew_depth) VALUES (?, ?, ?)');
   const dropBareLeads = db.prepare('DELETE FROM removed_orchestrators WHERE session_id NOT IN (SELECT orphaned_from FROM agents WHERE orphaned_from IS NOT NULL)');
   const keepConversation = db.prepare('INSERT INTO agent_conversations (session_id, harness_session_id, transcript_path) VALUES (?, ?, ?)');
@@ -460,7 +464,10 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
         await options.endTabs?.(sessionId);
         if (agent.reviews !== null) keepReview(sessionId, agent.worktree);
         // An agent adopted in the user's own folder takes nothing of theirs with it.
-        if (agent.ownsWorktree && !keepWorktree) await removeWorktree(repoRoot, agent.worktree, agent.ownedBranch, keepBranch);
+        if (agent.ownsWorktree && !keepWorktree) {
+          options.beforeWorktreeRemoved?.(sessionId, agent.worktree);
+          await removeWorktree(repoRoot, agent.worktree, agent.ownedBranch, keepBranch);
+        }
       } finally {
         deleting.delete(sessionId);
       }
@@ -469,11 +476,13 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
       // The agents it started stay, led by no one now but kept apart from the user's: another orchestrator may take
       // them over (`orchestrator.handover`). The activity log keeps who did what.
       const children = (selectChildren.all(sessionId) as { session_id: string }[]).map((child) => child.session_id);
+      const helpers = (selectHelpers.all(sessionId) as { session_id: string }[]).map((helper) => helper.session_id);
       db.exec('BEGIN');
       try {
         remove.run(sessionId);
         if (children.length > 0) keepRemovedLead.run(sessionId, agent.name, depth);
         orphanCrew.run(sessionId, sessionId);
+        clearTicket.run(sessionId);
         // A removed orchestrator whose last crew agent this was has nothing left to hand over.
         dropBareLeads.run();
         db.exec('COMMIT');
@@ -481,7 +490,7 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
         db.exec('ROLLBACK');
         throw error;
       }
-      for (const child of children) announce(child);
+      for (const child of new Set([...children, ...helpers])) announce(child);
       sessions.forget(sessionId);
       subagents.delete(sessionId);
       hookStates.deleted(sessionId);

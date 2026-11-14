@@ -35,10 +35,15 @@ async function idleAgent(setup: Setup, harness: Harness = 'claude') {
   return untilAgent(setup, agent.sessionId, (seen) => seen.state === 'idle' || seen.state === 'waiting');
 }
 
-/** The command line of the agent's session now. */
+/**
+ * The command line of the agent's session now, once its harness is past `env` starting `node`: until then `ps` shows
+ * only `(env)`.
+ */
 async function commandOf(setup: Setup, sessionId: string): Promise<string> {
   const session = (await setup.client.call('session.list')).find((each) => each.id === sessionId)!;
-  return execFileSync('ps', ['-ww', '-o', 'command=', '-p', String(session.pid)], { encoding: 'utf8' });
+  const read = () => execFileSync('ps', ['-ww', '-o', 'command=', '-p', String(session.pid)], { encoding: 'utf8' }).trim();
+  await expect.poll(read).not.toBe('(env)');
+  return read();
 }
 
 /** Stops the agent and starts it again, as Restart does. */

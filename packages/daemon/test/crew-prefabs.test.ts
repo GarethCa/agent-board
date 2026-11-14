@@ -46,16 +46,18 @@ describe('a crew prefab file', () => {
     }
   });
 
-  it('ships the five built-ins, Solo agent with one member and Lead and crew with member tiles', () => {
+  it('ships the six built-ins, Solo agent with one member, Lead and crew with member tiles, and Ticket as a ticket tile', () => {
     expect(BUILT_IN_PREFABS.map((prefab) => prefab.name)).toEqual([
       'Solo agent',
       'Implementer + reviewer',
       'Implementer + code + design reviewers',
       'Spike + reviewer',
       'Lead and crew',
+      'Ticket',
     ]);
     expect(BUILT_IN_PREFABS[0]!.members).toHaveLength(1);
     expect(BUILT_IN_PREFABS.filter((prefab) => prefab.onBoard === 'tiles').map((prefab) => prefab.name)).toEqual(['Lead and crew']);
+    expect(BUILT_IN_PREFABS.filter((prefab) => prefab.onBoard === 'ticket').map((prefab) => prefab.name)).toEqual(['Ticket']);
   });
 
   it('refuses what is not a prefab file, or one from a newer app', () => {

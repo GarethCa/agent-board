@@ -1,6 +1,6 @@
 import { ipcMain } from 'electron';
 import { DaemonRpcError, type DaemonLink } from '@agent-board/daemon/client';
-import { TRACKER_ERROR, type TrackerProvider } from '@agent-board/daemon/protocol';
+import { TRACKER_ERROR, type IssuePick, type TrackerProvider } from '@agent-board/daemon/protocol';
 import { TRACKER_IPC, type ScopesResult } from '../preload/api';
 import { openWebLink } from './links';
 import { passthrough, passthroughVoid } from './passthrough';
@@ -23,7 +23,8 @@ export function registerTrackerIpc(daemon: DaemonLink): void {
     }
   });
   passthrough(daemon, TRACKER_IPC.projects, 'tracker.projects', (provider: TrackerProvider, scope: string) => ({ provider, scope }));
-  passthrough(daemon, TRACKER_IPC.issues, 'tracker.issues', (zoneId: string, query?: string) => ({ zoneId, query }));
+  passthrough(daemon, TRACKER_IPC.issues, 'tracker.issues', (zoneId: string, query?: string, pick?: IssuePick) => ({ ...pick, zoneId, query }));
+  passthrough(daemon, TRACKER_IPC.issueFilters, 'tracker.issueFilters', (zoneId: string) => ({ zoneId }));
   // Tracker issues' and notes' links. Only https: the URL comes from outside the app.
   ipcMain.handle(TRACKER_IPC.openLink, (_event, url: string) => openWebLink(url));
 }

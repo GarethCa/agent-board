@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { matchOffsets, stepIndex } from './dom-find';
+import { matchOffsets, stepIndex, unfold } from './dom-find';
 import { findCount } from './FindBar';
 
 describe('finding text in a shown document', () => {
@@ -21,5 +21,18 @@ describe('finding text in a shown document', () => {
     expect(findCount('', { active: 0, total: 0 })).toBe('');
     expect(findCount('x', { active: 0, total: 0 })).toBe('No matches');
     expect(findCount('x', { active: 2, total: 5 })).toBe('2 of 5');
+  });
+});
+
+describe('a match in a folded part', () => {
+  it('opens every closed details round it, and nothing else', () => {
+    const outer = { tagName: 'DETAILS', open: false, parentElement: null };
+    const div = { tagName: 'DIV', parentElement: outer };
+    const inner = { tagName: 'DETAILS', open: false, parentElement: div };
+    const text = { tagName: 'P', parentElement: inner };
+    unfold(text);
+    expect([outer.open, inner.open]).toEqual([true, true]);
+    expect('open' in div).toBe(false);
+    unfold(null);
   });
 });

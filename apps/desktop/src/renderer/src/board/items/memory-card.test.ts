@@ -4,6 +4,9 @@ import {
   agoText,
   ageText,
   cardSections,
+  openSections,
+  turnedOpen,
+  ADDED_SECTION,
   countText,
   entryBytes,
   entryLine,
@@ -113,6 +116,61 @@ describe('a memory card', () => {
     const ids = (rows: { pinned: MemoryEntry[]; docs: MemoryEntry[]; facts: MemoryEntry[] }) => [rows.pinned, rows.docs, rows.facts].map((each) => each.map((one) => one.id));
     expect(ids(cardSections([facts[0]!, docs[0]!, ...facts.slice(1), ...docs.slice(1)]))).toEqual([['f4'], ['d1', 'd2', 'd3'], ['f1', 'f2', 'f3', 'f5']]);
     expect(ids(cardSections(facts))).toEqual([['f4'], [], ['f1', 'f2', 'f3', 'f5']]);
+  });
+
+  it('folds the sections that do not fit a card made smaller to their heads, so every head still shows', () => {
+    const sections = [
+      { key: 'pinned', count: 2 },
+      { key: 'docs', count: 3 },
+      { key: 'facts', count: 6 },
+    ] as const;
+    // Not measured yet, or room for all: every one open.
+    expect(openSections(sections, undefined)).toEqual(new Set(['pinned', 'docs', 'facts']));
+    expect(openSections(sections, 14)).toEqual(new Set(['pinned', 'docs', 'facts']));
+    // Room for pinned and docs with the facts' head under them.
+    expect(openSections(sections, 8)).toEqual(new Set(['pinned', 'docs']));
+    // Room for pinned and the two heads after it.
+    expect(openSections(sections, 5)).toEqual(new Set(['pinned']));
+    // A later one that fits opens though one before it is folded.
+    expect(openSections([{ key: 'pinned', count: 9 }, { key: 'docs', count: 1 }, { key: 'facts', count: 1 }], 6)).toEqual(new Set(['docs', 'facts']));
+    // Room for none: the first stays open, and scrolls.
+    expect(openSections(sections, 2)).toEqual(new Set(['pinned']));
+  });
+
+  it('keeps a section the user turned by hand as they left it', () => {
+    const sections = [
+      { key: 'docs', count: 3 },
+      { key: 'facts', count: 6 },
+    ] as const;
+    expect(openSections(sections, 5, new Map([['facts', true]]))).toEqual(new Set(['facts']));
+    expect(openSections(sections, 20, new Map([['docs', false]]))).toEqual(new Set(['facts']));
+    // Shut by hand, and no room for the rest: the next stays open, so the card is not all heads.
+    expect(openSections(sections, 2, new Map([['docs', false]]))).toEqual(new Set(['facts']));
+  });
+
+  it('opens the section a new entry landed in, though it would not fit, and keeps it open once turned', () => {
+    const sections = [
+      { key: 'docs', count: 1 },
+      { key: 'facts', count: 6 },
+    ] as const;
+    expect(openSections(sections, 5)).toEqual(new Set(['docs']));
+    expect(openSections(sections, 5, new Map(), 'facts')).toEqual(new Set(['facts']));
+    // The card turns it open as the entry lands, so it stays open after the flash.
+    expect(openSections(sections, 5, turnedOpen(new Map(), 'facts'))).toEqual(new Set(['facts']));
+    // Shut by hand during the flash, it shuts.
+    expect(openSections(sections, 5, new Map([['facts', false]]), 'facts')).toEqual(new Set(['docs']));
+  });
+
+  it("opens the facts as the user types one in the card's add box, though they were folded", () => {
+    const sections = [
+      { key: 'docs', count: 1 },
+      { key: 'facts', count: 2 },
+    ] as const;
+    expect(openSections(sections, 4)).toEqual(new Set(['docs']));
+    expect(openSections(sections, 4, turnedOpen(new Map(), ADDED_SECTION))).toEqual(new Set(['facts']));
+    // Turned open already, it is left as it was.
+    const turned = new Map([['facts', true]] as const);
+    expect(turnedOpen(turned, 'facts')).toBe(turned);
   });
 
   it("gives a document's size from its text, or from an agent's listing, which leaves the text out", () => {

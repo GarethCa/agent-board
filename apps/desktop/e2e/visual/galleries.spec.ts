@@ -1,5 +1,6 @@
 import { expect } from '@playwright/test';
 import { test, removeDataDir, tempDataDir } from '../launch.ts';
+import { settledBox } from '../board-helpers.ts';
 import { ignorePointer, pinFonts, settle } from '../render.ts';
 import { SHOT, needsBaselines, THEMES, launchGallery } from './shared.ts';
 
@@ -17,6 +18,29 @@ for (const { theme, suffix } of THEMES) {
       await settle(window);
       await expect.soft(window.getByTestId('tile-gallery')).toHaveScreenshot(`tile-states${suffix}.png`, SHOT);
       await expect.soft(window.getByTestId('character-gallery')).toHaveScreenshot(`character-gallery${suffix}.png`, SHOT);
+    } finally {
+      await app.close();
+      await removeDataDir(dataDir);
+    }
+  });
+}
+
+// A paused tile is frosted in a theme pack too: its cool wash and its snowflake, in one family's light and dark theme.
+for (const { theme, scheme } of [
+  { theme: 'gruvbox-light', scheme: 'light' },
+  { theme: 'gruvbox-dark', scheme: 'dark' },
+] as const) {
+  test(`a paused tile, frosted with a snowflake by its name, over a theme pack, ${theme}`, async () => {
+    needsBaselines(`tile-paused-${theme}`);
+    const dataDir = tempDataDir();
+    const { app, window } = await launchGallery(dataDir, theme, scheme);
+    try {
+      const paused = window.getByTestId('tile-gallery').locator('.tile-frosted').first();
+      await expect(paused).toBeVisible();
+      await pinFonts(window);
+      await ignorePointer(window);
+      await settle(window);
+      await expect.soft(paused).toHaveScreenshot(`tile-paused-${theme}.png`, SHOT);
     } finally {
       await app.close();
       await removeDataDir(dataDir);
@@ -68,6 +92,36 @@ for (const { theme, suffix } of THEMES) {
   });
 }
 
+// A long document read: wide with its rail at the top and scrolled to its findings, and narrow with the rail hidden.
+for (const { theme, suffix } of THEMES) {
+  const shots = ['wide-top', 'wide-findings', 'narrow'].map((name) => ({ name, shot: `reading-${name}${suffix}` }));
+  test(`a long document read with its contents rail, decision card and folded findings: the reading gallery, ${theme}`, async () => {
+    needsBaselines(...shots.map(({ shot }) => shot));
+    const dataDir = tempDataDir();
+    const { app, window } = await launchGallery(dataDir, theme, undefined, {}, '#gallery-reading');
+    try {
+      await expect(window.getByTestId('reading-gallery')).toBeVisible();
+      await expect(window.getByTestId('reading-narrow').getByTestId('reading-rail')).toHaveCount(0);
+      // The read is scrolled, and an overlay scrollbar shows a while after a scroll: hide it, as the chat's shots do.
+      await window.addStyleTag({ content: '.read-scroll { scrollbar-width: none; }' });
+      const findings = window.getByTestId('reading-wide-findings');
+      await findings.locator('.read-scroll').evaluate((scroller) => {
+        const heading = scroller.querySelector<HTMLElement>('#read-findings')!;
+        scroller.scrollTop = heading.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 16;
+      });
+      // The rail has caught up with the scroll.
+      await expect(findings.locator('.read-meter-top b')).toHaveText(/^[1-9]\d*%$/);
+      await pinFonts(window);
+      await ignorePointer(window);
+      await settle(window);
+      for (const { name, shot } of shots) await expect.soft(window.getByTestId(`reading-${name}`)).toHaveScreenshot(`${shot}.png`, SHOT);
+    } finally {
+      await app.close();
+      await removeDataDir(dataDir);
+    }
+  });
+}
+
 // The quick ask on an agent's tile: its chip on asking tiles, and the ask open at each place, in both designs.
 for (const { theme, suffix } of THEMES) {
   for (const design of ['classic', 'simplified'] as const) {
@@ -79,6 +133,31 @@ for (const { theme, suffix } of THEMES) {
       try {
         const gallery = window.getByTestId('quick-ask-gallery');
         await expect(gallery).toBeVisible();
+        await pinFonts(window);
+        await ignorePointer(window);
+        await settle(window);
+        await expect.soft(gallery).toHaveScreenshot(`${shot}.png`, SHOT);
+      } finally {
+        await app.close();
+        await removeDataDir(dataDir);
+      }
+    });
+  }
+}
+
+// Claude's own question dialog on the quick ask: open at a question, sent, kept open, and its plan approval, in both designs.
+for (const { theme, suffix } of THEMES) {
+  for (const design of ['classic', 'simplified'] as const) {
+    const shot = `quick-ask-dialog-gallery${design === 'simplified' ? '-simplified' : ''}${suffix}`;
+    test(`Claude's question dialog and plan approval on the quick ask: the quick ask dialog gallery, ${design}, ${theme}`, async () => {
+      needsBaselines(shot);
+      const dataDir = tempDataDir();
+      const { app, window } = await launchGallery(dataDir, theme, undefined, design === 'simplified' ? { design } : {});
+      try {
+        const gallery = window.getByTestId('quick-ask-dialog-gallery');
+        await expect(gallery).toBeVisible();
+        // The plan's choices ignore clicks for a moment as they show, drawn dimmed: shot once they take them.
+        for (const choice of await gallery.getByRole('button', { name: 'Yes, approve each edit' }).all()) await expect(choice).toBeEnabled();
         await pinFonts(window);
         await ignorePointer(window);
         await settle(window);
@@ -198,6 +277,9 @@ for (const { theme, suffix } of THEMES) {
       try {
         const gallery = window.getByTestId('crowded-orchestrator-gallery');
         await expect(gallery).toBeVisible();
+        // Last on a long page: scrolled to and painted before the shot, so its time goes on the shot, not the scroll.
+        await gallery.scrollIntoViewIfNeeded();
+        await settledBox(gallery);
         await pinFonts(window);
         const restorePointer = await ignorePointer(window);
         await settle(window);
@@ -228,7 +310,12 @@ for (const { theme, suffix } of THEMES) {
             const rows = popover.getByTestId('tile-folded-row');
             await expect(rows).toHaveCount(hidden + overflowPullRequests);
             await expect(rows.filter({ hasText: '#216' })).toBeVisible();
-            if (tile === tiles[0]) await expect.soft(popover).toHaveScreenshot(`${shot}-list.png`, SHOT);
+            if (tile === tiles[0]) {
+              await popover.scrollIntoViewIfNeeded();
+              await settledBox(popover);
+              await settle(window);
+              await expect.soft(popover).toHaveScreenshot(`${shot}-list.png`, SHOT);
+            }
             await window.keyboard.press('Escape');
             await expect(popover).toBeHidden();
           }
@@ -262,7 +349,7 @@ for (const theme of ['catppuccin-mocha', 'gruvbox-dark']) {
 }
 
 /** The component gallery's sections (ui/ComponentGallery.tsx), each shot on its own so a change names its primitive. */
-const GALLERY_SECTIONS = ['buttons', 'fields', 'overlays', 'labels', 'dialog', 'empty', 'window', 'chrome', 'shapes'];
+const GALLERY_SECTIONS = ['buttons', 'fields', 'overlays', 'labels', 'dialog', 'empty', 'window', 'chrome', 'shapes', 'readouts'];
 
 for (const { theme, suffix } of THEMES) {
   test(`every primitive in every state: the component gallery, ${theme}`, async () => {

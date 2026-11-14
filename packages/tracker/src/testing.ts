@@ -2,6 +2,7 @@
 export {
   createFakeTracker,
   FAKE_ISSUES,
+  FAKE_MILESTONES,
   FAKE_PROJECTS,
   FAKE_SCOPES,
   type FakeTracker,

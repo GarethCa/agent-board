@@ -68,6 +68,8 @@ describe('the Captain', () => {
       zoneId: null,
       spawnedBy: null,
       orphanedFrom: null,
+      ticket: null,
+      ticketChat: false,
       ownsWorktree: false,
       branch: '',
       harness: 'claude',
@@ -150,7 +152,7 @@ describe('the Captain', () => {
     expect((await client.call('agent.list')).find((agent) => agent.master)).toMatchObject({ zoneId: zone.id, master: true });
   });
 
-  it("routes a request to a zone's orchestrator: starts one in a zone with none and sends to it, and never sends to one the user started", async () => {
+  it("routes a request to a zone's orchestrator: starts one in a zone with none and sends to it, and sends to one the user started too", async () => {
     const setup = await masterDaemon();
     const { client } = setup;
     const web = await client.call('zone.add', { path: tempRepo(), x: 0, y: 0, name: 'web' });
@@ -159,11 +161,10 @@ describe('the Captain', () => {
     await until(client, handStarted.sessionId, atPrompt);
     const { master, token, connection } = await masterSide(setup);
 
-    // A zone's lead the user started is the user's to tell: the Captain asks them (needs-you) instead.
-    await expect(connection.call('orchestrator.send', { token, sessionId: handStarted.sessionId, text: 'Fix the flaky merge-gate test' })).rejects.toMatchObject({
-      code: BOARD_ERROR.outOfScope,
-      message: expect.stringMatching(/started by hand/),
-    });
+    // A zone's lead the user started is sent the request as any other.
+    await client.call('session.attach', { sessionId: handStarted.sessionId });
+    await connection.call('orchestrator.send', { token, sessionId: handStarted.sessionId, text: 'Fix the flaky merge-gate test' });
+    await setup.recorder.waitForText(handStarted.sessionId, 'Fix the flaky merge-gate test');
 
     // A zone with none: it starts one there, its own lead, and sends it the next request.
     const started = await connection.call('orchestrator.spawn', { token, zoneId: docs.id, role: 'orchestrator', prompt: 'Print your board identity' });
@@ -270,25 +271,12 @@ describe('a message to the Captain', () => {
     expect(setup.recorder.screenText(master.sessionId)).toContain(`[agent-board] From kobo lead (agent:${lead.sessionId.slice(0, 8)})`);
     expect(await connection.call('orchestrator.send', { token, sessionId: master.sessionId, text: 'One more thing' })).toMatchObject({ delivery: 'started' });
     await until(client, master.sessionId, atPrompt);
+    // It reads the Captain as any agent, and removes it only by asking the user.
     const id = { token, sessionId: master.sessionId };
-    for (const steer of [
-      () => connection.call('orchestrator.interrupt', id),
-      () => connection.call('orchestrator.send', { ...id, submit: true }),
-      () => connection.call('orchestrator.send', { ...id, clear: true }),
-      () => connection.call('orchestrator.read', id),
-      () => connection.call('orchestrator.wait', { token, sessionIds: [master.sessionId], timeoutMs: 1_000 }),
-      () => connection.call('orchestrator.pause', id),
-      () => connection.call('orchestrator.close', id),
-    ]) {
-      await expect(steer()).rejects.toMatchObject({ code: BOARD_ERROR.outOfScope });
-    }
-
-    // Paused by the user, a message would wake it: that is steering too.
-    await client.call('agent.pause', { sessionId: master.sessionId });
-    await until(client, master.sessionId, (agent) => agent.state === 'hibernated');
-    await expect(connection.call('orchestrator.send', { ...id, text: 'Wake up' })).rejects.toMatchObject({
+    await expect(connection.call('orchestrator.read', id)).resolves.toBeDefined();
+    await expect(connection.call('orchestrator.close', { ...id, remove: true })).rejects.toMatchObject({
       code: BOARD_ERROR.outOfScope,
-      message: expect.stringMatching(/is paused: only the user wakes it/),
+      message: expect.stringContaining('--remove --ask'),
     });
   }, 60_000);
 });

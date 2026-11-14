@@ -1,4 +1,4 @@
-import { Bot, Eye, Hammer, Network, PenLine, RefreshCw, Search, Users, Zap } from 'lucide-react';
+import { Bot, Eye, Hammer, Network, PenLine, RefreshCw, Search, Ticket, Users, Zap } from 'lucide-react';
 import { ORCHESTRATOR_ROLE, type PrefabMember } from '@agent-board/daemon/protocol';
 
 /**
@@ -14,12 +14,13 @@ export function RoleIcon({ member }: { member: Pick<PrefabMember, 'id' | 'name' 
   return <PenLine aria-hidden />;
 }
 
-/** A prefab's own icon, by its name in the file (`agent`, `review`, `spike`, `lead`, `crew`). */
+/** A prefab's own icon, by its name in the file (`agent`, `review`, `spike`, `lead`, `ticket`, `crew`). */
 export function PrefabIcon({ icon }: { icon: string }) {
   if (icon === 'agent') return <Bot aria-hidden />;
   if (icon === 'review') return <Search aria-hidden />;
   if (icon === 'spike') return <Zap aria-hidden />;
   if (icon === 'lead') return <Network aria-hidden />;
+  if (icon === 'ticket') return <Ticket aria-hidden />;
   return <Users aria-hidden />;
 }
 

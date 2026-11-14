@@ -217,6 +217,39 @@ export function turnSection(expanded: ReadonlySet<string>, key: string, open: bo
   return next;
 }
 
+/** A section of the card in full: its head (null for steps under none), and its steps. */
+export interface FullSection {
+  title: string | null;
+  steps: StepView[];
+  /** The closing one, of every step finished. */
+  done?: true;
+}
+
+/**
+ * The sections of the card in full: what is left under each section it is in (a section with nothing left drops out),
+ * then every finished step under Done, in place order, so the steps still to do come first, as on the card.
+ *
+ * `settled` is the steps that were finished when the view opened, if given: only those go under Done, so a step ticked
+ * or unticked while it is open stays where it is, and the focus on its tick stays with it, till the view opens again.
+ */
+export function fullSections(view: StepsView, settled?: ReadonlySet<string>): FullSection[] {
+  const isDone = (each: StepView) => (settled === undefined ? each.state === 'done' : settled.has(each.step.id));
+  const left = view.sections
+    .map((section) => ({ title: view.headed ? (section.title ?? 'First') : null, steps: section.steps.filter((each) => !isDone(each)) }))
+    .filter((section) => section.steps.length > 0);
+  const done = view.sections.flatMap((section) => section.steps.filter(isDone));
+  return done.length > 0 ? [...left, { title: 'Done', steps: done, done: true }] : left;
+}
+
+/** The steps finished now, by id: what the card in full keeps under Done while it is open. */
+export const settledSteps = (view: StepsView): Set<string> => new Set(view.sections.flatMap((section) => section.steps.filter((each) => each.state === 'done').map((each) => each.step.id)));
+
+/** What is the user's, as the card's foot and the card in full say: "Yours: N left", and how many an agent waits on. */
+export const yoursText = (view: StepsView): string | null => (view.userAnswers && view.yoursLeft > 0 ? `Yours: ${view.yoursLeft} left${view.waitedOn > 0 ? ` · ${view.waitedOn} waited on` : ''}` : null);
+
+/** Whether a step shows its kind beside its state: a question's, not a to-do's, whose round dot already says it is one. */
+export const kindMarked = (kind: Step['kind']): boolean => kind !== 'todo';
+
 /** How a steps card is drawn at `zoom`: in full, at about half size in larger type, or below about 40% as its icon tile. */
 export type ZoomLook = 'full' | 'mid' | 'icon';
 

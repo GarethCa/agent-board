@@ -1,11 +1,11 @@
-import { writeFileSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, onTestFinished } from 'vitest';
 import { fakeHarnessEnv } from '@agent-board/fake-harness';
 import { runBoardCommand } from '../src/board-cli.ts';
 import { daemonPaths } from '../src/paths.ts';
-import { BOARD_ERROR, MAX_MEMORY_VALUE, type Agent, type AgentUpdatedEvent, type BoardItem, type DaemonEvent, type MemoryData, type MemoryView, type QueueData } from '../src/protocol.ts';
+import { BOARD_ERROR, MAX_MEMORY_VALUE, type Agent, type AgentUpdatedEvent, type BoardItem, type DaemonEvent, type MemoryData, type MemoryView, type QueueData, QUEUE_LATER } from '../src/protocol.ts';
 import { connectTestClient, recordEvents, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
 
 const SIZE = { cols: 120, rows: 40 };
@@ -573,10 +573,53 @@ describe('kinds of queue row', () => {
     // Only on the user's queue, only by the user, only an open one.
     await client.call('queue.change', { id: work.id, change: { action: 'add', text: 'Task' } });
     const task = (await client.call('queue.read', { id: work.id })).jobs[0]!;
-    await expect(client.call('queue.change', { id: work.id, change: { action: 'skip', job: task.id } })).rejects.toThrow(/is for agents: only the user's queue has later and skip/);
+    await expect(client.call('queue.change', { id: work.id, change: { action: 'skip', job: task.id } })).rejects.toThrow(/is for agents: only the user's queue has skip/);
     await expect(connection.call('board.changeQueue', { token, id: mine.id, change: { action: 'skip', job: await idOf('One') } })).rejects.toThrow(/only the user skips/);
     await client.call('queue.change', { id: mine.id, change: { action: 'done', job: await idOf('One') } });
     await expect(client.call('queue.change', { id: mine.id, change: { action: 'later', job: await idOf('One'), until: null } })).rejects.toThrow(/is done: only an open one is put off/);
+  });
+
+  it("marks a waiting job Later on an agents' queue, which no take without a job starts until it is moved up", async () => {
+    const { client, start, cardOf } = await boardDaemon();
+    const lead = await start('Queue: Backlog', undefined, 'Lead');
+    const card = await cardOf('queue', lead.agent);
+    await cli(lead.env, 'queue', 'add', 'Backlog', '--', 'One', 'Two', 'Three');
+    const rows = async () => (await client.call('queue.read', { id: card.id })).jobs;
+    const idOf = async (text: string) => (await rows()).find((job) => job.text === text)!.id;
+    const ref = async (text: string) => (await idOf(text)).slice(0, 8);
+
+    // The user marks One Later: no time, and no version.
+    await client.call('queue.change', { id: card.id, change: { action: 'later', job: await idOf('One') } });
+    expect((await rows()).find((job) => job.text === 'One')).toMatchObject({ hiddenUntil: QUEUE_LATER, state: 'queued', lastChange: 'add' });
+    expect((await client.call('queue.history', { id: card.id, job: await idOf('One') })).map((version) => version.action)).toEqual(['add']);
+    // An agent marks Two Later too, from the command line, and the read says so.
+    expect((await cli(lead.env, 'queue', 'later', 'Backlog', await ref('Two'))).out).toContain('Marked');
+    const read = (await cli(lead.env, 'queue', 'read', 'Backlog')).out;
+    expect(read.match(/ later/g)).toHaveLength(2);
+
+    // take without a job passes them by; named, a Later job is refused until moved up.
+    const impl = await start('Queue: Mine', undefined, 'Impl');
+    const take = (job?: string) => impl.connection.call('board.changeQueue', { token: impl.token, id: card.id, change: { action: 'take', ...(job === undefined ? {} : { job }) } });
+    expect((await take()).job).toMatchObject({ text: 'Three', state: 'taken' });
+    await expect(take()).rejects.toThrow(/has no job waiting to be taken/);
+    await expect(take(await idOf('One'))).rejects.toThrow(/is marked Later: move it up first/);
+    // A taken job isn't put off: it is its taker's until done or dropped.
+    expect((await cli(impl.env, 'queue', 'later', 'Backlog', await ref('Three'))).err).toContain('is taken');
+    // done tells the finisher nothing waits: the Later jobs aren't waiting.
+    expect((await cli(impl.env, 'queue', 'done', 'Backlog', await ref('Three'))).out).toContain('No job waiting.');
+
+    // Moved up (the MCP tool's way, as the CLI's), it is the next taken.
+    expect((await cli(impl.env, 'queue', 'up', 'Backlog', await ref('One'))).out).toContain('Moved');
+    expect((await rows()).find((job) => job.text === 'One')).toMatchObject({ hiddenUntil: null });
+    expect((await take()).job).toMatchObject({ text: 'One' });
+
+    // An agents' queue has no put-off until a time, and no skip.
+    await expect(client.call('queue.change', { id: card.id, change: { action: 'later', job: await idOf('Two'), until: '2099-01-01T00:00:00Z' } })).rejects.toThrow(/Later, with no time/);
+    // An agent that moves up a job not marked Later, or marks a thing to read, is told so: not that it worked.
+    await cli(lead.env, 'queue', 'add', 'Backlog', '--', 'Four');
+    expect((await cli(lead.env, 'queue', 'up', 'Backlog', await ref('Four'))).err).toContain("isn't marked Later");
+    await cli(lead.env, 'queue', 'add', 'Backlog', '--kind', 'note', 'Read the style guide');
+    expect((await cli(lead.env, 'queue', 'later', 'Backlog', await ref('Read the style guide'))).err).toContain('only a task, a request or a prompt is marked Later');
   });
 
   it('swaps its rows for the kinds of the queue when it changes hands, so a thing to read is never taken', async () => {
@@ -681,6 +724,13 @@ describe('handing a job on', () => {
     await expect.poll(async () => (await client.call('agent.list')).find((each) => each.sessionId === asking.sessionId)?.ask ?? null, { timeout: 15_000 }).not.toBeNull();
     await expect(hand(docs!.id, asking.sessionId)).rejects.toThrow(/busy or asking you something/);
     expect((await client.call('queue.read', { id: card.id })).jobs.find((each) => each.id === docs!.id)).toMatchObject({ state: 'queued' });
+
+    // Marked Later, a job is handed on to no one until it is moved up.
+    await client.call('queue.change', { id: card.id, change: { action: 'later', job: docs!.id } });
+    await expect(hand(docs!.id, lead.agent.sessionId, 'Write the docs, please')).rejects.toThrow(/is marked Later: move it up first/);
+    expect((await client.call('queue.read', { id: card.id })).jobs.find((each) => each.id === docs!.id)).toMatchObject({ state: 'queued', takenBy: null });
+    await client.call('queue.change', { id: card.id, change: { action: 'later', job: docs!.id, until: null } });
+    expect((await hand(docs!.id, lead.agent.sessionId, 'Write the docs, please')).job).toMatchObject({ state: 'taken', takenBy: { kind: 'agent', sessionId: lead.agent.sessionId } });
   });
 });
 
@@ -775,6 +825,47 @@ describe('draining a queue', () => {
     await expect.poll(live, { timeout: 15_000 }).toContain('Four');
     expect(await live()).not.toContain('Three');
     expect((await jobs()).find((job) => job.text === 'Three')).toMatchObject({ state: 'queued', drops: 2 });
+  });
+
+  it('starts no agent for a job marked Later, and starts one once it is moved up', async () => {
+    const { client, zone } = await boardDaemon();
+    const data = { title: 'Backlog', madeBy: { kind: 'user' }, audience: 'agents', noAgents: false, count: 0 };
+    const card = await client.call('item.create', { kind: 'queue', zoneId: zone.id, x: 40, y: 80, width: 340, height: 244, data });
+    await client.call('queue.change', { id: card.id, change: { action: 'add', text: 'Someday' } });
+    const job = (await client.call('queue.read', { id: card.id })).jobs[0]!;
+    await client.call('queue.change', { id: card.id, change: { action: 'later', job: job.id } });
+    await client.call('queue.change', { id: card.id, change: { action: 'add', text: 'Now' } });
+    const live = async () => (await client.call('agent.list')).filter((agent) => agent.endedAt === null).map((agent) => agent.name);
+    await client.call('item.update', { id: card.id, data: { drain: { harness: 'claude', model: null, role: null, closeWhenDone: false, most: 3, started: [], on: true } } });
+    await expect.poll(live, { timeout: 15_000 }).toContain('Now');
+    // The pass has gone round again (both starts saved would be two): Someday waits.
+    await expect.poll(async () => ((await client.call('queue.read', { id: card.id })).item.data as unknown as QueueData).drain?.started.length).toBe(1);
+    expect(await live()).not.toContain('Someday');
+
+    // Moved up, the drain starts it.
+    await client.call('queue.change', { id: card.id, change: { action: 'later', job: job.id, until: null } });
+    await expect.poll(live, { timeout: 15_000 }).toContain('Someday');
+  });
+
+  it('refuses to mark Later a job it is starting an agent for, which the agent then takes', async () => {
+    const { client } = await boardDaemon();
+    const repo = tempRepo();
+    const zone = await client.call('zone.add', { path: repo, x: 2000, y: 0, name: 'web' });
+    // The drained agent's worktree is checked out with a hook that holds the start open until the test lets it go.
+    const flags = tempDataDir();
+    const [checkingOut, go] = [join(flags, 'checking-out'), join(flags, 'go')];
+    onTestFinished(() => writeFileSync(go, ''));
+    writeFileSync(join(repo, '.git', 'hooks', 'post-checkout'), `#!/bin/sh\ntouch '${checkingOut}'\nwhile [ ! -e '${go}' ]; do sleep 0.05; done\n`, { mode: 0o755 });
+    const data = { title: 'Backlog', madeBy: { kind: 'user' }, audience: 'agents', noAgents: false, count: 0 };
+    const card = await client.call('item.create', { kind: 'queue', zoneId: zone.id, x: 40, y: 80, width: 340, height: 244, data });
+    const { job } = await client.call('queue.change', { id: card.id, change: { action: 'add', text: 'Fix the login' } });
+    await client.call('item.update', { id: card.id, data: { drain: { harness: 'claude', model: null, role: null, closeWhenDone: false, most: 1, started: [], on: true } } });
+    await expect.poll(() => existsSync(checkingOut), { timeout: 15_000 }).toBe(true);
+
+    await expect(client.call('queue.change', { id: card.id, change: { action: 'later', job: job!.id } })).rejects.toThrow(/an agent is starting for job/);
+    writeFileSync(go, '');
+    await expect.poll(async () => (await client.call('queue.read', { id: card.id })).jobs[0]?.state, { timeout: 15_000 }).toBe('taken');
+    expect((await client.call('queue.read', { id: card.id })).jobs[0]).toMatchObject({ hiddenUntil: null });
   });
 
   it('is turned on by the agent that made the queue, with no role, and never by another', async () => {

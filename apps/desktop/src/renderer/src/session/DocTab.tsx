@@ -4,12 +4,12 @@ import type { Agent } from '@agent-board/daemon/protocol';
 import type { DocSurface } from '@agent-board/daemon/window-layout';
 import type { WebTabKey } from '../../../preload/api';
 import { errorMessage } from '../../../shared/errors';
-import { ErrorText, IconButton } from '../ui';
+import { Button, ErrorText, IconButton } from '../ui';
 import { PlanPage } from '../plan/PlanTab';
 import { FindBar } from '../find/FindBar';
 import { domFinder } from '../find/dom-find';
 import { useFindKey } from '../find/use-find';
-import { Markdown } from './Markdown';
+import { ReadingView, type ReadingStatus } from '../doc/ReadingView';
 import { docName } from './tabs';
 
 const openLink = (url: string) => void window.agentBoard.trackers.openLink(url).catch(() => {});
@@ -29,16 +29,17 @@ interface DocTabProps {
 
 /**
  * A Doc tab: one of an agent's hand-off docs or pinned files, read through the daemon when the tab shows it and again on
- * Reload, its Markdown rendered as a plan's is, and its HTML drawn as an HTML plan's page is. Read-only: the agent's
+ * Reload, its Markdown in the reading view, and its HTML drawn as an HTML plan's page is. Read-only: the agent's
  * file is the agent's.
  */
 export function DocTab({ doc, agent, visible, onFocus, onPaneKey }: DocTabProps) {
   const [text, setText] = useState<string>();
   const [problem, setProblem] = useState<string>();
   const [reads, setReads] = useState(0);
+  const [reading, setReading] = useState<ReadingStatus>();
   const { sessionId, path } = doc;
   const viewer = useRef<HTMLDivElement>(null);
-  const finder = useMemo(() => domFinder(() => viewer.current?.querySelector('.plan-markdown, .doc-text') ?? null), []);
+  const finder = useMemo(() => domFinder(() => viewer.current?.querySelector('.read-scroll, .doc-text') ?? null), []);
   // An HTML doc's page finds in itself (PlanPage).
   const find = useFindKey(() => viewer.current, visible && text !== undefined && !isHtml(path));
   useEffect(() => {
@@ -66,6 +67,16 @@ export function DocTab({ doc, agent, visible, onFocus, onPaneKey }: DocTabProps)
             <span className="review-meta" title={path}>
               {agent.name}
             </span>
+            {reading && text !== undefined && isMarkdown(path) && (
+              <span className="review-meta read-left" data-testid="doc-time-left">
+                {reading.label}
+              </span>
+            )}
+            {reading?.scrolled && text !== undefined && isMarkdown(path) && (
+              <Button size="sm" variant="ghost" onClick={reading.toTop}>
+                Back to the top
+              </Button>
+            )}
             <IconButton icon={<RotateCw />} size="sm" aria-label="Reload" tooltip="Read the file again" onClick={() => setReads((count) => count + 1)} />
           </header>
           {find.finding > 0 && <FindBar finder={finder} focusSignal={find.finding} onClose={find.close} />}
@@ -76,9 +87,7 @@ export function DocTab({ doc, agent, visible, onFocus, onPaneKey }: DocTabProps)
           ) : isHtml(path) ? (
             <PlanPage key={`${path}:${reads}`} html={text} visible={visible} onFocus={onFocus} onPaneKey={onPaneKey} />
           ) : isMarkdown(path) ? (
-            <div className="plan-markdown">
-              <Markdown text={text} onOpenLink={openLink} />
-            </div>
+            <ReadingView key={path} text={text} path={path} onOpenLink={openLink} onStatus={setReading} />
           ) : (
             <pre className="doc-text">{text}</pre>
           )}

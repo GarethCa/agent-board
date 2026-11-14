@@ -1,7 +1,7 @@
 // The user's own moves of a tile, which take it out of its zone's layout rule (placed by hand), and how a rule is undone
 // and redone: picking or leaving one, and a tile the user moved out of one.
 
-import type { TileMove, ZoneLayoutChoice } from '@agent-board/daemon/protocol';
+import { isLayoutRule, type TileMove, type Zone, type ZoneLayoutChoice } from '@agent-board/daemon/protocol';
 import { historyKey, type BoardState, type Change } from './editing/use-history';
 
 /** A nudge of a tile with the arrow keys, to `at` in `zoneId`: the user's own move, as a drag is. */
@@ -33,7 +33,7 @@ export function historyPlace(move: TileMove): TileMove {
  * draws them elsewhere). None for a view picked over a view, or the same choice again.
  */
 export function layoutChoiceStep(zoneId: string, was: ZoneLayoutChoice, choice: ZoneLayoutChoice, ruledBefore: boolean, places: readonly [string, TileMove][]): Change[] {
-  if (was === choice || (choice !== 'lanes' && !ruledBefore)) return [];
+  if (was === choice || (!isLayoutRule(choice) && !ruledBefore)) return [];
   return [
     [historyKey.zoneLayoutChoice(zoneId), { type: 'zoneLayoutChoice', choice: was }, { type: 'zoneLayoutChoice', choice }],
     // Redone, the rule lays them out again: no place of theirs to put back.
@@ -61,4 +61,18 @@ export type TileStepAction = { kind: 'move'; move: TileMove } | { kind: 'followR
 export function tileStepAction(state: Extract<BoardState, { type: 'tile' }>, markedIn: string | undefined): TileStepAction {
   if (state.handPlaced === false && markedIn !== undefined && markedIn === state.move.zoneId) return { kind: 'followRule', zoneId: markedIn };
   return { kind: 'move', move: state.handPlaced === true ? { ...state.move, byHand: true } : state.move };
+}
+
+/**
+ * How a Tidy of `zone` goes: on Spine, the daemon lays its bands out afresh (`reflow`, which nothing else asks for, as a
+ * band otherwise keeps its column), and the result is the zone as saved; on Free with no rule, the board tidies it into
+ * rows itself (`rows`); otherwise nothing, as its shelves, clusters or rule lay it out.
+ */
+export function zoneTidy(
+  zone: Pick<Zone, 'id' | 'layoutMode' | 'layoutRule'>,
+  zones: { followRule(id: string, tiles: string[], reflow?: boolean): Promise<Zone> },
+): { kind: 'byRule'; saved: Promise<Zone> } | { kind: 'rows' } | undefined {
+  if (zone.layoutMode !== 'free') return undefined;
+  if (zone.layoutRule === 'spine') return { kind: 'byRule', saved: zones.followRule(zone.id, [], true) };
+  return zone.layoutRule === 'off' ? { kind: 'rows' } : undefined;
 }

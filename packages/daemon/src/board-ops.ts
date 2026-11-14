@@ -7,12 +7,14 @@ import { resolve as resolvePath } from 'node:path';
 import { BOARD_DATA_DIR_ENV, BOARD_SOCKET_ENV, BOARD_TOKEN_ENV } from './board-env.ts';
 import type { AskSpec, PlanSpec } from './asks.ts';
 import { oneLine } from './terminal-input.ts';
+import { helpersOf } from './ticket-tiles.ts';
 import { connectDaemon, DaemonRpcError, type DaemonClient } from './client.ts';
 import { shortCommit } from './gate-rules.ts';
 import { daemonPaths, defaultDataDir } from './paths.ts';
 import {
   BOARD_ERROR,
   DEFAULT_ASK_WAIT_MS,
+  FIRST_PROMPT,
   type Agent,
   type CrewPrefab,
   type Crew,
@@ -27,6 +29,7 @@ import {
   type PinRef,
   type RecordParams,
   type SendDelivery,
+  type GivenRole,
   roleLabel,
   type BoardCaller,
   type CrewEvent,
@@ -422,6 +425,8 @@ function agentJson(refs: BoardRefs, agent: Agent, caller: BoardCaller | null) {
     issue: agent.issue,
     pullRequests: agent.pullRequests.map(({ number, url, state }) => ({ number, url, state })),
     spawnedBy: agent.spawnedBy === null ? null : refs.of('agent', agent.spawnedBy),
+    ticketChat: agent.ticketChat,
+    ticket: agent.ticket === null ? null : refs.of('agent', agent.ticket),
     orphanedFrom: agent.orphanedFrom === null ? null : { ref: refs.of('agent', agent.orphanedFrom.sessionId), name: agent.orphanedFrom.name },
   };
 }
@@ -479,11 +484,40 @@ function isCaller(caller: BoardCaller | null, kind: 'agent' | 'shell', id: strin
 
 const YOU = '  ← you';
 
-function agentLine(refs: BoardRefs, agent: Agent, caller: BoardCaller | null): string {
+/** What sits typed and unsent at the agent's prompt, as its line's state says it (`, first prompt not sent`), or nothing. */
+function unsentLabel(agent: Agent): string {
+  if (agent.unsent === null) return '';
+  const what = agent.unsent === FIRST_PROMPT ? 'first prompt' : `${agent.unsent.charAt(0).toLowerCase()}${agent.unsent.slice(1)}`;
+  return `, ${what} not sent`;
+}
+
+/** An agent in a line. `helpers`, for a ticket's chat, is how many helpers its ticket has. */
+function agentLine(refs: BoardRefs, agent: Agent, caller: BoardCaller | null, helpers?: number): string {
   const you = isCaller(caller, 'agent', agent.sessionId) ? YOU : '';
   const finished = agent.workFinishedAt === null ? '' : ', finished';
   const role = roleLabel(agent);
-  return `${refs.of('agent', agent.sessionId)}  ${agent.name}  [${agent.state}${finished}]${role === null ? '' : `  (${role})`}  ${agentDoing(agent)}${you}`;
+  const ticket = agent.ticketChat ? `  (ticket, ${plural(helpers ?? 0, 'helper')})` : '';
+  return `${refs.of('agent', agent.sessionId)}  ${agent.name}  [${agent.state}${finished}${unsentLabel(agent)}]${role === null ? '' : `  (${role})`}${ticket}  ${agentDoing(agent)}${you}`;
+}
+
+/** What marks a helper's line, under its ticket's chat. */
+const HELPER_MARK = '  └ ';
+
+/**
+ * The agents in lines, each ticket's helpers under its chat: those whose chat isn't among `agents` keep their place.
+ * `tail` ends each line.
+ */
+function agentLines(refs: BoardRefs, agents: readonly Agent[], caller: BoardCaller | null, tail: (agent: Agent) => string = () => ''): string[] {
+  const chats = new Set(agents.filter((agent) => agent.ticketChat).map((agent) => agent.sessionId));
+  const nested = (agent: Agent) => agent.ticket !== null && chats.has(agent.ticket);
+  return agents.flatMap((agent) => {
+    if (nested(agent)) return [];
+    const helpers = agent.ticketChat ? helpersOf(agents, agent.sessionId) : [];
+    return [
+      `${agentLine(refs, agent, caller, helpersOf(refs.board.agents, agent.sessionId).length)}${tail(agent)}`,
+      ...helpers.map((helper) => `${HELPER_MARK}${agentLine(refs, helper, caller)}${tail(helper)}`),
+    ];
+  });
 }
 
 function shellLine(refs: BoardRefs, shell: Shell, caller: BoardCaller | null): string {
@@ -601,7 +635,7 @@ export function identifyView(refs: BoardRefs, caller: BoardCaller | null, socket
     const role = roleLabel(agent);
     if (role !== null) lines.push(`role     ${role}`);
     if (caller.orchestrates) {
-      lines.push("you may  start, message and close any agent but the ones the user started by hand (`agent-board help orchestrate`)");
+      lines.push("you may  start, message and close any agent but yourself; removing one you didn't start asks the user (`agent-board help orchestrate`)");
     }
   }
   if (caller.side === 'user') lines.push('you may  act for the user: start, message and close any agent');
@@ -636,7 +670,7 @@ export function treeView(refs: BoardRefs, caller: BoardCaller | null): BoardView
   for (const section of sections) {
     const zone = zones.find((each) => each.id === section.zoneId);
     const rows = [
-      ...section.agents.map((agent) => agentLine(refs, agent, caller)),
+      ...agentLines(refs, section.agents, caller),
       ...section.shells.map((shell) => shellLine(refs, shell, caller)),
       ...section.items.map((item) => itemLine(refs, item)),
       ...section.connectors.map((connector) => connectorLine(refs, connector)),
@@ -681,7 +715,7 @@ export function zonesView(refs: BoardRefs): BoardView {
 export function agentsView(refs: BoardRefs, caller: BoardCaller | null): BoardView {
   const { agents } = refs.board;
   return {
-    text: agents.length === 0 ? 'No agents.' : agents.map((agent) => `${agentLine(refs, agent, caller)}  ${inZone(refs, agent.zoneId)}`).join('\n'),
+    text: agents.length === 0 ? 'No agents.' : agentLines(refs, agents, caller, (agent) => `  ${inZone(refs, agent.zoneId)}`).join('\n'),
     json: agents.map((agent) => agentJson(refs, agent, caller)),
   };
 }
@@ -1254,7 +1288,7 @@ function memberLine(member: PrefabMember, width: number): string {
 /** A crew prefab in a few lines: its name and what it is for, its round limit, and its members. */
 function prefabLines(prefab: CrewPrefab): string {
   const width = Math.max(...prefab.members.map((member) => member.id.length));
-  const tiles = prefab.onBoard === 'tiles' ? ', drawn as member tiles' : '';
+  const tiles = prefab.onBoard === 'tiles' ? ', drawn as member tiles' : prefab.onBoard === 'ticket' ? ', drawn as a ticket tile: its first member is the chat' : '';
   return [
     `${prefab.name}${prefab.purpose === '' ? '' : `: ${prefab.purpose}`}`,
     `  At most ${prefab.roundLimit} review ${prefab.roundLimit === 1 ? 'round' : 'rounds'}${tiles}.`,
@@ -1616,18 +1650,30 @@ export async function setAgentEffort(session: BoardSession, ref: string, effort:
 
 /**
  * `role`: gives the agent a role, or none with null, as its tile's Role menu does. Only the role changes: its session
- * isn't restarted, and no template is sent to it.
+ * isn't restarted, and no template is sent to it unless `sendTemplate` asks, when its new role's template goes to it
+ * as a message from the caller (a role with none sends nothing, and says so).
  */
-export async function giveAgentRole(session: BoardSession, ref: string, role: string | null): Promise<BoardView> {
+export async function giveAgentRole(session: BoardSession, ref: string, role: string | null, sendTemplate = false): Promise<BoardView> {
   const { token, agent } = await orchestratorTarget(session, ref);
-  await session.client.call('orchestrator.giveRole', { token, sessionId: agent.sessionId, role });
+  const { template } = await session.client.call('orchestrator.giveRole', { token, sessionId: agent.sessionId, role, ...(sendTemplate ? { sendTemplate } : {}) });
   const fresh = await freshAgentLine(session, agent.sessionId);
   const given = fresh.agent.roleName ?? fresh.agent.role;
+  const done = given === null ? 'Took the role away' : `Gave the role ${given}`;
   return {
-    text: `${given === null ? 'Took the role away' : `Gave the role ${given}`}: ${fresh.line}`,
-    json: agentJson(fresh.refs, fresh.agent, session.caller),
+    text: `${done}${template === undefined ? '' : TEMPLATE_SENT[template]}: ${fresh.line}`,
+    json: { ...agentJson(fresh.refs, fresh.agent, session.caller), ...(template === undefined ? {} : { template }) },
   };
 }
+
+/** What `role --send-template` adds for how the template went. */
+const TEMPLATE_SENT: Record<NonNullable<GivenRole['template']>, string> = {
+  none: '; the role has no template, so nothing was sent',
+  started: ', and sent it the role\'s template',
+  'queued-until-up': ", and queued the role's template until it's up",
+  waking: ", and woke it with the role's template",
+  'queued-in-turn': ", and queued the role's template for after its turn",
+  'queued-after-turn': ", and queued the role's template until its turn ends",
+};
 
 /** `continue`: resumes a rate-limited agent's turn on usage credits, as its harness offers. */
 export async function continueAgent(session: BoardSession, ref: string): Promise<BoardView> {
@@ -1670,13 +1716,18 @@ export async function wakeAgent(session: BoardSession, ref: string): Promise<Boa
   return { text: `Woke ${fresh.line}`, json: agentJson(fresh.refs, fresh.agent, session.caller) };
 }
 
-/** `close`: ends the agent's session, or with `remove` deletes it with its worktree and branch. */
+/**
+ * `close`: ends the agent's session and takes its tile off the board, with its worktree and branch unless they hold
+ * unsaved work; with `remove`, deletes it with its worktree and branch, or refuses.
+ */
 export async function closeAgent(session: BoardSession, ref: string, remove: boolean): Promise<BoardView> {
   const { token, refs, agent } = await orchestratorTarget(session, ref);
   const label = `${refs.of('agent', agent.sessionId)} ${agent.name}`;
-  const closed = await session.client.call('orchestrator.close', { token, sessionId: agent.sessionId, remove });
-  if (closed === null) return { text: `Removed ${label}, its worktree and its branch.`, json: null };
-  return { text: `Closed ${label}: its session ended; its tile, worktree and branch stay.`, json: agentJson(refs, closed, session.caller) };
+  const kept = await session.client.call('orchestrator.close', { token, sessionId: agent.sessionId, remove });
+  if (remove) return { text: `Removed ${label}, its worktree and its branch.`, json: null };
+  const closed = `Closed ${label} and took its tile off the board`;
+  if (kept !== null) return { text: `${closed}. Its worktree ${kept.worktree} and branch ${kept.branch} stay: ${kept.why}.`, json: { kept } };
+  return { text: agent.ownsWorktree ? `${closed}, with its worktree and branch: nothing in them was unsaved.` : `${closed}.`, json: { kept: null } };
 }
 
 /** `a`, `a and b`, `a, b and c`: names in a sentence. */

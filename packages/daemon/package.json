@@ -11,6 +11,7 @@
     "./board-tidy": "./src/board-tidy.ts",
     "./character": "./src/character.ts",
     "./shelf-layout": "./src/shelf-layout.ts",
+    "./stage-board": "./src/stage-board.ts",
     "./work-units": "./src/work-units.ts",
     "./arrange-board": "./src/arrange-board.ts",
     "./cli-install": "./src/cli-install.ts",

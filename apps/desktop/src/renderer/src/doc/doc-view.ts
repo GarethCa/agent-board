@@ -12,6 +12,12 @@ export function docMeta(document: Pick<DocumentSummary, 'version' | 'writtenBy' 
   return `v${document.version} · written by ${by} ${shortWhen(document.writtenAt)}`;
 }
 
+/** Whether a Markdown line is a heading that says `title`, case aside: what a head showing the title needn't repeat. */
+export function isTitleHeading(line: string, title: string | undefined): boolean {
+  const text = /^#{1,6}\s+(.*?)\s*#*\s*$/.exec(line)?.[1];
+  return text !== undefined && title !== undefined && text.trim().toLowerCase() === title.trim().toLowerCase();
+}
+
 /**
  * The first lines of a Markdown document for its card's preview, which draws a sticky's markdown: no blank lines, a
  * heading as a bold line, at most `count`, and not a first heading that is its `title`.
@@ -19,8 +25,7 @@ export function docMeta(document: Pick<DocumentSummary, 'version' | 'writtenBy' 
 export function previewLines(text: string, count = 8, title?: string): string {
   const lines = text.split('\n').filter((line) => line.trim() !== '');
   // The card says its title already: a first heading that is the title isn't said again.
-  const first = /^#{1,6}\s+(.*?)\s*#*$/.exec(lines[0] ?? '')?.[1];
-  return (first !== undefined && first === title ? lines.slice(1) : lines)
+  return (isTitleHeading(lines[0] ?? '', title) ? lines.slice(1) : lines)
     .slice(0, count)
     .map((line) => line.replace(/^#{1,6}\s+(.*?)\s*#*$/, '**$1**'))
     .join('\n');

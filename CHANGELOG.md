@@ -1,5 +1,39 @@
 # Changelog
 
+## v0.6.25 (2026-11-14)
+
+- Role ▸ With its template test picks its row in its own submenu, with Enter
+- A plan left from the CLI survives a daemon restart, and its agent is told of a decision made meanwhile
+- The reading shot hides its scrollbar, and the gallery's foot keeps new galleries from moving the rest
+- Closing a ticket chat takes its helpers with it, as removing it does
+- The clickable links switch shows a FORCE_HYPERLINK set in your environment, locked
+- Ticket tiles 1: helpers belong to a ticket (daemon and protocol)
+- Re-shoot the Captain panel shots after its prompt was reworded, and the gallery shots below the quick ask that the new dialog gallery shifted
+- Pick one gets a list-with-check glyph, its kind mark centres on its line, and a DOM test pins the order
+- Any agent acts on agents the user started by hand; removing still asks
+- A cut list's foot stays at the card's bottom; a choice question leads with its state dot
+- Mid-check flow-edge and Codex interrupt tests wait on what they assert, not on fixed sleeps
+- The quick ask gallery shows Claude's question dialog states and its plan approval
+- Re-shoot the 16 paused-tile shots: frosted in the character gallery, and the tile gallery at its place since the readouts moved
+- A job on any queue can be marked Later and moved up; no take, drain or hand-on starts it until then
+- An agent's notes and documents go with it, can be passed on, and its close takes the tile off the board
+- Review follow-up: the Simplified bubble's edge matches its token; the picker regex escapes the project name
+- Giving a running agent a role can also send it the role's template
+- flaky specs wait on what they assert, and four races they exposed are fixed
+- Main green again: picker and Simplified note specs follow the 14 Nov changes; three board baselines re-shot
+- Queued sends survive a daemon restart; an undelivered agent send goes back to its sender
+- Paused tiles look frosted, with a snowflake by the name, in every design and theme
+- Stage board, part 3: Done folds to one line, and Later items
+- Drag an agent onto a stage board to add it, and off to take it off
+- Readouts move to the gallery's end, so the tile shots stop moving
+- A first prompt left unsent retries for about two minutes, flags its orchestrator and shows in ls
+- Memory folds what doesn't fit, lists cut to whole rows, clear step dots, Done in the steps full view; note bubble edge at 3:1
+- Reading view B: long docs get a contents rail, a decision card and folded findings
+- Zone issue pickers filter by project and milestone (Linear and GitHub)
+- A zone's stage board: Doing as live bands, quiet cards for the rest
+- Settings rows say plainly what they do, and the background service can be restarted
+- Spine, a zone layout rule: the lead at the left, a band per ticket in kept columns
+
 ## v0.6.24 (2026-11-14)
 
 - Agent notes as a speech bubble from the agent's face, with a line budget

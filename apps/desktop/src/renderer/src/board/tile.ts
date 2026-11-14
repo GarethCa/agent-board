@@ -100,8 +100,11 @@ export interface TileActions {
   setMuted(sessionId: string, muted: boolean): void;
   /** Sets the agent's reasoning effort: typed at its prompt between turns, or kept for its next restart, as it can. */
   setEffort(sessionId: string, effort: Effort | null): void;
-  /** Gives the agent a role (a built-in one or any name), or none with null; only its role changes. */
-  setRole(sessionId: string, role: string | null): void;
+  /**
+   * Gives the agent a role (a built-in one or any name), or none with null; only its role changes, unless `sendTemplate`
+   * also sends it the role's template as a message.
+   */
+  setRole(sessionId: string, role: string | null, sendTemplate?: boolean): void;
   /**
    * Renames an agent's or shell's tile, or labels a shell's pane (a blank name takes a pane's label off). Rejects if
    * it could not (after saying why), so the field can stay as it was. Undoable on the board.

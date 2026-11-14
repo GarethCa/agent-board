@@ -252,14 +252,15 @@ export function recordEvents(client: DaemonClient) {
   return {
     events,
     screenText,
-    /** Resolves with the first event, seen or still to come, that matches. */
-    async waitFor<E extends DaemonEvent>(match: (event: DaemonEvent) => event is E): Promise<E> {
+    /** Resolves with the first event, seen or still to come, that matches; with `since`, from the `since`th event on. */
+    async waitFor<E extends DaemonEvent>(match: (event: DaemonEvent) => event is E, since = 0): Promise<E> {
+      const found = () => events.slice(since).find(match);
       await until(
-        () => events.some(match),
+        () => found() !== undefined,
         () => events.length,
         () => `a matching event; saw ${JSON.stringify(events)}`,
       );
-      return events.find(match)!;
+      return found()!;
     },
     /** Resolves once the client has been shown `text` from the session. */
     waitForText: (sessionId: string, text: string) =>

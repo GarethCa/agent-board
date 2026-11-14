@@ -4,6 +4,7 @@ import {
   TRACKER_PROVIDERS,
   TrackerError,
   type CredentialStore,
+  type IssueFilters,
   type Tracker,
   type TrackerIssue,
   type TrackerProject,
@@ -13,6 +14,7 @@ import { invalidParams, optionalStringParam, paramsObject, stringParam } from '.
 import {
   TRACKER_ERROR,
   type DaemonMethods,
+  type IssuePick,
   type TrackerProvider,
   type TrackerScope,
   type ZoneTracker,
@@ -55,11 +57,16 @@ export interface TrackerHost {
    * tracker spells it.
    */
   checkScope(tracker: ZoneTracker): Promise<ZoneTracker>;
-  /** The zone's open issues (those of its project, if it has one), or those matching `query`. */
-  issues(zoneId: string, query?: string): Promise<TrackerIssue[]>;
+  /**
+   * The zone's open issues, or those matching `query`, in `only.project` and `only.milestone`. A project left out is
+   * the zone's own project, if it has one; null is all of its scope's, for a project zone widened to its team.
+   */
+  issues(zoneId: string, query?: string, only?: IssuePick): Promise<TrackerIssue[]>;
+  /** The projects and milestones the zone's issues can be narrowed to; none for a tracker without them. */
+  issueFilters(zoneId: string): Promise<IssueFilters>;
   /**
    * The issue from the zone's tracker, with its branch name; `invalidParams` if the zone's scope (team) has no such
-   * issue.
+   * issue. A project zone takes any issue of its team: its project only says what its picker lists first.
    */
   issue(zoneId: string, issueId: string): Promise<IssueForAgent>;
   /**
@@ -190,25 +197,30 @@ export function createTrackerHost(options: TrackerHostOptions): TrackerHost {
         return { provider, scope: found.key, project: inScope.id };
       });
     },
-    async issues(zoneId, query) {
-      const { provider, scope, project } = requiredZoneTracker(zoneId);
+    async issues(zoneId, query, only = {}) {
+      const { provider, scope, project: bound } = requiredZoneTracker(zoneId);
+      const project = only.project === undefined ? bound : (only.project ?? undefined);
+      const filter = { ...(project === undefined ? {} : { project }), ...(only.milestone === undefined ? {} : { milestone: only.milestone }) };
       const text = query?.trim() ?? '';
       return call(async () => {
         const client = await tracker(provider);
-        return text === '' ? client.listIssues(scope, { project }) : client.searchIssues(scope, text, { project });
+        return text === '' ? client.listIssues(scope, filter) : client.searchIssues(scope, text, filter);
+      });
+    },
+    async issueFilters(zoneId) {
+      const { provider, scope } = requiredZoneTracker(zoneId);
+      return call(async () => {
+        const client = await tracker(provider);
+        return client.issueFilters === undefined ? { projects: [], milestones: [] } : client.issueFilters(scope);
       });
     },
     async issue(zoneId, issueId) {
-      const { provider, scope, project } = requiredZoneTracker(zoneId);
+      const { provider, scope } = requiredZoneTracker(zoneId);
       return call(async () => {
         const client = await tracker(provider);
         const issue = await client.getIssue(issueId);
-        // The zone's issues are its scope's (and its project's, if it has one): an issue from another team or project is
-        // no more its than a missing one.
+        // The zone's issues are its scope's: an issue from another team or repo is no more its than a missing one.
         if (issue?.scope !== scope) throw invalidParams(`${scope} has no issue ${issueId}`);
-        if (project !== undefined && issue.project !== project) {
-          throw invalidParams(`${scope}'s project ${project} has no issue ${issueId}`);
-        }
         return { issue, branch: client.branchName(issue) };
       });
     },
@@ -271,9 +283,17 @@ export function trackerHandlers<Context>(trackers: TrackerHost): RpcHandlers<Tra
     },
     'tracker.issues': (params) => {
       const p = paramsObject(params);
-      return trackers.issues(stringParam(p, 'zoneId'), optionalStringParam(p, 'query'));
+      return trackers.issues(stringParam(p, 'zoneId'), optionalStringParam(p, 'query'), issuePickParam(p));
     },
+    'tracker.issueFilters': (params) => trackers.issueFilters(stringParam(paramsObject(params), 'zoneId')),
   };
+}
+
+/** A project and milestone to narrow a zone's issues to, from wire params. */
+function issuePickParam(params: Record<string, unknown>): IssuePick {
+  const project = params.project === null ? null : optionalStringParam(params, 'project');
+  const milestone = optionalStringParam(params, 'milestone');
+  return { ...(project === undefined ? {} : { project }), ...(milestone === undefined ? {} : { milestone }) };
 }
 
 function providerParam(params: Record<string, unknown>): TrackerProvider {

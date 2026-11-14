@@ -421,8 +421,9 @@ PTY.
   unsent, a question or permission prompt is up when its turn comes, or the daemon shuts down first) is kept on the
   agent (`Agent.undelivered`, in the database, so a daemon restart shows it again) and flagged to the user, a flag that
   outlives its session, opening it and a restart, until the user resends it (`agent.resendUndelivered`, an ended agent
-  started again with the first) or clears it. A flag the agent
-  already had stays: its reason goes on in that one's, and it stands again once that is resent or cleared. An
+  started again with the first) or clears it. One another agent sent goes back to that agent instead, as a notice
+  typed at its prompt, and the receiver shows nothing for it (as for a message waiting for a turn's end, ADR 0011). A
+  flag the agent already had stays: its reason goes on in that one's, and it stands again once that is resent or cleared. An
   **unsent message**'s flag folds in the flag before it the same way, and either of the two may stand in place of the
   other: whichever is over first leaves the other standing in place of what it held, never a copy of itself. A flag
   the agent raised for its orchestrator goes to the user while folded in, as its reason shows on the user's flag.

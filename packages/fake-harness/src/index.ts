@@ -150,6 +150,8 @@ export interface FakeHarnessEnvOptions {
   fullscreen?: boolean;
   /** Lines of an earlier conversation the `busy` scenario prints first, as scrollback. None by default. */
   backlogLines?: number;
+  /** A file it writes, relative to its folder, as it is stopped (SIGTERM or SIGHUP): an edit made in its last moment. */
+  writeOnStop?: string;
   /** The environment to start from. Defaults to the process's own, less the session variables of an enclosing board. */
   base?: NodeJS.ProcessEnv;
 }
@@ -159,6 +161,8 @@ export function fakeHarnessEnv(options: FakeHarnessEnvOptions): NodeJS.ProcessEn
   const env: NodeJS.ProcessEnv = options.base ? { ...options.base } : scrubBoardSessionEnv({ ...process.env });
   delete env.CLAUDE_CONFIG_DIR;
   delete env.CODEX_HOME;
+  // A developer's own `FORCE_HYPERLINK` would lock the clickable links setting; a test that wants one sets it in `base`.
+  if (!options.base) delete env.FORCE_HYPERLINK;
   return {
     ...env,
     PATH: [fakeBinDir, env.PATH].filter(Boolean).join(delimiter),
@@ -196,6 +200,7 @@ export function fakeHarnessEnv(options: FakeHarnessEnvOptions): NodeJS.ProcessEn
     FAKE_HARNESS_RATE_LIMITS: options.rateLimits === undefined ? '' : JSON.stringify(options.rateLimits),
     FAKE_HARNESS_FULLSCREEN: options.fullscreen ? '1' : '0',
     FAKE_HARNESS_BACKLOG_LINES: String(options.backlogLines ?? 0),
+    FAKE_HARNESS_WRITE_ON_STOP: options.writeOnStop ?? '',
     FAKE_HARNESS_STARTUP_SCREEN: options.startupScreen ?? '',
     FAKE_HARNESS_TRUST_SCREEN: typeof options.trustScreen === 'string' ? options.trustScreen : options.trustScreen ? '1' : '0',
   };

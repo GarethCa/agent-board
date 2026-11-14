@@ -22,6 +22,7 @@ import { CharacterChangeDemo, CharacterLooksGallery, CharacterStylesGallery } fr
 import { CharactersSetting } from './chrome/CharactersSetting';
 import { NeedsYouStepsGallery } from './inbox/NeedsYouStepsGallery';
 import { TodoGallery } from './board/items/TodoGallery';
+import { ReadingGallery } from './doc/ReadingGallery';
 import { CrewCardGallery } from './board/items/CrewCardGallery';
 import { QueueHandOnGallery } from './board/items/QueueGallery';
 import { ShelvesGallery } from './session/ShelvesGallery';
@@ -132,6 +133,11 @@ createRoot(root).render(
           // A page of its own too: a to-do list in each of its looks, open and folded.
           <div className="gallery">
             <TodoGallery />
+          </div>
+        ) : location.hash === '#gallery-reading' ? (
+          // A page of its own: a long document read wide with its rail, scrolled to its findings, and narrow.
+          <div className="gallery">
+            <ReadingGallery />
           </div>
         ) : location.hash === '#gallery-queue-hand-on' ? (
           // A page of its own: adding to the dev gallery moves its scrollbar, and so every shot that reaches the page's edge.

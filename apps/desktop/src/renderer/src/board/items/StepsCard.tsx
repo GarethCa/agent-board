@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
-import { ArrowDown, ArrowUp, Check, ChevronLeft, ChevronRight, Circle, CircleDot, Link, ListChecks, ListTodo, MessageSquareText, Send, ToggleRight, ArrowUpDown } from 'lucide-react';
+import { ArrowDown, ArrowUp, Check, ChevronLeft, ChevronRight, Circle, Link, ListCheck, ListChecks, ListTodo, MessageSquareText, Send, ToggleRight, ArrowUpDown } from 'lucide-react';
 import type { Step, StepAnswer, StepsData } from '@agent-board/daemon/protocol';
 import { Button, ErrorText, Kbd } from '../../ui';
 import { useScrollFade } from './CardSizing';
 import { scrollToShow } from './card-size';
 import { fromStepLink, stepLinkUrl } from './step-link';
-import { sendsWithWords, stepRows, stepsView, turnSection, type StepRow, type StepsLookup, type StepsView, type StepView, type ZoomLook } from './steps-view';
+import { kindMarked, sendsWithWords, yoursText, stepRows, stepsView, turnSection, type StepRow, type StepsLookup, type StepsView, type StepView, type ZoomLook } from './steps-view';
 
 /**
  * Answers `step` by `key`, as the card's keys do: Space ticks a to-do, 1–9 picks a choice (or toggles one of any), and
@@ -57,7 +57,7 @@ export interface StepsCardProps {
 /** Each kind of step's mark, so a row reads as what it asks before its text. */
 export const KIND_ICON: Record<Step['kind'], ReactNode> = {
   todo: <Circle />,
-  one: <CircleDot />,
+  one: <ListCheck />,
   any: <ListChecks />,
   'yes-no': <ToggleRight />,
   order: <ArrowUpDown />,
@@ -357,11 +357,15 @@ function Row({ row, onCursor, onToggle, actions, onNext, keys, sends }: { row: S
     return (
       <div className="steps-open" data-tone={view.yours && view.state !== 'done' ? 'yours' : 'now'} data-testid="steps-open" data-step={view.place}>
         <div className="steps-open-head">
-          <span className="steps-kind" title={KIND_NAME[view.step.kind]}>
-            {KIND_ICON[view.step.kind]}
-          </span>
+          {/* Every step leads with its state dot, as the rows do; a question's kind trails, small, so the two never sit side by side. */}
+          <Dot view={view} />
           <span className="steps-open-text">{view.step.text}</span>
           {view.step.required && <span className="steps-required">Required</span>}
+          {kindMarked(view.step.kind) && (
+            <span className="steps-kind steps-kind-trail" title={KIND_NAME[view.step.kind]} aria-label={KIND_NAME[view.step.kind]}>
+              {KIND_ICON[view.step.kind]}
+            </span>
+          )}
         </div>
         <div className="steps-open-note">{view.state === 'done' && view.answer !== null ? `Answered: ${view.answer}` : view.note}</div>
         <Controls view={view} actions={actions} onNext={onNext} keys={keys} sends={sends} />
@@ -390,9 +394,7 @@ function Foot({ view, steppedIn, actions }: { view: StepsView; steppedIn: boolea
             ? 'Answers sent · change one to send again'
             : !view.userAnswers
               ? `${view.answerer} answers its questions`
-              : view.yoursLeft > 0
-                ? `Yours: ${view.yoursLeft} left${view.waitedOn > 0 ? ` · ${view.waitedOn} waited on` : ''}`
-                : keys}
+              : (yoursText(view) ?? keys)}
       </span>
       {(send.kind === 'ready' || send.kind === 'blocked') && (
         <Button size="sm" variant="primary" className="nodrag" disabled={send.kind === 'blocked'} onClick={actions.send} data-testid="steps-send">

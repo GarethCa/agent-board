@@ -275,6 +275,8 @@ describe('subagents on a Hybrid tile', () => {
       plainFolder: false,
       spawnedBy: null,
       orphanedFrom: null,
+      ticket: null,
+      ticketChat: false,
       ledBy: null,
       startup: null,
       hooksSilent: false,

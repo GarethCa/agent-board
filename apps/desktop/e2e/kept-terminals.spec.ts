@@ -310,6 +310,8 @@ test('popping an agent out builds it one terminal, though its pane mounts before
     await expect(tile(window)).toHaveAttribute('data-state', 'waiting');
     await tile(window).dblclick();
     await expect(sessionWindow(window).locator('.xterm')).toBeVisible();
+    // Its terminal shows before it connects: counted once its snapshot has come.
+    await expect(sessionWindow(window)).toHaveAttribute('data-state', 'attached');
     const connected = await connections(dataDir);
 
     const [popped] = await Promise.all([app.waitForEvent('window'), clickPopOut(sessionWindow(window))]);

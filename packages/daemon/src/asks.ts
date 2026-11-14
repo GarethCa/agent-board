@@ -48,6 +48,7 @@ import { planDecisionText } from './plan-told.ts';
 import { oneLine } from './terminal-input.ts';
 import { cutText } from './text-cut.ts';
 import { lineDiff } from './text-diff.ts';
+import { flagLeadOf } from './ticket-tiles.ts';
 import { isInside, realPath, whyNotWritable, writeWhole } from './user-files.ts';
 import type { AgentHost } from './agents.ts';
 
@@ -96,8 +97,8 @@ export interface AskHostOptions {
   addCard?(sessionId: string): Promise<void>;
   /** The user's approved version of the agent's plan was written to its file at `path`. */
   wrote?(sessionId: string, path: string): void;
-  /** Types `text` at the agent's prompt once it is ready for its next message: the decision on a plan it left. */
-  told?(sessionId: string, text: string): void;
+  /** Types `text` at the agent's prompt once it is ready for its next message, then calls `typed`: the decision on a plan it left. */
+  told?(sessionId: string, text: string, typed: () => void): void;
   /**
    * Makes a steps card beside the agent's tile from its ask, holding the answers so far: while the ask's call waits, the
    * card's Send answers it (`sendFromCard`). With `ended`, the call already stopped waiting, and the card says so.
@@ -116,10 +117,15 @@ export interface AskHost {
   presentPlan(sessionId: string, spec: PlanSpec, signal: AbortSignal): Promise<PlanResult>;
   /**
    * Presents the agent's next plan version and returns it at once, for an agent whose command line can't wait: the wait
-   * outlives its connection and its turns, and the decision, or the timeout, is typed at its prompt (`told`). Ends, told
-   * to no one, only with the agent's session.
+   * outlives its connection, its turns and a daemon restart (`resume`), and the decision is typed at its prompt (`told`).
+   * Ends undecided, and its agent told so, only with the agent's session, not one stopped to come back (`end`'s `keepLeft`).
    */
   leavePlan(sessionId: string, spec: PlanSpec): PlanSummary;
+  /**
+   * Once `told` can type, as the daemon starts: waits again on each plan an agent left that the daemon held undecided
+   * as it went, and tells each agent what it was not told yet of how its left plan ended. Call once.
+   */
+  resume(): void;
   /** The question the agent asks now, or null. */
   pendingAsk(sessionId: string): AgentAsk | null;
   /** The agent's latest plan, or null before its first. */
@@ -163,12 +169,15 @@ export interface AskHost {
   edit(sessionId: string, planId: string, body: string): PlanSummary;
   /** The agent stopped waiting (its turn ended, or its session): its question goes, its plan is withdrawn. A plan it left stays. */
   drop(sessionId: string): void;
-  /** The agent's session ended: what it waits on goes, a plan it left too. */
-  end(sessionId: string): void;
+  /**
+   * The agent's session ended: what it waits on goes, a plan it left too, unless `keepLeft`: it was stopped to come back
+   * (a restart, a hibernation), and its left plan waits on for the user, its decision typed once it is back.
+   */
+  end(sessionId: string, keepLeft?: boolean): void;
   /** The agent is being deleted: drops what it waits on and forgets its plans. */
   forget(sessionId: string): void;
   handlers<Context extends BoardConnection>(sources: BoardCallerSources & { agents: Pick<AgentHost, 'get'> }): RpcHandlers<AskMethods, Context>;
-  /** Withdraws everything still waiting, as the daemon goes. */
+  /** Withdraws every call still waiting, as the daemon goes. A plan left stays undecided for `resume`. */
   close(): void;
 }
 
@@ -186,6 +195,8 @@ interface PlanRow {
   decided_at: string | null;
   author: PlanSummary['author'];
   path: string | null;
+  /** For a plan left: what its agent is still to be told of how it ended. */
+  untold: string | null;
 }
 
 const toSummary = (row: PlanRow, left = false): PlanSummary => ({
@@ -305,9 +316,12 @@ export function createAskHost(options: AskHostOptions): AskHost {
   const selectPlan = db.prepare('SELECT * FROM plans WHERE id = ?');
   const selectAgentsBefore = db.prepare("SELECT * FROM plans WHERE session_id = ? AND author = 'agent' AND version < ? ORDER BY version DESC LIMIT 1");
   const deletePlans = db.prepare('DELETE FROM plans WHERE session_id = ?');
+  const setUntold = db.prepare('UPDATE plans SET untold = ? WHERE session_id = ? AND version = ?');
+  const selectUntold = db.prepare('SELECT * FROM plans WHERE untold IS NOT NULL ORDER BY session_id, version');
+  const selectUndecidedLeft = db.prepare("SELECT * FROM plans WHERE outcome IS NULL AND expires_at = '' ORDER BY session_id, version DESC");
 
-  // No call waits on a plan the daemon held as it went: it is withdrawn.
-  db.prepare('UPDATE plans SET outcome = ?, decided_at = ? WHERE outcome IS NULL').run('withdrawn', new Date(clock.now()).toISOString());
+  // No call waits on a plan the daemon held as it went: it is withdrawn. A plan left (no timer, so no expiry) waits on (`resume`).
+  db.prepare("UPDATE plans SET outcome = ?, decided_at = ? WHERE outcome IS NULL AND expires_at != ''").run('withdrawn', new Date(clock.now()).toISOString());
 
   const waiting = new Map<string, Waiting>();
   /**
@@ -448,7 +462,12 @@ export function createAskHost(options: AskHostOptions): AskHost {
     leftPlans.get(sessionId)?.settle('superseded');
     insertPlan.run(id, sessionId, version, title, spec.format, body, now(), ms === null ? '' : new Date(clock.now() + ms).toISOString(), 'agent', spec.path ?? null);
     latest.delete(sessionId);
-    return hold(sessionId, { ask: null, planId: id }, left ? leftPlans : waiting, ms, signal, (how, wait): PlanResult => {
+    return holdPlan(sessionId, id, ms, signal, left);
+  };
+
+  /** Holds the agent's wait on its plan `planId` (a call's, or with `left` none's), until it ends as `hold` says. */
+  const holdPlan = (sessionId: string, planId: string, ms: number | null, signal: AbortSignal, left: boolean): Promise<PlanResult> =>
+    hold(sessionId, { ask: null, planId }, left ? leftPlans : waiting, ms, signal, (how, wait): PlanResult => {
       const decision: PlanEnd =
         how === null || how === 'timed-out' || how === 'superseded'
           ? { outcome: how === 'timed-out' ? 'timed-out' : 'withdrawn', comments: '', decidedAt: now() }
@@ -463,6 +482,30 @@ export function createAskHost(options: AskHostOptions): AskHost {
       if (how === null && !left) throw stoppedWaiting();
       return { version: decided.version, decision, edits: editsOf(sessionId, decided, decision.outcome === 'approved') };
     });
+
+  /** Types `text` at the agent's prompt, kept on its plan `version` until it is typed, so a restart tells it still. */
+  const tell = (sessionId: string, version: number, text: string) => {
+    setUntold.run(text, sessionId, version);
+    retell(sessionId, version, text);
+  };
+
+  /** Types `text`, already kept on the agent's plan `version`, at its prompt, and forgets it there once it is typed. */
+  const retell = (sessionId: string, version: number, text: string) =>
+    options.told?.(sessionId, text, () => void setUntold.run(null, sessionId, version));
+
+  /** Tells the agent how the plan it left ended, once the wait on it (`held`) does. `path` is the file it was read from. */
+  const tellWhenDecided = (sessionId: string, held: Promise<PlanResult>, path: string | undefined) => {
+    held
+      .then((result) => {
+        const said =
+          result.decision.outcome === 'withdrawn'
+            ? `Plan v${result.version} was withdrawn before the user decided: your session ended. Present it again.`
+            : planDecisionText(result, { ...(path === undefined ? {} : { path }) });
+        tell(sessionId, result.version, `[agent-board] ${said}`);
+      })
+      .catch((error: unknown) => {
+        if (error !== superseded) options.log?.(`could not tell ${sessionId} how its plan ended: ${(error as Error).message}`);
+      });
   };
 
   const host: AskHost = {
@@ -518,18 +561,18 @@ export function createAskHost(options: AskHostOptions): AskHost {
     presentPlan: (sessionId, spec, signal) => present(sessionId, spec, signal, false),
 
     leavePlan(sessionId, spec) {
-      present(sessionId, spec, new AbortController().signal, true)
-        .then((result) => {
-          const said =
-            result.decision.outcome === 'withdrawn'
-              ? `Plan v${result.version} was withdrawn before the user decided: your session ended. Present it again.`
-              : planDecisionText(result, spec);
-          options.told?.(sessionId, `[agent-board] ${said}`);
-        })
-        .catch((error: unknown) => {
-          if (error !== superseded) options.log?.(`could not tell ${sessionId} how its plan ended: ${(error as Error).message}`);
-        });
+      tellWhenDecided(sessionId, present(sessionId, spec, new AbortController().signal, true), spec.path);
       return latestPlan(sessionId)!;
+    },
+
+    resume() {
+      for (const row of selectUntold.all() as unknown as PlanRow[]) retell(row.session_id, row.version, row.untold!);
+      // The user's edits made later versions of a plan left: the wait is on the latest, which comes first.
+      for (const row of selectUndecidedLeft.all() as unknown as PlanRow[]) {
+        if (leftPlans.has(row.session_id)) continue;
+        tellWhenDecided(row.session_id, holdPlan(row.session_id, row.id, null, new AbortController().signal, true), row.path ?? undefined);
+        latest.delete(row.session_id);
+      }
     },
 
     pendingAsk: (sessionId) => waiting.get(sessionId)?.ask ?? null,
@@ -634,8 +677,16 @@ export function createAskHost(options: AskHostOptions): AskHost {
       if (plan.format !== 'markdown') throw invalidParams('an HTML plan is view-only: say what to change in your comments');
       if (planBody(body) === plan.body) throw invalidParams(`nothing changed: it is v${plan.version} as it was`);
       const id = randomUUID();
-      insertPlan.run(id, sessionId, plan.version + 1, plan.title, plan.format, body, now(), plan.expires_at, 'user', plan.path);
-      decidePlan.run('edited', '', now(), planId);
+      // Together, so a crash between them never leaves two versions undecided.
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        insertPlan.run(id, sessionId, plan.version + 1, plan.title, plan.format, body, now(), plan.expires_at, 'user', plan.path);
+        decidePlan.run('edited', '', now(), planId);
+        db.exec('COMMIT');
+      } catch (error) {
+        db.exec('ROLLBACK');
+        throw error;
+      }
       entry.planId = id;
       latest.delete(sessionId);
       touched(sessionId);
@@ -645,12 +696,12 @@ export function createAskHost(options: AskHostOptions): AskHost {
     // A plan the agent left is not in `waiting`: a turn's end leaves it.
     drop: (sessionId) => waiting.get(sessionId)?.settle(null),
 
-    end(sessionId) {
+    end(sessionId, keepLeft = false) {
       // Its session over (deleted, stopped, the daemon going): answers so far are not kept on a new card for it.
       ending.add(sessionId);
       try {
         waiting.get(sessionId)?.settle(null);
-        leftPlans.get(sessionId)?.settle(null);
+        if (!keepLeft) leftPlans.get(sessionId)?.settle(null);
       } finally {
         ending.delete(sessionId);
       }
@@ -673,12 +724,14 @@ export function createAskHost(options: AskHostOptions): AskHost {
         return me.sessionId;
       };
       /**
-       * The live orchestrator that started the agent, which its questions and plans go to instead of the user; else
-       * undefined. Never the Captain (ADR-0019): what its leads ask or plan waits for the user, never for it to settle.
+       * The live orchestrator its questions and plans go to instead of the user: its ticket's chat for a helper, else the
+       * agent that started it; else undefined. Never the Captain (ADR-0019): what its leads ask or plan waits for the
+       * user, never for it to settle.
        */
       const leadOf = (sessionId: string): Agent | undefined => {
-        const spawnedBy = sources.agents.get(sessionId)?.spawnedBy;
-        const lead = spawnedBy === null || spawnedBy === undefined ? undefined : sources.agents.get(spawnedBy);
+        const asker = sources.agents.get(sessionId);
+        const leadId = asker === undefined ? null : flagLeadOf(asker);
+        const lead = leadId === null ? undefined : sources.agents.get(leadId);
         return lead?.endedAt === null && !lead.master ? lead : undefined;
       };
       /**
@@ -797,7 +850,9 @@ export function createAskHost(options: AskHostOptions): AskHost {
     },
 
     close() {
-      for (const sessionId of new Set([...waiting.keys(), ...leftPlans.keys()])) host.end(sessionId);
+      for (const sessionId of [...waiting.keys()]) host.end(sessionId, true);
+      // A plan left stays undecided in the database, for the next daemon to wait on.
+      leftPlans.clear();
     },
   };
   return host;

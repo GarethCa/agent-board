@@ -67,6 +67,8 @@ async function bareZonePoint(page: Page, zone: Locator): Promise<Point> {
 /** Drags from the middle of `what` by `by` board pixels at `scale`. */
 async function dragFrom(page: Page, what: Locator, by: Point, scale: number): Promise<void> {
   const from = centreOf(await settledBox(what));
+  // Pressed there, it is what the press lands on, with nothing drawn over it.
+  await expect.poll(() => what.evaluate((element, at) => element.contains(document.elementFromPoint(at.x, at.y)), from)).toBe(true);
   await drag(page, from, { x: from.x + by.x * scale, y: from.y + by.y * scale });
 }
 

@@ -302,6 +302,17 @@ describe("a crew member's flag", () => {
     expect(heard.events).toContainEqual(expect.objectContaining({ kind: 'flagged', sessionId: member.agent.sessionId, detail: "can't reproduce it on CI, only locally" }));
   });
 
+  it('goes to an agent the user started by hand that another agent handed the crew to, and no longer to the one that started it', async () => {
+    const { setup, lead, member } = await crew();
+    const taker = await topLevel(setup);
+    await lead.connection.call('orchestrator.handover', { token: lead.token, from: lead.agent.sessionId, to: taker.agent.sessionId });
+
+    const flagged = await member.connection.call('board.needsYou', { token: member.token, reason: 'the fixture is missing' });
+    expect(flagged.flag).toMatchObject({ to: 'orchestrator' });
+    await setup.recorder.waitForText(taker.agent.sessionId, 'needs you: the fixture is missing');
+    expect(setup.recorder.screenText(lead.agent.sessionId)).not.toContain('needs you: the fixture is missing');
+  });
+
   it('wakes an orchestrator waiting for its next check-in at once, without the check-in, and a burst of flags as one turn', async () => {
     const { setup, lead, member } = await crew();
     const leadId = lead.agent.sessionId;
@@ -350,6 +361,56 @@ describe("a crew member's flag", () => {
 
     expect((await setup.client.call('agent.typeFirstPrompt', { sessionId: member.sessionId })).flag).toBeNull();
     await setup.recorder.waitForText(member.sessionId, '> Fix the flaky test');
+  });
+
+  it('goes to its orchestrator when its first prompt is typed but left unsent, and shows in its list line', async () => {
+    const clock = createFakeClock(new Date());
+    const setup = await flagDaemon({ clock, noSessionStart: true, loseEnters: 10, loseEntersAfter: 1, submitConfirmMs: 100 });
+    const leadAgent = await setup.client.call('agent.spawn', { zoneId: setup.zone.id, prompt: 'Print your board identity', ...SIZE });
+    clock.advance(60_000);
+    await untilAgent(setup.recorder, leadAgent.sessionId, (a) => a.untypedPrompt !== null);
+    await setup.client.call('agent.typeFirstPrompt', { sessionId: leadAgent.sessionId });
+    const lead = { agent: leadAgent, ...(await agentSideOf(setup, leadAgent.sessionId)) };
+    const member = await lead.connection.call('orchestrator.spawn', { token: lead.token, prompt: 'Tidy the docs', name: 'docs tidier' });
+    // Its first line goes up; every Enter after it is lost, so its first prompt is typed and never sent.
+    await setup.client.call('session.write', { sessionId: member.sessionId, data: 'Print your board identity\r' });
+    await agentSideOf(setup, member.sessionId);
+    clock.advance(60_000);
+    await untilAgent(setup.recorder, member.sessionId, (a) => a.untypedPrompt !== null);
+    await setup.client.call('agent.typeFirstPrompt', { sessionId: member.sessionId });
+
+    const unsent = await untilAgent(setup.recorder, member.sessionId, (a) => a.unsent !== null);
+    expect(unsent.flag).toMatchObject({
+      to: 'orchestrator',
+      reason: `Its first prompt was typed at its prompt but not sent (no turn started on it after 6 presses of Enter): Send or Clear it on its tile, or \`agent-board send ${refOf(member)} --submit\``,
+    });
+    // Its line in the orchestrator's list says so, not just that it is idle.
+    let out = '';
+    const env = { [BOARD_SOCKET_ENV]: setup.daemon.socketPath, [BOARD_TOKEN_ENV]: lead.token };
+    expect(await runBoardCommand('ls', [], { out: (text) => (out += text), err: (text) => (out += text), env })).toBe(0);
+    expect(out).toMatch(/ {2}docs tidier {2}\[waiting, first prompt not sent\]/);
+  });
+
+  it('stays with the user when they type at a first prompt before it is sent, as only they can send or clear it there', async () => {
+    const clock = createFakeClock(new Date());
+    const setup = await flagDaemon({ clock, noSessionStart: true, loseEnters: 10, loseEntersAfter: 1, submitConfirmMs: 100 });
+    const leadAgent = await setup.client.call('agent.spawn', { zoneId: setup.zone.id, prompt: 'Print your board identity', ...SIZE });
+    clock.advance(60_000);
+    await untilAgent(setup.recorder, leadAgent.sessionId, (a) => a.untypedPrompt !== null);
+    await setup.client.call('agent.typeFirstPrompt', { sessionId: leadAgent.sessionId });
+    const lead = { agent: leadAgent, ...(await agentSideOf(setup, leadAgent.sessionId)) };
+    const member = await lead.connection.call('orchestrator.spawn', { token: lead.token, prompt: 'Tidy the docs', name: 'docs tidier' });
+    await setup.client.call('session.write', { sessionId: member.sessionId, data: 'Print your board identity\r' });
+    await agentSideOf(setup, member.sessionId);
+    clock.advance(60_000);
+    await untilAgent(setup.recorder, member.sessionId, (a) => a.untypedPrompt !== null);
+    await setup.client.call('agent.typeFirstPrompt', { sessionId: member.sessionId });
+    // The user adds to it in its terminal before its Enter.
+    await setup.client.call('session.write', { sessionId: member.sessionId, data: ' now' });
+
+    const unsent = await untilAgent(setup.recorder, member.sessionId, (a) => a.unsent !== null);
+    expect(unsent.flag).toMatchObject({ to: 'user' });
+    expect(unsent.flag?.reason).toMatch(/^Its first prompt was typed at its prompt but not sent \(.*\): send or clear it in its terminal$/);
   });
 
   it("goes to the user, never its orchestrator, when a crew member waits on Claude's trust screen", async () => {

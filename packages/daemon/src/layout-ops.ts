@@ -3,7 +3,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { BoardError, BoardRefs, connectorLine, connectorsIn, inZone, itemLine, readBoard, REF_KINDS, shapeSectionLines, zoneLine, type BoardSession, type BoardView, type RefKind } from './board-ops.ts';
+import { BoardError, BoardRefs, connectorLine, connectorsIn, inZone, itemLine, readBoard, REF_KINDS, resolveAgent, shapeSectionLines, zoneLine, type BoardSession, type BoardView, type RefKind } from './board-ops.ts';
 import {
   ARRANGE_BYS,
   ARRANGE_LAYOUTS,
@@ -344,12 +344,13 @@ export async function changeGroup(session: BoardSession, ref: string, options: G
 /** What each zone layout draws, as `zone layout` says it. */
 const LAYOUT_WORDS: Record<ZoneLayoutChoice, string> = {
   free: 'each tile where it was put',
+  spine: 'its lead at the left with its shells under it, each ticket a band in columns to the right, kept as its work changes',
   lanes: 'a lane per ticket, laid out again whenever its work changes',
   shelves: 'its work as stacks on To do, Doing, Waiting and Done shelves, under a head row of its leads and shells',
   clusters: "each unit of work's tiles drawn together, what needs the user first, under a head row of its leads and shells",
 };
 
-/** `zone layout`: sets how a zone (the caller's by default) lays out what it holds. Only a rule (lanes) moves tiles. */
+/** `zone layout`: sets how a zone (the caller's by default) lays out what it holds. Only a rule (spine, lanes) moves tiles. */
 export async function setZoneLayout(session: BoardSession, mode: string, zone: string | undefined): Promise<BoardView> {
   if (!(ZONE_LAYOUT_CHOICES as readonly string[]).includes(mode)) throw new BoardError(`the layout must be ${ZONE_LAYOUT_CHOICES.join(', ')}`);
   const refs = new BoardRefs(await readBoard(session.client));
@@ -359,7 +360,7 @@ export async function setZoneLayout(session: BoardSession, mode: string, zone: s
     ...(zone === undefined ? {} : { zoneId: zoneId(refs, zone, session.caller) }),
   });
   const choice = zoneLayoutChoiceOf(changed);
-  const moved = choice === 'lanes' ? 'Its tiles move into their lanes in a moment.' : "No tile's place changed.";
+  const moved = choice === 'lanes' ? 'Its tiles move into their lanes in a moment.' : choice === 'spine' ? 'Its tiles move into their bands in a moment.' : "No tile's place changed.";
   return { text: `${refs.of('zone', changed.id)} ${changed.name} is laid out as ${choice}: ${LAYOUT_WORDS[choice]}. ${moved}`, json: changed };
 }
 
@@ -446,6 +447,15 @@ export async function removeNote(session: BoardSession, ref: string): Promise<Bo
   const id = noteId(refs, ref, session.caller);
   await session.client.call('orchestrator.removeNote', { token: session.token, id });
   return { text: `Removed ${refs.of('item', id)}.`, json: null };
+}
+
+/** `note pass`: gives an agent note or document card to the agent `toRef`, which holds it from then on. */
+export async function passNote(session: BoardSession, ref: string, toRef: string): Promise<BoardView> {
+  const refs = new BoardRefs(await readBoard(session.client));
+  const id = noteId(refs, ref, session.caller);
+  const to = resolveAgent(refs, toRef, session.caller);
+  const item = await session.client.call('orchestrator.passItem', { token: session.token, id, to: to.sessionId });
+  return { text: `Passed ${refs.of('item', id)} to ${refs.of('agent', to.sessionId)} ${to.name}: it goes off the board with ${to.name} now.`, json: item };
 }
 
 /** What `shape add` and `shape edit` take, as typed. */

@@ -249,3 +249,56 @@ test('a zone takes its issues from a GitHub repo through gh, an agent starts fro
     github.dispose();
   }
 });
+
+test("a zone's issue picker narrows to a GitHub Project and one of its milestones, and remembers it", async () => {
+  const github = createFakeGitHub();
+  const { dir, repo, env } = scratch('waiting');
+  const dataDir = tempDataDir();
+  const app = await launchApp(dataDir, { ...env, AGENT_BOARD_GH: github.gh });
+  try {
+    const window = await app.firstWindow();
+    await connectedDaemonPid(window);
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await setZoneTracker(
+      window,
+      'monorepo',
+      async (dialog) => {
+        await dialog.getByLabel('Tracker').selectOption('github');
+        await dialog.getByLabel('GitHub repo').fill('acme/app');
+      },
+      'acme/app',
+    );
+
+    const openPicker = async () => {
+      await window.getByTestId('zone-tab').getByRole('button', { name: 'New agent' }).click();
+      const dialog = window.getByRole('dialog', { name: 'New agent' });
+      return { dialog, project: dialog.getByLabel('Project or milestone'), issues: dialog.getByRole('listbox', { name: 'Issues' }).getByRole('option') };
+    };
+    const first = await openPicker();
+    // The whole repo first, then each project with its milestones under it.
+    await expect(first.project.locator('option:checked')).toHaveText('All of acme/app');
+    await expect(first.project.locator('optgroup')).toHaveAttribute('label', 'Roadmap');
+    await expect(first.issues).toHaveCount(2);
+
+    // The project holds issues of another repo too; only this repo's are listed.
+    await first.project.selectOption({ label: 'All of Roadmap' });
+    await expect(first.issues).toHaveText([/#34/, /#12/]);
+    await first.project.selectOption({ label: 'v1.0' });
+    await expect(first.issues).toHaveText([/#12/]);
+    await first.dialog.getByLabel('Search issues').fill('login');
+    await expect(first.dialog.getByText('No issues found')).toBeVisible();
+    await window.keyboard.press('Escape');
+    await expect(first.dialog).toBeHidden();
+
+    // The zone remembers its choice.
+    const again = await openPicker();
+    await expect(again.project.locator('option:checked')).toHaveText('v1.0');
+    await expect(again.issues).toHaveText([/#12/]);
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+    github.dispose();
+  }
+});

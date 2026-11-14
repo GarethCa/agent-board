@@ -1,4 +1,4 @@
-import { readFileSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { fakeHarnessEnv } from '@agent-board/fake-harness';
@@ -56,6 +56,34 @@ describe('documents an agent shows the user through the board MCP', () => {
 
     await client.call('agent.delete', { sessionId: agent.sessionId, force: true });
     await expect.poll(async () => (await client.call('item.list')).filter((item) => item.kind === 'document')).toEqual([]);
+  });
+
+  it('passes a document card to another agent: it outlives its first agent’s worktree, and goes with its new holder', async () => {
+    const dataDir = tempDataDir();
+    const { client, recorder, start, until } = await docDaemon(dataDir);
+    const writer = await start('Doc on the board: docs/release-plan.md');
+    await recorder.waitForText(writer.sessionId, 'a card beside your tile');
+    const shown = (await until(writer.sessionId, (seen) => seen.docs.length === 1)).docs[0]!;
+    const reader = await start('Ready? | Yes');
+    const [card] = (await client.call('item.list')).filter((item) => item.kind === 'document');
+
+    const passed = await client.call('orchestrator.passItem', { id: card!.id, to: reader.sessionId });
+    expect(passed.data as unknown as DocumentCardData).toMatchObject({ documentId: shown.id, agent: { sessionId: reader.sessionId }, passedFrom: { sessionId: writer.sessionId } });
+    const docsOf = async (sessionId: string) => (await client.call('agent.list')).find((each) => each.sessionId === sessionId)!.docs;
+    // While its writer lives the document stays its file, so a rewrite of it still reaches the new holder.
+    expect((await docsOf(reader.sessionId)).map((each) => [each.id, each.path])).toEqual([[shown.id, shown.path]]);
+    await recorder.waitForText(reader.sessionId, 'passed you the document “Release 1.4 plan”');
+
+    // Its writer's worktree goes with the writer, so the file is kept first.
+    await client.call('agent.delete', { sessionId: writer.sessionId, force: true });
+    expect(existsSync(writer.worktree)).toBe(false);
+    expect((await client.call('item.list')).filter((item) => item.kind === 'document').map((item) => item.id)).toEqual([card!.id]);
+    expect((await docsOf(reader.sessionId))[0]!.path.startsWith(join(dataDir, 'documents'))).toBe(true);
+    expect((await client.call('doc.read', { documentId: shown.id })).text).toContain('Merge the flake fix first');
+
+    await client.call('agent.delete', { sessionId: reader.sessionId, force: true });
+    await expect.poll(async () => (await client.call('item.list')).filter((item) => item.kind === 'document')).toEqual([]);
+    expect(existsSync(join(dataDir, 'documents', shown.id))).toBe(false);
   });
 
   it('keeps a card collapsed to a bar, and the document when the card is taken off the board, across a daemon restart', async () => {

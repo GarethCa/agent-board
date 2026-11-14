@@ -65,7 +65,8 @@ A queue row's `kind` depends on who its queue is for. An agents' queue holds `ta
 agent takes and finishes, and `info`, which it reads and never takes. The user's queue holds `review`, `questions`,
 `backlog` and `read`, all of which the user finishes. A row's `text` is its headline (the first line) and its body. A
 done row keeps its finisher's `result`. A row of the user's queue that they put off for later holds the time it comes
-back in `hidden_until`, which is no version in its history, and a skip only moves it, behind the next row not put off. Migration 0089 renamed the old kinds: a `job` became a `task` (or `backlog` on the user's
+back in `hidden_until`, which is no version in its history; a row of any queue marked Later holds the open-ended
+`9999-12-31T23:59:59.999Z` (`QUEUE_LATER`) there until moved up, and no take without a job, drain or hand-on starts it; and a skip only moves it, behind the next row not put off. Migration 0089 renamed the old kinds: a `job` became a `task` (or `backlog` on the user's
 queue), and a `note` became `info` (or `read`), in the rows and in their `board_history` values alike, so a restore
 puts back a kind the table takes. It isn't backward-safe, as an older daemon knows only `job` and `note`. A queue that
 changes its audience swaps its rows' kinds for the other's in the same update (`task` and `backlog`, `info` and `read`;

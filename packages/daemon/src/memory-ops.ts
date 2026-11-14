@@ -19,7 +19,9 @@ import {
   type QueueData,
   type QueueJob,
   type StepsWho,
+  isPutOff,
   isQueueWork,
+  QUEUE_LATER,
 } from './protocol.ts';
 import { entryFrom, jobParts, jobsFrom } from './memory-lines.ts';
 
@@ -99,7 +101,11 @@ function jobLine(refs: BoardRefs, job: QueueJob, place: number | null): string {
       ? `taken by ${whoText(refs, job.takenBy!)}`
       : job.state === 'done'
         ? `done by ${whoText(refs, job.doneBy!)} ${day(job.doneAt!)}`
-        : 'queued';
+        : job.hiddenUntil === QUEUE_LATER
+          ? 'later (no take starts it until moved up)'
+          : job.hiddenUntil !== null && isPutOff(job, new Date().toISOString())
+            ? `put off until ${job.hiddenUntil.slice(0, 16).replace('T', ' ')}`
+            : 'queued';
   const drops = job.drops === 0 ? '' : `  dropped ${job.drops === 1 ? 'once' : `${job.drops} times`}`;
   const link = job.link === null ? '' : `\n     -> ${job.link}`;
   const result = job.result === null ? '' : `\n     result: ${indent(job.result, '     ')}`;
@@ -296,6 +302,9 @@ export type QueueUpdate =
   | { action: 'restore'; job: string; version: number }
   /** `to`: the open job to put it just before, `top` or `last`. */
   | { action: 'move'; job: string; to: string }
+  /** `later` marks a waiting job Later, which no take without a job starts until `up` moves it up. */
+  | { action: 'later'; job: string }
+  | { action: 'up'; job: string }
   | { action: 'drain'; on: boolean; most?: number };
 
 /** `queue add|edit|…`: changes the queue `ref` names, and says what it did. */
@@ -342,6 +351,11 @@ export async function updateQueue(session: BoardSession, ref: string, update: Qu
     return { text: `Queued ${what} ${update.front === true ? 'at the front of' : 'on'} ${title()}: ${added.map((job) => shortId(job.id)).join(', ')}.`, json: { item: changed, jobs: added } };
   }
   if (update.action === 'move') return moveJob(session, token, refs, item, title(), update);
+  if (update.action === 'later' || update.action === 'up') {
+    const { item: changed, job } = await call({ action: 'later', job: update.job, ...(update.action === 'up' ? { until: null } : {}) });
+    const said = update.action === 'later' ? `Marked ${shortId(job!.id)} Later on ${title()}: no take without a job starts it until \`queue up\` moves it up.` : `Moved ${shortId(job!.id)} up on ${title()}: it waits in its place again.`;
+    return { text: `${said}\n${jobLine(refs, job!, 1)}`, json: { item: changed, job } };
+  }
   if (update.action === 'drain') {
     const changed = await session.client.call('board.drainQueue', { token, id: item.id, on: update.on, ...(update.most === undefined ? {} : { most: update.most }) });
     const most = (changed.data as unknown as QueueData).drain?.most;
@@ -375,7 +389,8 @@ async function waiting(session: BoardSession, token: string, item: BoardItem): P
   } catch {
     return '';
   }
-  const queued = jobs.filter((job) => isQueueWork(job.kind) && job.state === 'queued');
+  const at = new Date().toISOString();
+  const queued = jobs.filter((job) => isQueueWork(job.kind) && job.state === 'queued' && !isPutOff(job, at));
   if (queued.length === 0) return 'No job waiting.';
   const next = queued[0]!;
   return `${plural(queued.length, 'job')} waiting; next: “${jobParts(next.text).headline}” (${shortId(next.id)}).`;

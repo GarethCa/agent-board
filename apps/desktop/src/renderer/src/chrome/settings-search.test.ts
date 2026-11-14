@@ -13,13 +13,15 @@ describe('searchSettings', () => {
   it('finds controls by their labels across groups, in the order the sidebar lists them', () => {
     expect(shown(searchSettings('path', { simplified: false }))).toEqual(['Advanced › Programs: Claude path, Codex path']);
     expect(shown(searchSettings('notif', { simplified: false }))).toEqual([
-      'Alerts › Notifications: Needs you shows, OS notifications, Also while agent-board is in front, A tile muted from its ⋯ menu never notifies',
+      'Alerts › Notifications: Needs you shows, OS notifications, Also while agent-board is in front, Muted agents',
     ]);
   });
 
   it('finds a control by the other words it goes by, so one that moved or was renamed is still found', () => {
     expect(shown(searchSettings('spacing', { simplified: false }))).toEqual(['Board › Tidying: Arrange spacing']);
-    expect(shown(searchSettings('hooks', { simplified: false }))).toEqual(['Accounts › Other terminals: Other terminals']);
+    expect(shown(searchSettings('hooks', { simplified: false }))).toEqual(['Accounts › Other terminals: Show sessions from other terminals']);
+    expect(shown(searchSettings('restart', { simplified: false }))).toEqual(['Advanced › Background service: Background service']);
+    expect(shown(searchSettings('silence', { simplified: false }))).toEqual(['Alerts › Notifications: Muted agents']);
     expect(shown(searchSettings('dark', { simplified: false }))).toEqual(['General › Appearance: Mode']);
     for (const word of ['maximise', 'maximised', 'maximize']) expect(shown(searchSettings(word, { simplified: false }))).toEqual(['Board › Opening tiles: Double-clicking a tile opens']);
   });

@@ -2,11 +2,13 @@ export {
   issueBranchName,
   issuePrompt,
   TrackerError,
+  type IssueFilters,
   type IssueLink,
   type IssueListOptions,
   type Tracker,
   type TrackerErrorKind,
   type TrackerIssue,
+  type TrackerMilestone,
   type TrackerProject,
   type TrackerScope,
 } from './tracker.ts';

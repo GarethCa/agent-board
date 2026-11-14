@@ -16,6 +16,7 @@ import {
   type ColorSlot,
   type FillSlot,
 } from '@agent-board/daemon/protocol';
+import { EMPTY_STAGE_BOARD_SIZE } from '@agent-board/daemon/stage-board';
 import { fillToken, foldColors, foldFills, shapeColors, slotName, slotPaint, slotToken, stickyPaint } from '../../board-colors';
 import { foldedNow } from './use-folded-slots';
 import { itemNodeType, type ItemNodeType, type ItemNodeTypeName } from './items';
@@ -39,6 +40,7 @@ import { filledIn, inSlot, newShapeData, newTextData, shapeData, textData } from
 import { TextNode } from './TextNode';
 import { newTodoData } from './todo-view';
 import { TodoNode } from './TodoNode';
+import { StagesNode } from './StagesNode';
 
 /** What the board needs to know about a kind of board item. A new kind plugs in here. */
 export interface ItemKind {
@@ -216,6 +218,15 @@ export const ITEM_KINDS: Record<BoardItemKind, ItemKind> = {
     label: 'crew card',
     node: CrewCardNode,
     size: CREW_CARD_SIZE,
+    editOnCreate: false,
+    minimapColor: () => 'var(--raised)',
+  },
+  // A zone's, from its menu, one to a zone: it draws its own size from its stages, empty to begin with.
+  stages: {
+    label: 'stage board',
+    node: StagesNode,
+    size: EMPTY_STAGE_BOARD_SIZE,
+    newData: () => ({ joined: [], left: [] }),
     editOnCreate: false,
     minimapColor: () => 'var(--raised)',
   },

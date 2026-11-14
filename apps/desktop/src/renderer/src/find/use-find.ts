@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { pressed } from '../keys/registry';
 
 /** Whether a key pressed at `target` is for the tab at `root`: pressed inside it, or with nothing focused while the pointer is over it. Never a terminal's. */
-function findKeyIsFor(root: Element, target: EventTarget | null): boolean {
+export function findKeyIsFor(root: Element, target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false;
   if (target.closest('.xterm') !== null) return false;
   if (root.contains(target)) return true;

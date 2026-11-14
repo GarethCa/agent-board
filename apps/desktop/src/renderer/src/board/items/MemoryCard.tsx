@@ -1,13 +1,13 @@
 // A memory's looks, apart from the board: the open card, the folded icon and the peek. They take what to show and what
 // to do as props, so the gallery draws them as the board does.
 import { useEffect, useRef, useState, type ComponentProps, type KeyboardEvent, type ReactNode } from 'react';
-import { Brain, Eye, FileText, Maximize2, Pin, PinOff, Search, Trash2 } from 'lucide-react';
+import { Brain, ChevronRight, Eye, FileText, Maximize2, Pin, PinOff, Search, Trash2 } from 'lucide-react';
 import { entryFrom } from '@agent-board/daemon/memory-lines';
 import { MAX_MEMORY_VALUE, type MemoryEntry, type MemoryReaders } from '@agent-board/daemon/protocol';
 import { IconButton } from '../../ui';
 import { peekKeys, ScopeChip, ListCardAddBox, ListCardFace, ListCardIconView } from './ListCardParts';
 import { useScrollFade } from './CardSizing';
-import { ageText, cardSections, countText, entryLine, entryName, filePreview, isStale, matching, staleCount, whenText, whoText } from './memory-card';
+import { ADDED_SECTION, ageText, cardSections, openSections, turnedOpen, type MemorySectionKey, countText, entryLine, entryName, filePreview, isStale, matching, staleCount, whenText, whoText } from './memory-card';
 
 /** What the add box makes of what was typed: `key: value` (the key one word) is a keyed entry, anything else a note. */
 export type AddEntry = (entry: { key: string | null; text: string }) => void;
@@ -116,7 +116,38 @@ function FactRow({ fact, fresh, now }: { fact: MemoryEntry; fresh: boolean; now:
  */
 export function MemoryCardView({ title, scope, zoneColor, entries, readers, count = entries.length, loaded = true, now, onAdd, onOpen, fresh, focusAdd, children }: MemoryCardViewProps) {
   const { pinned, docs, facts } = cardSections(entries);
-  const fade = useScrollFade<HTMLUListElement>();
+  const factRow = (fact: MemoryEntry) => <FactRow key={fact.id} fact={fact} fresh={fact.id === fresh} now={now} />;
+  const docRow = (doc: MemoryEntry) => (
+    <li key={doc.id} className="listcard-row memory-doc-row" data-fresh={doc.id === fresh || undefined}>
+      <span className="memory-doc-title" title={entryName(doc)}>
+        <FileText className="memory-file-mark" aria-label="Document" />
+        <b>{entryName(doc)}</b>
+      </span>
+      <RowWho entry={doc} now={now} />
+    </li>
+  );
+  const sections = (
+    [
+      { key: 'pinned', icon: <Pin aria-hidden="true" />, label: 'Pinned', entries: pinned, row: factRow },
+      { key: 'docs', icon: <FileText aria-hidden="true" />, label: 'Docs', entries: docs, row: docRow },
+      { key: 'facts', icon: <Brain aria-hidden="true" />, label: 'Facts', entries: facts, row: factRow },
+    ] satisfies { key: MemorySectionKey; icon: ReactNode; label: string; entries: MemoryEntry[]; row(entry: MemoryEntry): ReactNode }[]
+  ).filter((section) => section.entries.length > 0);
+  // Made smaller than its rows, the sections that don't fit fold to their heads; a click on a head turns it.
+  const [fit, setFit] = useState<number>();
+  const [turned, setTurned] = useState<ReadonlyMap<MemorySectionKey, boolean>>(new Map());
+  // A new entry's section stays open past its flash, as though turned open by hand, so the entry doesn't fold away.
+  const freshIn = sections.find((section) => section.entries.some((entry) => entry.id === fresh))?.key;
+  useEffect(() => {
+    if (freshIn !== undefined) setTurned((now) => turnedOpen(now, freshIn));
+  }, [freshIn, fresh]);
+  const shown = openSections(
+    sections.map((section) => ({ key: section.key, count: section.entries.length })),
+    fit,
+    turned,
+    freshIn,
+  );
+  const fade = useScrollFade<HTMLUListElement>({ whole: true, onRows: setFit });
   const stale = staleCount(entries, now);
   return (
     <div className="listcard listcard-unfolded" data-testid="memory-card" onDoubleClick={(event) => (event.stopPropagation(), onOpen())}>
@@ -135,40 +166,26 @@ export function MemoryCardView({ title, scope, zoneColor, entries, readers, coun
         </div>
       ) : (
         <ul ref={fade} className="listcard-rows nowheel" aria-label="Newest entries">
-          {pinned.length > 0 && (
-            <li className="memory-section" aria-hidden="true">
-              <Pin /> Pinned · {pinned.length}
-            </li>
-          )}
-          {pinned.map((fact) => (
-            <FactRow key={fact.id} fact={fact} fresh={fact.id === fresh} now={now} />
-          ))}
-          {docs.length > 0 && (
-            <li className="memory-section" aria-hidden="true">
-              <FileText /> Docs · {docs.length}
-            </li>
-          )}
-          {docs.map((doc) => (
-            <li key={doc.id} className="listcard-row memory-doc-row" data-fresh={doc.id === fresh || undefined}>
-              <span className="memory-doc-title" title={entryName(doc)}>
-                <FileText className="memory-file-mark" aria-label="Document" />
-                <b>{entryName(doc)}</b>
-              </span>
-              <RowWho entry={doc} now={now} />
-            </li>
-          ))}
-          {facts.length > 0 && (
-            <li className="memory-section" aria-hidden="true">
-              <Brain /> Facts · {facts.length}
-            </li>
-          )}
-          {facts.map((fact) => (
-            <FactRow key={fact.id} fact={fact} fresh={fact.id === fresh} now={now} />
-          ))}
+          {sections.map((section) => {
+            const open = shown.has(section.key);
+            return [
+              <li key={section.key} className="memory-section-row">
+                <button type="button" className="memory-section nodrag" aria-expanded={open} onClick={() => setTurned((now) => new Map(now).set(section.key, !open))}>
+                  <ChevronRight className="memory-section-chevron" aria-hidden="true" />
+                  {section.icon} {section.label} · {section.entries.length}
+                </button>
+              </li>,
+              ...(open ? section.entries.map(section.row) : []),
+            ];
+          })}
         </ul>
       )}
       <div className="listcard-foot">
-        <MemoryAddBox onAdd={onAdd} autoFocus={focusAdd} />
+        <MemoryAddBox
+          // What the user types lands in sight: its section opens, though it was folded.
+          onAdd={(entry) => (setTurned((now) => turnedOpen(now, ADDED_SECTION)), onAdd(entry))}
+          autoFocus={focusAdd}
+        />
         <span className="listcard-foot-line">
           {readers !== undefined && readers.count > 0 ? (
             <span className="memory-read" title={readers.last === null ? undefined : `Last read by ${readers.last.name}`}>
