@@ -6,7 +6,8 @@ import { entryFrom } from '@agent-board/daemon/memory-lines';
 import { MAX_MEMORY_VALUE, type MemoryEntry, type MemoryReaders } from '@agent-board/daemon/protocol';
 import { IconButton } from '../../ui';
 import { peekKeys, ScopeChip, ListCardAddBox, ListCardFace, ListCardIconView } from './ListCardParts';
-import { ageText, cardRows, countText, entryLine, entryName, filePreview, isStale, matching, staleCount, whenText, whoText } from './memory-card';
+import { useScrollFade } from './CardSizing';
+import { ageText, cardSections, countText, entryLine, entryName, filePreview, isStale, matching, staleCount, whenText, whoText } from './memory-card';
 
 /** What the add box makes of what was typed: `key: value` (the key one word) is a keyed entry, anything else a note. */
 export type AddEntry = (entry: { key: string | null; text: string }) => void;
@@ -92,13 +93,30 @@ function RowWho({ entry, now }: { entry: MemoryEntry; now: Date }) {
   );
 }
 
+/** A fact's row on the open card: its key (a pin first, if pinned), its value and its corner. */
+function FactRow({ fact, fresh, now }: { fact: MemoryEntry; fresh: boolean; now: Date }) {
+  return (
+    <li className="listcard-row" data-fresh={fresh || undefined}>
+      <span className="memory-key" data-note={fact.key === null || undefined} title={entryName(fact)}>
+        {fact.pinned && <Pin className="memory-pin-mark" aria-label="Pinned" />}
+        <span className="memory-key-name">{entryName(fact)}</span>
+      </span>
+      <span className="listcard-value" title={fact.text}>
+        {entryLine(fact)}
+      </span>
+      <RowWho entry={fact} now={now} />
+    </li>
+  );
+}
+
 /**
  * A memory open on the board, its notebook look: the brain's face and count at its head's left, its name and who may use
  * it; then its documents by title and its facts (pinned first), each with who wrote it and when; a box to remember a
  * fact; and at its foot how many agents read it, how many entries are stale, and Open, full screen.
  */
 export function MemoryCardView({ title, scope, zoneColor, entries, readers, count = entries.length, loaded = true, now, onAdd, onOpen, fresh, focusAdd, children }: MemoryCardViewProps) {
-  const { docs, facts, docCount, factCount } = cardRows(entries);
+  const { pinned, docs, facts } = cardSections(entries);
+  const fade = useScrollFade<HTMLUListElement>();
   const stale = staleCount(entries, now);
   return (
     <div className="listcard listcard-unfolded" data-testid="memory-card" onDoubleClick={(event) => (event.stopPropagation(), onOpen())}>
@@ -116,10 +134,18 @@ export function MemoryCardView({ title, scope, zoneColor, entries, readers, coun
           <span>Type a fact, or key: value; open it to write a document. Agents read and write here with agent-board memory.</span>
         </div>
       ) : (
-        <ul className="listcard-rows" aria-label="Newest entries">
+        <ul ref={fade} className="listcard-rows nowheel" aria-label="Newest entries">
+          {pinned.length > 0 && (
+            <li className="memory-section" aria-hidden="true">
+              <Pin /> Pinned · {pinned.length}
+            </li>
+          )}
+          {pinned.map((fact) => (
+            <FactRow key={fact.id} fact={fact} fresh={fact.id === fresh} now={now} />
+          ))}
           {docs.length > 0 && (
             <li className="memory-section" aria-hidden="true">
-              <FileText /> Docs · {docCount}
+              <FileText /> Docs · {docs.length}
             </li>
           )}
           {docs.map((doc) => (
@@ -133,20 +159,11 @@ export function MemoryCardView({ title, scope, zoneColor, entries, readers, coun
           ))}
           {facts.length > 0 && (
             <li className="memory-section" aria-hidden="true">
-              <Brain /> Facts · {factCount}
+              <Brain /> Facts · {facts.length}
             </li>
           )}
           {facts.map((fact) => (
-            <li key={fact.id} className="listcard-row" data-fresh={fact.id === fresh || undefined}>
-              <span className="memory-key" data-note={fact.key === null || undefined} title={entryName(fact)}>
-                {fact.pinned && <Pin className="memory-pin-mark" aria-label="Pinned" />}
-                <span className="memory-key-name">{entryName(fact)}</span>
-              </span>
-              <span className="listcard-value" title={fact.text}>
-                {entryLine(fact)}
-              </span>
-              <RowWho entry={fact} now={now} />
-            </li>
+            <FactRow key={fact.id} fact={fact} fresh={fact.id === fresh} now={now} />
           ))}
         </ul>
       )}

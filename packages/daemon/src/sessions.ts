@@ -13,6 +13,7 @@ import { createCwdLookup } from './cwd-lookup.ts';
 import { foregroundOf, harnessOfProgram, type Foreground } from './foreground.ts';
 import { lastExitStatus, shellIntegrationEnv } from './shell-integration.ts';
 import { processCwd } from './process-cwd.ts';
+import { watchLeftScreen, type LeftScreen } from './left-screen.ts';
 import {
   SCROLLBACK_LINES,
   type CreateShellParams,
@@ -171,6 +172,8 @@ interface LiveSession {
   foreground?: Foreground;
   /** The exit status of a shell's last command, as its integration reported at its prompt. */
   lastStatus?: number;
+  /** An agent's full-screen harness's screen, as it last left it: what it showed, should it be exiting. */
+  leftScreen?: LeftScreen;
 }
 
 export interface SessionHost {
@@ -303,11 +306,9 @@ export function createSessionHost(options: SessionHostOptions): SessionHost {
   /** Sessions the daemon is ending because it is going away: they are stopped by restart. */
   const stoppedByShutdown = new Set<string>();
 
-  /** Writes the screen to disk, whole or not at all. */
-  const writeScreen = (session: LiveSession) => {
+  /** Writes the screen to disk, whole or not at all: `screen`, or the session's as it is now. */
+  const writeScreen = (session: LiveSession, screen: SavedScreen = currentScreen(session)) => {
     if (scrollbackDir === undefined) return;
-    const { cols, rows } = session.model;
-    const screen: SavedScreen = { cols, rows, data: session.serializer.serialize({ scrollback: SCROLLBACK_LINES }) };
     const file = screenFile(session.info.id);
     try {
       writeFileSync(`${file}.tmp`, JSON.stringify(screen), { mode: 0o600 });
@@ -316,6 +317,12 @@ export function createSessionHost(options: SessionHostOptions): SessionHost {
       options.log(`could not save the screen of ${session.info.id}: ${(error as Error).message}`);
     }
   };
+
+  const currentScreen = ({ model, serializer }: LiveSession): SavedScreen => ({
+    cols: model.cols,
+    rows: model.rows,
+    data: serializer.serialize({ scrollback: SCROLLBACK_LINES }),
+  });
 
   const readScreen = (sessionId: string): SavedScreen | undefined => {
     if (scrollbackDir === undefined) return undefined;
@@ -380,10 +387,8 @@ export function createSessionHost(options: SessionHostOptions): SessionHost {
     const row = selectRow.get(sessionId) as SessionRow | undefined;
     if (row === undefined || row.ended_at === null) throw new Error(`no session ${sessionId}`);
     const screen = readScreen(sessionId);
-    const [first = '', ...rest] = chunk(screen?.data ?? '', snapshotChunkLength);
     const { cols, rows } = screen ?? DEFAULT_SIZE;
-    subscriber.send({ type: 'session.snapshot', sessionId, data: first, cols, rows });
-    for (const data of rest) subscriber.send({ type: 'session.output', sessionId, data });
+    sendScreen(subscriber, sessionId, screen ?? { ...DEFAULT_SIZE, data: '' });
     const session: SessionInfo = {
       id: row.id,
       harness: row.harness,
@@ -420,9 +425,12 @@ export function createSessionHost(options: SessionHostOptions): SessionHost {
   }
 
   function sendSnapshot(session: LiveSession, subscriber: SessionSubscriber): void {
-    const sessionId = session.info.id;
-    const [first = '', ...rest] = chunk(session.serializer.serialize({ scrollback: SCROLLBACK_LINES }), snapshotChunkLength);
-    const { cols, rows } = session.model;
+    sendScreen(subscriber, session.info.id, currentScreen(session));
+  }
+
+  /** Shows `screen` to the subscriber afresh: a snapshot, then output with the rest of a long one. */
+  function sendScreen(subscriber: SessionSubscriber, sessionId: string, { cols, rows, data }: SavedScreen): void {
+    const [first = '', ...rest] = chunk(data, snapshotChunkLength);
     subscriber.send({ type: 'session.snapshot', sessionId, data: first, cols, rows });
     for (const data of rest) subscriber.send({ type: 'session.output', sessionId, data });
   }
@@ -510,6 +518,9 @@ export function createSessionHost(options: SessionHostOptions): SessionHost {
       attachments: new Map(),
       exited: new Promise((resolve) => (resolveExited = resolve)),
     };
+    // Claude Code's TUI takes what it drew with it as it exits: its last screen is the one it left. (Codex is not
+    // watched: what it leaves is not yet known.)
+    if (harness === 'claude') session.leftScreen = watchLeftScreen(model, serializer, SCROLLBACK_LINES);
     sessions.set(id, session);
     try {
       options.onStart?.(id);
@@ -571,7 +582,10 @@ export function createSessionHost(options: SessionHostOptions): SessionHost {
         options.onExit?.(ended);
         // Let pending snapshots and their queued output go out first.
         model.write('', () => {
-          writeScreen(session);
+          const left = session.leftScreen?.last();
+          writeScreen(session, left);
+          // What is attached took the harness leaving its screen as it went: it is shown the screen it left instead.
+          if (left !== undefined) for (const subscriber of session.attachments.keys()) sendScreen(subscriber, id, left);
           exiting.delete(id);
           model.dispose();
           session.attachments.clear();

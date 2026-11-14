@@ -20,12 +20,12 @@ test('⌘⇧M opens the Captain’s panel: Start the Captain puts its tile on th
     expect((await agents(window)).some((agent) => agent.master)).toBe(false);
     await start.click();
 
-    // Its tile, loose on the board with the CAPTAIN badge, at board scope in a folder of its own.
+    // Its tile, loose on the board with the CAPTAIN badge, in a folder of its own.
     const master = tile(window).filter({ has: window.getByTestId('master-badge') });
     await expect(master).toHaveCount(1);
     await expect(master).toHaveAttribute('data-zone', '');
     const [started] = (await agents(window)).filter((agent) => agent.master);
-    expect(started).toMatchObject({ orchestrate: 'board', zoneId: null, branch: '', ownsWorktree: false });
+    expect(started).toMatchObject({ master: true, zoneId: null, branch: '', ownsWorktree: false });
 
     // Watching lists the zone, which has no orchestrator yet; the chat shows the master's brief.
     await expect(panel.getByTestId('master-watch-row')).toHaveText([/monorepo.*no orchestrator/]);

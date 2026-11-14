@@ -258,16 +258,25 @@
    * Agent notes, never taken for a sticky: the document card is a tile's surface with an accent bar;
    * the terminal card is the session window's terminal, dark in every theme.
    */
-  --agent-note-radius: var(--radius-md);
   --agent-note-bar: var(--accent); /* the note on the minimap */
-  --agent-note-tab-height: 21px;
-  --agent-note-loose: var(--muted); /* the colour a note outside every zone takes in place of a zone's */
+  /* A note is a speech bubble from its agent's face: the harness's mark in a round face, ringed in the harness's colour. */
+  --agent-note-face-size: 28px;
+  --agent-note-face-gap: 10px; /* from the face to the bubble: with the face, the width the daemon keeps for it (38px) */
+  --agent-note-face-mark: 16px;
+  --agent-note-face-ring: 1.5px;
+  --agent-note-face-ring-mix: 55%; /* the harness's colour in the face's ring, over the border */
+  --agent-note-bubble-radius: var(--radius-2xl); /* a zone's rounding, so Simplified rounds it less */
+  --agent-note-bubble-corner: var(--radius-sm); /* the bubble's corner under its tail, nearest the face */
+  --agent-note-tail: 7px; /* how far the tail reaches out to the face */
+  --agent-note-tail-top: 10px; /* from the bubble's top to its tail */
+  --agent-note-bubble-edge-mix: 14%; /* the ink in the bubble's hairline edge, over its fill */
+  --agent-note-bubble-edge: color-mix(in srgb, var(--agent-note-ink) var(--agent-note-bubble-edge-mix), var(--agent-note-fill));
+  --agent-note-fade: 28px; /* the fade over the last lines of a note's text past its line budget */
+  --agent-note-chip-mix: 8%; /* the ink in the "more lines" chip, over the fill */
+  --agent-note-chip: color-mix(in srgb, var(--agent-note-ink) var(--agent-note-chip-mix), var(--agent-note-fill));
   --agent-note-paper: #e7dac6; /* the light note paper: a beige, not the grey border; a theme pack sets its own (its border) */
-  --agent-note-fill-mix: 50%; /* the paper colour in the card and its tab, over the panel: a light note reads as paper beside a white tile; the dark theme sets 0 */
+  --agent-note-fill-mix: 50%; /* the paper colour in the bubble, over the panel: a light note reads as paper beside a white tile */
   --agent-note-fill: color-mix(in srgb, var(--agent-note-paper) var(--agent-note-fill-mix), var(--panel));
-  --agent-note-tab-mix: 12%; /* its zone's colour in the tab that reads NOTE and names the agent, over the card */
-  --agent-note-tab-ink-mix: 20%; /* ... in the tab's text, over the text colour */
-  --agent-note-edge-mix: 42%; /* ... in the card's dashed edge (and the tab's), over the border colour */
   --agent-note-edited: var(--warning-ink); /* "edited by you": the warning as text, readable on its soft fill */
   --agent-note-edited-soft: var(--warning-soft);
   --agent-note-ink: var(--text); /* the card's text, muted text and links: the theme's own, unless the paper fill leaves a pack's under AA */
@@ -314,7 +323,6 @@
   --todo-clip-dark: color-mix(in srgb, var(--muted) 80%, var(--raised)); /* the clip's foot, for its metal shading */
   --agent-note-term-code: var(--window-added);
   --agent-note-term-prompt: var(--harness-claude); /* the ❯ before each line */
-  --agent-note-term-edited: #f0a36b;
   --agent-note-term-link: #91a7f5; /* "show agent", and a link */
   --agent-note-tether: var(--muted); /* the dashed line from a note to its agent's tile */
   --agent-note-tether-dash: 3 3;
@@ -1191,10 +1199,8 @@
   --separator: #2c2a28;
   --hover: #2f2d2a;
   --panel: #201f1e;
-  --agent-note-paper: var(--border);
-  --agent-note-fill-mix: 0%;
-  --agent-note-code: var(--hover);
-  --agent-note-rule: var(--separator);
+  --agent-note-paper: var(--pressed); /* a step lighter than a tile, so a note is never a tile's colour */
+  --agent-note-fill-mix: 70%;
   --pressed: #3a3733;
   --scrim: rgb(0 0 0 / 50%);
   --scrim-window: rgb(0 0 0 / 60%);

@@ -15,7 +15,7 @@
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, createWriteStream } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { scrubBoardEnv } from '../../packages/fake-harness/src/board-guard.ts';
 import { flakyTests } from '../e2e-flaky/flaky.ts';
 import { acquireLock } from '../e2e-lock/lock.ts';
@@ -202,10 +202,11 @@ if (plan.full) {
   fullGate = full;
   full.on('close', (code) => process.exit(code ? 1 : 0));
 } else {
-  const steps = stepsFor(plan, { leakCheck, exists: (file) => existsSync(join(root, file)), headless: process.platform === 'linux' && !process.env.DISPLAY, quick });
+  // A dry run makes no log dir. The Electron runs keep their failure output in it, so it outlives the worktree's next run.
+  const logDir = dryRun ? undefined : resolve(process.env.CHECK_LOG_DIR ?? mkdtempSync(join(tmpdir(), 'agent-board-check-pr.')));
+  const steps = stepsFor(plan, { leakCheck, exists: (file) => existsSync(join(root, file)), headless: process.platform === 'linux' && !process.env.DISPLAY, quick, outputDir: logDir });
   if (chatty) console.log(`check:pr: steps: ${steps.map((s) => s.name).join(', ')}`);
-  if (dryRun) process.exit(0);
-  const logDir = process.env.CHECK_LOG_DIR ?? mkdtempSync(join(tmpdir(), 'agent-board-check-pr.'));
+  if (logDir === undefined) process.exit(0);
   mkdirSync(logDir, { recursive: true });
   const started = Date.now();
   const batteryAtStart = await readBatteryNote();

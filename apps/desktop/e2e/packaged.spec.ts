@@ -1,19 +1,25 @@
 import { _electron as electron, expect } from '@playwright/test';
 import { connectDaemon } from '@agent-board/daemon/client';
 import { daemonPaths } from '@agent-board/daemon/paths';
+import { fakeBinDir } from '@agent-board/fake-harness';
 import { execFileSync } from 'node:child_process';
-import { join } from 'node:path';
+import { readFileSync, readlinkSync } from 'node:fs';
+import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { packagedApp } from './packaged-app.ts';
+import { linuxProgram, packagedExecutable } from './packaged-app.ts';
 import { test, BACKGROUND_ENV, connectedDaemonPid, removeDataDir, tempDataDir } from './launch.ts';
 
 test('the packaged app launches, starts its own daemon, runs a shell session in a PTY, and ignores demo mode', async () => {
-  const appPath = packagedApp(fileURLToPath(new URL('..', import.meta.url)));
+  // `PACKAGED_EXECUTABLE` points it at an installed copy instead, such as a .deb's `/opt/agent-board/agent-board`. It
+  // has no `AGENT_BOARD_` prefix because the run's setup drops those (scrubBoardEnv).
+  const executable = process.env.PACKAGED_EXECUTABLE ?? packagedExecutable(fileURLToPath(new URL('..', import.meta.url)));
   const dataDir = tempDataDir();
   const app = await electron.launch({
-    executablePath: join(appPath, 'Contents', 'MacOS', 'agent-board'),
+    executablePath: executable,
     env: {
       ...process.env,
+      // The fake claude and codex first on PATH, so the app never finds the real CLIs.
+      PATH: [fakeBinDir, process.env.PATH].filter(Boolean).join(delimiter),
       ...BACKGROUND_ENV,
       AGENT_BOARD_DATA_DIR: dataDir,
       AGENT_BOARD_HOOK_SHIM: join(dataDir, 'bin', 'agent-board-hook'),
@@ -31,9 +37,12 @@ test('the packaged app launches, starts its own daemon, runs a shell session in 
     expect(await app.evaluate(() => 'agentBoardDemo' in globalThis)).toBe(false);
 
     // The daemon is the packaged executable run as Node, and node-pty loads in it.
-    expect(execFileSync('ps', ['-o', 'comm=', '-p', String(pid)], { encoding: 'utf8' }).trim()).toBe(
-      join(appPath, 'Contents', 'MacOS', 'agent-board'),
-    );
+    // Linux's `ps` cuts the command name to 15 characters, so ask /proc there.
+    const daemonExecutable =
+      process.platform === 'linux'
+        ? linuxProgram(readlinkSync(`/proc/${pid}/exe`), () => readFileSync(`/proc/${pid}/cmdline`, 'utf8'))
+        : execFileSync('ps', ['-o', 'comm=', '-p', String(pid)], { encoding: 'utf8' }).trim();
+    expect(daemonExecutable).toBe(executable);
     const client = await connectDaemon(daemonPaths(dataDir).socket);
     try {
       const session = await client.call('session.createShell', { cols: 80, rows: 24 });

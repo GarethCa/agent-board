@@ -9,7 +9,7 @@
 import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { boardCaller, connectionAgent, isOwnLiveSession, type BoardCallerSources, type BoardConnection } from './board.ts';
-import { readsItem, type ReachesZone } from './item-scope.ts';
+import { readsItem } from './item-scope.ts';
 import { isObject } from './json.ts';
 import { AGENT_TILE_SIZE, freeSpotFor } from './board-layout.ts';
 import { cutText } from './text-cut.ts';
@@ -36,6 +36,7 @@ import {
   QUEUE_CARD_SIZE,
   AGENT_QUEUE_KINDS,
   defaultQueueKind,
+  isCardSize,
   isQueueWork,
   queueKindOn,
   queueKindsFor,
@@ -95,7 +96,6 @@ export interface MemoryQueueHostOptions extends BoardCallerSources {
   call: DaemonCall;
   /** Where a new card of the agent's goes: beside its tile. */
   place(sessionId: string, size: { width: number; height: number }): Promise<BoardPlace | undefined>;
-  reachesZone: ReachesZone;
   now?: () => Date;
 }
 
@@ -131,6 +131,7 @@ function checkCommon(what: string, data: Record<string, unknown>): void {
   if (!isWho(data.madeBy)) throw fail("madeBy must be { kind: 'user' } or { kind: 'agent', sessionId, name }");
   if (typeof data.noAgents !== 'boolean') throw fail('noAgents must be true or false');
   if (data.folded !== undefined && typeof data.folded !== 'boolean') throw fail('folded must be true or false');
+  if (data.openSize !== undefined && !isCardSize(data.openSize)) throw fail('openSize must be { width, height }');
   if (!Number.isInteger(data.count) || (data.count as number) < 0) throw fail('count must be a whole number');
 }
 
@@ -418,7 +419,7 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
 
   // ---- who calls ----
 
-  const reads = (agent: Agent, item: BoardItem) => !dataOf(item).noAgents && readsItem(agent, item, sameWho(dataOf(item).madeBy, agentWho(agent)), options.reachesZone);
+  const reads = (agent: Agent, item: BoardItem) => !dataOf(item).noAgents && readsItem(agent, item, sameWho(dataOf(item).madeBy, agentWho(agent)));
 
   /** The agent whose board token the call holds; with `live`, only its own live session. */
   const agentCaller = (p: Record<string, unknown>, connection: BoardConnection, live: boolean): Agent => {
@@ -434,7 +435,7 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
     const item = await itemOf(kind, id);
     if (me !== null && !reads(me, item)) {
       throw outOfScope(
-        dataOf(item).noAgents ? `“${titleOf(item)}” is set to No agents: only the user reads it` : `that ${kind} is outside your scope: in a zone you are not in, nor reach`,
+        dataOf(item).noAgents ? `“${titleOf(item)}” is set to No agents: only the user reads it` : `that ${kind} is in a zone you are not in`,
       );
     }
     return item;
@@ -832,7 +833,7 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
   };
 
   /**
-   * The user hands a waiting job to an idle agent in the queue's scope: taken for it, then `text` typed at its prompt.
+   * The user hands a waiting job to an idle agent the queue is for (its zone's, or any for a loose one): taken for it, then `text` typed at its prompt.
    * A send that fails puts the job back as it was, so no agent holds a job it never heard of.
    */
   const handOn = async (item: BoardItem, ref: string, sessionId: string, rawText: string): Promise<QueueJob> => {
@@ -840,7 +841,7 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
     if (data.audience === 'user') throw invalidParams(`“${data.title}” is the user's queue: its jobs are for them, not handed to agents`);
     const agent = options.agents.get(sessionId);
     if (agent === undefined) throw invalidParams(`no agent ${sessionId}`);
-    if (!reads(agent, item)) throw outOfScope(`${agent.name} doesn't use “${data.title}”: hand it a job from a queue in its scope`);
+    if (!reads(agent, item)) throw outOfScope(`${agent.name} doesn't use “${data.title}”: hand it a job from a queue in its zone, or a loose one`);
     if (!takesHandOn(agent)) throw invalidParams(`${agent.name} is busy or asking you something: hand a job to an idle agent`);
     const text = rawText.trim();
     if (text === '' || text.length > MAX_JOB_TEXT) throw invalidParams(`the message is 1 to ${MAX_JOB_TEXT} characters`);
@@ -1090,8 +1091,6 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
         'board.drainQueue': async (params, connection) => {
           const p = paramsObject(params);
           const me = agentCaller(p, connection, true);
-          // Starting agents is an orchestrator's (ADR-0011): checked here too, as the CLI calls with its token alone.
-          if (me.orchestrate === null) throw new RpcMethodError(BOARD_ERROR.notAllowed, `board.drainQueue is only for an orchestrator: ${me.name} doesn't orchestrate`);
           const item = await reached('queue', stringParam(p, 'id'), me);
           const data = dataOf(item) as QueueData;
           if (!sameWho(data.madeBy, agentWho(me))) throw outOfScope(`“${data.title}” isn't yours: an agent turns on the drain of a queue it made, and the user any`);

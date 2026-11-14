@@ -162,10 +162,9 @@ function startCrew(board: ReturnType<typeof crewBoard>, prefab = pair(), started
 }
 
 const userAccess = {
-  caller: () => ({ sessionId: 'user', name: 'the user', zoneId: null, repoRoot: '', orchestrate: 'board', agent: null }),
+  caller: () => ({ sessionId: 'user', name: 'the user', zoneId: null, repoRoot: '', agent: null }),
   logged: (_me: unknown, _action: unknown, _entry: unknown, act: () => unknown) => Promise.resolve().then(act),
   reachesAgent: () => true,
-  scopeText: () => 'the whole board',
 } as unknown as OrchestratorAccess;
 const NO_CONNECTION = {} as never;
 

@@ -33,7 +33,7 @@ async function setup(scenario: 'waiting' | 'orchestrate' = 'waiting') {
   // The user's own work, uncommitted, that nothing may touch.
   writeFileSync(join(repo, 'wip.txt'), 'unsaved work\n');
   const orchestrator = (extra: object = {}) =>
-    client.call('agent.spawn', { zoneId: zone.id, role: 'orchestrator', orchestrate: 'zone', checkout: 'main', ...extra, ...SIZE });
+    client.call('agent.spawn', { zoneId: zone.id, role: 'orchestrator', checkout: 'main', ...extra, ...SIZE });
   /** The checkout as the user left it: branches, HEAD, status and the file. */
   const state = () => ({
     branches: git(repo, 'branch', '--format=%(refname:short)'),

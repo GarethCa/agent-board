@@ -9,7 +9,6 @@ import {
   BOARD_CALLER_METHODS,
   BOARD_ERROR,
   ORCHESTRATOR_METHODS,
-  USER_SIDE_METHODS,
   type Agent,
   type BoardCaller,
   type DaemonMethod,
@@ -45,18 +44,15 @@ export interface BoardConnection {
 /**
  * `handlers` for connections that may have presented a board token (ADR-0010): once one has, every method outside
  * `BOARD_CALLER_METHODS` refuses it with `BOARD_ERROR.notAllowed`, however it reached the socket (the CLI, its `rpc`,
- * the MCP server), but for `ORCHESTRATOR_METHODS` while `mayOrchestrate` says its session may (ADR-0011), which each
- * of those methods checks again for the token it is given, and for `USER_SIDE_METHODS` while its session is on the
- * user's side: a shell turns an agent's orchestrating on and off, and changes no setting. `orchestrator.send`
- * also passes as a reply to an agent that messaged the session's (`repliesTo`), which it checks again. A connection that
+ * the MCP server), but for `ORCHESTRATOR_METHODS` while `mayOrchestrate` says its session may (ADR-0011): every
+ * agent's live session, and the user's side, which each of those methods checks again for the token it is given. No
+ * board token changes a setting. `orchestrator.send` also passes as a reply to an agent that messaged the session's (`repliesTo`), which it checks again. A connection that
  * never presents one is the user's, and keeps the whole API.
  */
 export function guardBoardCallers<Context extends BoardConnection>(
   handlers: RpcHandlers<DaemonMethods, Context>,
   orchestrators: {
     mayOrchestrate(sessionId: string): boolean;
-    /** Whether the session acts for the user (`BoardCaller.side`). */
-    actsForUser(sessionId: string): boolean;
     /** Whether the agent `sessionId` may send to `to` as a reply to an agent that messaged it. */
     repliesTo(sessionId: string, to: unknown): boolean;
     /** Why the session may not orchestrate, for the refusal. */
@@ -68,13 +64,11 @@ export function guardBoardCallers<Context extends BoardConnection>(
   const guarded: Record<string, (params: unknown, context: Context) => unknown> = {};
   for (const [method, handler] of Object.entries(handlers) as [DaemonMethod, (params: unknown, context: Context) => unknown][]) {
     const orchestrating = ORCHESTRATOR_METHODS.has(method);
-    const userSide = USER_SIDE_METHODS.has(method);
     guarded[method] = BOARD_CALLER_METHODS.has(method)
       ? handler
       : (params, context) => {
           const session = context.boardSession;
           if (session === undefined) return handler(params, context);
-          if (userSide && orchestrators.actsForUser(session)) return handler(params, context);
           if (method === 'orchestrator.send' && orchestrators.repliesTo(session, (params as { sessionId?: unknown } | null)?.sessionId)) {
             return handler(params, context);
           }
@@ -82,8 +76,7 @@ export function guardBoardCallers<Context extends BoardConnection>(
             const reason = orchestrating
               ? `${method} is only for an orchestrator. ${orchestrators.notOrchestrating(session)}`
               : `${method} is not open to a session's board token: an agent may read the board, set its own status, ` +
-                'hand off, ask the user a question or present a plan and, if the user lets it orchestrate, use the ' +
-                'orchestrator commands; a shell may also turn an agent\'s orchestrating on and off; nothing more';
+                'hand off, ask the user a question or present a plan, and use the orchestrator commands; nothing more';
             if (orchestrating) orchestrators.refused(session, method, params, reason);
             throw new RpcMethodError(BOARD_ERROR.notAllowed, reason);
           }
@@ -125,17 +118,17 @@ export function isOwnLiveSession(agent: Pick<Agent, 'sessionId' | 'endedAt'>, se
 
 /**
  * The tile the live session `sessionId` speaks for, as `boardCaller` says; undefined for a session with none. Only an
- * agent's own live session acts as the agent; every other acts for the user, at board scope.
+ * agent's own live session acts as the agent; every other acts for the user, reaching every agent.
  */
 export function sessionCaller(sources: Omit<BoardCallerSources, 'sessions'>, sessionId: string): BoardCaller | undefined {
   const { agents, shells } = sources;
-  const user = { side: 'user', orchestrate: 'board' } as const;
+  const user = { side: 'user', orchestrates: true } as const;
   // An ended agent's pane drops into a shell: that shell speaks for its agent's tile, on the user's side. The agent's
   // own session is the agent's, ended or not: a connection it identified on never turns into the user's.
   const agent = agents.get(agents.fallbackOwner(sessionId) ?? sessionId);
   if (agent !== undefined) {
     const own = sessionId === agent.sessionId;
-    const side = own ? ({ side: 'agent', orchestrate: isOwnLiveSession(agent, sessionId) ? agent.orchestrate : null } as const) : user;
+    const side = own ? ({ side: 'agent' as const, orchestrates: isOwnLiveSession(agent, sessionId) }) : user;
     return { sessionId, kind: 'agent', tileId: agent.sessionId, name: agent.name, zoneId: agent.zoneId, ...side };
   }
   const all = shells.list();
@@ -179,7 +172,7 @@ export type ActivityLogger = (
 /**
  * The `board.*` RPC handlers (ADR-0010): what the agent-facing CLI and MCP add to the methods the app uses. Each takes
  * the caller's board token and acts as the session holding it, so an agent can set only its own status, and hand off
- * only along its own edges, or to an agent it names in its scope over a one-off edge, each hand-off
+ * only along its own edges, or to an agent it may act on, named, over a one-off edge, each hand-off
  * logged.
  */
 export function boardHandlers<Context extends BoardConnection>(
@@ -313,7 +306,7 @@ export function boardHandlers<Context extends BoardConnection>(
           to,
           // One still being checked as it answered is logged again once it is delivered, held, queued or skipped.
           logOutcome,
-          // A named agent it has no edge to gets a one-off edge, in its scope.
+          // A named agent it has no edge to gets a one-off edge, if it may act on it.
           (target) => options.checkHandoffTarget(me.sessionId, target),
         );
       } catch (error) {

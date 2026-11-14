@@ -88,21 +88,8 @@ async function freePort(): Promise<number> {
 /** Types `typed` into the web tab's address row and goes there. */
 async function goTo(window: Page, typed: string): Promise<void> {
   const address = webView(window).getByTestId('web-address');
-  // The address row drops what is typed in it when it loses focus, and the page's last state (the page taking the keyboard
-  // as it loads) can arrive after the test has moved on. So the row is submitted only while it still holds what was typed:
-  // typed and submitted in one step, retried from the typing if the row let go in between. The row dropping typed text on
-  // blur is a product bug; this retry only keeps the test steady until that is fixed.
-  await expect(async () => {
-    await address.fill(typed);
-    const held = await address.evaluate((input, value) => {
-      const row = input as HTMLInputElement;
-      if (row.value !== value) return false;
-      if (!row.form) throw new Error('the address row is not in a form');
-      row.form.requestSubmit();
-      return true;
-    }, typed);
-    expect(held).toBe(true);
-  }).toPass();
+  await address.fill(typed);
+  await address.press('Enter');
 }
 
 test("a web tab from + Web… shows a local dev server's page, locked down: no file, data or javascript, no redirect away, no window, permission, download or devtools; it follows its pane as it splits, hides behind another tab, is kept across a restart by its URL and goes when closed", async () => {
@@ -707,6 +694,50 @@ test('⌘F in a web tab finds in its page: a count, ↵ and ⇧↵ to step, esc 
     await expect(count).toHaveText('No matches');
     await field.press('Escape');
     await expect(window.getByTestId('find-bar')).toHaveCount(0);
+  } finally {
+    await app.close();
+    await server.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an address typed while a slow page loads is kept as the page finishes and as the row lets go of the keyboard, and Enter goes there; one typed and left goes as Back takes the page elsewhere', async () => {
+  const server = await serveWebPages();
+  const { dir, repo, env } = scratch('output');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, { ...env, ...SHELL_ENV });
+  try {
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await newShellInZone(window);
+    await openWebTab(app, window, 'Web…', server.url, 'Dev home');
+
+    // Sent to a page that takes a second and a half to answer, then another address typed in the row while it loads.
+    const address = webView(window).getByTestId('web-address');
+    await address.fill(`${server.url}slow`);
+    await address.press('Enter');
+    await expect(webView(window)).toHaveAttribute('aria-busy', 'true');
+    await address.fill(`${server.url}ne`);
+    await expectHeading(app, `${server.url}slow`, 'Slow page');
+    await expect(webView(window)).toHaveAttribute('aria-busy', 'false');
+    await expect(address).toBeFocused();
+    await expect(address).toHaveValue(`${server.url}ne`);
+
+    // The row letting go of the keyboard keeps what was typed in it, and typing goes on where it was.
+    await address.evaluate((row) => (row as HTMLInputElement).blur());
+    await expect(address).not.toBeFocused();
+    await expect(address).toHaveValue(`${server.url}ne`);
+    await address.focus();
+    await window.keyboard.type('xt');
+    await window.keyboard.press('Enter');
+    await expectHeading(app, `${server.url}next`, 'Next page');
+
+    // Typed and left, an address goes as Back takes the page elsewhere: the row says where the page is.
+    await address.fill(`${server.url}typed-and-left`);
+    await webView(window).getByRole('button', { name: 'Back' }).click();
+    await expectHeading(app, `${server.url}slow`, 'Slow page');
+    await expect(address).toHaveValue(`${server.url}slow`);
   } finally {
     await app.close();
     await server.close();

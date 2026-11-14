@@ -123,7 +123,6 @@ export const ZoneBindingContext = createContext<ZoneBindingActions>({
   deleteZone: () => {},
   setTrustsFolder: () => {},
   setBoardMcp: () => {},
-  setAgentsOrchestrate: () => {},
   editGateCommand: () => {},
   editRoleTemplates: () => {},
   startCrew: () => {},

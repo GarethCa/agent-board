@@ -3,7 +3,7 @@ import type { MemoryEntry } from '@agent-board/daemon/protocol';
 import {
   agoText,
   ageText,
-  cardRows,
+  cardSections,
   countText,
   entryBytes,
   entryLine,
@@ -107,20 +107,12 @@ describe('a memory card', () => {
     expect(agoText(new Date(2026, 9, 1).toISOString(), NOW)).toBe('1 Oct');
   });
 
-  it('lists documents first on the card, in the rows that fit whole: a second section head takes a row', () => {
+  it('lists its pinned facts on the card first, then every document, then every other fact, in list order', () => {
     const docs = ['d1', 'd2', 'd3'].map((id) => entry(id, { file: true }));
-    const facts = ['f1', 'f2', 'f3'].map((id) => entry(id));
-    const ids = (rows: { docs: MemoryEntry[]; facts: MemoryEntry[] }) => [...rows.docs, ...rows.facts].map((each) => each.id);
-    // Both sections: one row each, under their two heads.
-    expect(ids(cardRows([...docs, ...facts]))).toEqual(['d1', 'f1']);
-    expect(cardRows([...docs, ...facts])).toMatchObject({ docCount: 3, factCount: 3 });
-    // One section: three rows under its head.
-    expect(ids(cardRows(facts))).toEqual(['f1', 'f2', 'f3']);
-    expect(ids(cardRows(docs))).toEqual(['d1', 'd2', 'd3']);
-    // With more room, documents take one row while there are facts, and the rest when there are few.
-    expect(ids(cardRows([...docs, ...facts], 5))).toEqual(['d1', 'f1', 'f2', 'f3']);
-    expect(ids(cardRows([...docs, facts[0]!], 5))).toEqual(['d1', 'd2', 'd3', 'f1']);
-    expect(ids(cardRows(docs, 2))).toEqual(['d1', 'd2']);
+    const facts = ['f1', 'f2', 'f3', 'f4', 'f5'].map((id) => entry(id, { pinned: id === 'f4' }));
+    const ids = (rows: { pinned: MemoryEntry[]; docs: MemoryEntry[]; facts: MemoryEntry[] }) => [rows.pinned, rows.docs, rows.facts].map((each) => each.map((one) => one.id));
+    expect(ids(cardSections([facts[0]!, docs[0]!, ...facts.slice(1), ...docs.slice(1)]))).toEqual([['f4'], ['d1', 'd2', 'd3'], ['f1', 'f2', 'f3', 'f5']]);
+    expect(ids(cardSections(facts))).toEqual([['f4'], [], ['f1', 'f2', 'f3', 'f5']]);
   });
 
   it("gives a document's size from its text, or from an agent's listing, which leaves the text out", () => {

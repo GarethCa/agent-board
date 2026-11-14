@@ -60,6 +60,16 @@ describe('stepsFor', () => {
     ]);
   });
 
+  it('keeps both Electron runs\' failure output in the dir it is given, apart', () => {
+    const steps = stepsFor(plan({ e2e: ['flow-edges.spec.ts'], visual: true }), { ...context, outputDir: '/logs' });
+    const outputOf = (name: string): string | undefined => {
+      const argv = steps.find((step) => step.name === name)!.argv;
+      return argv[argv.indexOf('--output') + 1];
+    };
+    expect(outputOf('e2e')).toBe('/logs/e2e-results');
+    expect(outputOf('visual')).toBe('/logs/visual-results');
+  });
+
   it('puts the Electron runs on a virtual display when there is none, and no other step', () => {
     const steps = stepsFor(plan({ e2e: ['flow-edges.spec.ts'], visual: true, unit: ['a.ts'] }), { ...context, headless: true });
     for (const step of steps) expect(step.argv[0] === 'sh', step.name).toBe(step.playwright === true);

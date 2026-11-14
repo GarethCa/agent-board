@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, writeSync, mkdirSync } from 'node:fs';
+import { constants } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { runHooks, runStatusLine, permissionDecision, permissionUpdates, hookAnswers, denyMessage, type HooksConfig, type HookRunOptions, type HookOutput } from './hooks.ts';
@@ -10,6 +11,42 @@ import { CODEX_START_SCREENS, codexComposer, codexLoadingComposer, codexStartScr
 import * as demo from './demo.ts';
 import { drawRateLimitMenu, rateLimitMenuRows, RATE_LIMIT_CONTINUE, RATE_LIMIT_STOP_ROW } from './rate-limit-menu.ts';
 import { SPINNER_LINE, drawPromptBox, drawTrustScreen } from './trust-screen.ts';
+
+/** A session run in the terminal's alternate screen (`runFullscreen`). */
+interface Fullscreen {
+  /** Leaves the alternate screen for the normal one, as the real TUI does before it prints a fatal error. */
+  leave(): void;
+  /** Exits without printing how to resume, as the real TUI does after a fatal error. */
+  noResumeHint(): void;
+}
+
+/**
+ * Runs the session in the terminal's alternate screen, as Claude Code's full-screen TUI does: everything it draws goes
+ * there, and however it exits (a quit, a crash, or a hangup or terminate signal, from which it exits with 128 plus the
+ * signal) it leaves that screen, which takes what it drew with it, and prints how to resume it on the normal screen.
+ */
+function runFullscreen(sessionId: string): Fullscreen {
+  const write = (text: string) => {
+    try {
+      writeSync(1, text);
+    } catch {
+      // Its terminal is gone.
+    }
+  };
+  let inside = true;
+  let resumeHint = true;
+  const leave = () => {
+    if (inside) write('\x1b[?1049l');
+    inside = false;
+  };
+  write('\x1b[?1049h\x1b[H');
+  process.on('exit', () => {
+    leave();
+    if (resumeHint) write(`\r\n\x1b[2mResume this session with:\r\nclaude --resume ${sessionId}\x1b[0m\r\n`);
+  });
+  for (const signal of ['SIGHUP', 'SIGTERM'] as const) process.on(signal, () => process.exit(128 + constants.signals[signal]));
+  return { leave, noResumeHint: () => (resumeHint = false) };
+}
 
 /**
  * Stops the terminal echoing what is typed while the session runs, as the real TUIs (which read their keys raw) don't
@@ -197,6 +234,11 @@ export const PLAN_TOOL = 'ExitPlanMode';
 const SLOW_PROMPT_MS = 1_000;
 /** How long a session answered on its trust screen with `slow-redraw` leaves it drawn after Enter. */
 const SLOW_REDRAW_MS = 600;
+/**
+ * How long a Codex session resumed with `FAKE_HARNESS_SLOW_RESUME=1` leaves its redrawn conversation quiet before its
+ * composer: past the daemon's wait for quiet before it reads the screen.
+ */
+const SLOW_RESUME_MS = 1_000;
 
 /** The subagent a hook fires inside: its fields go on every hook it fires. */
 export interface SubagentScope {
@@ -280,6 +322,8 @@ export class FakeSession {
   private prefilled = '';
   /** The MCP servers started so far. */
   private readonly mcpClients: Record<string, McpClient> = {};
+  /** Set if it runs in the alternate screen. */
+  private fullscreen: Fullscreen | undefined;
 
   /** Its permission mode now: the one it was started in (`--permission-mode`, `default` without) until a hook's allow sets another. */
   private mode: string | undefined;
@@ -302,6 +346,7 @@ export class FakeSession {
     // Like the real TUIs: Ctrl-C (SIGINT, or \x03 through a PTY) interrupts a turn; twice at the prompt exits.
     // Print and exec modes keep the default and die.
     if (dialect.interactive) process.on('SIGINT', () => this.onCtrlC());
+    if (dialect.interactive && dialect.harness === 'claude' && process.env.FAKE_HARNESS_FULLSCREEN === '1') this.fullscreen = runFullscreen(dialect.sessionId);
   }
 
   get interactive(): boolean {
@@ -343,7 +388,14 @@ export class FakeSession {
       this.printLines(demo.welcome(harness, { cwd, model, version, home: shellEnv.HOME }));
     }
     if (this.resumed) {
-      for (const { role, text } of this.dialect.transcript.history()) this.print(role === 'user' ? `> ${text}\n` : `${text}\n`);
+      // The Codex TUI draws each past prompt after the glyph its composer has (`› fix the tests`), and each reply after
+      // a bullet: a screen its composer is read from must not take either for it.
+      const codex = harness === 'codex' && this.dialect.interactive;
+      for (const { role, text } of this.dialect.transcript.history()) {
+        if (role === 'user') this.print(`${codex ? '›' : '>'} ${text}\n`);
+        else this.print(`${codex ? '• ' : ''}${text}\n`);
+      }
+      if (codex && process.env.FAKE_HARNESS_SLOW_RESUME === '1') await this.loseLinesFor(SLOW_RESUME_MS);
     }
     const trust = process.env.FAKE_HARNESS_TRUST_SCREEN ?? '';
     let redrawing: NodeJS.Timeout | undefined;
@@ -984,8 +1036,13 @@ export class FakeSession {
     process.exit(0);
   }
 
-  /** Dies mid-turn: no Stop, no SessionEnd. */
+  /**
+   * Dies mid-turn: no Stop, no SessionEnd. Full-screen, it leaves the alternate screen first and then writes the error
+   * on the normal one, with no resume hint, in the real TUI's order.
+   */
   crash(message: string): never {
+    this.fullscreen?.leave();
+    this.fullscreen?.noResumeHint();
     process.stderr.write(`${this.dialect.harness}: ${message}\n`);
     process.exit(1);
   }
@@ -1239,6 +1296,21 @@ export class FakeSession {
 
   private pause(): Promise<void> {
     return this.sleep(this.dialect.stepDelayMs);
+  }
+
+  /**
+   * Waits `ms`, losing every line typed meanwhile, as a TUI still loading loses what is typed at it: it never reaches
+   * the prompt drawn after.
+   */
+  private async loseLinesFor(ms: number): Promise<void> {
+    const until = Date.now() + ms;
+    for (let left = ms; left > 0; left = until - Date.now()) {
+      this.nextLine ??= this.lines.next();
+      const timedOut = this.sleep(left).then(() => undefined);
+      const next = await Promise.race([this.nextLine, timedOut]);
+      if (next === undefined || next.done) return;
+      this.nextLine = undefined;
+    }
   }
 
   private sleep(ms: number): Promise<void> {

@@ -9,7 +9,6 @@ import { clickOpensFrom, type ClickOpens } from './click-opens';
 import { withConnectorChange } from './connectors/endpoints';
 import { connectionsViewFrom, type ConnectionsView } from './connections-view';
 import { agentNoteLookFrom, type AgentNoteLook } from './items/agent-note-look';
-import { crewLookFrom, type CrewLook } from './crew-view';
 import { expandedFrom, overlapsFrom, sizesFrom, type ExpandedSizes, type ExpandedTiles, type OverlapsAllowed } from './expanded';
 import { withItem, withItemChange } from './items/items';
 import { placeholderCount, placeholderStickies, placeholderTiles } from './placeholders';
@@ -46,7 +45,6 @@ export interface SavedView {
   unfolded: Unfolded;
   overlapsAllowed: OverlapsAllowed;
   clickOpens: ClickOpens;
-  crewLook: CrewLook;
   connections: ConnectionsView;
   agentNoteLook: AgentNoteLook;
 }
@@ -210,7 +208,6 @@ export function useBoardData({ setNodes, report, setNotice, onShellChange, resto
         window.agentBoard.view.get(VIEW_KEYS.viewport),
         window.agentBoard.view.get(VIEW_KEYS.expanded),
         window.agentBoard.view.get(VIEW_KEYS.clickOpens),
-        window.agentBoard.view.get(VIEW_KEYS.crewLook),
         window.agentBoard.view.get(VIEW_KEYS.expandedSizes),
         window.agentBoard.view.get(VIEW_KEYS.expandedOverlaps),
         window.agentBoard.view.get(VIEW_KEYS.tileSizes),
@@ -218,9 +215,9 @@ export function useBoardData({ setNodes, report, setNotice, onShellChange, resto
         window.agentBoard.view.get(VIEW_KEYS.agentNoteLook),
         window.agentBoard.view.get(VIEW_KEYS.unfolded),
         window.agentBoard.view.get(VIEW_KEYS.hiddenExpanded),
-      ]).catch(() => [null, null, null, null, null, null, null, null, null, null, null] as const),
+      ]).catch(() => [null, null, null, null, null, null, null, null, null, null] as const),
     ]).then(
-      ([zones, loadedAgents, loadedExternals, items, listedShells, listedConnectors, [viewport, savedExpanded, savedClickOpens, savedCrewLook, savedSizes, savedOverlaps, savedTileSizes, savedConnections, savedAgentNoteLook, savedUnfolded, savedHidden]]) => {
+      ([zones, loadedAgents, loadedExternals, items, listedShells, listedConnectors, [viewport, savedExpanded, savedClickOpens, savedSizes, savedOverlaps, savedTileSizes, savedConnections, savedAgentNoteLook, savedUnfolded, savedHidden]]) => {
         if (cancelled) return;
         const search = window.location.search;
         // Items after zones: a child node needs its parent first.
@@ -244,7 +241,6 @@ export function useBoardData({ setNodes, report, setNotice, onShellChange, resto
           unfolded: unfoldedFrom(savedUnfolded),
           overlapsAllowed: overlapsFrom(savedOverlaps),
           clickOpens: clickOpensFrom(savedClickOpens),
-          crewLook: crewLookFrom(savedCrewLook),
           connections: connectionsViewFrom(savedConnections),
           agentNoteLook: agentNoteLookFrom(savedAgentNoteLook),
         });

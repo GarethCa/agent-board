@@ -42,7 +42,7 @@ import { HandoffsContext } from './flow-edges';
 import { PlusChip, type PlusItem } from './PlusChip';
 import { badgeLine, checksLabel, EXTRA_FOLD_RANK, foldRanking, isStarting, setupText, tileFooter } from './tile-footer';
 import { useFooterFold } from './use-footer-fold';
-import { agentPill, STATE_LABELS, TILE_STATE_LABELS } from '../states';
+import { STATE_LABELS, TILE_STATE_LABELS } from '../states';
 import { useNeedsYouShows } from '../needs-you-setting';
 import { SubagentPerch } from './SubagentPerch';
 import { HandPlacedMark } from './HandPlacedMark';
@@ -52,7 +52,7 @@ import { useRenameRequest } from './rename';
 import { useFittedLines } from './use-fitted-lines';
 import { splitReviewerName } from './tile-name';
 import { ClickOpensContext, TileActionsContext, type TileData, type TileProps } from './tile';
-import { CrewViewContext, lightCrew } from './crew-view';
+import { CrewViewContext, crewsOf, hoverCrew, leaveCrew, useCrewHover, useCrewLit } from './crew-view';
 import { panesLabel } from '../session/panes';
 import { canRestart, canRestartLive, endedShellLabel } from '../session/RestartAgent';
 import { useReviews } from '../review/ReviewsProvider';
@@ -72,7 +72,7 @@ import { TileQuickAsk } from './TileQuickAsk';
 import { TileDialogAsk } from './DialogQuickAsk';
 import { pillShowsAge, sinceLabel, stateAge, tileDetails, tileProgress, timeToGo, type TileShows } from './tile-shows';
 import { useTileShows } from './view-settings';
-import { FLAT_STATES, reviewablePr, TILE_STATE_WORDS, tileAbout, tileButton, tileNow, tileSince, tileState, tileTime, type TileButton as OneButton } from './tile-headline';
+import { FLAT_STATES, reviewablePr, TILE_STATE_WORDS, tileAbout, tileMark, footerFoldKey, tileNow, tileSince, tileTime, type TileButton as OneButton } from './tile-headline';
 import { askOf, HooksSilentRow, lastMessageCard, nameClass, stopPropagation, TileButton, TileMenu, TrustRow, UndeliveredRow, UnsentRow, UntypedRow } from './tile-parts';
 
 /** How tall an agent's character stands at the leading edge of its tile's body, in px. */
@@ -113,9 +113,11 @@ export const HybridTile = memo(function HybridTile({ id, tile, selected = false 
 function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, implementer }: { id: string; selected: boolean; agent: Agent; repo?: string } & Pick<TileData, 'from' | 'crew' | 'crewFlags' | 'tabs' | 'implementer'>) {
   const shows = useNeedsYouShows();
   const crewView = useContext(CrewViewContext);
-  // The crew it is of, as an orchestrator or one it started: lit while the orchestrator or a chip is hovered.
-  const crewOf = crew === undefined ? from?.sessionId : agent.sessionId;
-  const chip = from !== undefined && crewView.look !== 'off' && (crewView.look === 'chips' || !crewView.framed.has(agent.sessionId));
+  // The crews it is in, as an orchestrator and as one started: lit while the orchestrator is focused.
+  const crewOf = crewsOf(agent.sessionId, crew !== undefined, from?.sessionId);
+  const chip = from !== undefined && !crewView.framed.has(agent.sessionId);
+  useCrewHover(crew === undefined ? undefined : agent.sessionId);
+  const crewLit = useCrewLit(crewOf);
   const tileActions = useContext(TileActionsContext);
   const { expand, openAgent, popOutAgent, deleteAgent, openLink, openPullRequest, resumeAgent, sendUnsent, clearUnsent, typeFirstPrompt, trustFolder, resendUndelivered, clearUndelivered, restartAgent, rename, openReview, openGate, openPlan, openDoc, retryAgentStart, continueOnCredits } =
     tileActions;
@@ -162,16 +164,17 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
   // Seen only means something while it still waits: an ended or stopped agent shows its own state.
   const seen = agent.seen && waitsForYou(agent, shows);
   const state = sending ? 'handing-off' : agent.state;
-  const pillFace = sending ? { state, label: TILE_STATE_LABELS[state] } : agentPill(agent, shows, TILE_STATE_LABELS);
+  const mark = tileMark(agent, shows, sending, receiving);
+  const pillFace = mark.pill;
   // How long it has been in its state, on its pill: re-read at each whole minute of it.
   const stateNow = useNowForSince(agent.stateSince);
   const age = look.stateTime && !sending && pillShowsAge(pillFace.state) ? stateAge(agent.stateSince, stateNow) : undefined;
   // Tile B: what it is for, what is true now, its state in a word with a time in steps, and at most one button.
-  const tState = tileState(agent, shows, pillFace.state);
+  const tState = mark.state;
   const about = tileAbout(agent);
   const nowLine = tileNow(agent, tState);
   const stateTime = tileTime(agent, tState, stateNow);
-  const oneButton = sending || receiving ? undefined : tileButton(agent, tState);
+  const oneButton = mark.button;
   const pickedStyle = useCharacterStyle();
   // A row with a button of its own needs the tile's width more than the tile needs its character: its pill still says.
   const rowWithButton = agent.undelivered.length > 0 || agent.trustFolder !== null || agent.untypedPrompt !== null || agent.unsent !== null || agent.hooksSilent;
@@ -279,7 +282,10 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
     });
   }
   const footer = useFooterFold({
-    key: JSON.stringify([shown, shells.length, latestRound?.round, gate?.status, gate === undefined ? '' : gateBadge(gate), agent.state, receiving, sending, agent.shellSessionId, agent.endedAt, crewFlags, extras.map((each) => each.line)]),
+    key: footerFoldKey(
+      [shown, shells.length, latestRound?.round, gate?.status, gate === undefined ? '' : gateBadge(gate), agent.state, receiving, sending, agent.shellSessionId, agent.endedAt, crewFlags, extras.map((each) => each.line)],
+      { mark, statePill: look.statePill, age, stateTime, character: markCharacter, onCredits: continuesOnCredits(agent) },
+    ),
     badges: look.chips ? shown.length : 0,
     ranking: look.chips ? ranking : [],
     plusShown: overflow.jobs.length + overflow.pullRequests.length > 0,
@@ -352,8 +358,9 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
       data-orchestrator={crew !== undefined || undefined}
       data-master={agent.master || undefined}
       data-crew={crewOf}
-      onMouseEnter={crew === undefined ? undefined : () => lightCrew(agent.sessionId)}
-      onMouseLeave={crew === undefined ? undefined : () => lightCrew(undefined)}
+      data-crew-lit={crewLit || undefined}
+      onMouseEnter={crew === undefined ? undefined : () => hoverCrew(agent.sessionId)}
+      onMouseLeave={crew === undefined ? undefined : () => leaveCrew(agent.sessionId)}
       title={hoverCard !== undefined ? undefined : clickOpens !== 'expand' ? 'Double-click to open its session window' : 'Double-click to expand it here'}
       onDoubleClick={() => (clickOpens !== 'expand' ? openAgent(agent) : expand(id))}
     >
@@ -402,8 +409,8 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
               className="hybrid-tile-from"
               data-testid="from-chip"
               title={`Started by ${from.name}`}
-              onMouseEnter={() => lightCrew(from.sessionId)}
-              onMouseLeave={() => lightCrew(undefined)}
+              onMouseEnter={() => hoverCrew(from.sessionId)}
+              onMouseLeave={() => leaveCrew(from.sessionId)}
             >
               ↳ from {from.name}
             </span>

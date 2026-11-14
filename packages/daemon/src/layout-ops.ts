@@ -32,6 +32,8 @@ import {
   type ZoneMap,
   type ZoneScreenshot,
   MAX_AGENT_NOTE_SIZE,
+  isLineBudget,
+  MAX_AGENT_NOTE_LINES,
   MIN_AGENT_NOTE_SIZE,
 } from './protocol.ts';
 import { toMermaid } from './mermaid.ts';
@@ -63,6 +65,16 @@ export function noteSizeOf(text: string): { width: number; height: number } {
     throw new BoardError(`--size is at most ${MAX_AGENT_NOTE_SIZE.width}x${MAX_AGENT_NOTE_SIZE.height}`);
   }
   return size;
+}
+
+/** An agent note's line budget as typed: a whole number of lines, from 1 to the most; `0` (when `clears`) for none. */
+export function noteLinesOf(value: string | number, clears: boolean): number {
+  const lines = typeof value === 'number' ? value : /^\s*\d+\s*$/.test(value) ? Number(value) : Number.NaN;
+  if (clears && lines === 0) return 0;
+  if (!isLineBudget(lines)) {
+    throw new BoardError(`--lines is a whole number from 1 to ${MAX_AGENT_NOTE_LINES}${clears ? ', or 0 for none' : ''}`);
+  }
+  return lines;
 }
 
 /** What a layout command's options say where to put something, as typed: refs and words, not yet checked. */
@@ -364,17 +376,30 @@ export interface NoteOptions extends PlaceOptions {
   text: string;
   kind?: string;
   color?: string;
+  /** How many lines of an agent note's text show before the rest fades into a chip. */
+  lines?: string | number;
 }
 
 /** Checks `note add`'s options before anything connects. */
 export function checkNote(options: Omit<NoteOptions, 'text'>): void {
   checkPlace(options);
   if (options.kind !== undefined && !(NOTE_KINDS as readonly string[]).includes(options.kind)) throw new BoardError(`--kind must be ${NOTE_KINDS.join(' or ')}`);
+  if (options.lines !== undefined) {
+    noteLinesOf(options.lines, false);
+    // Any kind given makes a sticky or a text, not an agent note.
+    if (options.kind !== undefined) throw new BoardError('--lines is only for an agent note');
+  }
 }
 
 /** What is said when a colour is given for an agent note, which has none: ignored, so no caller breaks. */
 const colourIgnored = (item: BoardItem, color: string | undefined) =>
   item.kind === 'agent-note' && color !== undefined ? '\nwarning: an agent note has no colour, so the colour was ignored.' : '';
+
+/** What is said when a line budget is given for an agent note the user has sized, whose size wins: ignored. */
+const budgetIgnored = (item: BoardItem, lines: number | undefined) =>
+  item.kind === 'agent-note' && lines !== undefined && lines > 0 && item.data.userSized === true
+    ? '\nwarning: the user has sized this note, and their size wins over a line budget, so the budget was ignored.'
+    : '';
 
 /** `note add`: a note marked as made by the caller, placed clear of what is there: an agent note, from an agent. */
 export async function addNote(session: BoardSession, options: NoteOptions): Promise<BoardView> {
@@ -385,6 +410,7 @@ export async function addNote(session: BoardSession, options: NoteOptions): Prom
     text: options.text,
     ...(options.kind === undefined ? {} : { kind: options.kind as (typeof NOTE_KINDS)[number] }),
     ...(options.color === undefined ? {} : { color: options.color }),
+    ...(options.lines === undefined ? {} : { lines: noteLinesOf(options.lines, false) }),
     ...placeOf(refs, options, session.caller),
   });
   const fresh = new BoardRefs(await readBoard(session.client));
@@ -398,17 +424,20 @@ function noteId(refs: BoardRefs, text: string, caller: BoardCaller | null): stri
   return object.item.id;
 }
 
-/** `note edit`: the text, colour or size (`<w>x<h>`, an agent note's) of a note the caller (or its crew) made. */
-export async function editNote(session: BoardSession, ref: string, options: { text?: string; color?: string; size?: string }): Promise<BoardView> {
-  const { size, ...fields } = options;
+/** `note edit`: the text, colour, size (`<w>x<h>`) or line budget (`0` for none) of a note the caller (or its crew) made; size and lines are an agent note's. */
+export async function editNote(session: BoardSession, ref: string, options: { text?: string; color?: string; size?: string; lines?: string | number }): Promise<BoardView> {
+  const { size, lines, ...fields } = options;
+  if (size !== undefined && lines !== undefined) throw new BoardError('give --size or --lines, not both');
+  const budget = lines === undefined ? undefined : noteLinesOf(lines, true);
   const refs = new BoardRefs(await readBoard(session.client));
   const item = await session.client.call('orchestrator.editNote', {
     token: session.token,
     id: noteId(refs, ref, session.caller),
     ...fields,
     ...(size === undefined ? {} : noteSizeOf(size)),
+    ...(budget === undefined ? {} : { lines: budget }),
   });
-  return { text: `Changed ${itemLine(refs, item)}.${colourIgnored(item, options.color)}`, json: item };
+  return { text: `Changed ${itemLine(refs, item)}.${colourIgnored(item, options.color)}${budgetIgnored(item, budget)}`, json: item };
 }
 
 /** `note remove`: deletes a note the caller (or its crew) made. */

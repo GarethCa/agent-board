@@ -6,6 +6,7 @@ import { AppWindow, Check, Copy, Eye, GripVertical, Maximize2, Minimize2, Pencil
 import type { TodoData, TodoLine } from '@agent-board/daemon/protocol';
 import { ContextMenu, Tooltip, type MenuEntry } from '../../ui';
 import { HarnessMark } from '../HarnessMark';
+import { useScrollFade } from './CardSizing';
 import { cursorAfterRemove, headCountIn, moveCursor, openWriters, pillText, todoCounts, todoKey, todoState, writerOf, type TodoLook, type TodoLookup, type Writer } from './todo-view';
 
 /** What the user does to a list; each is saved where it is drawn. Those it can't do there are left out, with their menu entries. */
@@ -117,6 +118,7 @@ export function LineField({ value, onChange, onSave, onCancel, hint, placeholder
 export function TodoCardView({ data, lookup, zoneName, look = 'card', steppedIn, addFirst = false, actions, children, initial }: TodoCardProps) {
   const counts = todoCounts(data);
   const state = todoState(counts);
+  const fade = useScrollFade<HTMLOListElement>();
   const [cursor, setCursor] = useState<string | undefined>(initial?.cursor);
   const [editing, setEditingNow] = useState<TodoEditing | undefined>(initial?.editing ?? (addFirst ? { add: true, after: null } : undefined));
   const [draft, setDraftNow] = useState(initial?.draft ?? '');
@@ -340,7 +342,7 @@ export function TodoCardView({ data, lookup, zoneName, look = 'card', steppedIn,
           </button>
         </div>
       ) : (
-        <ol className="todo-lines nowheel" aria-label="To do">
+        <ol ref={fade} className="todo-lines nowheel" aria-label="To do">
           {data.lines.map((line, at) => (
             <li
               key={line.id}

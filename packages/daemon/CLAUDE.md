@@ -17,7 +17,7 @@ The daemon owns the board: the SQLite database, the agents' terminals, the hooks
 | Agents | `agents.ts`, `agent-spawns.ts` (the harness command line and env), `agent-starts.ts`, `agent-lifecycle.ts`, `worktrees.ts`, `harness-path.ts`, `login-path.ts`, `board-env.ts` |
 | Agent state from hooks | `hook-ingress.ts`, `hook-forwarder.ts`, `hook-states.ts`, `harness-state.ts`, `claude-state.ts`, `codex-state.ts`, `human-status.ts`, `turn-status.ts`, `quiet-turns.ts`, `subagents.ts` |
 | Reading the harness's screen | `startup-screen.ts`, `codex-screen.ts`, `rate-limit-screen.ts`, `codex-config-guard.ts` |
-| Terminals and shells | `sessions.ts`, `terminal-backend.ts`, `node-pty-backend.ts`, `terminal-input.ts`, `shells.ts`, `shell-integration.ts`, `pane-layout.ts`, `window-layout.ts`, `foreground.ts`, `background-commands.ts` |
+| Terminals and shells | `sessions.ts`, `left-screen.ts` (the screen a full-screen harness leaves as it exits), `terminal-backend.ts`, `node-pty-backend.ts`, `terminal-input.ts`, `shells.ts`, `shell-integration.ts`, `pane-layout.ts`, `window-layout.ts`, `foreground.ts`, `background-commands.ts` |
 | Messages between agents | `deliveries.ts`, `sender-marker.ts`, `reply-paths.ts`, `handoff-text.ts`, `flow-edges.ts`, `flow-conditions.ts`, `flow-payloads.ts`, `flow-approvals.ts` |
 | Transcripts and chat | `transcripts.ts`, `transcript-adapters.ts`, `claude-transcript.ts`, `external-sessions.ts`, `external-hooks.ts`, `resume-external.ts` |
 | Board items | `items.ts`, `connectors.ts`, `agent-notes.ts`, `documents.ts`, `memory-queue.ts`, `steps.ts`, `clocks.ts`, `schedules.ts`, `cron.ts`, `link-cards.ts`, `link-metadata.ts`, `image-store.ts`, `image-sweeper.ts`, `mermaid.ts`, `diagram.ts` |

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agentNoteData, agentNoteFooter, clockTime, noteStamp, noteStampFull } from './agent-note';
+import { agentNoteData, agentNoteFooter, clockTime, lineBudget, noteStamp, noteStampFull } from './agent-note';
 
 const at = (hours: number, minutes: number) => new Date(2026, 9, 15, hours, minutes).toISOString();
 
@@ -19,6 +19,16 @@ describe('an agent note', () => {
       editedByUser: true,
       asked: 'Why?',
     });
+  });
+
+  it('keeps a line budget its agent gave it, until the user sizes it', () => {
+    expect(agentNoteData({ text: 'x', lines: 4 }).lines).toBe(4);
+    expect(lineBudget({ lines: 4 })).toBe(4);
+    expect(lineBudget({ lines: 4, userSized: true })).toBeUndefined();
+    for (const lines of [0, -1, 2.5, 41, '4', null, undefined]) {
+      expect(lineBudget({ lines })).toBeUndefined();
+      expect(agentNoteData({ lines })).not.toHaveProperty('lines');
+    }
   });
 
   it('shows the time on the clock, or nothing for no time', () => {

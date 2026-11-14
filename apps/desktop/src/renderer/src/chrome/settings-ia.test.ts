@@ -28,7 +28,6 @@ describe('the Settings window’s groups', () => {
       'arrangeSpacing',
       'dock',
       'agentNoteLook',
-      'crewLook',
       'needsYouShows',
       'osNotifications',
       'notifyInFront',
@@ -57,6 +56,8 @@ describe('the Settings window’s groups', () => {
       'todoLook',
       // Added since: when the chat's Expand all / Collapse all show.
       'chatRunsShow',
+      // Added since, in place of how a crew shows: whether the board draws its tethers.
+      'tethers',
     ];
     const ids = SETTINGS_CONTROLS.map((control) => control.id);
     expect(new Set(ids).size).toBe(ids.length);
@@ -82,6 +83,7 @@ describe('the Settings window’s groups', () => {
     expect(home('todoLook')).toBe('general.design');
     expect(home('conversationAs')).toBe('agents.chat');
     expect(home('agentSidebar')).toBe('agents.sidebar');
+    expect(home('tethers')).toBe('board.connections');
   });
 
   it('have no empty group or section', () => {

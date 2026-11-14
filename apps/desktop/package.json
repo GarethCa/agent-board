@@ -1,7 +1,13 @@
 {
   "name": "@agent-board/desktop",
-  "version": "0.6.23",
+  "version": "0.6.24",
   "private": true,
+  "description": "An infinite board for your Claude Code and Codex sessions",
+  "homepage": "https://github.com/GarethCa/agent-board#readme",
+  "author": {
+    "name": "agent-board",
+    "email": "agent-board@users.noreply.github.com"
+  },
   "type": "module",
   "main": "out/main/index.js",
   "scripts": {

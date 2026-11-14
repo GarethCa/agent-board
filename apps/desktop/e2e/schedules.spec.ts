@@ -3,6 +3,7 @@ import { rmSync } from 'node:fs';
 import { launch, spawnAgent, tile, tileAction } from './agent-helpers.ts';
 import { test, pickFolderNext, removeDataDir, runDesign, tempDataDir, browseForZone } from './launch.ts';
 import { scratch } from './scratch.ts';
+import { showTethers } from './board-helpers.ts';
 import { showTileParts } from './settings-helpers.ts';
 
 test("an agent's Schedule… puts a clock beside its tile, joined to it: the agent shows scheduled with a clock badge until the clock goes", async () => {
@@ -32,6 +33,9 @@ test("an agent's Schedule… puts a clock beside its tile, joined to it: the age
     const clock = page.getByTestId('clock');
     await expect(clock.locator('.clock-words')).toHaveText('Daily 06:30');
     await expect(clock.getByTestId('clock-detail')).toHaveText(/^→ Check the build · next (tomorrow )?06:30$/);
+    // Its tether to the agent is drawn only while View › Show Tethers is on, which it isn't by default.
+    await expect(page.getByTestId('clock-tether')).toHaveCount(0);
+    await showTethers(page);
     await expect(page.getByTestId('clock-tether')).toHaveCount(1);
 
     // Waiting for its next run, not for you: out of the inbox.

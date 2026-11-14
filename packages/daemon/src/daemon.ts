@@ -41,7 +41,6 @@ import { createAskHost } from './asks.ts';
 import { createRemoveAskStore } from './remove-asks.ts';
 import { createDocumentHost } from './documents.ts';
 import { createStepsHost } from './steps.ts';
-import type { ReachesZone } from './item-scope.ts';
 import { createMemoryQueueHost, type MemoryQueueHost } from './memory-queue.ts';
 import { createCrewFlags } from './crew-flags.ts';
 import { runGit } from './git.ts';
@@ -772,7 +771,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       broadcast,
       log,
     });
-    const zones = zoneHandlers<unknown>(db, zoneTable, trackers, (zoneId, on) => agents.zoneOrchestrateChanged(zoneId, on), (zoneId) =>
+    const zones = zoneHandlers<unknown>(db, zoneTable, trackers, (zoneId) =>
       agents.dismissStartsIn(zoneId),
     );
     const orchestrators = createOrchestratorHost({
@@ -845,12 +844,6 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       void pullRequests.refresh(sessionId);
     });
     const orchestratorHandlers = orchestrators.handlers<SessionSubscriber & BoardConnection>();
-    // Whether an agent's orchestrator scope reaches a zone: what a steps card, a memory or a queue there asks of it.
-    const reachesZone: ReachesZone = (agent, zoneId) => {
-      const zone = zoneTable.list().find((each) => each.id === zoneId);
-      if (agent.orchestrate === null || zone === undefined) return false;
-      return orchestrators.access.reachesZone({ sessionId: agent.sessionId, name: agent.name, zoneId: agent.zoneId, repoRoot: agent.repoRoot, orchestrate: agent.orchestrate, agent }, zone);
-    };
     // Steps cards: answers sent, and to-dos waited on, are typed at the agent's prompt as a document's edit is.
     const steps = createStepsHost({
       sessions,
@@ -858,7 +851,6 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       shells,
       call: (method, params) => call(method, params),
       place: (sessionId, size) => spotBesideAgent(call, sessionId, size),
-      reachesZone,
       tell: (sessionId, text) => documents.tell(sessionId, text),
       answerAsk: (sessionId, askId, cardId, answers) => asks.sendFromCard(sessionId, askId, cardId, answers),
       // A new step waited on is news: the agent's row in Needs you is unread until its session is opened.
@@ -866,7 +858,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       askWaits: (sessionId, askId, cardId) => asks.waitsOnCard(sessionId, askId, cardId),
     });
     // Memories and queues: their contents in their own tables, their scope as a steps card's.
-    const memoryQueue = createMemoryQueueHost({ sessions, agents, shells, db, log, call: (method, params) => call(method, params), place: (sessionId, size) => spotBesideAgent(call, sessionId, size), reachesZone });
+    const memoryQueue = createMemoryQueueHost({ sessions, agents, shells, db, log, call: (method, params) => call(method, params), place: (sessionId, size) => spotBesideAgent(call, sessionId, size) });
     late.memoryQueue = memoryQueue;
     // A running crew's card: the crew loop's own record of it, as a board item.
     const crewCards = createCrewCards({
@@ -879,7 +871,6 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       place: (sessionId, size) => spotBesideAgent(call, sessionId, size),
       card: (crewId) => crews.card(crewId),
       crews: () => crews.list(),
-      reachesZone,
     });
     late.crewCards = crewCards;
     // To-do lists: lines for the user to do. A tick is saved and tells no one.
@@ -889,7 +880,6 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       shells,
       call: (method, params) => call(method, params),
       place: (sessionId, size) => spotBesideAgent(call, sessionId, size, 'below'),
-      reachesZone,
     });
     late.visibleItems = (list, connection) => todos.visible(crewCards.visible(memoryQueue.visible(steps.visible(list, connection), connection), connection), connection);
     const captures = createCaptureHost({ ...(options.captureTimeoutMs === undefined ? {} : { timeoutMs: options.captureTimeoutMs }) });
@@ -1020,8 +1010,6 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       ...prefabs.handlers<SessionSubscriber & BoardConnection>({
         access: orchestrators.access,
         spawn: async (params, connection) => orchestratorHandlers['orchestrator.spawn'](params as never, connection),
-        depth: (sessionId) => agents.orchestrateFacts(sessionId).depth,
-        zones: () => zoneTable.list(),
         startCrew: (prefab, builder, startedBy, prompt) => crews.start(prefab, builder, startedBy, prompt)?.id ?? null,
       }),
       ...crews.handlers<SessionSubscriber & BoardConnection>(orchestrators.access),

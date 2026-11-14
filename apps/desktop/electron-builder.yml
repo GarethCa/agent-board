@@ -28,3 +28,34 @@ electronFuses:
   enableCookieEncryption: true
   # Changing a fuse breaks the build's ad hoc signature, which Apple silicon needs to launch it at all.
   resetAdHocDarwinSignature: true
+# Linux (x86-64): a .deb installs the app in /opt/agent-board with `agent-board` on PATH; the tar.gz is the same files
+# for any other distribution. No AppImage: the daemon outlives the window and runs the app's own executable, which in an
+# AppImage lives on a mount that goes when the window quits.
+linux:
+  target:
+    - deb
+    - tar.gz
+  executableName: agent-board
+  # Named for the app, not the workspace package (`@agent-board/desktop`), which is no file or deb package name.
+  artifactName: agent-board-${version}-${arch}.${ext}
+  category: Development
+  synopsis: An infinite board for your Claude Code and Codex sessions
+  description: A desktop app that shows Claude Code and Codex sessions as objects on an infinite board.
+  maintainer: agent-board <agent-board@users.noreply.github.com>
+  icon: ../../brand/png/app-icon/icon-1024.png
+deb:
+  packageName: agent-board
+  # Electron's own libraries, as electron-builder lists them, plus git, which the daemon runs for worktrees.
+  depends:
+    - libgtk-3-0 | libgtk-3-0t64
+    - libnotify4
+    - libnss3
+    - libxss1
+    - libxtst6
+    - xdg-utils
+    - libatspi2.0-0 | libatspi2.0-0t64
+    - libuuid1
+    - libsecret-1-0
+    - libasound2 | libasound2t64
+    - libgbm1
+    - git

@@ -33,10 +33,8 @@ import {
   type CrewEventKind,
   type Effort,
   type Harness,
-  type OrchestrateScope,
   type OrchestratorActivity,
   type RemoveAskResult,
-  orchestrateScopeWords,
   type AgentNoteData,
   type BoardItem,
   type Connector,
@@ -423,7 +421,6 @@ function agentJson(refs: BoardRefs, agent: Agent, caller: BoardCaller | null) {
     worktree: agent.worktree,
     issue: agent.issue,
     pullRequests: agent.pullRequests.map(({ number, url, state }) => ({ number, url, state })),
-    orchestrate: agent.orchestrate,
     spawnedBy: agent.spawnedBy === null ? null : refs.of('agent', agent.spawnedBy),
     orphanedFrom: agent.orphanedFrom === null ? null : { ref: refs.of('agent', agent.orphanedFrom.sessionId), name: agent.orphanedFrom.name },
   };
@@ -603,11 +600,11 @@ export function identifyView(refs: BoardRefs, caller: BoardCaller | null, socket
     lines.push(`branch   ${branchWords(agent)} in ${tilde(agent.worktree)}`);
     const role = roleLabel(agent);
     if (role !== null) lines.push(`role     ${role}`);
-    if (caller.orchestrate !== null) {
-      lines.push(`you may  orchestrate in ${orchestrateScopeWords(caller.orchestrate, 'your')}: start, message and close agents (\`agent-board help orchestrate\`)`);
+    if (caller.orchestrates) {
+      lines.push("you may  start, message and close any agent but the ones the user started by hand (`agent-board help orchestrate`)");
     }
   }
-  if (caller.side === 'user') lines.push('you may  act for the user: start, message and close any agent, and turn orchestrating on and off');
+  if (caller.side === 'user') lines.push('you may  act for the user: start, message and close any agent');
   lines.push(`session  ${caller.sessionId}`, `daemon   ${socketPath}`);
   return {
     text: lines.join('\n'),
@@ -618,7 +615,7 @@ export function identifyView(refs: BoardRefs, caller: BoardCaller | null, socket
         side: caller.side,
         name: caller.name,
         session: caller.sessionId,
-        orchestrate: caller.orchestrate,
+        orchestrates: caller.orchestrates,
         role: caller.side === 'agent' && tile !== undefined ? roleLabel(tile as Agent) : null,
         character: caller.side === 'agent' && tile !== undefined ? characterReading(tile as Agent) : null,
         zone: zone === undefined ? null : zoneJson(refs, zone),
@@ -815,13 +812,12 @@ export function showView(refs: BoardRefs, object: BoardObject, caller: BoardCall
             ['kind', zoneWhere(zone)],
             ['tracker', zone.tracker === null ? undefined : `${zone.tracker.provider} ${zone.tracker.scope}`],
             ['board mcp', zone.boardMcp ? 'on' : 'off'],
-            ['agents orchestrate', zone.agentsOrchestrate ? 'on' : 'off'],
           ]),
           '  tiles',
           ...(tiles.length === 0 ? ['    (none)'] : tiles.map((tile) => `    ${tile}`)),
           ...(items.length === 0 ? [] : ['  items', ...items.map((item) => `    ${item}`)]),
         ].join('\n'),
-        json: { ...zoneJson(refs, zone), boardMcp: zone.boardMcp, agentsOrchestrate: zone.agentsOrchestrate, tiles: tiles.length, items: items.length },
+        json: { ...zoneJson(refs, zone), boardMcp: zone.boardMcp, tiles: tiles.length, items: items.length },
       };
     }
     case 'agent': {
@@ -848,7 +844,6 @@ export function showView(refs: BoardRefs, object: BoardObject, caller: BoardCall
             ['issue', agent.issue === null ? undefined : `${agent.issue.id} ${agent.issue.title} ${agent.issue.url}`],
             ['pr', agent.pullRequests.length === 0 ? undefined : agent.pullRequests.map((pr) => `#${pr.number} ${pr.state} ${pr.url}`).join(', ')],
             ['last said', agent.lastMessage === null ? undefined : cut(agent.lastMessage, 200)],
-            ['orchestrates', agent.orchestrate === null ? undefined : `agents in ${orchestrateScopeWords(agent.orchestrate)}`],
             ['started by', agent.spawnedBy === null ? undefined : endLabel(refs, agent.spawnedBy)],
           ]),
           ...(edges.length === 0 ? [] : ['  edges', ...edges.flatMap((edge) => edgeLines(refs, edge)).map((line) => `    ${line}`)]),
@@ -1081,7 +1076,7 @@ async function orchestratorTarget(session: BoardSession, ref: string): Promise<{
 
 /**
  * The caller and the board, for an orchestrator command. The daemon decides whether the caller may: an agent
- * the user lets orchestrate, a shell on the board, or the user outside a session, with no token.
+ * in its own live session, a shell on the board, or the user outside a session, with no token.
  */
 async function orchestratingCaller(session: BoardSession): Promise<{ caller: BoardCaller | null; token: string | undefined; refs: BoardRefs }> {
   const { caller, token } = session;
@@ -1619,6 +1614,21 @@ export async function setAgentEffort(session: BoardSession, ref: string, effort:
   };
 }
 
+/**
+ * `role`: gives the agent a role, or none with null, as its tile's Role menu does. Only the role changes: its session
+ * isn't restarted, and no template is sent to it.
+ */
+export async function giveAgentRole(session: BoardSession, ref: string, role: string | null): Promise<BoardView> {
+  const { token, agent } = await orchestratorTarget(session, ref);
+  await session.client.call('orchestrator.giveRole', { token, sessionId: agent.sessionId, role });
+  const fresh = await freshAgentLine(session, agent.sessionId);
+  const given = fresh.agent.roleName ?? fresh.agent.role;
+  return {
+    text: `${given === null ? 'Took the role away' : `Gave the role ${given}`}: ${fresh.line}`,
+    json: agentJson(fresh.refs, fresh.agent, session.caller),
+  };
+}
+
 /** `continue`: resumes a rate-limited agent's turn on usage credits, as its harness offers. */
 export async function continueAgent(session: BoardSession, ref: string): Promise<BoardView> {
   const { token, agent } = await orchestratorTarget(session, ref);
@@ -1712,18 +1722,6 @@ export async function handOver(session: BoardSession, fromRef: string, toRef: st
     json: { crew: crew.map((agent) => agentJson(refs, agent, caller)), made },
   };
 }
-
-/** `orchestrate on|off`: the user lets an agent orchestrate, or stops it. Refused to an agent's own session. */
-export async function setOrchestrate(session: BoardSession, ref: string, scope: OrchestrateScope | null): Promise<BoardView> {
-  const refs = new BoardRefs(await readBoard(session.client));
-  const agent = await session.client.call('agent.setOrchestrate', { sessionId: resolveAgent(refs, ref, session.caller).sessionId, scope });
-  const label = `${refs.of('agent', agent.sessionId)} ${agent.name}`;
-  return {
-    text: scope === null ? `${label} may not orchestrate now.` : `${label} may orchestrate in ${orchestrateScopeWords(scope)} now.`,
-    json: agentJson(refs, agent, session.caller),
-  };
-}
-
 
 /** `activity`: what orchestrators did and tried, newest first. */
 export async function activityView(session: BoardSession, of: string | undefined, limit: number | undefined): Promise<BoardView> {
@@ -1836,7 +1834,7 @@ export function edgeRules(options: Pick<AddEdgeOptions, 'carries' | 'trigger' | 
   };
 }
 
-/** `edge add`: an orchestrator joins two agents of its scope (or itself) with an edge it is marked as making. */
+/** `edge add`: an orchestrator joins two agents it may act on (or itself) with an edge it is marked as making. */
 export async function addEdge(session: BoardSession, options: AddEdgeOptions): Promise<BoardView> {
   const { conditions, ...rules } = edgeRules(options);
   const { caller, token, refs } = await orchestratingCaller(session);

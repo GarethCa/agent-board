@@ -21,8 +21,8 @@ import { connectTestClient, recordEvents, startTestDaemon, tempDataDir, tempRepo
 const SIZE = { cols: 120, rows: 40 };
 
 /**
- * A daemon whose agents play the fake harnesses' `orchestrate` scenario for every line typed to them, in one zone
- * whose agents may not orchestrate: handing off is every agent's.
+ * A daemon whose agents play the fake harnesses' `orchestrate` scenario for every line typed to them, in one zone.
+ * Handing off along an edge is every agent's; naming an agent to hand off to reaches one another agent started.
  */
 async function handoffDaemon(flowRecheckMs = 0, dataDir = tempDataDir(), harness: Partial<FakeHarnessEnvOptions> = {}, submitConfirmMs?: number) {
   const daemon = await startTestDaemon({
@@ -35,7 +35,6 @@ async function handoffDaemon(flowRecheckMs = 0, dataDir = tempDataDir(), harness
   const client = await connectTestClient(daemon);
   const recorder = recordEvents(client);
   const zone = await client.call('zone.add', { path: tempRepo(), x: 0, y: 0, name: 'web' });
-  await client.call('zone.configure', { id: zone.id, agentsOrchestrate: false });
   return { daemon, client, recorder, zone };
 }
 
@@ -71,13 +70,28 @@ async function untilEdge(recorder: Setup['recorder'], id: string, match: (edge: 
   return event.edge;
 }
 
+/** An agent's side of the board: its token, and a connection that presented it. */
+type Side = { token: string; connection: Awaited<ReturnType<typeof connectTestClient>> };
+
+/**
+ * Starts `name` as the user does, or as the agent `by` does (`orchestrator.spawn`), in `zoneId`: one an agent started is
+ * one any agent may name, as none the user started by hand.
+ */
+async function started(setup: Setup, name: string, by: Side | undefined, zoneId: string, rest: { prompt?: string; harness?: Harness }) {
+  const { client } = setup;
+  if (by === undefined) return client.call('agent.spawn', { zoneId, name, ...rest, ...SIZE });
+  const agent = await by.connection.call('orchestrator.spawn', { token: by.token, zoneId, name, ...rest });
+  await client.call('session.resize', { sessionId: agent.sessionId, ...SIZE });
+  return agent;
+}
+
 /**
  * An agent named `name` that prints its board token and sits at its prompt, and a connection as it: the token
- * presented, as the CLI and MCP do.
+ * presented, as the CLI and MCP do. Started by the user, or by the agent `by`.
  */
-async function agentSide(setup: Setup, name: string) {
+async function agentSide(setup: Setup, name: string, by?: Side) {
   const { daemon, client, recorder, zone } = setup;
-  const agent = await client.call('agent.spawn', { zoneId: zone.id, name, prompt: 'Print your board identity', ...SIZE });
+  const agent = await started(setup, name, by, zone.id, { prompt: 'Print your board identity' });
   await client.call('session.attach', { sessionId: agent.sessionId });
   // A TUI losing Enters loses those after its first prompt too, which is typed at it: Send then sends it, as you would.
   const up = await untilAgent(recorder, agent.sessionId, (seen) => seen.state === 'thinking' || seen.unsent !== null);
@@ -91,11 +105,11 @@ async function agentSide(setup: Setup, name: string) {
 }
 
 /**
- * An agent the user started, at its prompt, attached so what it is typed can be read. A Claude one is waited on until
- * its session is up: nothing is delivered to it before then.
+ * An agent the user started, or the agent `by` did, at its prompt, attached so what it is typed can be read. A Claude
+ * one is waited on until its session is up: nothing is delivered to it before then.
  */
-async function receiver(setup: Setup, name: string, harness: Harness = 'claude'): Promise<Agent> {
-  const agent = await setup.client.call('agent.spawn', { zoneId: setup.zone.id, name, harness, ...SIZE });
+async function receiver(setup: Setup, name: string, harness: Harness = 'claude', options: { by?: Side; zoneId?: string } = {}): Promise<Agent> {
+  const agent = await started(setup, name, options.by, options.zoneId ?? setup.zone.id, { harness });
   await setup.client.call('session.attach', { sessionId: agent.sessionId });
   if (harness === 'claude') {
     await setup.recorder.waitFor(
@@ -298,8 +312,10 @@ describe('handing off explicitly', () => {
 
   it('hands off to an agent it names with no edge, as a one-off edge drawn afterwards, and again along it', async () => {
     const setup = await handoffDaemon();
-    const { agent: a, token, connection } = await agentSide(setup, 'impl');
-    const b = await receiver(setup, 'review');
+    const impl = await agentSide(setup, 'impl');
+    const { agent: a, token, connection } = impl;
+    // An agent names one another agent started, never one the user started by hand: it starts its reviewer itself.
+    const b = await receiver(setup, 'review', 'claude', { by: impl });
 
     const handedFirst = setup.recorder.events.length;
     const [first] = await connection.call('board.handoff', { token, to: b.sessionId, message: 'Please review the login fix' });
@@ -326,8 +342,9 @@ describe('handing off explicitly', () => {
   it("keeps what a named hand-off carried, so Send replays it after a restart: JSON handed inline is no file", async () => {
     const dataDir = tempDataDir();
     const setup = await handoffDaemon(0, dataDir);
-    const { token, connection } = await agentSide(setup, 'impl');
-    const b = await receiver(setup, 'review');
+    const impl = await agentSide(setup, 'impl');
+    const { token, connection } = impl;
+    const b = await receiver(setup, 'review', 'claude', { by: impl });
     const [handed] = await connection.call('board.handoff', { token, to: b.sessionId, json: { pr: 12 } });
     expect(handed).toMatchObject({ outcome: 'delivered' });
     connection.close();
@@ -340,8 +357,10 @@ describe('handing off explicitly', () => {
 
   it('hands back and forth by name, implementer and reviewer, and leaves the user free to draw the reply', async () => {
     const setup = await handoffDaemon();
-    const impl = await agentSide(setup, 'impl');
-    const review = await agentSide(setup, 'review');
+    // Each names the other, so another agent starts both.
+    const lead = await agentSide(setup, 'lead');
+    const impl = await agentSide(setup, 'impl', lead);
+    const review = await agentSide(setup, 'review', lead);
     // Each turn on a hand-off writes a handover and ends on STATUS: done.
     const turnEnded = async (agent: Agent) => {
       await setup.recorder.waitForText(agent.sessionId, 'STATUS: done');
@@ -370,8 +389,10 @@ describe('handing off explicitly', () => {
 
   it('wakes a paused agent by a named hand-off, carrying on its conversation, its message the first it gets', async () => {
     const setup = await handoffDaemon();
-    const impl = await agentSide(setup, 'impl');
-    const review = await agentSide(setup, 'review');
+    // Each names the other, so another agent starts both.
+    const lead = await agentSide(setup, 'lead');
+    const impl = await agentSide(setup, 'impl', lead);
+    const review = await agentSide(setup, 'review', lead);
     await untilAgent(setup.recorder, review.agent.sessionId, (seen) => seen.state === 'idle' || seen.state === 'waiting');
     await setup.client.call('agent.pause', { sessionId: review.agent.sessionId });
     const before = setup.recorder.events.length;
@@ -389,8 +410,10 @@ describe('handing off explicitly', () => {
 
   it('never starts an ended agent again by a named hand-off, so two agents can never relaunch each other', async () => {
     const setup = await handoffDaemon();
-    const impl = await agentSide(setup, 'impl');
-    const review = await agentSide(setup, 'review');
+    // Each names the other, so another agent starts both.
+    const lead = await agentSide(setup, 'lead');
+    const impl = await agentSide(setup, 'impl', lead);
+    const review = await agentSide(setup, 'review', lead);
     const ended = async (agent: Agent) => {
       await setup.client.call('agent.stop', { sessionId: agent.sessionId });
       await untilAgent(setup.recorder, agent.sessionId, (seen) => seen.endedAt !== null);
@@ -414,16 +437,23 @@ describe('handing off explicitly', () => {
     expect(await isEnded(impl.agent)).toBe(true);
   });
 
-  it('names a target only in its scope: its zone, unless the user let it orchestrate wider', async () => {
+  it('refuses to name an agent the user started by hand, and hands off to one an agent started in another zone', async () => {
     const setup = await handoffDaemon();
-    const { token, connection } = await agentSide(setup, 'impl');
+    const impl = await agentSide(setup, 'impl');
+    const { agent: a, token, connection } = impl;
     const elsewhere = await setup.client.call('zone.add', { path: tempRepo('elsewhere'), x: 4000, y: 0, name: 'elsewhere' });
     const far = await setup.client.call('agent.spawn', { zoneId: elsewhere.id, name: 'far', ...SIZE });
     await expect(connection.call('board.handoff', { token, to: far.sessionId, message: 'hi' })).rejects.toMatchObject({
       code: BOARD_ERROR.outOfScope,
-      message: expect.stringMatching(/far is outside your scope/),
+      message: expect.stringMatching(/far is one the user started by hand/),
     });
     expect(await setup.client.call('flowEdge.list')).toEqual([]);
+
+    const reached = await receiver(setup, 'reached', 'claude', { by: impl, zoneId: elsewhere.id });
+    const [handed] = await connection.call('board.handoff', { token, to: reached.sessionId, message: 'Over to you' });
+    expect(handed).toMatchObject({ to: reached.sessionId, outcome: 'delivered' });
+    await setup.recorder.waitForText(reached.sessionId, 'Hand-off from impl (its message): Over to you');
+    expect((await setup.client.call('flowEdge.list')).map((edge) => [edge.from, edge.to])).toEqual([[a.sessionId, reached.sessionId]]);
   });
 
   it("skips a final-message edge it gives no message, since its last final message is from an earlier turn; a manual or paused one too", async () => {

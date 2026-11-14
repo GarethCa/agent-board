@@ -33,7 +33,7 @@ An agent often has more to show than its terminal reads well: a design, a findin
 ## On the board, a card that is a board item
 
 - **A document card is a board item** (`document`), not drawn from the document as a question card is (ADR-0014): the user moves it, collapses it to a slim bar, and takes it off the board, and it survives a restart with the board. Its data is the document's id and its agent as they were then (name, harness, role), so it still says whose it was; what it shows of the document (version, "you edited", the first lines) is read from the agent's documents as they are now.
-- **It is put beside its agent's tile**, to its right or the nearest spot clear of what is there (`spotBesideAgent`), and tied to it by the agent note's dashed tether. One card per document: showing it on the board again adds none.
+- **It is put beside its agent's tile**, to its right or the nearest spot clear of what is there (`spotBesideAgent`), and tied to it by the agent note's dashed tether, drawn while View › Show Tethers is on (off by default). One card per document: showing it on the board again adds none.
 - **Taking it off the board leaves the document**, a tab of its agent and counted on its tile, and listed in its sidebar's Documents section (ADR-0010).
 
 ## Plans are documents with a decision

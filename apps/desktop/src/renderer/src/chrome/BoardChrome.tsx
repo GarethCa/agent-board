@@ -15,7 +15,7 @@ import type { SpotlightHandle } from './Spotlight';
 import { Onboarding } from '../onboarding/Onboarding';
 import { onboardingState, shouldOpenOnboarding, type OnboardingState } from '../onboarding/first-run';
 import { SampleBoard } from '../onboarding/SampleBoard';
-import { setCrewLook, setViewSetting, useViewSettings } from '../board/view-settings';
+import { setViewSetting, useViewSettings } from '../board/view-settings';
 import { ZoneJump } from './ZoneJump';
 import { ZoomControls } from './ZoomControls';
 import type { ZoneSource } from './zones';
@@ -77,7 +77,7 @@ export function BoardChrome({ loaded, empty, loadedEmpty, zones, agents, pane, o
   const status = useDaemonStatus();
   const [menu, setMenu] = useState<BoardMenuState>({ open: false });
   const onboarding = useOnboarding(loaded, loadedEmpty, onError);
-  const { connections, crewLook } = useViewSettings();
+  const { connections, tethers } = useViewSettings();
 
   const spotlight = useRef<SpotlightHandle>(null);
 
@@ -121,7 +121,7 @@ export function BoardChrome({ loaded, empty, loadedEmpty, zones, agents, pane, o
           <CreateToolbar {...toolbar} />
           <NeedsYou agents={agents} onOpen={onOpenAgent} onSettings={onSettings} onMaster={onMaster} onNeedsYou={onNeedsYou} pane={pane} />
           <ZoneJump zones={zones} current={currentZone} onJump={onJump} onKeyboardHelp={onKeyboardHelp} />
-          <ZoomControls nodeColor={minimapColor} grid={grid} onGrid={onGrid} connections={connections} onConnections={(value) => setViewSetting('connections', value)} crewLook={crewLook} onCrewLook={setCrewLook} />
+          <ZoomControls nodeColor={minimapColor} grid={grid} onGrid={onGrid} connections={connections} onConnections={(value) => setViewSetting('connections', value)} tethers={tethers} onTethers={(on) => setViewSetting('tethers', on)} />
           {empty && !onboarding.open && <EmptyBoard onAddZone={onAddZone} onTool={toolbar.onTool} />}
           {onboarding.open && onboarding.state !== undefined && (
             <Onboarding

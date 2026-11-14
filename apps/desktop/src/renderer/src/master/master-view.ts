@@ -29,8 +29,8 @@ export function captainRevival(master: Agent): CaptainRevival | undefined {
 }
 
 /**
- * The zones' leads the master watches: every live agent in a zone with the orchestrator role, and every live agent the
- * master started that orchestrates. Not the master itself.
+ * The zones' leads the master watches: every live agent in a zone with the orchestrator role, and every live agent in a
+ * zone the master started. Not the master itself.
  */
 export function watchedOrchestrators(agents: readonly Agent[]): Agent[] {
   const master = boardMaster(agents);
@@ -39,7 +39,7 @@ export function watchedOrchestrators(agents: readonly Agent[]): Agent[] {
       !agent.master &&
       agent.endedAt === null &&
       agent.zoneId !== null &&
-      (isOrchestratorRole(agent.roleName) || (master !== undefined && agent.spawnedBy === master.sessionId && agent.orchestrate !== null)),
+      (isOrchestratorRole(agent.roleName) || (master !== undefined && agent.spawnedBy === master.sessionId)),
   );
 }
 
@@ -80,7 +80,7 @@ export function masterRails(nodeIds: ReadonlySet<string>, agents: readonly Agent
         sourceHandle: 'right',
         target,
         targetHandle: 'left',
-        data: { tab: false, look: 'master' },
+        data: { look: 'master' },
         selectable: false,
         deletable: false,
         focusable: false,

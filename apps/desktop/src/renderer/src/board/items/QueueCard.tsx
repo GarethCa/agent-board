@@ -9,7 +9,8 @@ import type { NeedsYouEntry } from '../../../../shared/needs-you';
 import { itemKind, needsLine } from './to-look-at';
 import { JOB_DRAG, setJobDropOver, startJobDrag } from './queue-board';
 import { peekKeys, ScopeChip, ListCardAddBox, ListCardFace, ListCardIconView } from './ListCardParts';
-import { countsText, DONE_SHOWN, doneJobs, jobCorner, jobLine, jobState, matchingJobs, nextJob, openInCardOrder, QUEUE_CARD_ROWS } from './queue-card';
+import { useScrollFade } from './CardSizing';
+import { countsText, DONE_SHOWN, doneJobs, jobCorner, jobLine, jobState, matchingJobs, nextJob, openInCardOrder } from './queue-card';
 
 /** A job or note to add: its text, and its link when the line ends ` -> link`. */
 /** What the add box adds: the queue's own kind (a task, or backlog on the user's queue), or a note, read, never taken. */
@@ -70,6 +71,7 @@ function rowChip(job: QueueJob, next: QueueJob | undefined, audience: QueueAudie
 /** One row: its chip, its text on one line, and its corner (its taker, its link, who queued it). */
 function JobRow({ job, next, audience }: { job: QueueJob; next: QueueJob | undefined; audience: QueueAudience }) {
   const state = rowChip(job, next, audience);
+  const corner = jobCorner(job);
   return (
     <>
       <span className="queue-state" data-tone={state.tone}>
@@ -78,9 +80,11 @@ function JobRow({ job, next, audience }: { job: QueueJob; next: QueueJob | undef
       <span className="listcard-value" title={job.text}>
         {jobLine(job)}
       </span>
-      <span className="listcard-who" title={job.link ?? undefined}>
-        {jobCorner(job)}
-      </span>
+      {corner !== '' && (
+        <span className="listcard-who" title={job.link ?? undefined}>
+          {corner}
+        </span>
+      )}
     </>
   );
 }
@@ -102,12 +106,10 @@ function NeedsRow({ entry }: { entry: NeedsYouEntry }) {
 }
 
 /**
- * What a card's foot says: how many rows it doesn't list; else, for a work queue with jobs waiting, that agents start
- * for them (its drain on, whatever waits; or that it left jobs dropped twice for the user), that no one is taking them,
- * or that agents take them in order.
+ * What a card's foot says, for a work queue with jobs waiting: that agents start for them (its drain on, whatever waits;
+ * or that it left jobs dropped twice for the user), that no one is taking them, or that agents take them in order.
  */
-function footText({ more, audience, next, drain, idle, left }: { more: number; audience: QueueAudience; next: QueueJob | undefined; drain?: { on: boolean; most: number }; idle: boolean; left: number }): string {
-  if (more > 0) return `+${more} more`;
+function footText({ audience, next, drain, idle, left }: { audience: QueueAudience; next: QueueJob | undefined; drain?: { on: boolean; most: number }; idle: boolean; left: number }): string {
   if (audience !== 'agents') return '';
   if (drain?.on === true) return left > 0 ? `Agents start for its jobs · ${left} dropped twice, for you` : `Agents start for its jobs · at most ${drain.most}`;
   if (next === undefined) return '';
@@ -212,10 +214,8 @@ interface QueueCardViewProps {
 export function QueueCardView(props: QueueCardViewProps) {
   const { title, scope, zoneColor, zoneName, audience, jobs, count, loaded = true, onAdd, onOpen, onAudience, fresh, focusAdd, needs = [], onOpenAgent, onStart, dragFrom, drain, onDrain, children } = props;
   const open = openInCardOrder(jobs);
-  const shownNeeds = needs.slice(0, QUEUE_CARD_ROWS);
-  const rows = open.slice(0, QUEUE_CARD_ROWS - shownNeeds.length);
   const next = nextJob(jobs);
-  const more = open.length + needs.length - rows.length - shownNeeds.length;
+  const fade = useScrollFade<HTMLUListElement>();
   const looking = audience === 'user' && open.length + needs.length > 0;
   return (
     <div className="listcard listcard-unfolded" data-testid="queue-card" data-audience={audience} onDoubleClick={(event) => (event.stopPropagation(), onOpen())}>
@@ -231,15 +231,15 @@ export function QueueCardView(props: QueueCardViewProps) {
       ) : open.length + needs.length === 0 ? (
         <QueueEmpty audience={audience} zoneName={zoneName} onAudience={jobs.length === 0 ? onAudience : undefined} />
       ) : (
-        <ul className="listcard-rows" aria-label="Jobs in order">
-          {shownNeeds.map((entry) => (
+        <ul ref={fade} className="listcard-rows nowheel" aria-label="Jobs in order">
+          {needs.map((entry) => (
             <li key={`${entry.agent.sessionId}:${entry.kind}`} className="listcard-row queue-needs-row">
               <button type="button" className="queue-needs-open nodrag" aria-label={`Open ${entry.agent.name}: ${needsLine(entry).line}`} onClick={() => onOpenAgent?.(entry.agent)}>
                 <NeedsRow entry={entry} />
               </button>
             </li>
           ))}
-          {rows.map((job) => (
+          {open.map((job) => (
             <li key={job.id} className="listcard-row nodrag" data-fresh={job.id === fresh || undefined} {...dragProps(dragFrom, job, audience)}>
               <JobRow job={job} next={next} audience={audience} />
             </li>
@@ -249,7 +249,7 @@ export function QueueCardView(props: QueueCardViewProps) {
       <div className="listcard-foot">
         <QueueAddBox audience={audience} onAdd={onAdd} autoFocus={focusAdd} />
         <span className="listcard-foot-line">
-          <span>{footText({ more, audience, next, drain, idle: !open.some((job) => job.state === 'taken'), left: open.filter((job) => job.state === 'queued' && isQueueWork(job.kind) && job.drops >= MAX_DRAIN_DROPS).length })}</span>
+          <span>{footText({ audience, next, drain, idle: !open.some((job) => job.state === 'taken'), left: open.filter((job) => job.state === 'queued' && isQueueWork(job.kind) && job.drops >= MAX_DRAIN_DROPS).length })}</span>
           <span className="queue-foot-actions">
             {audience === 'agents' && onDrain !== undefined && (drain?.on === true || (next !== undefined && !open.some((job) => job.state === 'taken'))) && (
               <Button size="sm" variant={drain?.on === true ? 'ghost' : 'primary'} className="nodrag" data-testid="queue-drain" onClick={onDrain}>

@@ -80,8 +80,8 @@ test('Agent › Settings › Rename opens the selected agent’s name for editin
     expect((await menuItem(app, ['Agent']))?.rows[0]).toBe('Select an agent on the board');
 
     await tile(window).locator('.hybrid-tile-name').click();
-    // Classic's tile menu has Rename under Agent ▸, which the menu bar names This agent.
-    const settings = runDesign() === 'simplified' ? ['Agent', 'Settings'] : ['Agent', 'This agent'];
+    // Classic's tile menu has Rename under Agent ▸, which the menu bar names Selected agent.
+    const settings = runDesign() === 'simplified' ? ['Agent', 'Settings'] : ['Agent', 'Selected agent'];
     await expect.poll(async () => (await menuItem(app, settings))?.rows).toContain('Rename');
     await pick(app, [...settings, 'Rename']);
     await expect(window.getByTestId('rename-field')).toBeVisible();

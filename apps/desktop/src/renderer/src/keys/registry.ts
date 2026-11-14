@@ -65,7 +65,7 @@ const bare = (key: string, text = key.toUpperCase()): Chord => ({ key, text, shi
 export const KEYS = [
   // The tile selected on the board.
   { id: 'tile.open', label: 'Open it, or type in a shape', section: 'tile', scope: 'tile', status: 'today', keys: [{ key: 'Enter', text: '↵' }] },
-  { id: 'tile.full', label: 'Open a memory full screen', section: 'tile', scope: 'tile', status: 'new', keys: [{ mod: 'command', key: 'Enter', text: '↵' }] },
+  { id: 'tile.full', label: 'Open a memory or steps in full', section: 'tile', scope: 'tile', status: 'new', keys: [{ mod: 'command', key: 'Enter', text: '↵' }] },
   { id: 'tile.rename', label: 'Rename (or click its name, then pause)', section: 'tile', scope: 'tile', status: 'today', keys: [{ key: 'F2', shift: 'any' }] },
   { id: 'tile.delete', label: 'Delete or close (asks first)', section: 'tile', scope: 'tile', status: 'today', keys: [{ text: '⌫' }] },
 
@@ -76,7 +76,6 @@ export const KEYS = [
   { id: 'move.box', label: 'Box select', section: 'move', scope: 'board', status: 'today', keys: [bare('b')] },
   { id: 'move.hand', label: 'Pan the board', section: 'move', scope: 'board', status: 'today', keys: [bare('h')] },
   { id: 'move.connections', label: 'Cycle which connections are drawn', section: 'move', scope: 'board', status: 'today', keys: [{ key: 'e', text: 'E', shift: true }] },
-  { id: 'move.crews', label: 'Cycle how an orchestrator’s crew is shown', section: 'move', scope: 'board', status: 'today', keys: [{ key: 'c', text: 'C', shift: true }] },
   { id: 'move.cheatSheet', label: 'Keyboard shortcuts', section: 'move', scope: 'board', status: 'new', keys: [{ key: '?', shift: 'any' }] },
   { id: 'move.master', label: 'Open the Captain, its message box focused; in it, shut it', section: 'move', scope: 'terminal-safe', status: 'new', keys: [{ mod: 'window', shift: true, code: 'KeyM', text: 'M' }], otherKeys: [{ mod: 'window', code: 'KeyM', text: 'M' }] },
   { id: 'move.cheatSheetAnywhere', label: 'Keyboard shortcuts, from anywhere', section: 'move', scope: 'terminal-safe', status: 'new', keys: [{ mod: 'window', code: 'Slash', text: '/' }] },

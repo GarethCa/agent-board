@@ -40,7 +40,7 @@ describe('an agent in a group with no repo', () => {
     const { client, recorder, dataDir } = await setup();
     const group = await client.call('zone.addUnbound', { name: 'Local Banking', ...at });
 
-    const agent = await client.call('agent.spawn', { zoneId: group.id, role: 'orchestrator', orchestrate: 'zone', prompt: 'Plan it', ...SIZE });
+    const agent = await client.call('agent.spawn', { zoneId: group.id, role: 'orchestrator', prompt: 'Plan it', ...SIZE });
     // What its hooks set off (branch reads, pull request lookups) has had its turn too.
     await recorder.waitFor((e): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'Stop');
 
@@ -73,7 +73,7 @@ describe('an agent in a group with no repo', () => {
       });
     }
     // The checkout it would work in is its folder: a main checkout asks nothing more of it.
-    const orchestrator = await client.call('agent.spawn', { zoneId: group.id, role: 'orchestrator', orchestrate: 'zone', checkout: 'main', ...SIZE });
+    const orchestrator = await client.call('agent.spawn', { zoneId: group.id, role: 'orchestrator', checkout: 'main', ...SIZE });
     expect(orchestrator).toMatchObject({ plainFolder: true, branch: '' });
   });
 
@@ -114,8 +114,7 @@ describe('an orchestrator in a group with no repo', () => {
   async function lead() {
     const ctx = await setup();
     const group = await ctx.client.call('zone.addUnbound', { name: 'Local Banking', ...at });
-    await ctx.client.call('zone.configure', { id: group.id, agentsOrchestrate: true });
-    const agent = await ctx.client.call('agent.spawn', { zoneId: group.id, role: 'orchestrator', orchestrate: 'zone', noTemplate: true, prompt: 'Print your board identity', ...SIZE });
+    const agent = await ctx.client.call('agent.spawn', { zoneId: group.id, role: 'orchestrator', noTemplate: true, prompt: 'Print your board identity', ...SIZE });
     await ctx.client.call('session.attach', { sessionId: agent.sessionId });
     await ctx.recorder.waitForText(agent.sessionId, ':end\r\n');
     const token = /identity:(.*):end\r\n/.exec(ctx.recorder.screenText(agent.sessionId))![1]!;

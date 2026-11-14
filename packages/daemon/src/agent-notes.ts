@@ -1,6 +1,6 @@
 // Agent notes: the notes agents write, a board item of their own kind so none is ever taken for one of the
 // user's stickies. `note add` from an agent makes one; Ask Claude's answers are made here too.
-import { AGENT_NOTE_SIZE, MAX_AGENT_NOTE_HEIGHT, type Agent, type AgentNoteAuthor, type AgentNoteData } from './protocol.ts';
+import { AGENT_NOTE_FACE_WIDTH, AGENT_NOTE_SIZE, MAX_AGENT_NOTE_HEIGHT, MIN_AGENT_NOTE_SIZE, type Agent, type AgentNoteAuthor, type AgentNoteData } from './protocol.ts';
 
 /** A character drawn twice as wide as a letter: CJK, Hangul, fullwidth forms and emoji. */
 const WIDE = /[\u1100-\u115f\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6\u{1f300}-\u{1faff}\u{20000}-\u{3fffd}]/u;
@@ -16,6 +16,8 @@ interface Look {
   indent: { paragraph: number; item: number };
   /** The space after each block. */
   blockGap: number;
+  /** How far in from the bubble's padding its text sits, across both sides and down: the terminal is a cut-out inside it. */
+  inset: { across: number; down: number };
 }
 
 /** Bold, italics and a link's address draw nothing. */
@@ -32,6 +34,7 @@ const LOOKS: readonly Look[] = [
     lineHeight: 17.5,
     indent: { paragraph: 0, item: 16 },
     blockGap: 4,
+    inset: { across: 0, down: 0 },
   },
   {
     width: (char) => (WIDE.test(char) ? 13 : 6.8),
@@ -39,10 +42,11 @@ const LOOKS: readonly Look[] = [
     lineHeight: 16,
     indent: { paragraph: 19, item: 28 },
     blockGap: 0,
+    inset: { across: 12, down: 6 },
   },
 ];
-/** The card's sides and padding across, and its tab, border, padding and footer down, px. */
-const CHROME_WIDTH = 27;
+/** The agent's face and the bubble's sides and padding across, and its first line, border, padding and footer down, px. */
+const CHROME_WIDTH = AGENT_NOTE_FACE_WIDTH + 27;
 const CHROME_HEIGHT = 70;
 const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s+/;
 
@@ -88,15 +92,17 @@ export function agentNoteData(author: AgentNoteAuthor, text: string, more: Pick<
 
 /**
  * The size a new agent note of `text` starts at, `width` wide: tall enough to show all its text whichever way the board
- * draws it, and no shorter than `least`. Past `MAX_AGENT_NOTE_HEIGHT` it scrolls.
+ * draws it, and no shorter than `least`. Past `MAX_AGENT_NOTE_HEIGHT` it scrolls. With a line budget (`lines`, as its
+ * agent asked), it is as tall as that many lines, as the board draws it, and no shorter than the least it can be resized to.
  */
-export function agentNoteSize(text: string, width = AGENT_NOTE_SIZE.width, least = AGENT_NOTE_SIZE.height): { width: number; height: number } {
-  const lines = text.split('\n');
+export function agentNoteSize(text: string, width = AGENT_NOTE_SIZE.width, least = AGENT_NOTE_SIZE.height, lines?: number | null): { width: number; height: number } {
+  const rows = text.split('\n');
+  const budgeted = typeof lines === 'number' && lines > 0;
   const body = Math.max(
     ...LOOKS.map((look) => {
       let height = 0;
       let last: 'paragraph' | 'item' | undefined;
-      for (const line of lines) {
+      for (const line of rows) {
         if (line.trim() === '') {
           last = undefined;
           continue;
@@ -105,11 +111,13 @@ export function agentNoteSize(text: string, width = AGENT_NOTE_SIZE.width, least
         // A list item after a paragraph, or either after a blank line, starts a block of its own.
         if (kind !== last) height += look.blockGap;
         last = kind;
-        height += wrappedLines(look.shown(line.replace(LIST_ITEM, '')), width - CHROME_WIDTH - look.indent[kind], look) * look.lineHeight;
+        height += wrappedLines(look.shown(line.replace(LIST_ITEM, '')), width - CHROME_WIDTH - look.inset.across - look.indent[kind], look) * look.lineHeight;
       }
-      return height;
+      // The board shows as many lines as the budget says, and fades the rest.
+      return look.inset.down + (budgeted ? Math.min(height, lines * look.lineHeight) : height);
     }),
   );
-  const height = Math.min(MAX_AGENT_NOTE_HEIGHT, Math.max(least, Math.ceil(CHROME_HEIGHT + body)));
+  const floor = budgeted ? Math.min(least, MIN_AGENT_NOTE_SIZE.height) : least;
+  const height = Math.min(MAX_AGENT_NOTE_HEIGHT, Math.max(floor, Math.ceil(CHROME_HEIGHT + body)));
   return { width, height };
 }

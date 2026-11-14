@@ -1,6 +1,6 @@
 import { expect, type Locator, type Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
-import { agents, launch, spawnAgent, tile, zones } from './agent-helpers.ts';
+import { agents, launch, setClickOpens, spawnAgent, tile, zones } from './agent-helpers.ts';
 import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone } from './launch.ts';
 import { scratch } from './scratch.ts';
 import { openSettings, settingsSection } from './settings-helpers.ts';
@@ -145,6 +145,53 @@ test('connections are hidden, hand-offs only or shown from the board menu or ⇧
     await showConnections(window, 'All');
     await expect(window.locator('.react-flow__edge')).toHaveCount(3);
     expect(await savedMode(window)).toBe('all');
+  } finally {
+    await app.close().catch(() => {});
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('with connections hidden, a tile selected or clicked into to type shows none of its own, and a hovered one still does', async () => {
+  const { dir, repo, env } = scratch('output');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, env);
+  try {
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    for (const prompt of ['Write the code', 'Review the code']) await spawnAgent(window, 'monorepo', prompt);
+    const coder = tile(window).filter({ hasText: 'Write the code' });
+    const reviewer = tile(window).filter({ hasText: 'Review the code' });
+    for (const agent of [coder, reviewer]) await expect(agent).toHaveAttribute('data-state', 'waiting');
+    const all = await agents(window);
+    const id = (name: string) => all.find((agent) => agent.name === name)!.sessionId;
+    await window.evaluate(({ from, to }) => globalThis.window.agentBoard.flowEdges.create({ from, to }), { from: id('Write the code'), to: id('Review the code') });
+    const edges = window.locator('.react-flow__edge');
+    await expect(edges).toHaveCount(1);
+    await setClickOpens(window, 'Expand in place');
+    await showConnections(window, 'None');
+    await expect(edges).toHaveCount(0);
+
+    // Selected, and then with the pointer gone, it shows none.
+    await coder.click();
+    await window.mouse.move(5, 5);
+    await expect(edges).toHaveCount(0);
+
+    // Expanded and clicked into, its terminal takes the keyboard: with the pointer over it as it types, still none.
+    await coder.dblclick();
+    const expanded = window.getByTestId('expanded-tile');
+    await expect(expanded).toBeVisible();
+    await expanded.getByTestId('session-terminal').click();
+    expect(await window.evaluate(() => document.activeElement?.closest('[data-testid="expanded-tile"]') != null)).toBe(true);
+    await window.keyboard.type('a first line for the agent');
+    await expect(edges).toHaveCount(0);
+    await expect(window.locator('.connector-halo')).toHaveCount(0);
+
+    // Another tile, hovered while the first keeps the keyboard, shows its own.
+    await reviewer.hover();
+    await expect(edges).toHaveCount(1);
+    await window.mouse.move(5, 5);
+    await expect(edges).toHaveCount(0);
   } finally {
     await app.close().catch(() => {});
     await removeDataDir(dataDir);

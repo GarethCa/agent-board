@@ -1,9 +1,9 @@
 import { expect, type Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
 import type { DaemonClient } from '@agent-board/daemon/client';
-import type { BoardItem } from '@agent-board/daemon/protocol';
+import { MAX_AGENT_NOTE_HEIGHT, type BoardItem } from '@agent-board/daemon/protocol';
 import { agents, launch, spawnAgent, tile, zones } from './agent-helpers.ts';
-import { drag, settledBox, withDaemon } from './board-helpers.ts';
+import { drag, emptyFoot, settledBox, withDaemon } from './board-helpers.ts';
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
 import { scratch } from './scratch.ts';
 
@@ -121,6 +121,49 @@ test("measures a lane's note the board doesn't draw, off screen, and arranges ro
     expect((await noteOf()).height).toBe(sized.height);
     const map = await withDaemon(dataDir, (client) => client.call('orchestrator.map', { zoneId: zone.id }));
     expect({ unmeasured: map.unmeasured, overlaps: map.overlaps }).toEqual({ unmeasured: false, overlaps: [] });
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("measures a lane's note with a line budget at its lines, not its whole text, and arranges round that", async () => {
+  const { dir, repo, env } = scratch('orchestrate');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, env);
+  try {
+    const { token, noteOf } = await arrangedCrew(dataDir, window, app, repo);
+    const written = await noteOf();
+
+    // Panned far from the zone, the board draws none of it: only the measurer sees the note.
+    const pane = window.locator('.react-flow__pane');
+    const box = (await pane.boundingBox())!;
+    await window.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    for (let step = 0; step < 6; step++) await window.mouse.wheel(0, 4000);
+    await expect(window.getByTestId('agent-note')).toHaveCount(0);
+
+    // Twenty lines, three of them to show.
+    const long = longText(20);
+    await window.evaluate(({ id, text }) => globalThis.window.agentBoard.items.update({ id, data: { text, lines: 3, editedByUser: true } }), {
+      id: written.id,
+      text: long,
+    });
+    const arranged = await withDaemon(dataDir, (client) => client.call('orchestrator.arrange', { token }));
+    expect(arranged.unmeasured).toBe(false);
+    const sized = await noteOf();
+    expect(sized.data).toMatchObject({ text: long, lines: 3 });
+    // About three lines' height and its head and foot: far from the most a note grows to.
+    expect(sized.height).toBeLessThan(MAX_AGENT_NOTE_HEIGHT / 2);
+
+    // Drawn, it is as tall as its three lines, with no empty foot and nothing cut, and it keeps the height it was arranged
+    // at: shorter than a tile, though its lane is a tile tall.
+    await fitView(window);
+    const body = window.getByTestId('agent-note').locator('.agent-note-body');
+    await expect(window.getByTestId('agent-note').getByTestId('agent-note-more')).toBeVisible();
+    await expect.poll(emptyFoot(body)).toBeLessThanOrEqual(2);
+    expect(await emptyFoot(body)()).toBeGreaterThanOrEqual(-1);
+    expect((await noteOf()).height).toBe(sized.height);
   } finally {
     await app.close();
     await removeDataDir(dataDir);

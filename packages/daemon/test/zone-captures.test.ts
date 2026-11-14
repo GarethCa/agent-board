@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { fakeHarnessEnv } from '@agent-board/fake-harness';
 import { runBoardCommand } from '../src/board-cli.ts';
 import type { DaemonClient } from '../src/client.ts';
-import { BOARD_ERROR, MAX_CAPTURE_PNG_BYTES, type CaptureRequestedEvent, type DaemonEvent } from '../src/protocol.ts';
+import { MAX_CAPTURE_PNG_BYTES, RPC_ERROR, type CaptureRequestedEvent, type DaemonEvent } from '../src/protocol.ts';
 import { connectTestClient, recordEvents, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
 
 // A picture of a zone for its orchestrator: the daemon asks the app, which captures it in a hidden window and hands the
@@ -24,8 +24,7 @@ async function captureDaemon({ captureTimeoutMs }: { captureTimeoutMs?: number }
   const recorder = recordEvents(client);
   const zone = await client.call('zone.add', { path: tempRepo(), x: 100, y: 200, width: 1200, height: 600, name: 'web' });
   const other = await client.call('zone.add', { path: tempRepo('other'), x: 3000, y: 0, name: 'other' });
-  for (const { id } of [zone, other]) await client.call('zone.configure', { id, agentsOrchestrate: false });
-  const agent = await client.call('agent.spawn', { zoneId: zone.id, name: 'lead', prompt: 'Print your board identity', orchestrate: 'zone', ...SIZE });
+  const agent = await client.call('agent.spawn', { zoneId: zone.id, name: 'lead', prompt: 'Print your board identity', ...SIZE });
   await client.call('session.attach', { sessionId: agent.sessionId });
   await recorder.waitForText(agent.sessionId, ':end\r\n');
   const token = /identity:(.*):end\r\n/.exec(recorder.screenText(agent.sessionId))![1]!;
@@ -135,12 +134,20 @@ describe('orchestrator.screenshot', () => {
     await expect(setup.lead.call('orchestrator.screenshot', { token: setup.token })).rejects.toThrow("the app isn't open");
   });
 
-  it("refuses a zone outside the orchestrator's scope, without asking the app", async () => {
+  it('takes a picture of any zone it names, not only its own, and refuses one there is no such zone of without asking the app', async () => {
     const setup = await captureDaemon();
-    const { heard } = await app(setup);
-    const refused = setup.lead.call('orchestrator.screenshot', { token: setup.token, zoneId: setup.other.id });
-    await expect(refused).rejects.toMatchObject({ code: BOARD_ERROR.outOfScope });
+    const { heard } = await app(setup, (event, client) => void client.call('capture.deliver', { id: event.id, png: PIXEL, width: 1280, height: 680 }));
+
+    await expect(setup.lead.call('orchestrator.screenshot', { token: setup.token, zoneId: 'zone-nowhere' })).rejects.toMatchObject({
+      code: RPC_ERROR.invalidParams,
+      message: 'no zone zone-nowhere',
+    });
     expect(heard).toEqual([]);
+
+    const shot = await setup.lead.call('orchestrator.screenshot', { token: setup.token, zoneId: setup.other.id });
+    expect(heard).toEqual([expect.objectContaining({ zoneId: setup.other.id, rect: expect.objectContaining({ x: 2960, y: -40 }) })]);
+    expect(shot).toMatchObject({ zoneId: setup.other.id, png: PIXEL });
+    expect(shot.map).toMatchObject({ zoneId: setup.other.id, name: 'other' });
   });
 });
 

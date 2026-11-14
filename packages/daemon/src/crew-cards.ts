@@ -6,7 +6,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { isDeepStrictEqual } from 'node:util';
 import { connectionAgent, type BoardCallerSources, type BoardConnection } from './board.ts';
 import type { Size } from './board-layout.ts';
-import { readsItem, type ReachesZone } from './item-scope.ts';
+import { readsItem } from './item-scope.ts';
 import { isObject } from './json.ts';
 import { keyedQueue } from './keyed-queue.ts';
 import type { DaemonCall } from './orchestrator-layout.ts';
@@ -22,7 +22,6 @@ export interface CrewCardsOptions extends BoardCallerSources {
   card(crewId: string): CrewCardData | undefined;
   /** Every crew (`CrewLoop.list`). */
   crews(): Crew[];
-  reachesZone: ReachesZone;
   log(message: string): void;
 }
 
@@ -34,7 +33,7 @@ export interface CrewCards {
    * crew there isn't. Until then `changed` does nothing.
    */
   load(): Promise<void>;
-  /** `items` as the connection may see them: a board-token agent sees only the crew cards in its scope. */
+  /** `items` as the connection may see them: a board-token agent sees only the crew cards it reads (`readsItem`). */
   visible(items: BoardItem[], connection: BoardConnection): BoardItem[];
   /**
    * An `item.create`'s params as they are stored: a crew card's data is its crew's own, whatever was sent (an undo of
@@ -130,7 +129,7 @@ export function createCrewCards(options: CrewCardsOptions): CrewCards {
       const me = connectionAgent(options, connection);
       if (me === undefined) return items;
       if (me === null) return items.filter((item) => item.kind !== 'crew');
-      return items.filter((item) => item.kind !== 'crew' || readsItem(me, item, involved(me, item.data as Partial<CrewCardData>), options.reachesZone));
+      return items.filter((item) => item.kind !== 'crew' || readsItem(me, item, involved(me, item.data as Partial<CrewCardData>)));
     },
 
     creating(params) {

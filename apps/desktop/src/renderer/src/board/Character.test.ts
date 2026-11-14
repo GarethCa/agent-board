@@ -273,7 +273,6 @@ describe('subagents on a Hybrid tile', () => {
       ownsWorktree: true,
       master: false,
       plainFolder: false,
-      orchestrate: null,
       spawnedBy: null,
       orphanedFrom: null,
       ledBy: null,

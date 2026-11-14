@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { describe, expect, it, onTestFinished } from 'vitest';
 import { fakeHarnessEnv, McpClient } from '@agent-board/fake-harness';
-import { BOARD_MCP_INSTRUCTIONS, type McpCall, type McpMethods } from '../src/board-mcp.ts';
+import { BOARD_MCP_INSTRUCTIONS, ORCHESTRATOR_INSTRUCTIONS, ORCHESTRATOR_MCP_TOOLS, type McpCall, type McpMethods } from '../src/board-mcp.ts';
 import { createBoardMcpHttp } from '../src/board-mcp-http.ts';
 import type { RpcHandlers } from '../src/rpc.ts';
 import type { Agent, AgentUpdatedEvent, DaemonEvent } from '../src/protocol.ts';
@@ -13,8 +13,8 @@ import { connectTestClient, recordEvents, startTestDaemon, tempDataDir, tempRepo
 const SIZE = { cols: 120, rows: 40 };
 
 /**
- * A daemon whose agents play the fake harnesses' `orchestrate` scenario, which can print an agent's board token. Its
- * agents may not orchestrate.
+ * A daemon whose agents play the fake harnesses' `orchestrate` scenario, which can print an agent's board token. The
+ * user starts each of them by hand, so no agent may act on another.
  */
 async function httpDaemon() {
   const daemon = await startTestDaemon({
@@ -24,7 +24,6 @@ async function httpDaemon() {
   const client = await connectTestClient(daemon);
   const recorder = recordEvents(client);
   const zone = await client.call('zone.add', { path: tempRepo(), x: 0, y: 0, name: 'web' });
-  await client.call('zone.configure', { id: zone.id, agentsOrchestrate: false });
   const url = `http://127.0.0.1:${daemon.hookPort}/mcp`;
 
   /** Starts an agent that prints its board token and waits at its prompt: the token its harness posts MCP with. */
@@ -90,9 +89,13 @@ describe('the board MCP over HTTP', () => {
     const two = await agentWithToken('two');
     const mcp = mcpAs(one.token);
 
-    expect((await mcp.initialize()).instructions).toBe(BOARD_MCP_INSTRUCTIONS);
-    expect(await mcp.listTools()).toEqual(['whoami', 'board', 'usage', 'connections', 'handoff', 'ask', 'present_plan', 'show_doc', 'set_status', 'needs_you', 'open_pr', 'record_pr', 'record_doc', 'pin', 'unpin', 'steps_new', 'steps_read', 'steps_update', 'memory_new', 'memory_read', 'memory_update', 'queue_new', 'queue_read', 'queue_update', 'remind', 'remind_read', 'remind_update', 'set_page', 'clock_add', 'clock_set', 'save_clock_template', 'list_clock_templates', 'remove_clock_template']);
-    // Not an orchestrator, it still adds a clock of its own.
+    // A live agent's own session may act on other agents: it is told so, and listed the control tools.
+    expect((await mcp.initialize()).instructions).toBe(`${BOARD_MCP_INSTRUCTIONS} ${ORCHESTRATOR_INSTRUCTIONS}`);
+    expect(await mcp.listTools()).toEqual([
+      'whoami', 'board', 'usage', 'connections', 'handoff', 'ask', 'present_plan', 'show_doc', 'set_status', 'needs_you', 'open_pr', 'record_pr', 'record_doc', 'pin', 'unpin', 'steps_new', 'steps_read', 'steps_update', 'memory_new', 'memory_read', 'memory_update', 'queue_new', 'queue_read', 'queue_update', 'remind', 'remind_read', 'remind_update', 'set_page', 'clock_add', 'clock_set', 'save_clock_template', 'list_clock_templates', 'remove_clock_template',
+      ...ORCHESTRATOR_MCP_TOOLS.map((tool) => tool.name),
+    ]);
+    // It adds a clock of its own.
     expect(await mcp.callTool('clock_add', { cron: '0 9 * * 1-5', prompt: 'Check the PRs', after: 'hibernate' })).toEqual({
       text: expect.stringMatching(/^Added item:\S+ {2}Weekdays 09:00 \(0 9 \* \* 1-5\) {2}messages agent:\S+ one, hibernating it after each run/),
       isError: false,
@@ -108,7 +111,7 @@ describe('the board MCP over HTTP', () => {
     expect(agents.find((a) => a.sessionId === two.agent.sessionId)!.status).toBeNull();
   });
 
-  it('lets an agent that is no orchestrator save, list and remove clock templates, its own alone, and start its own clock from one', async () => {
+  it('lets an agent save, list and remove clock templates, its own alone, and start its own clock from one', async () => {
     const { client, agentWithToken, mcpAs } = await httpDaemon();
     const one = await agentWithToken('one');
     const two = await agentWithToken('two');
@@ -131,17 +134,18 @@ describe('the board MCP over HTTP', () => {
     expect(await client.call('clockTemplate.list', {})).toEqual([]);
   });
 
-  it('keeps an agent to what its session may do: an orchestrator tool it was not listed is refused', async () => {
+  it('keeps an agent to what its session may do: a control tool on an agent the user started by hand is refused', async () => {
     const { client, agentWithToken, post } = await httpDaemon();
     const { token } = await agentWithToken('one');
+    const two = await agentWithToken('two');
 
     const called = await post(
-      { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'new_agent', arguments: { prompt: 'Sneak', name: 'sneak' } } },
+      { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'close', arguments: { agent: `agent:${two.agent.sessionId.slice(0, 4)}` } } },
       { authorization: `Bearer ${token}` },
     );
     const reply = JSON.parse(/^data: (.*)$/m.exec(await called.text())![1]!);
-    expect(reply.result).toMatchObject({ isError: true, content: [{ text: expect.stringMatching(/orchestrate/) }] });
-    expect((await client.call('agent.list')).map((a) => a.name)).toEqual(['one']);
+    expect(reply.result).toMatchObject({ isError: true, content: [{ text: expect.stringMatching(/started by hand/) }] });
+    expect((await client.call('agent.list')).find((a) => a.sessionId === two.agent.sessionId)!.endedAt).toBeNull();
   });
 
   it('answers a notification with 202 and no body, and a tool call as an event stream', async () => {

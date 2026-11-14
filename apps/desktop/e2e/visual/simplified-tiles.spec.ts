@@ -519,7 +519,7 @@ for (const { theme, suffix } of [
     }
   });
 
-  test(`agent notes beside a sticky, tethered to their agent: the document card, then the terminal card, ${theme}`, async () => {
+  test(`agent notes beside a sticky, one about its agent: the document card, then the terminal card, ${theme}`, async () => {
     needsBaselines(`agent-notes${suffix}`, `agent-notes-terminal${suffix}`);
     const { dir, repo, env } = scratch('waiting');
     const dataDir = tempDataDir();
@@ -574,11 +574,18 @@ for (const { theme, suffix } of [
               asked: "What's risky here?",
             },
           });
-          // A zone in Yellow, the colour that read worst under the tab's text, and a note outside every zone: both
-          // tab tints, beside the first zone's.
-          const yellow = await board.zones.addUnbound({ name: 'Docs', color: '#fcc419', x: below.x, y: below.y, width: 560, height: 160 });
-          const short = { text: '**Docs pass** is waiting on the API names.', agent, writtenAt, editedByUser: false };
-          await board.items.create({ kind: 'agent-note', zoneId: yellow.id, x: 30, y: 20, width: 272, height: 100, data: short });
+          // A note in another zone, given a line budget: its text fades into a chip that counts the lines past it; and a
+          // short note outside every zone, from an agent of the other harness.
+          const yellow = await board.zones.addUnbound({ name: 'Docs', color: '#fcc419', x: below.x, y: below.y, width: 560, height: 200 });
+          const budgeted = {
+            text: '**Docs pass** is waiting on the API names.\n\n- `board.items` and `board.zones` are named\n- `board.agents` is next\n- then the guide, page by page',
+            agent,
+            writtenAt,
+            editedByUser: false,
+            lines: 2,
+          };
+          await board.items.create({ kind: 'agent-note', zoneId: yellow.id, x: 30, y: 20, width: 272, height: 100, data: budgeted });
+          const short = { text: '**Docs pass** is waiting on the API names.', agent: { ...agent, sessionId: '', name: 'Docs writer', harness: 'codex', role: null }, writtenAt, editedByUser: false };
           await board.items.create({ kind: 'agent-note', zoneId: null, x: below.x + 600, y: below.y + 20, width: 272, height: 100, data: short });
         },
         { zoneId: zone!.id, sessionId: lead!.sessionId, below: { x: zone!.x, y: zone!.y + zone!.height + 56 } },
@@ -609,7 +616,7 @@ for (const { theme, suffix } of [
     }
   });
 
-  test(`agent notes in the Simplified design: under a tab, one with no author, beside a sticky and a waiting tile, one with long markdown, ${theme}`, async () => {
+  test(`agent notes in the Simplified design: bubbles from their agents' faces, one cut to its line budget, one with no author, beside a sticky and a waiting tile, one with long markdown, ${theme}`, async () => {
     needsBaselines(`simplified-agent-notes${suffix}`);
     await shootSimplifiedNotes(theme, theme, `simplified-agent-notes${suffix}`);
   });

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
-import type { InternalNode, NodeChange } from '@xyflow/react';
+import type { InternalNode, Node, NodeChange } from '@xyflow/react';
 import { commandKey } from '../../keys';
 import { boundsOnBoard } from '../items/items';
 import { isZone, type BoardNode } from '../tiles';
@@ -22,6 +22,17 @@ interface SnappingOptions {
   grid: boolean;
   /** The grid's spacing, on the board. */
   gap: number;
+}
+
+/**
+ * Whether a drag of the nodes `dragged` snaps to `node`, drawn as `drawn`. Never to what moves with the drag (the dragged
+ * nodes, and what is in a dragged zone), to a zone drawn grown round an expanded tile, whose edges follow that tile, or
+ * to what isn't drawn: what is in a folded zone, which keeps its place there while only the chip shows.
+ */
+export function snapsTo(node: BoardNode, drawn: Node | undefined, dragged: ReadonlySet<string>): boolean {
+  if (dragged.has(node.id) || (node.parentId !== undefined && dragged.has(node.parentId))) return false;
+  if (drawn?.hidden === true) return false;
+  return drawn === undefined || !isZone(drawn) || drawn.data.grown !== true;
 }
 
 /**
@@ -77,13 +88,10 @@ export function useSnapping({ applyNodeChanges, nodesRef, getInternalNode, getZo
       if (box !== undefined && !free.current) {
         if (grid) shift = snapToGrid(box, gap);
         else {
-          // What is in view, but not what moves with the drag: the dragged nodes, what is in a dragged zone, and a zone
-          // drawn grown round an expanded tile, whose edges follow that tile.
+          // What is in view and drawn, but not what moves with the drag (`snapsTo`).
           const view = viewRect();
           const others = nodesRef.current.flatMap((node) => {
-            if (ids.has(node.id) || (node.parentId !== undefined && ids.has(node.parentId))) return [];
-            const drawn = getInternalNode(node.id);
-            if (drawn !== undefined && isZone(drawn) && drawn.data.grown === true) return [];
+            if (!snapsTo(node, getInternalNode(node.id), ids)) return [];
             const rect = rectAt(node.id);
             return rect === undefined || rect.width === 0 || !overlaps(rect, view) ? [] : [rect];
           });

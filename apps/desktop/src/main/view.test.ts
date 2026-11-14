@@ -27,9 +27,9 @@ function register(set: ViewState['set'], saved?: (key: string, value: unknown) =
 describe('the view state IPC', () => {
   it('tells every other window what was saved, once it is, not the one that saved it', async () => {
     const set = register(async () => {});
-    await set({ sender: electron.windows[0] }, 'crewLook', 'chips');
+    await set({ sender: electron.windows[0] }, 'connections', 'handoffs');
     expect(electron.windows[0]!.sent).toEqual([]);
-    expect(electron.windows[1]!.sent).toEqual([[VIEW_IPC.changed, { key: 'crewLook', value: 'chips' }]]);
+    expect(electron.windows[1]!.sent).toEqual([[VIEW_IPC.changed, { key: 'connections', value: 'handoffs' }]]);
   });
 
   it('tells the main process of each save too, once it is: a key press there reads the setting at once', async () => {
@@ -43,7 +43,7 @@ describe('the view state IPC', () => {
     const set = register(async () => {
       throw new Error('daemon down');
     });
-    await expect(set({ sender: electron.windows[0] }, 'crewLook', 'chips')).rejects.toThrow('daemon down');
+    await expect(set({ sender: electron.windows[0] }, 'connections', 'handoffs')).rejects.toThrow('daemon down');
     for (const window of electron.windows) expect(window.sent).toEqual([]);
   });
 });

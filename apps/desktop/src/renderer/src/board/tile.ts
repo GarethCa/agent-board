@@ -100,6 +100,8 @@ export interface TileActions {
   setMuted(sessionId: string, muted: boolean): void;
   /** Sets the agent's reasoning effort: typed at its prompt between turns, or kept for its next restart, as it can. */
   setEffort(sessionId: string, effort: Effort | null): void;
+  /** Gives the agent a role (a built-in one or any name), or none with null; only its role changes. */
+  setRole(sessionId: string, role: string | null): void;
   /**
    * Renames an agent's or shell's tile, or labels a shell's pane (a blank name takes a pane's label off). Rejects if
    * it could not (after saying why), so the field can stay as it was. Undoable on the board.
@@ -188,6 +190,7 @@ export const TileActionsContext = createContext<TileActions>({
   scheduleAgent: () => {},
   setMuted: () => {},
   setEffort: () => {},
+  setRole: () => {},
   // Outside the board (a popped-out window) there is no history to record in.
   rename: async (target, name) => void (await renameDirect(target, name)),
   openLink: () => {},

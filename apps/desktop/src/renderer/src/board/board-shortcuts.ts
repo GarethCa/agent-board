@@ -17,7 +17,6 @@ const SHORTCUTS: readonly (readonly [KeyId, BoardShortcut])[] = [
   ['edit.escape', { kind: 'escape' }],
   ['make.insert', { kind: 'insert' }],
   ['move.connections', { kind: 'connections' }],
-  ['move.crews', { kind: 'crews' }],
   ['make.note', { kind: 'note' }],
   ['make.steps', { kind: 'steps' }],
   ['make.memory', { kind: 'memory' }],
@@ -44,7 +43,6 @@ export type BoardShortcut =
   | { kind: 'tool'; tool: ArmedTool }
   | { kind: 'mode'; mode: PointerMode }
   | { kind: 'connections' }
-  | { kind: 'crews' }
   | { kind: 'insert' }
   | { kind: 'cheatSheet' }
   | { kind: 'arrangeBoard' };

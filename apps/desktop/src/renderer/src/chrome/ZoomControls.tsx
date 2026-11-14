@@ -32,6 +32,7 @@ export function ZoomControls({
   useMenuBarAction('zoomToFit', () => void fitView({ maxZoom: 1 }));
   useMenuBarAction('snapToGrid', onGrid, grid);
   useMenuBarAction('minimap', () => setMinimap(!minimap), minimap);
+  useMenuBarAction('tethers', () => view.onTethers(!view.tethers), view.tethers);
   return (
     <>
       {minimap && <MiniMap className="board-minimap" pannable zoomable nodeColor={nodeColor} nodeStrokeColor="var(--raised-edge)" ariaLabel="Minimap" />}

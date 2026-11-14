@@ -537,7 +537,7 @@ export function createCrewLoop(db: DatabaseSync, options: CrewLoopOptions): Crew
       };
       const reached = (me: ReturnType<OrchestratorAccess['caller']>, crewId: string): CrewRow => {
         const crew = crewNamed(crewId);
-        if (!reaches(me, crew)) throw new RpcMethodError(BOARD_ERROR.outOfScope, `crew:${crew.id} is outside your scope (${access.scopeText(me)})`);
+        if (!reaches(me, crew)) throw new RpcMethodError(BOARD_ERROR.outOfScope, `crew:${crew.id} was built by one the user started by hand: agents never act on the user's own agents`);
         return crew;
       };
       const logged = (crew: CrewRow) => ({ id: `crew:${crew.id}`, name: crew.prefab });

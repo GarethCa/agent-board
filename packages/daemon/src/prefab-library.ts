@@ -7,10 +7,7 @@ import { BUILT_IN_PREFABS, parsePrefab, prefabFile } from './crew-prefabs.ts';
 import type { ActivityEntry, OrchestratorAccess } from './orchestrators.ts';
 import { invalidParams, optionalBooleanParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
 import {
-  BOARD_ERROR,
-  MAX_CREW_DEPTH,
   MAX_REVIEW_CAP,
-  ORCHESTRATE_SETTING,
   REVIEWER_ROLES,
   type CrewPrefab,
   type DaemonMethods,
@@ -19,9 +16,8 @@ import {
   type OrchestratorSpawned,
   type PrefabMember,
   type PrefabStarted,
-  type Zone,
 } from './protocol.ts';
-import { RpcMethodError, type RpcHandlers } from './rpc.ts';
+import type { RpcHandlers } from './rpc.ts';
 import { shellQuote } from './shell-words.ts';
 
 type PrefabMethods = Pick<DaemonMethods, 'orchestrator.prefabs' | 'orchestrator.savePrefab' | 'orchestrator.removePrefab' | 'orchestrator.startPrefab'>;
@@ -36,9 +32,6 @@ export interface PrefabLibraryOptions<Context> {
   access: OrchestratorAccess;
   /** Starts an agent as `orchestrator.spawn` does, for the caller on `connection`. */
   spawn(params: { token?: string } & OrchestratorSpawnParams, connection: Context): Promise<OrchestratorSpawned>;
-  /** How deep in a crew the agent `sessionId` is: 0 for one the user started. */
-  depth(sessionId: string): number;
-  zones(): Zone[];
   /** Starts the crew's loop around the agent `builder`, if the prefab has reviewers at the hand-off: its id, else null. */
   startCrew(prefab: CrewPrefab, builder: string, startedBy: string | null, prompt: string): string | null;
 }
@@ -122,38 +115,13 @@ export function createPrefabLibrary(db: DatabaseSync): PrefabLibrary {
     return read;
   };
 
-  /** Throws `outOfScope` unless `me` may change the library, which reaches every board. */
-  const mayChange = (access: OrchestratorAccess, me: Parameters<OrchestratorAccess['scopeText']>[0]) => {
-    if (me.orchestrate === 'board') return;
-    throw new RpcMethodError(
-      BOARD_ERROR.outOfScope,
-      `the crew prefab library reaches every board, so it is for the user or an orchestrator of the whole board; your scope is ${access.scopeText(me)}`,
-    );
-  };
-
   return {
-    handlers<Context extends BoardConnection>({ access, spawn, depth, zones, startCrew }: PrefabLibraryOptions<Context>): RpcHandlers<PrefabMethods, Context> {
+    handlers<Context extends BoardConnection>({ access, spawn, startCrew }: PrefabLibraryOptions<Context>): RpcHandlers<PrefabMethods, Context> {
       const logged = (name: string) => ({ id: `prefab:${name}`, name });
-      /** The prefab `name`, once `me` may start it in `zoneId` (its own zone without), else why not. */
-      const startable = (me: Parameters<OrchestratorAccess['scopeText']>[0], name: string, zoneId: string | undefined): LibraryPrefab => {
+      /** The prefab `name`, else why not. */
+      const startable = (name: string): LibraryPrefab => {
         const prefab = get(name);
         if (prefab === undefined) throw invalidParams(`the library has no crew prefab named ${name.trim()}: agent-board prefab ls lists them`);
-        const ledCrew = prefab.members.some((member) => member.starts === 'lead');
-        // The lead is a level of the crew, and its members one more: both must fit under the deepest a crew goes.
-        const levels = ledCrew ? 2 : 1;
-        if (me.agent !== null && depth(me.agent.sessionId) + levels > MAX_CREW_DEPTH - 1) {
-          throw new RpcMethodError(
-            BOARD_ERROR.outOfScope,
-            `${prefab.name} needs ${levels} free ${levels === 1 ? 'level' : 'levels'} of crew depth below you, and a crew goes ${MAX_CREW_DEPTH} deep: ask the agent that started you to start it`,
-          );
-        }
-        // A lead in a zone that doesn't let its agents orchestrate could start none of its crew: said now, not found later.
-        const zone = zones().find((each) => each.id === (zoneId ?? me.zoneId));
-        if (ledCrew && zone !== undefined && !zone.agentsOrchestrate) {
-          throw invalidParams(
-            `${zone.name} doesn't let its agents orchestrate, so ${prefab.name}'s lead could start none of its crew: turn on ${ORCHESTRATE_SETTING}, or start it in another zone`,
-          );
-        }
         return prefab;
       };
       return {
@@ -173,7 +141,6 @@ export function createPrefabLibrary(db: DatabaseSync): PrefabLibrary {
             const prefab = parsePrefab(stringParam(fields, 'text'));
             entry.detail = prefab.name;
             entry.on = logged(prefab.name);
-            mayChange(access, me);
             if (builtInNamed(prefab.name) !== undefined) {
               throw invalidParams(`${prefab.name} is a built-in prefab: save your copy under a name of its own`);
             }
@@ -192,7 +159,6 @@ export function createPrefabLibrary(db: DatabaseSync): PrefabLibrary {
           const name = typeof fields.name === 'string' ? fields.name.trim() : '';
           const entry: ActivityEntry = { detail: name, on: logged(name) };
           return access.logged(me, 'remove-prefab', entry, () => {
-            mayChange(access, me);
             stringParam(fields, 'name');
             if (builtInNamed(name) !== undefined) throw invalidParams(`${name} is a built-in prefab: it can't be removed`);
             if (remove.run(name).changes === 0) throw invalidParams(`the library has no crew prefab named ${name}`);
@@ -205,7 +171,7 @@ export function createPrefabLibrary(db: DatabaseSync): PrefabLibrary {
           const zoneId = optionalStringParam(fields, 'zoneId');
           let prefab: LibraryPrefab;
           try {
-            prefab = startable(me, stringParam(fields, 'name'), zoneId);
+            prefab = startable(stringParam(fields, 'name'));
             // For this crew alone: the prefab keeps its own.
             const roundLimit = fields.roundLimit;
             if (roundLimit !== undefined) {

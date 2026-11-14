@@ -5,6 +5,7 @@ import type { Rect } from '../geometry';
 import type { ExpandedTiles, OverlapsAllowed } from './expanded';
 import { boundsOnBoard } from './items/items';
 import { clearOf, PERCH_ROOM, SPACING_GAPS, TILE_GAP, ZONE_PADDING } from '@agent-board/daemon/board-layout';
+import { drawnZoneSize } from '@agent-board/daemon/protocol';
 import { CREW_PADDING } from './crews';
 import { tileSizeOf, type TileSizes } from './tile-size';
 import { isSessionTile, isZone, type BoardNode } from './tiles';
@@ -391,12 +392,16 @@ export function displaced(
   if (expanded.length === 0) return nodes;
   const open = new Map(expanded.map((entry) => [entry.id, entry]));
   const byId = new Map(nodes.map((node) => [node.id, node]));
-  const openNodes = nodes.filter((node) => open.has(node.id));
+  // A folded zone is drawn as its chip, with nothing of what is in it: an expanded tile in it is out of sight and moves
+  // nothing, and the zone takes only its chip's room.
+  const folded = new Set(nodes.filter((node) => isZone(node) && node.data.zone.folded).map((node) => node.id));
+  const openNodes = nodes.filter((node) => open.has(node.id) && (node.parentId === undefined || !folded.has(node.parentId)));
   if (openNodes.length === 0) return nodes;
   const partner = partnerOf(overlaps);
   const changing = (node: BoardNode) => node.dragging === true || node.resizing === true;
   const movable = (node: BoardNode) => !open.has(node.id) && !changing(node);
-  const sizeOf = (node: BoardNode) => ({ width: node.width ?? node.measured?.width ?? 0, height: node.height ?? node.measured?.height ?? 0 });
+  const sizeOf = (node: BoardNode) =>
+    isZone(node) && folded.has(node.id) ? drawnZoneSize(node.data.zone) : { width: node.width ?? node.measured?.width ?? 0, height: node.height ?? node.measured?.height ?? 0 };
   const positions = new Map<string, { x: number; y: number }>();
   const sizes = new Map<string, { width: number; height: number }>();
   // Where each node was drawn as the change under way began, unless the change has moved it since.

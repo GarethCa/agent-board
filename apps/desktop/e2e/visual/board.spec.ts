@@ -7,7 +7,7 @@ import { agents, closeAgent, launch, listFinishedTurns, screen, sessionWindow, s
 import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone } from '../launch.ts';
 import { RENDER_ARGS, RENDER_ENV, VIEWPORT, ignorePointer, pinFonts, pinNow, pinRandomText, settle } from '../render.ts';
 import { scratch } from '../scratch.ts';
-import { untilStill } from '../board-helpers.ts';
+import { showTethers, untilStill } from '../board-helpers.ts';
 import { SHOT, needsBaselines, viewSettled, nodesStill, PACK_SHOTS, pinChatTimes } from './shared.ts';
 
 test.use({ viewport: null });
@@ -450,6 +450,9 @@ test("an agent note's tether goes round the tile between the note and its agent,
       },
       { zoneId: zone!.id, fixerId: fixer!.sessionId, fixerName: fixer!.name, between: cache!.sessionId },
     );
+    // Tethers are drawn only while View › Show Tethers is on: this shot is the board with it on.
+    await expect(window.getByTestId('agent-note-tether')).toHaveCount(0);
+    await showTethers(window);
     const tether = window.getByTestId('agent-note-tether');
     await expect(tether).toHaveCount(1);
     await expect(tether).toHaveAttribute('data-routed', 'true');
@@ -731,7 +734,11 @@ test('an orchestrator expanded in place, its crew pushed aside in their frame, w
     // Waiting, not just done working: an agent still thinking, or idle before it asks, redraws its tile.
     for (const at of [0, 1, 2]) await expect(tile(window).nth(at)).toHaveAttribute('data-state', 'waiting', { timeout: 2 * TURN_MS });
     await expect(window.getByTestId('crew-frame')).toHaveCount(1);
-    await tileAction(window.locator('[data-testid="agent-tile"][data-orchestrator]'), 'Expand in place');
+    // Selected, so its crew's frame shows: at rest it waits for the orchestrator to be focused.
+    const orchestrator = window.locator('[data-testid="agent-tile"][data-orchestrator]');
+    await orchestrator.click({ position: { x: 4, y: 4 } });
+    await expect(window.getByTestId('crew-frame')).toHaveAttribute('data-focused', 'true');
+    await tileAction(orchestrator, 'Expand in place');
     await expect(window.getByTestId('expanded-tile')).toHaveCount(1);
     // Its pane in view marks the orchestrator seen, but only while the app has the focus, which a background run may
     // not: mark it seen as its pane would. Its crew's finished turns are its own to take, so nothing needs the user.
@@ -749,6 +756,7 @@ test('an orchestrator expanded in place, its crew pushed aside in their frame, w
     await pinRandomText(window);
     const restorePointer = await ignorePointer(window);
     await settle(window);
+    await expect(window.getByTestId('crew-frame')).toHaveAttribute('data-focused', 'true');
     await expect.soft(window.locator('.board')).toHaveScreenshot('expanded-crew.png', { ...SHOT, mask: [screen(window)] });
     await restorePointer();
   } finally {

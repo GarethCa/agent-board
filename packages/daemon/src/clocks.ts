@@ -27,6 +27,7 @@ import {
   type Zone,
   BOARD_ERROR,
   type ClockStatus,
+  handStartedReason,
 } from './protocol.ts';
 import { boardCaller, isOwnLiveSession, type BoardCallerSources, type BoardConnection } from './board.ts';
 import type { OrchestratorAccess } from './orchestrators.ts';
@@ -96,7 +97,7 @@ export interface ClockHost {
   /** The scheduler, for the agents' own schedules (`Agent.schedule`) and keeping the daemon up. */
   schedules: Pick<ScheduleHost, 'forAgent' | 'runOf' | 'hasEnabled'>;
   handlers<Context>(): RpcHandlers<ClockMethods, Context>;
-  /** The orchestrator's clock methods: `schedule add` and `schedule remove`, in its scope, logged. */
+  /** The orchestrator's clock methods: `schedule add` and `schedule remove`, logged. */
   orchestratorHandlers<Context extends BoardConnection>(access: OrchestratorAccess, zones: () => Zone[]): RpcHandlers<OrchestratorClockMethods, Context>;
   /** What any live agent may do to its own clock (`clock.self`, `clock.addSelf`), from its own session. */
   agentHandlers<Context extends BoardConnection>(sources: BoardCallerSources): RpcHandlers<AgentClockMethods, Context>;
@@ -610,7 +611,7 @@ export function createClockHost(options: ClockHostOptions): ClockHost {
       const reachable = (me: Parameters<OrchestratorAccess['reachesAgent']>[0], sessionId: string) => {
         const agent = agents.get(sessionId);
         if (agent === undefined) throw invalidParams(`no agent ${sessionId}`);
-        if (!access.reachesAgent(me, agent)) throw outOfScope(`${agent.name} is outside your scope (${access.scopeText(me)})`);
+        if (!access.reachesAgent(me, agent)) throw outOfScope(handStartedReason(agent.name));
         return agent;
       };
       return {

@@ -189,7 +189,7 @@ describe('a crew’s card', () => {
     expect(dataOf(again).crew).toMatchObject({ round: 2, roundLimit: 2, stopped: null });
   });
 
-  it('is listed for an agent only in its scope: its zone, a zone it orchestrates, or its own crew', async () => {
+  it('is listed for an agent only in its scope: its zone, or its own crew', async () => {
     const setup = await crewDaemon();
     const { started, made } = await startQuiet(setup);
     const builder = await asAgent(setup, started.started[0]!.sessionId);
@@ -210,12 +210,6 @@ describe('a crew’s card', () => {
     await setup.client.call('agent.delete', { sessionId: passing.sessionId, force: true });
     expect(await sees(left, made)).toBe(false);
     expect((await left.call('item.list')).some((item) => item.kind === 'crew')).toBe(false);
-
-    // An orchestrator whose scope reaches the zone lists it too.
-    await setup.client.call('agent.setOrchestrate', { sessionId: stranger.sessionId, scope: 'board' });
-    expect(await sees(strange, made)).toBe(true);
-    await setup.client.call('agent.setOrchestrate', { sessionId: stranger.sessionId, scope: null });
-    expect(await sees(strange, made)).toBe(false);
 
     // Moved to the other zone, it is that zone's agents' to list, and still its own crew's.
     await setup.client.call('item.update', { id: made.id, zoneId: other.id, x: 4100, y: 600 });

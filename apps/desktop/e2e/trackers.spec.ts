@@ -193,6 +193,11 @@ test('a zone takes its issues from a GitHub repo through gh, an agent starts fro
     await expect(pr).toHaveAttribute('data-state', 'open');
     await expect(pr).toHaveAttribute('data-checks', 'failing');
 
+    // Its turn ends with a question: from here its footer holds its waiting mark and its Open button, seen or not, so
+    // the PR chips below are counted against them. Under load the turn can end late. (That the fold measures again when
+    // only the mark changes is a unit test, of footerFoldKey: here the PR chips change too.)
+    await expect.poll(async () => (await agents(window))[0]!.state).toBe('waiting');
+
     // Clicking it opens the PR in a PR tab of the agent's window (pr-tab.spec.ts), whose GitHub button opens it in the
     // browser (stubbed here). The window stays open over the tile: what follows reads the tile's chips, not clicks them.
     await app.evaluate(({ shell }) => {
@@ -207,15 +212,18 @@ test('a zone takes its issues from a GitHub repo through gh, an agent starts fro
       .poll(() => app.evaluate(() => (globalThis as { opened?: string[] }).opened))
       .toEqual(['https://github.com/acme/app/pull/41']);
 
-    // The footer is one line: the first PR fits on the tile with its issue; the others fold into its +N.
+    // The footer is one line. One PR fits beside its issue, its waiting mark and its Open button; three don't, so all
+    // three fold into its +N (the issue, the mark and the button never fold).
+    await expect(agentTile.getByTestId('tile-pr').filter({ visible: true })).toHaveText(['#41']);
     github.setState({
       ...FAKE_GITHUB_STATE,
       pullRequests: [pullRequest(44, { isDraft: true }), pullRequest(43, { state: 'MERGED' }), pullRequest(41)],
     });
     await expect(agentTile.getByTestId('tile-pr')).toHaveText(['#44', '#43']);
-    await expect(agentTile.getByTestId('tile-folded')).toHaveText('+2');
+    await expect(agentTile.getByTestId('tile-pr').filter({ visible: true })).toHaveCount(0);
+    await expect(agentTile.getByTestId('tile-folded')).toHaveText('+3');
     // It names them in its label, in order (its list, a click away, is in tile-chip-overflow.spec.ts: the PR tab stays open over this tile).
-    await expect(agentTile.getByTestId('tile-folded')).toHaveAttribute('aria-label', /^2 more: #43 .*; #41 /s);
+    await expect(agentTile.getByTestId('tile-folded')).toHaveAttribute('aria-label', /^3 more: #43 .*; #44 .*; #41 /s);
 
     // The agent commits and pushes onto another branch's PR, as a fix agent cut from it does: its tile shows
     // that PR, marked as pushed to, open and once merged. It is only shown: the agent has no PR of its own to merge.

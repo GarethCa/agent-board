@@ -96,6 +96,7 @@ import { shownWindow } from '../windows/session-windows';
 import { BoardBackdrop } from './BoardBackdrop';
 import { oneAtATime } from './one-at-a-time';
 import { installWheelLatch } from './wheel-latch';
+import { installWholeLines } from './items/whole-line';
 import { CONNECTOR_LABEL_PLACES, ConnectorActionsContext, type ConnectorActions } from './connectors/actions';
 import { ConnectorEdge, ConnectorMarkers } from './connectors/ConnectorEdge';
 import { withConnectorHandles } from './connectors/ConnectorHandles';
@@ -164,10 +165,10 @@ import { tidySize, VIEW_FOLLOW_DELAY_MS } from './expanded';
 import { tileOpenAction } from './click-opens';
 import { focusTerminalIn, pulseTile } from './tile-attention';
 import { crewFrames, crewMoves, frameableTiles, landingRects, withCrewFollowing } from './crews';
-import { restoreViewSettings, setCrewLook, setViewSetting, useViewSettings } from './view-settings';
-import { ConnectionCountsContext, edgeCounts, nextConnectionsView, shownEdges } from './connections-view';
+import { restoreViewSettings, setViewSetting, useViewSettings } from './view-settings';
+import { ConnectionCountsContext, edgeCounts, nextConnectionsView, revealedBy, shownEdges, typingInTile, withTethers } from './connections-view';
 import { railOf, withRailSelected } from './rails';
-import { CrewFramesContext, CrewViewContext, nextCrewLook, type CrewView } from './crew-view';
+import { CrewFramesContext, CrewViewContext, selectCrews, type CrewView } from './crew-view';
 import { AgentNoteLookContext, type AgentNoteLook } from './items/agent-note-look';
 import { useSimplified } from '../design';
 import { agentNoteTethers, isTether, TETHER_EDGE_TYPE } from './items/agent-note-tethers';
@@ -462,13 +463,10 @@ function BoardView() {
   // Keeps the library followed, and the board's right-click menu current with it; a Classic zone's ⋯ follows it itself.
   usePrefabs();
   const { windows, windowsRestored, windowsRef, showWindow, closeWindow, popOut, popOutTabWindow, openShell, openAgent, poppedOut, onShellChange } = useBoardWindows();
-  /** The view settings every window shares: what a double-click opens, how crews and agent notes look, which connections are drawn. */
-  const { clickOpens, crewLook, connections, agentNoteLook: savedNoteLook } = useViewSettings();
+  /** The view settings every window shares: what a double-click opens, how agent notes look, which connections and tethers are drawn. */
+  const { clickOpens, connections, tethers, agentNoteLook: savedNoteLook } = useViewSettings();
   // The Simplified design has one look for a note an agent writes, a card: the setting is Classic's alone.
   const agentNoteLook: AgentNoteLook = useSimplified() ? 'document' : savedNoteLook;
-  const crewLookRef = useRef(crewLook);
-  crewLookRef.current = crewLook;
-  const cycleCrewLook = useCallback(() => setCrewLook(nextCrewLook(crewLookRef.current)), []);
   const connectionsRef = useRef(connections);
   connectionsRef.current = connections;
   const cycleConnections = useCallback(() => setViewSetting('connections', nextConnectionsView(connectionsRef.current)), []);
@@ -477,31 +475,58 @@ function BoardView() {
   const hoverEnds = useRef<ReturnType<typeof setTimeout>>(undefined);
   // Always followed, but kept in state only while some are hidden: the board redraws for it, and not at all with all drawn.
   const hoveredNow = useRef<string>(undefined);
+  /** The tile a field with the keyboard is in, as one clicked into to type: hovering it shows none of its connections. */
+  const [typingTile, setTypingTile] = useState<string>();
+  // Followed like the hover, in state only while some are hidden: on each focus change, and read again on each hover, as
+  // a field that goes with its tile (collapsed, closed) may take the keyboard away without saying so.
+  const typingNow = useRef<string>(undefined);
+  const followTyping = useCallback((target: EventTarget | null) => {
+    typingNow.current = typingInTile(target);
+    if (connectionsRef.current !== 'all') setTypingTile(typingNow.current);
+  }, []);
   const hoverTile = useCallback((id: string | undefined) => {
     clearTimeout(hoverEnds.current);
     const set = (to: string | undefined) => {
       hoveredNow.current = to;
       if (connectionsRef.current !== 'all') setHoveredTile(to);
     };
+    followTyping(document.activeElement);
     if (id !== undefined) set(id);
     else hoverEnds.current = setTimeout(() => set(undefined), HOVER_GRACE_MS);
-  }, []);
+  }, [followTyping]);
   useEffect(() => setHoveredTile(connections === 'all' ? undefined : hoveredNow.current), [connections]);
   useEffect(() => () => clearTimeout(hoverEnds.current), []);
+  useEffect(() => {
+    const focusIn = (event: FocusEvent) => followTyping(event.target);
+    const focusOut = (event: FocusEvent) => followTyping(event.relatedTarget);
+    document.addEventListener('focusin', focusIn);
+    document.addEventListener('focusout', focusOut);
+    return () => {
+      document.removeEventListener('focusin', focusIn);
+      document.removeEventListener('focusout', focusOut);
+    };
+  }, [followTyping]);
+  useEffect(() => setTypingTile(connections === 'all' ? undefined : typingNow.current), [connections]);
   // Who is in each crew frame, where the tiles are saved: for the tiles, and for an expanded tile to push each crew
   // aside as one; kept while the same so a frame moving with its crew redraws only the zones.
-  const savedFrames = useMemo(() => (crewLook === 'frames' ? crewFrames(frameableTiles(nodes)) : []), [crewLook, nodes]);
+  const savedFrames = useMemo(() => crewFrames(frameableTiles(nodes)), [nodes]);
   const crewsKey = savedFrames.map((frame) => frame.members.join(' ')).join('\n');
   const framedKey = savedFrames.flatMap((frame) => frame.members).join(' ');
-  const crewView = useMemo<CrewView>(() => ({ look: crewLook, framed: new Set(framedKey.split(' ').filter(Boolean)) }), [crewLook, framedKey]);
+  const crewView = useMemo<CrewView>(() => ({ framed: new Set(framedKey.split(' ').filter(Boolean)) }), [framedKey]);
+  // The selected orchestrators keep their crews focused (framed, lit, the rest dimmed), dragged or not.
+  const selectedOrchestrators = nodes
+    .flatMap((node) => (node.selected === true && node.type === 'tile' && node.data.crew !== undefined && node.data.agent !== undefined ? [node.data.agent.sessionId] : []))
+    .join(' ');
+  useEffect(() => selectCrews(selectedOrchestrators.split(' ').filter(Boolean)), [selectedOrchestrators]);
+  useEffect(() => () => selectCrews([]), []);
   const crewBlocks = useMemo(
     () => (crewsKey === '' ? [] : crewsKey.split('\n').map((members) => members.split(' ').map((id) => tileNodeId('agent', id)))),
     [crewsKey],
   );
-  /** React Flow's node changes applied, with an orchestrator's crew dragged along with it under crew frames. */
+  /** React Flow's node changes applied, with an orchestrator's crew dragged along with it. */
   const applyNodeChanges = useCallback(
     (changes: NodeChange<BoardNode>[]) => {
-      setNodes((current) => applyFlowNodeChanges(crewLookRef.current === 'frames' ? withCrewFollowing(changes, current) : changes, current));
+      setNodes((current) => applyFlowNodeChanges(withCrewFollowing(changes, current), current));
     },
     [setNodes],
   );
@@ -671,8 +696,8 @@ function BoardView() {
   } = useExpandedTiles({ nodes, loaded, agents, shells, externals, windows, windowsRestored, relayout, crews: crewBlocks });
   /** The crew frames as drawn, for the zones: round where their tiles are drawn, pushed aside by an expanded tile or not. */
   const shownFrames = useMemo(
-    () => (crewLook === 'frames' ? crewFrames(frameableTiles(nodes), shown.filter(isSessionTile)) : []),
-    [crewLook, nodes, shown],
+    () => crewFrames(frameableTiles(nodes), shown.filter(isSessionTile)),
+    [nodes, shown],
   );
   // Each project's heading under the Simplified design: how many of its agents need you, and the rest by status. A
   // folded zone's chip reads it in both designs, with the external sessions it hides counted too.
@@ -740,6 +765,8 @@ function BoardView() {
 
   // A wheel gesture stays with the surface it started on, so a pan keeps its momentum across a terminal or a note.
   useEffect(() => (container.current === null ? undefined : installWheelLatch(container.current, ZOOM_KEY)), []);
+  // A line cut short on a memory, a queue or a steps card shows whole, laid over it, while it is pointed at or focused.
+  useEffect(() => (container.current === null ? undefined : installWholeLines(container.current)), []);
 
   // A notification's click opens its agent's session window, or brings it forward if it is popped out.
   useEffect(() => window.agentBoard.agents.onOpenRequested(setOpenRequest), []);
@@ -978,6 +1005,8 @@ function BoardView() {
           const when = applies === 'after-turn' ? 'once it is back at its prompt' : applies === 'restart' ? 'when it restarts' : undefined;
           if (when !== undefined) toasts.show({ tone: 'info', message: `${agent.name} takes ${effort === null ? 'its default' : EFFORT_LABELS[effort]} reasoning ${when}.` });
         }, report("change the agent's reasoning")),
+      setRole: (sessionId, role) =>
+        void window.agentBoard.agents.setRole(sessionId, role).then(agentHeard, report("change the agent's role")),
       openLink: (url) => void window.agentBoard.trackers.openLink(url).catch(report('open the link')),
       // An ended one is forgotten at once; one still running is only taken off the board, which it is told first.
       dismissExternal(id) {
@@ -1241,10 +1270,10 @@ function BoardView() {
     const onto = droppedOnto(shown, node.id, expandedRef.current);
     // Put down by the user: in a zone with a layout rule, it leaves the rule, placed by hand.
     const move = { ...placeOnBoard(at, compactSizeOf(node), zoneLayouts()), toFront: true, byHand: true };
-    // Its crew comes along under crew frames, each where it was beside it, undone with it as one step.
+    // Its crew comes along, each where it was beside it, undone with it as one step.
     // Measured from where it is drawn, as its crew is.
     const drawn = shown.find((known): known is TileNodeType => known.id === node.id && isSessionTile(known)) ?? node;
-    const crew = crewLookRef.current === 'frames' ? crewMoves(shown, drawn, move, landingRects(shown, move.zoneId, drawn)) : [];
+    const crew = crewMoves(shown, drawn, move, landingRects(shown, move.zoneId, drawn));
     const step = crew.length === 0 ? undefined : `crew:${node.id}:${Date.now()}`;
     moveTile(node.id, node.data, move, step);
     if (crew.length > 0) {
@@ -2419,7 +2448,6 @@ function BoardView() {
     arrangeBoard,
     typeInShape,
     cycleConnections,
-    cycleCrewLook,
     openQuickInsert,
     loaded,
     tool,
@@ -2814,20 +2842,6 @@ function BoardView() {
         if (prefab !== undefined) setCrewFlow({ kind: 'prompt', prefab, zone });
       },
       crewLibrary: (zone: Zone) => setCrewFlow({ kind: 'library', zone }),
-      setAgentsOrchestrate(zone, agentsOrchestrate) {
-        window.agentBoard.zones.configure(zone.id, { agentsOrchestrate }).then(
-          (saved) => {
-            setNodes((current) => withZone(current, saved));
-            toasts.show({
-              tone: 'success',
-              message: agentsOrchestrate
-                ? `Agents you start in ${saved.name} may orchestrate there`
-                : `No agent in ${saved.name} orchestrates any more`,
-            });
-          },
-          report('change whether the zone’s agents may orchestrate'),
-        );
-      },
     }),
     [setNodes, reloadExternals, toasts, report, tidyZone, deleteZones, history, makeRoomToUnfold, zoneTilePlaces],
   );
@@ -3132,18 +3146,17 @@ function BoardView() {
       ...flowEdges(flow.edges, nodeIds, flow.selected, { live: flow.live, names: agentNames, ready, rectOf: (sessionId) => rectOf(tileNodeId('agent', sessionId)) }),
     ];
   }, [connectors, nodes, selectedConnectors, agents, flow.edges, flow.selected, flow.live, rectOf, clockStatuses]);
-  // With some hidden, a tile that is selected or hovered shows its own; the rest are told how many they have.
-  const selectedKey = connections === 'all' ? '' : nodes.filter((node) => node.selected === true).map((node) => node.id).join('\n');
+  // With some hidden, the hovered tile shows its own, unless it is being typed in; the rest are told how many.
   // What a shelved zone folded into its stacks is hidden, and so are the lines to it.
   const hiddenKey = drawn.flatMap((node) => (node.hidden === true ? [node.id] : [])).join('\n');
   const edges = useMemo(() => {
     const hidden = new Set(hiddenKey.split('\n').filter(Boolean));
-    const shown = hidden.size === 0 ? allEdges : allEdges.filter((edge) => !hidden.has(edge.source) && !hidden.has(edge.target));
+    // The tethers wait for View › Show Tethers: each of their ends says whose it is without them.
+    const tethered = withTethers(allEdges, tethers);
+    const shown = hidden.size === 0 ? tethered : tethered.filter((edge) => !hidden.has(edge.source) && !hidden.has(edge.target));
     if (connections === 'all') return shown;
-    const revealed = new Set(selectedKey.split('\n').filter(Boolean));
-    if (hoveredTile !== undefined) revealed.add(hoveredTile);
-    return shownEdges(shown, connections, revealed);
-  }, [allEdges, connections, selectedKey, hoveredTile, hiddenKey]);
+    return shownEdges(shown, connections, revealedBy(hoveredTile, typingTile));
+  }, [allEdges, tethers, connections, hoveredTile, typingTile, hiddenKey]);
   /** In a capture window, what it draws: its zone and what is in it, and the edges between those (capture-mode.ts). */
   const captured = useMemo(() => {
     if (CAPTURE_FRAME === undefined) return undefined;

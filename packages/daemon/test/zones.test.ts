@@ -225,17 +225,17 @@ describe('zones over the socket', () => {
     const client = await connectTestClient(await startTestDaemon());
     const zone = await client.call('zone.addUnbound', { name: 'Ideas', ...at });
     await client.call('zone.setLook', { id: zone.id, color: '#12b886', fillOpacity: 12 });
-    await client.call('zone.configure', { id: zone.id, boardMcp: false, agentsOrchestrate: false, codexBypassHookTrust: false, gateCommand: 'make check', spacing: 'compact', layoutMode: 'shelves' });
+    await client.call('zone.configure', { id: zone.id, boardMcp: false, codexBypassHookTrust: false, gateCommand: 'make check', spacing: 'compact', layoutMode: 'shelves' });
     const full = await client.call('zone.setDefaultRepo', { id: zone.id, path: tempRepo() });
     await client.call('zone.dissolve', { id: zone.id });
     expect(await client.call('zone.list')).toEqual([]);
 
-    const { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, tracker, defaultRepo, spacing, layoutMode } = full;
-    const restored = await client.call('zone.restore', { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, tracker, defaultRepo, spacing, layoutMode });
+    const { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, gateCommand, tracker, defaultRepo, spacing, layoutMode } = full;
+    const restored = await client.call('zone.restore', { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, gateCommand, tracker, defaultRepo, spacing, layoutMode });
 
     expect(restored).toEqual({ ...full, createdAt: restored.createdAt });
     expect(await client.call('zone.list')).toEqual([restored]);
-    await expect(client.call('zone.restore', { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, tracker, defaultRepo })).rejects.toMatchObject({
+    await expect(client.call('zone.restore', { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, gateCommand, tracker, defaultRepo })).rejects.toMatchObject({
       code: RPC_ERROR.invalidParams,
     });
   });
@@ -260,11 +260,11 @@ describe('zones over the socket', () => {
   it('restores a group without a default repo whose folder has gone, rather than failing', async () => {
     const client = await connectTestClient(await startTestDaemon());
     const zone = await client.call('zone.addUnbound', { name: 'Ideas', ...at });
-    const { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, tracker } = zone;
+    const { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, gateCommand, tracker } = zone;
     await client.call('zone.dissolve', { id });
 
     const restored = await client.call('zone.restore', {
-      id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, tracker,
+      id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, gateCommand, tracker,
       defaultRepo: join(tempPlainFolder(), 'gone'),
     });
 

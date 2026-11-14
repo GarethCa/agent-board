@@ -122,8 +122,7 @@ const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 async function leadIn(repo: string) {
   const ctx = await setup(tempDataDir(), 'orchestrate');
   const zone = await ctx.client.call('zone.add', { path: repo, ...at });
-  await ctx.client.call('zone.configure', { id: zone.id, agentsOrchestrate: true });
-  const agent = await ctx.client.call('agent.spawn', { zoneId: zone.id, role: 'orchestrator', orchestrate: 'zone', checkout: 'main', noTemplate: true, prompt: 'Print your board identity', ...SIZE });
+  const agent = await ctx.client.call('agent.spawn', { zoneId: zone.id, role: 'orchestrator', checkout: 'main', noTemplate: true, prompt: 'Print your board identity', ...SIZE });
   await ctx.client.call('session.attach', { sessionId: agent.sessionId });
   await ctx.recorder.waitForText(agent.sessionId, ':end\r\n');
   const token = /identity:(.*):end\r\n/.exec(ctx.recorder.screenText(agent.sessionId))![1]!;

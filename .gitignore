@@ -8,3 +8,4 @@ test-results/
 test-results-visual/
 playwright-report/
 *.tsbuildinfo
+dist-linux/

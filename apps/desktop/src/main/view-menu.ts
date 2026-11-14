@@ -33,7 +33,7 @@ export function viewMenu(packaged: boolean, technical: TechnicalItem, keys = men
       { type: 'separator' },
       { label: 'Tool', submenu: [keys.key('Select', 'move.select'), keys.key('Box Select', 'move.box'), keys.key('Hand', 'move.hand')] },
       keys.key('Cycle Connections', 'move.connections'),
-      keys.key('Cycle Crews', 'move.crews'),
+      keys.action('Show Tethers', 'tethers', true),
       keys.action('Snap to Grid', 'snapToGrid', true),
       keys.action('Show Minimap', 'minimap', true),
       { type: 'separator' },

@@ -18,18 +18,25 @@ const watchFocus = (notify: () => void) => {
 export const useWindowFocused = () => useSyncExternalStore(watchFocus, () => document.hasFocus());
 
 /**
- * Makes an item tall enough for its text, so what is written is never cut off. It only grows: an item the user made
- * taller keeps its height. `fits` measures the height its text needs, `height` tall, or 0 if it can't; `deps` are what
- * the text's wrapping depends on. Not while `paused`, as during a resize drag, which is the user's to size (its end
- * checks the fit).
+ * Makes an item tall enough for its text, so what is written is never cut off. It only grows, unless it `shrinks`: an
+ * item the user made taller keeps its height. `fits` measures the height its text needs, `height` tall, or 0 if it
+ * can't; `deps` are what the text's wrapping depends on. Not while `paused`, as during a resize drag, which is the
+ * user's to size (its end checks the fit). One that `shrinks` is made as tall as its text needs, shorter too.
  */
-export function useGrowToFit(fits: (height: number) => number, height: number, paused: boolean, grow: (height: number) => void, deps: unknown[]) {
+export function useGrowToFit(
+  fits: (height: number) => number,
+  height: number,
+  paused: boolean,
+  grow: (height: number) => void,
+  deps: unknown[],
+  shrinks = false,
+) {
   useLayoutEffect(() => {
     if (paused) return;
     const needs = fits(height);
     // A pixel of slack: the two heights it is measured from are rounded.
-    if (needs > height + 1) grow(needs);
-  }, [height, paused, ...deps]);
+    if (needs > height + 1 || (shrinks && needs > 0 && needs < height - 1)) grow(needs);
+  }, [height, paused, shrinks, ...deps]);
 }
 
 /**

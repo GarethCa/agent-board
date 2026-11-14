@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { ArrowDown, ArrowUp, Check, ChevronLeft, ChevronRight, Circle, CircleDot, Link, ListChecks, ListTodo, MessageSquareText, Send, ToggleRight, ArrowUpDown } from 'lucide-react';
 import type { Step, StepAnswer, StepsData } from '@agent-board/daemon/protocol';
 import { Button, ErrorText, Kbd } from '../../ui';
+import { useScrollFade } from './CardSizing';
+import { scrollToShow } from './card-size';
 import { fromStepLink, stepLinkUrl } from './step-link';
-import { sendsWithWords, stepRows, stepsView, type StepRow, type StepsLookup, type StepsView, type StepView, type ZoomLook } from './steps-view';
+import { sendsWithWords, stepRows, stepsView, turnSection, type StepRow, type StepsLookup, type StepsView, type StepView, type ZoomLook } from './steps-view';
 
 /**
  * Answers `step` by `key`, as the card's keys do: Space ticks a to-do, 1–9 picks a choice (or toggles one of any), and
@@ -41,6 +43,8 @@ export interface StepsCardProps {
   look: ZoomLook;
   /** Selected: its rows show. */
   selected: boolean;
+  /** Made taller by the user: it fills its size, its rows showing whether selected or not, and scrolling within. */
+  sized?: boolean;
   /** Stepped into: its keys are its own. */
   steppedIn: boolean;
   /** Typing its steps in, for an empty card of the user's. */
@@ -51,7 +55,7 @@ export interface StepsCardProps {
 }
 
 /** Each kind of step's mark, so a row reads as what it asks before its text. */
-const KIND_ICON: Record<Step['kind'], ReactNode> = {
+export const KIND_ICON: Record<Step['kind'], ReactNode> = {
   todo: <Circle />,
   one: <CircleDot />,
   any: <ListChecks />,
@@ -61,12 +65,12 @@ const KIND_ICON: Record<Step['kind'], ReactNode> = {
 };
 
 /** What a kind of question asks, for its row's tooltip and a screen reader. */
-const KIND_NAME: Record<Step['kind'], string> = { todo: 'To-do', one: 'Pick one', any: 'Pick any', 'yes-no': 'Yes or no', order: 'Put in order', words: 'In your words' };
+export const KIND_NAME: Record<Step['kind'], string> = { todo: 'To-do', one: 'Pick one', any: 'Pick any', 'yes-no': 'Yes or no', order: 'Put in order', words: 'In your words' };
 
 const EXAMPLE = '## Before\n- [ ] Pull main\n? Ship on Friday? [yes/no]\n? Which store? [Redis | SQLite]';
 
 /** The bar: one segment, or one a section, each filled as far as its steps are done. */
-function Bar({ view }: { view: StepsView }) {
+export function Bar({ view }: { view: StepsView }) {
   const parts = view.headed ? view.sections : [{ title: null, done: view.done, total: view.total }];
   return (
     <div className="steps-bar" aria-hidden>
@@ -80,7 +84,7 @@ function Bar({ view }: { view: StepsView }) {
 }
 
 /** A step's dot: ticked, the user's, the one it is on, or later; a question's is square. */
-function Dot({ view }: { view: StepView }) {
+export function Dot({ view }: { view: StepView }) {
   return (
     <span className="steps-dot" data-state={view.state} data-question={view.step.kind !== 'todo' || undefined}>
       {view.state === 'done' && <Check />}
@@ -328,10 +332,10 @@ function Controls({ view, actions, onNext, keys, sends }: { view: StepView; acti
 }
 
 /** One row of the open card. */
-function Row({ row, onCursor, onToggle, actions, onNext, keys, sends }: { row: StepRow; onCursor(id: string): void; onToggle(key: string): void; actions: StepsCardActions; onNext(): void; keys: boolean; sends(stepId: string, words: string): boolean }) {
+function Row({ row, onCursor, onToggle, actions, onNext, keys, sends }: { row: StepRow; onCursor(id: string): void; onToggle(row: Extract<StepRow, { key: string }>): void; actions: StepsCardActions; onNext(): void; keys: boolean; sends(stepId: string, words: string): boolean }) {
   if (row.kind === 'section') {
     return (
-      <button type="button" className="steps-section nodrag" aria-expanded={row.open} data-finished={row.finished || undefined} onClick={() => onToggle(row.key)}>
+      <button type="button" className="steps-section nodrag" aria-expanded={row.open} data-finished={row.finished || undefined} onClick={() => onToggle(row)}>
         <ChevronRight className="steps-chevron" />
         <span>{row.label}</span>
         <span className="steps-section-count">
@@ -343,7 +347,7 @@ function Row({ row, onCursor, onToggle, actions, onNext, keys, sends }: { row: S
   }
   if (row.kind !== 'step') {
     return (
-      <button type="button" className="steps-fold nodrag" onClick={() => onToggle(row.key)}>
+      <button type="button" className="steps-fold nodrag" onClick={() => onToggle(row)}>
         {row.kind === 'more' ? `+ ${row.label}` : `${row.label} ▸`}
       </button>
     );
@@ -447,11 +451,20 @@ function Writing({ actions }: { actions: StepsCardActions }) {
 
 /**
  * A steps card: an ordered list of questions and to-dos. At rest, its title and count, a bar and the step that matters;
- * selected, its rows, the step it is on open with its controls; zoomed out, fewer lines in larger type, then its icon
+ * selected, or made taller by the user, its rows, the step it is on open with its controls; zoomed out, fewer lines in larger type, then its icon
  * tile. Stepped into (↵), it takes 1–9, Space, ↑↓, ↵ and ⌘↵ for itself, and esc gives the keys back.
  */
-export function StepsCard({ data, lookup, look, selected, steppedIn, writing, actions, error }: StepsCardProps) {
+export function StepsCard({ data, lookup, look, selected, sized = false, steppedIn, writing, actions, error }: StepsCardProps) {
   const view = useMemo(() => stepsView(data, lookup), [data, lookup]);
+  const fade = useScrollFade<HTMLDivElement>();
+  const list = useRef<HTMLDivElement | null>(null);
+  const rowsRef = useCallback(
+    (element: HTMLDivElement | null) => {
+      list.current = element;
+      return fade(element);
+    },
+    [fade],
+  );
   const [cursor, setCursor] = useState<string>();
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const root = useRef<HTMLDivElement>(null);
@@ -468,11 +481,24 @@ export function StepsCard({ data, lookup, look, selected, steppedIn, writing, ac
   useEffect(() => {
     if (steppedIn) root.current?.focus();
   }, [steppedIn]);
+  // Made taller, it lists every step from the first: it scrolls the open one into view, not the board (no scrollIntoView).
+  useEffect(() => {
+    const rows = list.current;
+    const open = rows?.querySelector<HTMLElement>('.steps-open');
+    if (!sized || !rows || !open) return;
+    const box = rows.getBoundingClientRect();
+    // On screen the board's zoom scales it; scrollTop is in its own pixels.
+    const scale = box.height / rows.offsetHeight || 1;
+    const top = (open.getBoundingClientRect().top - box.top) / scale + rows.scrollTop;
+    rows.scrollTop = scrollToShow(rows, { top, bottom: top + open.offsetHeight });
+  }, [sized, at]);
 
-  const toggle = (key: string) =>
+  // A section is turned to the other side of how it shows; a fold opens.
+  const toggle = (row: Extract<StepRow, { key: string }>) =>
     setExpanded((now) => {
+      if (row.kind === 'section') return turnSection(now, row.key, row.open);
       const next = new Set(now);
-      if (!next.delete(key)) next.add(key);
+      if (!next.delete(row.key)) next.add(row.key);
       return next;
     });
   const all = view.sections.flatMap((section) => section.steps);
@@ -529,6 +555,7 @@ export function StepsCard({ data, lookup, look, selected, steppedIn, writing, ac
       data-testid="steps-card"
       data-look="full"
       data-selected={selected || undefined}
+      data-sized={sized || undefined}
       data-stepped-in={steppedIn || undefined}
       // The board's keys stand back while the card has the keyboard (`isTyping`).
       data-keys-own={steppedIn || writing || undefined}
@@ -541,10 +568,10 @@ export function StepsCard({ data, lookup, look, selected, steppedIn, writing, ac
         <Writing actions={actions} />
       ) : empty ? (
         <div className="steps-empty">Double-click to type its steps</div>
-      ) : selected ? (
+      ) : selected || sized ? (
         <>
-          <div className="steps-rows nowheel" data-testid="steps-rows">
-            {stepRows(view, at, expanded).map((row) => (
+          <div ref={rowsRef} className="steps-rows nowheel" data-testid="steps-rows">
+            {stepRows(view, at, expanded, { every: sized }).map((row) => (
               <Row key={row.kind === 'step' ? row.view.step.id : row.key} row={row} onCursor={setCursor} onToggle={toggle} actions={actions} onNext={() => moveCursor(1)} keys={steppedIn} sends={(stepId, words) => sendsWithWords(data, lookup, stepId, words)} />
             ))}
           </div>

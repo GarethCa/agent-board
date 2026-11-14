@@ -11,7 +11,7 @@ import { zoneNode } from './ZoneNode';
 const { width, height } = AGENT_TILE_SIZE;
 const zone = (id: string) => zoneNode({ id, x: 0, y: 0, width: 1600, height: 900, repoRoot: '/code/app', folder: '', name: id, color: '#4c6ef5', spacing: 'normal' } as Zone);
 const agent = (sessionId: string, zoneId: string | null, position: TilePosition | null, spawnedBy: string | null = null) =>
-  ({ sessionId, zoneId, position, spawnedBy, orchestrate: null, repoRoot: '/code/app', name: sessionId, harness: 'claude', endedAt: null }) as Agent;
+  ({ sessionId, zoneId, position, spawnedBy, repoRoot: '/code/app', name: sessionId, harness: 'claude', endedAt: null }) as Agent;
 const tiles = (nodes: BoardNode[]) => nodes.filter((node): node is TileNodeType => node.type === 'tile');
 const byId = (nodes: BoardNode[], id: string) => tiles(nodes).find((node) => node.id === id)!;
 

@@ -58,7 +58,6 @@ const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}
   ownsWorktree: true,
   master: false,
   plainFolder: false,
-  orchestrate: null,
   spawnedBy: null,
   orphanedFrom: null,
   ledBy: null,

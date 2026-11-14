@@ -13,7 +13,6 @@ const agent = (sessionId: string, fields: Partial<Agent> = {}): Agent =>
     master: false,
     role: null,
     roleName: null,
-    orchestrate: null,
     spawnedBy: null,
     orphanedFrom: null,
     permissions: [],
@@ -26,8 +25,8 @@ const agent = (sessionId: string, fields: Partial<Agent> = {}): Agent =>
 
 const zone = (id: string, name = id): Zone => ({ id, name }) as Zone;
 
-const master = agent('m', { master: true, zoneId: null, orchestrate: 'board' });
-const lead = agent('lead', { role: 'custom', roleName: 'Orchestrator', orchestrate: 'zone' });
+const master = agent('m', { master: true, zoneId: null });
+const lead = agent('lead', { role: 'custom', roleName: 'Orchestrator' });
 
 describe('the Captain', () => {
   it('is the agent marked as it, if there is one', () => {
@@ -35,13 +34,14 @@ describe('the Captain', () => {
     expect(boardMaster([lead])).toBeUndefined();
   });
 
-  it('watches the live zone leads: orchestrator-role agents, and agents it started that orchestrate', () => {
-    const started = agent('started', { zoneId: 'z2', spawnedBy: 'm', orchestrate: 'zone' });
-    const member = agent('member', { spawnedBy: 'm', orchestrate: null });
+  it('watches the live zone leads: the agents with the orchestrator role, and the agents it started, never the rest of a crew', () => {
+    const started = agent('started', { zoneId: 'z2', spawnedBy: 'm' });
+    const member = agent('member', { spawnedBy: 'lead' });
     const ended = agent('ended', { roleName: 'orchestrator', endedAt: '2026-10-23T10:00:00.000Z' });
     const loose = agent('loose', { roleName: 'orchestrator', zoneId: null });
+    const looseStarted = agent('loose-started', { spawnedBy: 'm', zoneId: null });
 
-    expect(watchedOrchestrators([master, lead, started, member, ended, loose]).map((each) => each.sessionId)).toEqual(['lead', 'started']);
+    expect(watchedOrchestrators([master, lead, started, member, ended, loose, looseStarted]).map((each) => each.sessionId)).toEqual(['lead', 'started']);
   });
 
   it('lists every zone with its lead and that lead’s crew, or none', () => {

@@ -2,7 +2,7 @@ import { memo, useCallback, useContext, useMemo, useState } from 'react';
 import { type NodeProps } from '@xyflow/react';
 import { Bot, Inbox, Ticket } from 'lucide-react';
 import { jobsFrom } from '@agent-board/daemon/memory-lines';
-import { QUEUE_CARD_SIZE, LIST_CARD_FOLDED_SIZE, type QueueAudience, type QueueChange, type QueueJob } from '@agent-board/daemon/protocol';
+import { QUEUE_CARD_SIZE, LIST_CARD_FOLDED_SIZE, LIST_CARD_MIN_SIZE, type QueueAudience, type QueueChange, type QueueJob } from '@agent-board/daemon/protocol';
 import { IconButton, useToast } from '../../ui';
 import { ItemActionsContext, useOnlySelected, type ItemNodeType } from './items';
 import { scopeText } from './memory-card';
@@ -12,6 +12,8 @@ import { openDrain, openFocus, openHandOn, QueueBoardContext } from './queue-boa
 import { lookCount, needsInScope } from './to-look-at';
 import { QueueCardView, QueueIconView, QueuePeek, type AddJob } from './QueueCard';
 import { agentLine, freshJob, jobLine, newestChange, nextJob, queueData, queueTitle } from './queue-card';
+import { CardResizer } from './CardSizing';
+import { foldTo } from './card-size';
 import { ListCardPeekPopover, ListCardToolbar, useFocusOnce, useFresh, useLift, useRows, useZone, why } from './ListCardNodeParts';
 
 /** A queue's jobs and notes as the daemon lists them, for the user. */
@@ -87,7 +89,8 @@ export const QueueNode = memo(function QueueNode({ id: nodeId, data, selected: p
   };
   const fold = (folded: boolean) => {
     if (folded) setPeek(false);
-    update({ id: item.id, data: { folded }, ...(folded ? LIST_CARD_FOLDED_SIZE : QUEUE_CARD_SIZE) });
+    const { size, kept } = foldTo(item, folded, { folded: LIST_CARD_FOLDED_SIZE, open: QUEUE_CARD_SIZE });
+    update({ id: item.id, data: { folded, ...kept }, ...size });
   };
   // Who it is for; a name it was given for its audience follows it, one the user typed stays.
   const setAudience = (audience: QueueAudience) => {
@@ -169,42 +172,45 @@ export const QueueNode = memo(function QueueNode({ id: nodeId, data, selected: p
   );
 
   return (
-    <ListCardPeekPopover
-      anchor={<div className="listcard-anchor">{body}</div>}
-      open={peek}
-      onOpenChange={setPeek}
-      aria-label={`${queue.title}: every job`}
-      className="listcard-peek-popover"
-    >
-      <QueuePeek
-        needs={needs}
-        onOpenAgent={board.openAgent}
-        onStart={start}
-        dragFrom={queue.noAgents ? undefined : { queueId: item.id, zoneId: item.zoneId }}
-        // A queue set to No agents gives its jobs to no agent: no Hand, as no drag.
-        onHand={queue.noAgents ? undefined : (job) => {
-          setPeek(false);
-          openHandOn({ queueId: item.id, jobId: job.id });
-        }}
-        title={queue.title}
-        scope={scope}
-        zoneColor={zone.color}
-        audience={queue.audience}
-        jobs={shown}
-        focusAdd={shown.length === 0}
-        onAdd={add}
-        onEdit={(job, line) => void change({ action: 'edit', job: job.id, ...line })}
-        onMove={(job, before) => change({ action: 'move', job: job.id, before: before?.id ?? null })}
-        onDone={(job) => void change({ action: 'done', job: job.id })}
-        onDrop={(job) => void change({ action: 'drop', job: job.id })}
-        onRemove={removeJob}
-        onGone={(job, draft) =>
-          toast.show({
-            message: `“${jobLine(job)}” was removed while you edited it`,
-            ...(draft.trim() === '' ? {} : { persistent: true, action: { label: 'Add your text back', onClick: () => jobsFrom(draft).forEach((line) => add({ kind: job.kind, ...line })) } }),
-          })
-        }
-      />
-    </ListCardPeekPopover>
+    <>
+      <CardResizer visible={selected && queue.folded !== true} least={LIST_CARD_MIN_SIZE} onResized={(frame) => update({ id: item.id, ...frame })} />
+      <ListCardPeekPopover
+        anchor={<div className="listcard-anchor">{body}</div>}
+        open={peek}
+        onOpenChange={setPeek}
+        aria-label={`${queue.title}: every job`}
+        className="listcard-peek-popover"
+      >
+        <QueuePeek
+          needs={needs}
+          onOpenAgent={board.openAgent}
+          onStart={start}
+          dragFrom={queue.noAgents ? undefined : { queueId: item.id, zoneId: item.zoneId }}
+          // A queue set to No agents gives its jobs to no agent: no Hand, as no drag.
+          onHand={queue.noAgents ? undefined : (job) => {
+            setPeek(false);
+            openHandOn({ queueId: item.id, jobId: job.id });
+          }}
+          title={queue.title}
+          scope={scope}
+          zoneColor={zone.color}
+          audience={queue.audience}
+          jobs={shown}
+          focusAdd={shown.length === 0}
+          onAdd={add}
+          onEdit={(job, line) => void change({ action: 'edit', job: job.id, ...line })}
+          onMove={(job, before) => change({ action: 'move', job: job.id, before: before?.id ?? null })}
+          onDone={(job) => void change({ action: 'done', job: job.id })}
+          onDrop={(job) => void change({ action: 'drop', job: job.id })}
+          onRemove={removeJob}
+          onGone={(job, draft) =>
+            toast.show({
+              message: `“${jobLine(job)}” was removed while you edited it`,
+              ...(draft.trim() === '' ? {} : { persistent: true, action: { label: 'Add your text back', onClick: () => jobsFrom(draft).forEach((line) => add({ kind: job.kind, ...line })) } }),
+            })
+          }
+        />
+      </ListCardPeekPopover>
+    </>
   );
 });

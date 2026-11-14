@@ -75,9 +75,10 @@ test('M puts a memory at the pointer ready to type; it remembers what is typed, 
     await expect.poll(async () => (await storedMemory(dataDir)).entries.filter((entry) => entry.file).map(({ key, text }) => ({ key, text }))).toEqual([{ key: 'How we test', text: '# Testing\n\nRerun a flaky test once.' }]);
     // Added, it opens to write on.
     await expect(full.getByRole('article', { name: 'How we test' }).getByRole('textbox', { name: 'Document text' })).toBeFocused();
-    // The card has room for a row under each section's head: the document, and the newest fact.
-    await expect(card.locator('.listcard-row')).toHaveCount(2);
+    // The card lists every entry under its section's head: the document, then the facts, the one just edited first. It scrolls what its size doesn't show.
+    await expect(card.locator('.listcard-row')).toHaveCount(3);
     await expect(card.locator('.memory-doc-row')).toContainText('How we test');
+    await expect(card.locator('.listcard-row')).toContainText(['How we test', 'Wednesdays', 'Staging is down']);
     await window.keyboard.press('Escape');
     await expect(full).toBeHidden();
 

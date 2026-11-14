@@ -1,11 +1,13 @@
 import { memo, useCallback, useContext, useEffect, useState } from 'react';
 import { type NodeProps } from '@xyflow/react';
-import { MEMORY_CARD_SIZE, LIST_CARD_FOLDED_SIZE, type MemoryChange, type MemoryEntry } from '@agent-board/daemon/protocol';
+import { MEMORY_CARD_SIZE, LIST_CARD_FOLDED_SIZE, LIST_CARD_MIN_SIZE, type MemoryChange, type MemoryEntry } from '@agent-board/daemon/protocol';
 import { useToast } from '../../ui';
 import { pressed } from '../../keys/registry';
 import { isTyping } from '../../keys/typing';
 import { useNow } from '../../inbox/use-now';
 import { ItemActionsContext, useOnlySelected, type ItemNodeType } from './items';
+import { CardResizer } from './CardSizing';
+import { foldTo } from './card-size';
 import { ListCardPeekPopover, ListCardToolbar, useFocusOnce, useFresh, useLift, useRows, useZone, why } from './ListCardNodeParts';
 import { MemoryCardView, MemoryIconView, MemoryPeek, type AddEntry } from './MemoryCard';
 import { MemoryFull, type Unsaved } from './MemoryFull';
@@ -110,7 +112,8 @@ export const MemoryNode = memo(function MemoryNode({ id: nodeId, data, selected:
     });
   const fold = (folded: boolean) => {
     if (folded) setPeek(false);
-    update({ id: item.id, data: { folded }, ...(folded ? LIST_CARD_FOLDED_SIZE : MEMORY_CARD_SIZE) });
+    const { size, kept } = foldTo(item, folded, { folded: LIST_CARD_FOLDED_SIZE, open: MEMORY_CARD_SIZE });
+    update({ id: item.id, data: { folded, ...kept }, ...size });
   };
   const toolbar = (
     <ListCardToolbar
@@ -157,6 +160,7 @@ export const MemoryNode = memo(function MemoryNode({ id: nodeId, data, selected:
 
   return (
     <>
+      <CardResizer visible={selected && memory.folded !== true} least={LIST_CARD_MIN_SIZE} onResized={(frame) => update({ id: item.id, ...frame })} />
       <ListCardPeekPopover
         anchor={<div className="listcard-anchor">{body}</div>}
         open={peek}

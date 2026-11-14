@@ -81,6 +81,7 @@ export function registerAgentIpc(daemon: DaemonLink, dataDir: string): void {
   passthrough(daemon, AGENT_IPC.markSeen, 'agent.markSeen', (sessionId: string) => ({ sessionId }));
   passthrough(daemon, AGENT_IPC.setMuted, 'agent.setMuted', (sessionId: string, muted: boolean) => ({ sessionId, muted }));
   passthrough(daemon, AGENT_IPC.setEffort, 'agent.setEffort', (sessionId: string, effort: Effort | null) => ({ sessionId, effort }));
+  passthrough(daemon, AGENT_IPC.setRole, 'agent.setRole', (sessionId: string, role: string | null) => ({ sessionId, role }));
   passthrough(daemon, AGENT_IPC.setRecordDeleted, 'agent.setRecordDeleted', (sessionId: string, kind: AgentRecordKind, key: string, deleted: boolean) => ({
     sessionId,
     kind,

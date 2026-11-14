@@ -24,7 +24,6 @@ import {
   MAX_PURPOSE_LENGTH,
   MAX_ROLE_TEMPLATE_LENGTH,
   MODEL_NAME,
-  ORCHESTRATE_SCOPES,
   REVIEWER_ROLES,
   type Agent,
   type Effort,
@@ -210,8 +209,8 @@ export function createAgentSpawns(
   const insert = db.prepare(
     `INSERT INTO agents (session_id, zone_id, repo_root, codex_bypass_hook_trust, model, effort, role, role_name, name, description,
        branch, worktree, state, issue_provider, issue_id, issue_title, issue_url, x, y, z, review_of, base_commit,
-       owns_worktree, harness_session_id, orchestrate, spawned_by, reviews_branch, reviews_head)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       owns_worktree, harness_session_id, spawned_by, reviews_branch, reviews_head)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const setPlainFolder = db.prepare('UPDATE agents SET plain_folder = 1 WHERE session_id = ?');
   const selectNames = db.prepare('SELECT name FROM agents');
@@ -541,9 +540,6 @@ export function createAgentSpawns(
     if (mainCheckout && (reviewer || params.branch !== undefined || params.baseBranch !== undefined)) {
       throw invalidParams("an agent in the repo's own checkout takes no branch, base branch or reviewer role: it works on the branch checked out there");
     }
-    if (params.orchestrate !== undefined && !ORCHESTRATE_SCOPES.includes(params.orchestrate)) {
-      throw invalidParams(`unknown orchestrate scope ${String(params.orchestrate)}`);
-    }
     const fromZone = issueId === undefined ? undefined : issueZone({ ...params, issueId }, zone, spawnedBy);
     const id = randomUUID();
     // Named for now by what it was given; one started from an issue is named after it once the issue is read.
@@ -594,8 +590,6 @@ export function createAgentSpawns(
     const { id, shownName, params, spawnedBy, place, plain, used, zone, harness, model, effort, choice, reviewer, mainCheckout, fromZone, allowProjectCodexConfig } = start;
     const { zoneId, prompt = '', name, issueId, cols, rows } = params;
     const role = choice?.role ?? null;
-    // A scope by hand is the user's alone (ADR-0011): an orchestrator's agents, like any, follow their zone's switch.
-    const orchestrate = spawnedBy === undefined ? (params.orchestrate ?? null) : null;
     // What was made for it so far, undone if it fails to start: its harness, its worktree and branch, then any scratch repo.
     const undo: (() => Promise<void>)[] = [];
     /** Stops a start whose tile was dismissed, or whose zone went, before anything more is made for it. */
@@ -753,7 +747,6 @@ export function createAgentSpawns(
         baseCommit,
         owns ? 1 : 0,
         null,
-        orchestrate,
         spawnedBy ?? null,
         reviews?.branch ?? null,
         reviews?.head ?? null,
@@ -881,7 +874,6 @@ export function createAgentSpawns(
         null,
         null,
         null,
-        null,
       );
       options.promptQueued(id);
       options.log(`spawned ${implementer.harness} reviewer ${id} of ${of} on ${branch} in ${worktree}`);
@@ -964,7 +956,6 @@ export function createAgentSpawns(
         baseCommit,
         at.ownsWorktree ? 1 : 0,
         codexSessionId,
-        null,
         null,
         null,
         null,

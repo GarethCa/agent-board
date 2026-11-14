@@ -165,6 +165,29 @@ describe('reading the board', () => {
     expect(await run(env, 'note', 'edit', ref('item', sticky.id), '--size', '400x300')).toMatchObject({ code: 1, err: expect.stringContaining('only an agent note can be given a size') });
   });
 
+  it('gives an agent note a line budget with `note edit --lines`, and takes it away with 0', async () => {
+    const { client, env, ideas, fixTests } = await board();
+    const author = { sessionId: fixTests.sessionId, name: 'fix-tests', harness: 'claude', role: null };
+    const text = Array.from({ length: 20 }, (_, index) => `- line ${index + 1}`).join('\n');
+    const note = await client.call('item.create', {
+      kind: 'agent-note',
+      zoneId: ideas.id,
+      x: 300,
+      y: 20,
+      ...AGENT_NOTE_SIZE,
+      data: { text, agent: author, writtenAt: new Date().toISOString(), editedByUser: false },
+    });
+    expect(await run(env, 'note', 'edit', ref('item', note.id), '--lines', '3')).toMatchObject({ code: 0 });
+    const budgeted = (await client.call('item.list')).find((item) => item.id === note.id)!;
+    expect(budgeted.data).toMatchObject({ lines: 3 });
+    expect(await run(env, 'note', 'edit', ref('item', note.id), '--lines', '0')).toMatchObject({ code: 0 });
+    const whole = (await client.call('item.list')).find((item) => item.id === note.id)!;
+    expect(whole.data.lines).toBeNull();
+    expect(whole.height).toBeGreaterThan(budgeted.height);
+    const sticky = (await client.call('item.list')).find((item) => item.kind === 'sticky')!;
+    expect(await run(env, 'note', 'edit', ref('item', sticky.id), '--lines', '3')).toMatchObject({ code: 1, err: expect.stringContaining('only an agent note can be given lines') });
+  });
+
   it("shows an agent note's kind and the agent that wrote it, in the tree and by ref", async () => {
     const { client, env, ideas, fixTests } = await board();
     const author = { sessionId: fixTests.sessionId, name: 'fix-tests', harness: 'claude', role: null };
@@ -320,17 +343,10 @@ describe('an agent that changes its branch', () => {
 });
 
 describe('orchestrating from the command line', () => {
-  it('lets the user turn orchestrating on and off for an agent, and shows it', async () => {
-    const { env, client, fixTests } = await board();
-
-    expect(await run(env, 'orchestrate', 'on', 'fix-tests', '--scope', 'repo')).toMatchObject({
-      code: 0,
-      out: `${ref('agent', fixTests.sessionId)} fix-tests may orchestrate in its repo now.\n`,
-    });
-    expect((await client.call('agent.list')).find((agent) => agent.name === 'fix-tests')!.orchestrate).toBe('repo');
-    expect((await run(env, 'show', 'fix-tests')).out).toContain('  orchestrates agents in its repo\n');
-    expect((await run(env, 'orchestrate', 'off', 'fix-tests')).out).toBe(`${ref('agent', fixTests.sessionId)} fix-tests may not orchestrate now.\n`);
-    expect((await client.call('agent.list')).find((agent) => agent.name === 'fix-tests')!.orchestrate).toBeNull();
+  it('has no switch to turn orchestrating on or off: any agent may', async () => {
+    const { env } = await board();
+    expect(await run(env, 'orchestrate', 'on', 'fix-tests')).toMatchObject({ code: 2, err: expect.stringContaining('give handover') });
+    expect((await run(env, 'show', 'fix-tests')).out).not.toMatch(/orchestrat/);
   });
 
   it('runs the orchestrator commands as the user outside a session, logged as you', async () => {
@@ -387,7 +403,7 @@ describe('orchestrating from the command line', () => {
     expect(await run({}, 'agents', '--done')).toMatchObject({ code: 2, err: expect.stringContaining('--done is only for `status set`') });
     expect(await run({}, 'wait', 'agent:1234', '--until', 'sleeping')).toMatchObject({ code: 2, err: expect.stringContaining('sleeping is not a state') });
     expect(await run({}, 'orchestrate', 'maybe', 'agent:1234')).toMatchObject({ code: 2 });
-    expect(await run({}, 'orchestrate', 'on', 'agent:1234', '--scope', 'galaxy')).toMatchObject({ code: 2 });
+    expect(await run({}, 'orchestrate', 'handover', 'agent:1234', '--scope', 'galaxy')).toMatchObject({ code: 2, err: expect.stringContaining("Unknown option '--scope'") });
     expect(await run({}, 'send', 'agent:1234')).toMatchObject({ code: 2, err: expect.stringContaining('give a message') });
   });
 });
@@ -506,9 +522,15 @@ describe('laying out the board from the command line', () => {
     await usage(['zone', 'bind', 'zone:1'], 'the zone commands are');
     await usage(['note', 'add'], 'give the note its text');
     await usage(['note', 'add', '--kind', 'poster', '--', 'hi'], '--kind must be sticky or text');
-    await usage(['note', 'edit', 'item:1'], 'give its new --text, --color or --size');
+    await usage(['note', 'edit', 'item:1'], 'give its new --text, --color, --size or --lines');
+    await usage(['note', 'edit', 'item:1', '--lines', 'many'], '--lines is a whole number from 1 to 40, or 0 for none');
+    await usage(['note', 'edit', 'item:1', '--lines', '3', '--size', '300x200'], 'give --size or --lines, not both');
+    await usage(['note', 'add', '--lines', '0', '--', 'hi'], '--lines is a whole number from 1 to 40');
+    await usage(['note', 'add', '--lines', '41', '--', 'hi'], '--lines is a whole number from 1 to 40');
+    await usage(['note', 'add', '--kind', 'sticky', '--lines', '3', '--', 'hi'], '--lines is only for an agent note');
+    await usage(['note', 'add', '--kind', 'text', '--lines', '3', '--', 'hi'], '--lines is only for an agent note');
     await usage(['note', 'edit', 'item:1', '--size', 'big'], '--size is <width>x<height>');
-    await usage(['note', 'edit', 'item:1', '--size', '100x50'], '--size is at least 200x96');
+    await usage(['note', 'edit', 'item:1', '--size', '100x50'], '--size is at least 238x96');
     await usage(['note', 'edit', 'item:1', '--size', '3600x2400'], '--size is at most 1200x1440');
     await usage(['note', 'add', '--size', '300x200', '--', 'hi'], '--size is only for `note edit`');
     await usage(['note', 'edit', 'item:1', '--near', 'a'], '--near is only for `note add`');

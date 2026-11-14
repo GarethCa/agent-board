@@ -268,7 +268,7 @@ test("approving and denying a permission from the inbox answer the agent's Permi
 test('a permission asked by the Captain, loose on the board in no zone, reaches the inbox and can be answered there', async () => {
   await withApp(scratch('permission'), async (window) => {
     const captain = await window.evaluate(() => self.agentBoard.agents.startMaster({ harness: 'claude', cols: 120, rows: 32 }));
-    expect(captain).toMatchObject({ orchestrate: 'board', zoneId: null });
+    expect(captain).toMatchObject({ master: true, zoneId: null });
     const asking = item(window, captain.sessionId);
     await openInbox(window);
     await expect(asking).toContainText('Wants to use Bash');

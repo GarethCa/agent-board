@@ -604,6 +604,8 @@ export const WEB_TAB_IPC = {
   /** main → renderer: `(tabId, WebTabKey)`, one of its window's own shortcuts pressed while the page had the keyboard. */
   key: 'web-tab:key',
   focus: 'web-tab:focus',
+  /** renderer → main: `(tabId, boolean)`, whether its address row holds the keyboard and text typed in it. */
+  typing: 'web-tab:typing',
   focusWindow: 'web-tab:focusWindow',
   /** renderer → invoke: `(tabId, text, FindStep)`, finds in the page; `stopFind` clears it. */
   find: 'web-tab:find',
@@ -705,6 +707,8 @@ export interface WebTabsApi {
   focus(tabId: string): Promise<void>;
   /** Gives the keyboard to the window the page is in, away from the page. */
   focusWindow(tabId: string): Promise<void>;
+  /** Says whether the tab's address row is being typed in: while it is, a page that takes the keyboard by itself (as it loads) gives it back. */
+  typing(tabId: string, on: boolean): void;
   /** Finds `text` in the tab's page, highlighting the matches (any case) and the one shown; the keyboard stays with the caller. */
   find(tabId: string, text: string, step: FindStep): Promise<FindResult>;
   /** Takes the find's highlights off the page. */
@@ -897,6 +901,7 @@ export const AGENT_IPC = {
   markSeen: 'agent:markSeen',
   setMuted: 'agent:setMuted',
   setEffort: 'agent:setEffort',
+  setRole: 'agent:setRole',
   setRecordDeleted: 'agent:setRecordDeleted',
   readDoc: 'agent:readDoc',
   setName: 'agent:setName',
@@ -952,7 +957,7 @@ export interface AgentsApi {
   captureSelection(rect: { x: number; y: number; width: number; height: number }, width: number): Promise<string>;
   /** Ask Claude about a selection: starts an agent with its picture and diagram (`selection.ask`). */
   askSelection(params: AskSelectionParams): Promise<Agent>;
-  /** The Captain: the board's own, or a new one started at board scope (`master.start`, ADR-0019). */
+  /** The Captain: the board's own, or a new one started in a folder of its own (`master.start`, ADR-0019). */
   startMaster(params: StartMasterParams): Promise<Agent>;
   /** Its conversation from its transcript, from entry `since` of `generation` on. */
   transcript(sessionId: string, since: number, generation?: number): Promise<TranscriptChunk>;
@@ -1011,6 +1016,8 @@ export interface AgentsApi {
   setMuted(sessionId: string, muted: boolean): Promise<Agent>;
   /** Sets the agent's reasoning effort, and says when it takes it: now, after its turn, or on its next restart. */
   setEffort(sessionId: string, effort: Effort | null): Promise<{ agent: Agent; applies: EffortApplies }>;
+  /** Gives the agent a role, as typed (a built-in one or any name), or none with null. Only its role changes. */
+  setRole(sessionId: string, role: string | null): Promise<Agent>;
   /** Deletes one of the agent's records from its sidebar, or with `deleted` false brings it back. */
   setRecordDeleted(sessionId: string, kind: AgentRecordKind, key: string, deleted: boolean): Promise<Agent>;
   /** Reads one of the agent's hand-off docs, for its Doc tab. */

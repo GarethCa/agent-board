@@ -38,7 +38,6 @@ function agent(sessionId: string, fields: Partial<Agent> = {}): Agent {
     flag: null,
     ledBy: null,
     seen: false,
-    orchestrate: null,
     pullRequests: [],
     finishedAt: null,
     lastMessage: null,
@@ -54,7 +53,7 @@ const note = (id: string, about: string): BoardNode =>
   itemNode({ id, kind: 'agent-note', zoneId: 'z', x: 900, y: 40, width: 240, height: 96, rotation: 0, z: null, data: { text: 'hi', agent: { sessionId: 'lead', name: 'lead' }, about } } as unknown as BoardItem) as BoardNode;
 
 const none: ShelvesChoice = { freed: new Set(), doneShown: new Set(), open: null };
-const agents = [agent('lead', { orchestrate: 'zone' }), agent('worker', { orchestrate: 'zone', spawnedBy: 'lead' }), agent('other', { zoneId: 'free-zone' })];
+const agents = [agent('lead', {}), agent('worker', { spawnedBy: 'lead' }), agent('other', { zoneId: 'free-zone' })];
 const board = (): BoardNode[] => [
   zoneNode(zone('z', 'shelves')),
   zoneNode(zone('free-zone', 'free')),
@@ -244,13 +243,13 @@ describe('nudgedTiles', () => {
 });
 
 describe('pinnedLead', () => {
-  it('pins a lead (its crew, its role, the Captain) until the user frees it, never an agent that only may orchestrate', () => {
+  it('pins a lead (its crew, its role, the Captain) until the user frees it, never an agent with no crew or role', () => {
     const crew = [agent('lead'), agent('worker', { spawnedBy: 'lead' })];
     expect(pinnedLead(crew[0]!, crew, new Set())).toBe(true);
     expect(pinnedLead(crew[0]!, crew, new Set(['lead']))).toBe(false);
     expect(pinnedLead(agent('planner', { roleName: 'orchestrator' }), [], new Set())).toBe(true);
     expect(pinnedLead(agent('captain', { master: true }), [], new Set())).toBe(true);
-    expect(pinnedLead(agent('solo', { orchestrate: 'zone' }), crew, new Set())).toBe(false);
+    expect(pinnedLead(agent('solo'), crew, new Set())).toBe(false);
     // An implementer that started a helper and its own reviewer is no lead: they are in its stack, not over it.
     const own = [agent('impl', { role: 'implementer' }), agent('helper', { role: 'implementer', spawnedBy: 'impl' })];
     expect(pinnedLead(own[0]!, own, new Set())).toBe(false);

@@ -7,7 +7,7 @@ import { useNeedsYouShows } from '../needs-you-setting';
 import { dropKey, dropOver as dropOverValue } from '../session/shell-moves';
 import { calmFace, technicalLine, type CalmAction } from './calm-tile';
 import { TileRobot } from './CommandFigure';
-import { lightCrew } from './crew-view';
+import { crewsOf, hoverCrew, leaveCrew, useCrewHover, useCrewLit } from './crew-view';
 import { HandoffsContext } from './flow-edges';
 import { JobTicket, useHeldJobs } from './items/taken-jobs';
 import { useJobDropOver } from './items/queue-board';
@@ -41,6 +41,9 @@ type CalmTileProps = { id: string; selected: boolean; agent: Agent } & Pick<Tile
  */
 export function CalmTile({ id, selected, agent, repo, from, crew, crewFlags, implementer }: CalmTileProps) {
   const shows = useNeedsYouShows();
+  useCrewHover(crew === undefined ? undefined : agent.sessionId);
+  const crewOf = crewsOf(agent.sessionId, crew !== undefined, from?.sessionId);
+  const crewLit = useCrewLit(crewOf);
   const tileActions = useContext(TileActionsContext);
   const { expand, openAgent, popOutAgent, setFolded, stopAgent, rename, sendUnsent, clearUnsent, typeFirstPrompt, trustFolder, resendUndelivered, clearUndelivered } = tileActions;
   const clickOpens = useContext(ClickOpensContext);
@@ -94,9 +97,10 @@ export function CalmTile({ id, selected, agent, repo, from, crew, crewFlags, imp
         data-reviewer={agent.reviewOf !== null || undefined}
         data-orchestrator={crew !== undefined || undefined}
         data-master={agent.master || undefined}
-        data-crew={crew === undefined ? from?.sessionId : agent.sessionId}
-        onMouseEnter={crew === undefined ? undefined : () => lightCrew(agent.sessionId)}
-        onMouseLeave={crew === undefined ? undefined : () => lightCrew(undefined)}
+        data-crew={crewOf}
+        data-crew-lit={crewLit || undefined}
+        onMouseEnter={crew === undefined ? undefined : () => hoverCrew(agent.sessionId)}
+        onMouseLeave={crew === undefined ? undefined : () => leaveCrew(agent.sessionId)}
         title={card !== undefined ? undefined : clickOpens !== 'expand' ? 'Double-click to open its session window' : 'Double-click to expand it here'}
         onDoubleClick={open}
       >

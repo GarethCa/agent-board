@@ -51,6 +51,11 @@ export interface FakeHarnessEnvOptions {
    * `hooks-review`), until Enter answers it. None by default.
    */
   startScreen?: CodexStartScreen;
+  /**
+   * A Codex session resumed interactively leaves its redrawn conversation quiet for a second before drawing its
+   * composer, losing what is typed at it meanwhile, as a slow Codex does. Defaults to false.
+   */
+  slowResume?: boolean;
   /** Fire no `SessionStart` as the session starts, its other hooks running as usual. Defaults to false. */
   noSessionStart?: boolean;
   /** The source its `SessionStart` names, as Claude's after a compaction does `compact`. Defaults to its own (`startup`, `resume`). */
@@ -138,6 +143,11 @@ export interface FakeHarnessEnvOptions {
    * turn of its own once this one ends.
    */
   queueMidTurn?: boolean;
+  /**
+   * Claude runs full-screen, in the terminal's alternate screen, as Claude Code's full-screen TUI does, and as it exits
+   * it leaves that screen and prints only how to resume it. Defaults to false: it prints inline.
+   */
+  fullscreen?: boolean;
   /** Lines of an earlier conversation the `busy` scenario prints first, as scrollback. None by default. */
   backlogLines?: number;
   /** The environment to start from. Defaults to the process's own, less the session variables of an enclosing board. */
@@ -163,6 +173,7 @@ export function fakeHarnessEnv(options: FakeHarnessEnvOptions): NodeJS.ProcessEn
     FAKE_HARNESS_START_FAIL: options.startFailure ?? '',
     FAKE_HARNESS_START_FAIL_ONCE: options.startFailureOnce ? '1' : '0',
     FAKE_HARNESS_START_SCREEN: options.startScreen ?? '',
+    FAKE_HARNESS_SLOW_RESUME: options.slowResume ? '1' : '0',
     FAKE_HARNESS_NO_SESSION_START: options.noSessionStart ? '1' : '0',
     FAKE_HARNESS_START_SOURCE: options.sessionStartSource ?? '',
     FAKE_HARNESS_LOSE_ENTERS: String(options.loseEnters ?? 0),
@@ -183,6 +194,7 @@ export function fakeHarnessEnv(options: FakeHarnessEnvOptions): NodeJS.ProcessEn
     FAKE_HARNESS_RATE_LIMIT_SCREEN: options.rateLimitScreen ?? '',
     FAKE_HARNESS_QUEUE_MID_TURN: options.queueMidTurn ? '1' : '0',
     FAKE_HARNESS_RATE_LIMITS: options.rateLimits === undefined ? '' : JSON.stringify(options.rateLimits),
+    FAKE_HARNESS_FULLSCREEN: options.fullscreen ? '1' : '0',
     FAKE_HARNESS_BACKLOG_LINES: String(options.backlogLines ?? 0),
     FAKE_HARNESS_STARTUP_SCREEN: options.startupScreen ?? '',
     FAKE_HARNESS_TRUST_SCREEN: typeof options.trustScreen === 'string' ? options.trustScreen : options.trustScreen ? '1' : '0',

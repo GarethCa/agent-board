@@ -1,7 +1,7 @@
 import { Choice, Choices, Fieldset, Hint, Segmented, Switch, Tag } from '../ui';
 import { keyText } from '../keys/registry';
 import { PARTS_TO_TURN_ON, tileShowsWith } from '../board/tile-shows';
-import { setCrewLook, setViewSetting, useTileShows, useViewSettings } from '../board/view-settings';
+import { setViewSetting, useTileShows, useViewSettings } from '../board/view-settings';
 
 /** Settings › Board › Opening tiles: what a double-click on an agent's or shell's tile opens. */
 export function ClickOpensSetting() {
@@ -56,45 +56,23 @@ export function ConnectionsSetting() {
         onChange={(value) => setViewSetting('connections', value)}
       />
       <Hint>
-        Hiding only changes the view: hand-offs still go. Any object shows how many it has hidden. Its own show while it is selected or hovered, and a moment
-        after, to reach one; a selected one stays. {keyText('move.connections')} cycles them.
+        Hiding only changes the view: hand-offs still go. Any object shows how many it has hidden. Its own show while it is hovered, and a moment after, to reach
+        one, but not while you type in it; a selected one stays. {keyText('move.connections')} cycles them.
       </Hint>
     </Fieldset>
   );
 }
 
-/** Settings › Board › Crews: how the agents an orchestrator starts show, the saved default the board's View button also sets. */
-export function CrewLookSetting() {
-  const { crewLook } = useViewSettings();
+/** Settings › Board › Connections: whether the board draws its tethers, the saved default the View menu's Show Tethers also sets. */
+export function TethersSetting() {
+  const { tethers } = useViewSettings();
   return (
-    <Fieldset legend="Agents an orchestrator starts">
-      <Choices aria-label="Agents an orchestrator starts">
-        <Choice
-          name="crew-look"
-          label={
-            <>
-              In a crew frame <Tag tone="accent">default</Tag>
-            </>
-          }
-          detail="Together in a dashed frame beside it, moving with it."
-          checked={crewLook === 'frames'}
-          onChange={() => setCrewLook('frames')}
-        />
-        <Choice
-          name="crew-look"
-          label="With a “from” chip"
-          detail="Where they are, each with a chip naming it. Hover to light the family."
-          checked={crewLook === 'chips'}
-          onChange={() => setCrewLook('chips')}
-        />
-        <Choice
-          name="crew-look"
-          label="Off"
-          detail="No frame and no chip. Hover the orchestrator to light its crew."
-          checked={crewLook === 'off'}
-          onChange={() => setCrewLook('off')}
-        />
-      </Choices>
+    <Fieldset legend="Show tethers">
+      <Switch label="Show tethers" checked={tethers} onChange={(event) => setViewSetting('tethers', event.currentTarget.checked)} />
+      <Hint>
+        The faint lines from the Captain to the orchestrators it watches, from a schedule to the agents it starts, and from an agent&apos;s notes, documents, plans and to-do lists
+        to it. Off, they aren&apos;t drawn, but the links stay: a schedule still starts its agent. An orchestrator&apos;s crew shows in its frame while the orchestrator is hovered or selected.
+      </Hint>
     </Fieldset>
   );
 }

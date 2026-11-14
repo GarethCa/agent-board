@@ -6,7 +6,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import { fakeHarnessEnv, McpClient } from '@agent-board/fake-harness';
 import { prefabFile } from '../src/crew-prefabs.ts';
-import { BOARD_ERROR, MAX_PURPOSE_LENGTH, RPC_ERROR, type CrewPrefab, type DaemonEvent, type HookEvent } from '../src/protocol.ts';
+import { MAX_PURPOSE_LENGTH, RPC_ERROR, type CrewPrefab, type DaemonEvent, type HookEvent } from '../src/protocol.ts';
 import { connectTestClient, recordEvents, startTestDaemon, TEST_CLI_LAUNCHER, tempDataDir, tempRepo } from './helpers.ts';
 
 const SIZE = { cols: 120, rows: 40 };
@@ -25,10 +25,10 @@ async function prefabDaemon(dataDir = tempDataDir()) {
 
 type Setup = Awaited<ReturnType<typeof prefabDaemon>>;
 
-/** An agent the user lets orchestrate in `scope`, connected as it with its board token. */
-async function lead(setup: Setup, scope: 'zone' | 'repo' | 'board') {
+/** An agent the user starts in the zone, with no role, connected as it with its board token. */
+async function lead(setup: Setup) {
   const { daemon, client, recorder } = setup;
-  const agent = await client.call('agent.spawn', { zoneId: setup.zone.id, prompt: 'Print your board identity', orchestrate: scope, ...SIZE });
+  const agent = await client.call('agent.spawn', { zoneId: setup.zone.id, prompt: 'Print your board identity', ...SIZE });
   await client.call('session.attach', { sessionId: agent.sessionId });
   await recorder.waitForText(agent.sessionId, ':end\r\n');
   const token = /identity:(.*):end\r\n/.exec(recorder.screenText(agent.sessionId))![1]!;
@@ -126,18 +126,10 @@ describe('the crew prefab library', () => {
     await expect(client.call('orchestrator.removePrefab', { name: 'pair' })).rejects.toMatchObject({ message: 'the library has no crew prefab named pair' });
   });
 
-  it('is changed only by the user or an orchestrator of the whole board, and each change is logged', async () => {
+  it('is changed by the user or any agent, with no role, and each change is logged', async () => {
     const setup = await prefabDaemon();
-    const zoneLead = await lead(setup, 'zone');
-    expect((await zoneLead.connection.call('orchestrator.prefabs', { token: zoneLead.token })).prefabs).toHaveLength(5);
-    await expect(zoneLead.connection.call('orchestrator.savePrefab', { token: zoneLead.token, text: prefabFile(pair()) })).rejects.toMatchObject({
-      code: BOARD_ERROR.outOfScope,
-      message: expect.stringContaining('reaches every board'),
-    });
-    const [refused] = await setup.client.call('orchestrator.activity', { limit: 1 });
-    expect(refused).toMatchObject({ action: 'save-prefab', targetName: 'Pair', outcome: 'refused' });
-
-    const boardLead = await lead(setup, 'board');
+    const boardLead = await lead(setup);
+    expect((await boardLead.connection.call('orchestrator.prefabs', { token: boardLead.token })).prefabs).toHaveLength(5);
     await boardLead.connection.call('orchestrator.savePrefab', { token: boardLead.token, text: prefabFile(pair()) });
     await boardLead.connection.call('orchestrator.removePrefab', { token: boardLead.token, name: 'Pair' });
     const [removed, saved] = await setup.client.call('orchestrator.activity', { orchestratorId: boardLead.agent.sessionId, limit: 2 });
@@ -315,45 +307,40 @@ describe('starting a crew from a prefab', () => {
     );
   });
 
-  it('refuses a lead in a zone that doesn’t let its agents orchestrate, which could start none of its crew', async () => {
+  it('starts a lead in any zone, which may start its crew there', async () => {
     const setup = await prefabDaemon();
-    await setup.client.call('zone.configure', { id: setup.zone.id, agentsOrchestrate: false });
 
-    await expect(setup.client.call('orchestrator.startPrefab', { name: 'Lead and crew', prompt: 'Go', zoneId: setup.zone.id })).rejects.toMatchObject({
-      code: RPC_ERROR.invalidParams,
-      message: expect.stringContaining("web doesn't let its agents orchestrate, so Lead and crew's lead could start none of its crew"),
-    });
+    expect((await setup.client.call('orchestrator.startPrefab', { name: 'Lead and crew', prompt: 'Go', zoneId: setup.zone.id })).started).toHaveLength(1);
     expect((await setup.client.call('orchestrator.startPrefab', { name: 'Solo agent', prompt: 'Go', zoneId: setup.zone.id })).started).toHaveLength(1);
   });
 
-  it('is started by an orchestrator as its own crew, and a lead needs two free levels below it', async () => {
+  it('is started by an orchestrator as its own crew, a lead and its crew at any depth', async () => {
     const setup = await prefabDaemon();
-    const zoneLead = await lead(setup, 'zone');
+    const zoneLead = await lead(setup);
 
     const { started } = await zoneLead.connection.call('orchestrator.startPrefab', { token: zoneLead.token, name: 'Implementer + reviewer', prompt: 'Fix it' });
     expect(started[0]).toMatchObject({ spawnedBy: zoneLead.agent.sessionId, zoneId: setup.zone.id });
     const [line] = await setup.client.call('orchestrator.activity', { orchestratorId: zoneLead.agent.sessionId, limit: 1 });
     expect(line).toMatchObject({ action: 'spawn', outcome: 'done' });
 
-    // An agent one level down has one level left: enough for a builder, not for a lead and its crew.
+    // An agent one level down starts a lead and its crew as its own, a crew going any depth.
     const solo = await zoneLead.connection.call('orchestrator.startPrefab', { token: zoneLead.token, name: 'Solo agent', prompt: 'Print your board identity' });
     const member = solo.started[0]!;
-    await setup.client.call('agent.setOrchestrate', { sessionId: member.sessionId, scope: 'zone' });
     await setup.client.call('session.attach', { sessionId: member.sessionId });
     await setup.recorder.waitForText(member.sessionId, ':end\r\n');
     const token = /identity:(.*):end\r\n/.exec(setup.recorder.screenText(member.sessionId))![1]!;
     const connection = await connectTestClient(setup.daemon);
     await connection.call('board.identify', { token });
-    await expect(connection.call('orchestrator.startPrefab', { token, name: 'Lead and crew', prompt: 'Go' })).rejects.toMatchObject({
-      code: BOARD_ERROR.outOfScope,
-      message: expect.stringContaining('Lead and crew needs 2 free levels of crew depth below you'),
+    // Its lead, two below the zone's orchestrator, may start its crew as any agent may.
+    expect((await connection.call('orchestrator.startPrefab', { token, name: 'Lead and crew', prompt: 'Go' })).started[0]).toMatchObject({
+      spawnedBy: member.sessionId,
     });
     expect((await connection.call('orchestrator.startPrefab', { token, name: 'Solo agent', prompt: 'Go' })).started[0]).toMatchObject({ spawnedBy: member.sessionId });
   });
 
   it('is started by an orchestrator’s new_agent tool with prefab, which leaves the members to the prefab', async () => {
     const setup = await prefabDaemon();
-    const zoneLead = await lead(setup, 'zone');
+    const zoneLead = await lead(setup);
     const mcp = new McpClient(
       {
         command: TEST_CLI_LAUNCHER.command,
@@ -377,7 +364,7 @@ describe('starting a crew from a prefab', () => {
 
   it('starts the agent with the description new_agent is given, with and without prefab, and says what was stored', async () => {
     const setup = await prefabDaemon();
-    const zoneLead = await lead(setup, 'zone');
+    const zoneLead = await lead(setup);
     const mcp = new McpClient(
       {
         command: TEST_CLI_LAUNCHER.command,
@@ -400,7 +387,7 @@ describe('starting a crew from a prefab', () => {
 
   it('is waited on by the wait tool given its crew ref alone, until it stops, as `agent-board wait crew:<id>`', async () => {
     const setup = await prefabDaemon();
-    const zoneLead = await lead(setup, 'zone');
+    const zoneLead = await lead(setup);
     const mcp = new McpClient(
       {
         command: TEST_CLI_LAUNCHER.command,
@@ -434,7 +421,7 @@ describe('starting a crew from a prefab', () => {
 
   it('draws no edges, even once its reviewer is started on the builder’s branch as the command says', async () => {
     const setup = await prefabDaemon();
-    const zoneLead = await lead(setup, 'zone');
+    const zoneLead = await lead(setup);
     const crew = await zoneLead.connection.call('orchestrator.startPrefab', { token: zoneLead.token, name: 'Implementer + reviewer', prompt: 'Fix it' });
     const impl = crew.started[0]!;
     expect(crew.later[0]!.command).toBe("agent-board new --base <impl's ref> --role reviewer --harness claude -- '<its task>'");
@@ -447,7 +434,7 @@ describe('starting a crew from a prefab', () => {
 
   it('logs a start it refuses before any agent is asked for', async () => {
     const setup = await prefabDaemon();
-    const zoneLead = await lead(setup, 'zone');
+    const zoneLead = await lead(setup);
     await expect(zoneLead.connection.call('orchestrator.startPrefab', { token: zoneLead.token, name: 'Nope' })).rejects.toThrow();
     const [line] = await setup.client.call('orchestrator.activity', { orchestratorId: zoneLead.agent.sessionId, limit: 1 });
     expect(line).toMatchObject({ action: 'spawn', outcome: 'refused', detail: 'crew prefab Nope' });
