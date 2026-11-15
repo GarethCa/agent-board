@@ -1,5 +1,5 @@
 // The board's view settings: what a double-click on a tile opens, how agent notes look, which connections and
-// tethers are drawn, which sidebar an agent's window shows, whether terminals draw with the GPU, what an agent's tile shows, and when the chat's Expand all / Collapse all show. Kept in the daemon's view state, and held here once per window, so the board and the Settings window read
+// tethers are drawn, which sidebar an agent's window shows, whether terminals draw with the GPU, what an agent's tile shows, how a ticket's tile opens, and when the chat's Expand all / Collapse all show. Kept in the daemon's view state, and held here once per window, so the board and the Settings window read
 // and set the same values. Main tells every window of a change, so each follows live.
 import { createContext, useContext, useMemo, useSyncExternalStore } from 'react';
 import { VIEW_KEYS } from '../../../shared/view-saver';
@@ -11,6 +11,7 @@ import { gpuTerminalsFrom } from '../session/terminal-gpu';
 import { keepTerminalsFrom } from '../session/kept-terminals';
 import { chatRunsShowFrom, type ChatRunsShow } from '../session/chat-runs-show';
 import { sameLook, tileShowsFrom, type TileShows } from './tile-shows';
+import { ticketTilesOpenAsFrom, type TicketTilesOpenAs } from './ticket-view';
 
 export interface ViewSettings {
   clickOpens: ClickOpens;
@@ -23,6 +24,8 @@ export interface ViewSettings {
   keepTerminals: boolean;
   tileShows: TileShows;
   chatRunsShow: ChatRunsShow;
+  /** How a ticket's tile opens: its chat's terminal, or the clean card. */
+  ticketTilesOpenAs: TicketTilesOpenAs;
 }
 
 export const DEFAULT_VIEW_SETTINGS: ViewSettings = {
@@ -35,6 +38,7 @@ export const DEFAULT_VIEW_SETTINGS: ViewSettings = {
   keepTerminals: keepTerminalsFrom(undefined),
   tileShows: tileShowsFrom(undefined),
   chatRunsShow: chatRunsShowFrom(undefined),
+  ticketTilesOpenAs: ticketTilesOpenAsFrom(undefined),
 };
 
 /** Each setting's view state key and the reader of what was saved under it (read back untyped). */
@@ -48,6 +52,7 @@ const SETTINGS = {
   keepTerminals: { key: VIEW_KEYS.keepTerminals, from: keepTerminalsFrom },
   tileShows: { key: VIEW_KEYS.tileShows, from: tileShowsFrom },
   chatRunsShow: { key: VIEW_KEYS.chatRunsShow, from: chatRunsShowFrom },
+  ticketTilesOpenAs: { key: VIEW_KEYS.ticketTilesOpenAs, from: ticketTilesOpenAsFrom },
 } as const;
 
 let current: ViewSettings = DEFAULT_VIEW_SETTINGS;
@@ -117,7 +122,7 @@ export function viewSettingsLoaded(): boolean {
 
 /** Whether the saved settings have been read, for a component that must not act on a default. */
 export function useViewSettingsLoaded(): boolean {
-  return useSyncExternalStore(subscribe, viewSettingsLoaded);
+  return useSyncExternalStore(subscribe, viewSettingsLoaded, viewSettingsLoaded);
 }
 
 const tileShowsNow = () => current.tileShows;

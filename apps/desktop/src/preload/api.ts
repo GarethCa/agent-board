@@ -1,4 +1,5 @@
 import type {
+  TicketWatchChange,
   Agent,
   Crew,
   CrewPrefab,
@@ -82,6 +83,7 @@ import type {
   WindowOwner,
   PaneLayout,
   Shell,
+  TicketBoardPlace,
   TileMove,
   TranscriptChunk,
   ToolCheck,
@@ -130,6 +132,8 @@ import type {
   DocumentContent,
   DocumentSummary,
   LayoutMeasured,
+  TicketArrangeResult,
+  TicketChatKind,
 } from '@agent-board/daemon/protocol';
 import type { Placement, Surface, WindowLayout } from '@agent-board/daemon/window-layout';
 import type { Appearance } from '../shared/appearance';
@@ -737,7 +741,21 @@ export const ORCHESTRATOR_IPC = {
   importPrefab: 'orchestrator:import-prefab',
   stopCrew: 'orchestrator:stop-crew',
   crewRound: 'orchestrator:crew-round',
+  setTicketChat: 'orchestrator:set-ticket-chat',
+  arrangeTicket: 'orchestrator:arrange-ticket',
 } as const;
+
+/** What the user starts a prefab's crew with. */
+export interface StartPrefabParams {
+  name: string;
+  /** Its member on the prompt's first message; a ticket may start on its issue alone. */
+  prompt?: string;
+  zoneId: string;
+  repo?: string;
+  issueId?: string;
+  roundLimit?: number;
+  ticketChat?: TicketChatKind;
+}
 
 /** What orchestrators did and tried: the activity log the daemon keeps. */
 export interface OrchestratorsApi {
@@ -761,7 +779,18 @@ export interface OrchestratorsApi {
   /** Why the library would refuse `prefab`, read by its own parser, or null if it would take it. */
   checkPrefab(prefab: CrewPrefab): Promise<string | null>;
   /** Starts a crew from the prefab `name` as the user: its member on the prompt gets `prompt`. */
-  startPrefab(params: { name: string; prompt: string; zoneId: string; repo?: string; roundLimit?: number }): Promise<PrefabStarted>;
+  /**
+   * Starts a crew from the prefab `name` as the user: its member on the prompt gets `prompt`. For a prefab that starts
+   * inside a ticket tile, `issueId` is its ticket and `ticketChat` who builds it, in place of the prefab's choice.
+   */
+  startPrefab(params: StartPrefabParams): Promise<PrefabStarted>;
+  /**
+   * Makes a ticket's chat its implementer, which builds, or its own lead, which starts a builder helper: now if it is at
+   * a hand-off, else at its next one (`Agent.chatSwitch` says it waits). Asking for its kind drops a switch that waits.
+   */
+  setTicketChat(sessionId: string, kind: TicketChatKind): Promise<Agent>;
+  /** Lays out a ticket's own board, as the user: its chat and helpers beside its items. Nothing on the main board moves. */
+  arrangeTicket(ticket: string): Promise<TicketArrangeResult>;
   /** Asks for a `.crew.json` file and reads it as the library does: the prefab, or null if none was picked. Adds nothing. */
   importPrefab(): Promise<CrewPrefab | null>;
   /** Stops the running crew's loop, as the user: nothing more is handed on. Its agents stay as they are. */
@@ -798,8 +827,8 @@ export const ITEM_IPC = {
 } as const;
 
 export interface ItemsApi {
-  /** Every board item, lowest first. */
-  list(): Promise<BoardItem[]>;
+  /** Every item on the main board, lowest first; with `ticket`, a ticket chat's session id, every item on that ticket's own board. */
+  list(ticket?: string): Promise<BoardItem[]>;
   /** Adds an item on top of the others. */
   create(params: CreateItemParams): Promise<BoardItem>;
   /** Changes the fields of an item that `params` gives. */
@@ -907,11 +936,14 @@ export const AGENT_IPC = {
   markSeen: 'agent:markSeen',
   setMuted: 'agent:setMuted',
   setEffort: 'agent:setEffort',
+  setWatches: 'agent:setWatches',
+  readWatches: 'agent:readWatches',
   setRole: 'agent:setRole',
   setRecordDeleted: 'agent:setRecordDeleted',
   readDoc: 'agent:readDoc',
   setName: 'agent:setName',
   move: 'agent:move',
+  placeOnTicket: 'agent:placeOnTicket',
   /** Takes the agent the user last asked to open from outside the window (a notification), if any. */
   takeOpenRequest: 'agent:takeOpenRequest',
   /** main → renderer: the user asked to open an agent; take it with `takeOpenRequest`. */
@@ -1022,6 +1054,10 @@ export interface AgentsApi {
   setMuted(sessionId: string, muted: boolean): Promise<Agent>;
   /** Sets the agent's reasoning effort, and says when it takes it: now, after its turn, or on its next restart. */
   setEffort(sessionId: string, effort: Effort | null): Promise<{ agent: Agent; applies: EffortApplies }>;
+  /** Changes a ticket's watches (its chat's, or a helper's ticket's): those named and how often, leaving the rest. */
+  setWatches(sessionId: string, change: TicketWatchChange): Promise<Agent>;
+  /** Marks a ticket's watch news read, as its tile's Read does: its news and its ask clear. */
+  readWatches(sessionId: string): Promise<Agent>;
   /**
    * Gives the agent a role, as typed (a built-in one or any name), or none with null. Only its role changes, unless
    * `sendTemplate` asks to send it the role's template as a message too: `template` then says how that went, `none` for
@@ -1036,6 +1072,8 @@ export interface AgentsApi {
   setName(sessionId: string, name: string): Promise<Agent>;
   /** Moves the agent's tile within its zone, into any other, or out onto the board (`zoneId` null). */
   move(sessionId: string, move: TileMove): Promise<Agent>;
+  /** Moves the tile of a ticket's helper, or of its chat, on that ticket's own board; its main-board tile stays. */
+  placeOnTicket(sessionId: string, place: TicketBoardPlace): Promise<Agent>;
   /** Calls `listener` whenever an agent changes or is deleted. Returns the unsubscribe function. */
   onChanged(listener: (change: AgentChange) => void): () => void;
   /**

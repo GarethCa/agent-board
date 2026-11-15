@@ -5,7 +5,7 @@
 // it nothing. What a change tells is typed only once the change is saved.
 import { createHash, randomUUID } from 'node:crypto';
 import { boardCaller, connectionAgent, isOwnLiveSession, type BoardCallerSources, type BoardConnection } from './board.ts';
-import { readsItem } from './item-scope.ts';
+import { notReadBecause, readsItem } from './item-scope.ts';
 import { isObject } from './json.ts';
 import { keyedQueue } from './keyed-queue.ts';
 import type { DaemonCall } from './orchestrator-layout.ts';
@@ -356,7 +356,7 @@ export function createStepsHost(options: StepsHostOptions): StepsHost {
     }
   };
 
-  const cards = async () => (await options.call('item.list', undefined)).filter((item) => item.kind === 'steps');
+  const cards = async () => (await options.call('item.list', { allBoards: true })).filter((item) => item.kind === 'steps');
   const card = async (id: string) => {
     const found = (await cards()).find((item) => item.id === id);
     if (found === undefined) throw invalidParams(`no steps card ${id}`);
@@ -642,7 +642,7 @@ export function createStepsHost(options: StepsHostOptions): StepsHost {
           const id = optionalStringParam(p, 'id');
           const mine = optionalBooleanParam(p, 'mine') === true;
           const all = id === undefined ? await cards() : [await card(id)];
-          if (id !== undefined && !reads(me, all[0]!)) throw outOfScope('that steps card is in a zone you are not in');
+          if (id !== undefined && !reads(me, all[0]!)) throw outOfScope(notReadBecause('that steps card', all[0]!));
           const self = agentWho(me);
           return all.filter((item) => reads(me, item) && (!mine || stepsOf(item).steps.some((step) => step.done === null && sameWho(step.who, self))));
         },
@@ -653,7 +653,7 @@ export function createStepsHost(options: StepsHostOptions): StepsHost {
           const change = checkedChange(p.change);
           return queue(id, async () => {
             const item = await card(id);
-            if (!reads(me, item)) throw outOfScope('that steps card is in a zone you are not in');
+            if (!reads(me, item)) throw outOfScope(notReadBecause('that steps card', item));
             return save(item, changed(item, stepsOf(item), me, change), change.action === 'add' ? 'those steps' : 'that change');
           });
         },

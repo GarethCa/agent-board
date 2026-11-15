@@ -14,7 +14,7 @@ export function registerItemIpc(daemon: DaemonLink, dataDir: string): void {
   forwardEvents(daemon, ['item.updated', 'item.removed'], ITEM_IPC.changed);
   forwardEvents(daemon, ['clock.updated'], ITEM_IPC.clockChanged);
 
-  passthrough(daemon, ITEM_IPC.list, 'item.list');
+  passthrough(daemon, ITEM_IPC.list, 'item.list', (ticket?: string) => (ticket === undefined ? undefined : { ticket }));
   passthrough(daemon, ITEM_IPC.create, 'item.create', (params: CreateItemParams) => params);
   passthrough(daemon, ITEM_IPC.update, 'item.update', (params: UpdateItemParams) => params);
   ipcMain.handle(ITEM_IPC.importImage, (_event, bytes: unknown) => handImage(dataDir, bytes, (path) => daemon.call('image.import', { path })));

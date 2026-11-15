@@ -22,7 +22,7 @@ Every agent: its ref, name, [state], status (or task) and zone.
 `;
 
 exports[`agent-board --help > has help for arrange 1`] = `
-"usage: agent-board arrange [<zone ref>] [--by issue|role|state] [--layout rows|columns|cards|grid|wrap|masonry|treemap] [--auto on|off] [--json] | arrange board [--json]
+"usage: agent-board arrange [<zone ref>] [--by issue|role|state] [--layout rows|columns|cards|grid|wrap|masonry|treemap] [--auto on|off] [--json] | arrange board [--json] | arrange ticket|<ticket chat ref> [--json]
 
 Lays out the tiles of your zone (or <zone ref>) that you may move, for an
 orchestrator: you first, then
@@ -85,6 +85,12 @@ reading order a roomy gap apart, from the top-left of where they are, and the ag
 loose on the board in rows below them. The notes, shapes and text loose on the board stay put,
 and what moves keeps clear of them. It is never run by itself. It takes no --by, --layout or
 --auto.
+
+\`arrange ticket\` (your ticket's) or \`arrange <ticket chat's ref>\` lays out a ticket's own board:
+its chat, with its helpers in a column on its right, the block a gap to the left of the notes
+and cards there, which stay put. Only the tiles' places on that board move, never anything on
+the main board, and arranging a zone or the board never moves what is on a ticket's board. It
+takes no --by, --layout or --auto. After it arranges, it prints the ticket board's map.
 
   --by <b>         issue, role, state.
   --layout <l>     rows, columns, cards, grid, wrap, masonry, treemap.
@@ -222,8 +228,9 @@ their ends, dash and label; a class diagram's classes take their attributes and 
 multiplicities by them. \`style <id> fill:#rrggbb\` sets a fill. It prints the lines it passed over:
 subgraphs are drawn without their box, and clicks, classDefs and notes are left out.
 
-\`diagram export\` prints the shapes named (a zone's, or each shape ref; your zone with none) and the
-connectors between them as Mermaid: a class diagram when a class is among them, else a flowchart.
+\`diagram export\` prints the shapes named (a zone's, or each shape ref) and the connectors between them
+as Mermaid: a class diagram when a class is among them, else a flowchart. With none named it prints
+your ticket's board if you are a helper beside your ticket, else your zone.
 \`shape edit\` and \`connector edit\` change what was drawn.
 
   --file <path>    Read the Mermaid text from a file, or - for stdin.
@@ -415,7 +422,7 @@ memory, and 4,000 characters a value (keep longer text as a document).
 `;
 
 exports[`agent-board --help > has help for move 1`] = `
-"usage: agent-board move <ref> [--to <zone ref>|board] [--at <x>,<y>] [--near <ref> [--side below|right|left|above]] [--json]
+"usage: agent-board move <ref> [--to <zone ref>|board|<ticket chat ref>|ticket] [--at <x>,<y>] [--near <ref> [--side below|right|left|above]] [--json]
 
 Moves a tile (an agent's or a shell's) or a note (any board item), as dragging it would, for an
 orchestrator (\`agent-board help orchestrate\`). In a zone it lands exactly where you say, and
@@ -432,12 +439,16 @@ notes or cards, an agent the user started by hand, or an external session's tile
 refused.
 
 What you may move: any tile or note, the agents the user started by hand too.
-Where: any zone, a group, or loose on the board (--to board).
+Where: any zone, a group, or loose on the board (--to board). A note, shape or card also goes
+onto a ticket's own board (--to its chat's ref, or --to ticket for yours) and back off it, with
+--at or --near: a move to another board is refused without a place on it. A tile stays on the
+main board.
 An --at more than 1000 px past the zone's edge is put at that reach; a move that would grow
 the zone over another zone is refused.
 
-  --to <ref>       The zone (or group) to move it into; \`board\` for loose on the board.
-  --at <x>,<y>     Where, relative to the zone.
+  --to <ref>       The zone (or group) to move it into; \`board\` for loose on the board; a
+                   ticket's chat (or \`ticket\`) for that ticket's own board.
+  --at <x>,<y>     Where, relative to the zone (or on the ticket's board).
   --near <ref>     Beside this tile or note.
   --side <side>    below (the default), right, left or above.
   --json           Print where it went as JSON.
@@ -470,7 +481,7 @@ For a question with answers to pick from, use the MCP tool \`ask\`, which waits 
 `;
 
 exports[`agent-board --help > has help for new 1`] = `
-"usage: agent-board new [--zone <ref>] [--name <name>] [--harness claude|codex] [--model <model>] [--effort <level>] [--role <role>] [--repo <path>] [--branch <branch>] [--base <branch or agent ref>] [--edges auto|manual] [--issue <id>] [--description <text>] [--file <path>] [--] <prompt> | new --prefab <name> [--zone <ref>] [--repo <path>] [--issue <id>] [--description <text>] [--file <path>] [--] <prompt>
+"usage: agent-board new [--zone <ref>] [--name <name>] [--harness claude|codex] [--model <model>] [--effort <level>] [--role <role>] [--repo <path>] [--branch <branch>] [--base <branch or agent ref>] [--edges auto|manual] [--issue <id>] [--description <text>] [--file <path>] [--] <prompt> | new --prefab <name> [--zone <ref>] [--repo <path>] [--issue <id>] [--chat implementer|lead] [--description <text>] [--file <path>] [--] <prompt>
 
 Starts an agent with <prompt> (or the text of --file) as its first message, in a new worktree and
 branch of its zone's repo, as the user starts one; --repo starts it in another, in any zone. In a
@@ -520,6 +531,8 @@ agent-board: see \`agent-board help orchestrate\`. It prints the new agent's ref
                      approves or the round limit: see \`agent-board crew\`. A lead starts its
                      own crew. Takes --zone, --repo, --issue, --description and --file; the
                      prefab sets the rest.
+  --chat <kind>      With a ticket prefab: its chat is the implementer, which builds, or its
+                     own lead, which starts a builder: in place of the prefab's.
   --json             Print the agent as JSON.
 "
 `;
@@ -534,7 +547,8 @@ so it has no colour (--color is ignored, with a warning); --kind sticky makes a 
 signed with 🤖, your name and the time (signed again when edited). In a shell, or outside agent-board, it makes a sticky note (the
 default) or text. It puts the note in your zone (or --to's, any zone or a group you made)
 at its first free spot, or exactly at --at or beside --near, what is there moving aside as for
-\`agent-board move\`. A note (not text) --near an agent, with no --side, goes in its cluster's
+\`agent-board move\`. A helper beside its ticket puts it on its ticket's own board instead;
+--to ticket (or a ticket's chat's ref) puts it on that ticket's board, --to <zone ref> in a zone. A note (not text) --near an agent, with no --side, goes in its cluster's
 slot: added to the end of the note of the cluster \`agent-board arrange\` put it in, after
 what it says (arranging again keeps that text), else in the slot before the agent, which moves
 along with its row (beside it, below, for an agent the user started by hand). Its text is short
@@ -1066,6 +1080,7 @@ and, for an agent's own live session, the orchestrator commands:
   orchestrator.read
   orchestrator.interrupt
   orchestrator.setEffort
+  orchestrator.setWatches
   orchestrator.giveRole
   orchestrator.continueOnCredits
   orchestrator.restart
@@ -1079,6 +1094,7 @@ and, for an agent's own live session, the orchestrator commands:
   orchestrator.move
   orchestrator.arrange
   orchestrator.arrangeBoard
+  orchestrator.arrangeTicket
   orchestrator.map
   orchestrator.screenshot
   orchestrator.addZone
@@ -1467,6 +1483,28 @@ Exits 0, or 3 when --timeout came before --count lines.
 "
 `;
 
+exports[`agent-board --help > has help for watches 1`] = `
+"usage: agent-board watches <ref> [<kind>=<mode>...] [--every 2|5|15] [--json]
+
+Shows a ticket's watches on its pull request, or changes them, as its tile's Watches menu
+does. <ref> is the ticket's chat or one of its helpers; \`me\` is your own ticket. Each watch
+reads the pull request with the user's own \`gh\` sign-in, and only reads: none approves or merges.
+
+  reviews     A new review or comment by a person.
+  approvals   A new approval, or the review decision changing.
+  merge       Merged, closed, conflicting with its base, or behind it.
+  checks      The checks starting to fail, or passing again.
+
+Each is off, tile (the ticket's tile shows it), chat (the ticket's chat is told, as its next
+message) or both. None is on until you turn it on. The pull request is read every 5 minutes
+while one is on, and once straight after the ticket pushes; it stops once merged or closed.
+
+  reviews=both approvals=tile   Turns those on, leaving the others as they are.
+  --every <minutes>             How often to read it: 2, 5 or 15.
+  --json                        Print the ticket's chat as JSON, with its watches.
+"
+`;
+
 exports[`agent-board --help > has help for zone 1`] = `
 "usage: agent-board zone add --group --name <name> [--color <#rrggbb>] [--at <x>,<y>] [--size <w>,<h>] | zone rename <ref> <name> [--color <c>] | zone resize <ref> --size <w>,<h> [--at <x>,<y>] | zone remove <ref> | zone map [<ref>] [--boxes] [--sections] | zone screenshot [<ref>] [--out <file.png>] [--style board|lofi] | zone layout free|spine|lanes|shelves|clusters [<ref>]
 
@@ -1498,6 +1536,9 @@ really are, whatever the layout, at about three times the length. A zone with a 
 with it in short: each shape's kind, text and how many attributes and methods it has, and each
 connector's ends, relation and labels, at most 40 lines; --sections lists a class's members
 too, a few of each and cut short. \`agent-board show <ref>\` prints one shape whole.
+\`zone map ticket\` (or a ticket's chat's ref) reads a ticket's own board instead: each thing on
+it, where and how big, and the ones on top of each other. A helper beside its ticket reads its
+ticket's board by default; it names its zone's ref for the zone.
 
 \`zone screenshot\` writes a PNG of your zone (or <ref>) and prints where, the
 zone's size, the scale it is drawn at and the map's lint line. The app takes it in a hidden
@@ -1669,6 +1710,9 @@ ORCHESTRATING
   read <ref> [<path>]   An agent's final message, or a file in its worktree.
   interrupt <ref>       Stop an agent's turn; it waits at its prompt.
   effort <ref> <level>  Change an agent's reasoning effort: low, medium, high, xhigh or max.
+  watches <ref> [<kind>=<mode>...] [--every <minutes>]
+                        Show or change what a ticket watches on its pull request: reviews,
+                        approvals, merge, checks; each off, tile, chat or both.
   role <ref> <role> [--send-template] | --clear
                         Give a running agent a role, orchestrator among them, or none; only
                         its role changes, and --send-template also sends it the role's
@@ -1700,7 +1744,8 @@ ORCHESTRATING
                         Lay out your zone's tiles: you first, then a lane per issue, its
                         implementer, reviewer and follow-up in columns, then its note.
                         --auto on arranges by itself as you start agents and add notes.
-                        arrange board lays out the whole board's zones and loose tiles.
+                        arrange board lays out the whole board's zones and loose tiles;
+                        arrange ticket, a ticket's own board.
   zone map [<zone ref>] [--boxes]
                         Your zone as a table of its lanes and what is amiss, to check a
                         layout; --boxes draws it in characters.

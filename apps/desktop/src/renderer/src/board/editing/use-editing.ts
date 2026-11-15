@@ -121,7 +121,7 @@ export function useEditing(options: EditingOptions) {
       const zones = zoneLayouts();
       const top = topZ();
       made.items.forEach(({ id, kind, x, y, width, height, rotation, data }, index) => {
-        putItem({ id, kind, ...placeOnBoard({ x, y }, { width, height }, zones), width, height, rotation, data, z: top + index + 1, createdAt: '', updatedAt: '' });
+        putItem({ id, kind, ticket: null, ...placeOnBoard({ x, y }, { width, height }, zones), width, height, rotation, data, z: top + index + 1, createdAt: '', updatedAt: '' });
       });
       for (const connector of made.connectors) putConnector({ ...connector, createdAt: '', updatedAt: '' });
       select(new Set(made.items.map((item) => `${ITEM_NODE_PREFIX}${item.id}`)));

@@ -60,7 +60,9 @@ import {
   type WaitState,
   type Zone,
   type WorkCategoryParams,
+  type TicketWatchChange,
 } from './protocol.ts';
+import { ticketWatchOf, watchesSummary } from './ticket-watches.ts';
 import { cutText } from './text-cut.ts';
 import { characterReading, type CharacterReading, type CharacterSet } from './character.ts';
 import { WORK_CATEGORY_LABELS, workCategory } from './work-category.ts';
@@ -156,6 +158,35 @@ export async function readBoard(client: DaemonClient): Promise<Board> {
   ]);
   // An agent's tabs are its own, not shell tiles on the board.
   return { zones, agents, shells: shells.filter((shell) => shell.owner === null), edges, items, connectors };
+}
+
+/**
+ * The board, with the items on the caller's ticket's own board as well: what the card commands (memory, queue, steps,
+ * to-do) resolve a ref or title on, so a ticket's agents reach a card on their ticket's board as one on the main board.
+ */
+export async function readCards(session: Pick<BoardSession, 'client' | 'caller'>): Promise<Board> {
+  const board = await readBoard(session.client);
+  const ticket = callerTicket(board, session.caller);
+  return ticket === null ? board : { ...board, items: [...board.items, ...(await session.client.call('item.list', { ticket }))] };
+}
+
+/**
+ * The board, with the items on every ticket's own board as well: what the layout commands (move, note, shape) resolve a
+ * ref on, so an agent moves or edits a note wherever it is, as it moves any tile.
+ */
+export async function readEveryBoard(client: DaemonClient): Promise<Board> {
+  const board = await readBoard(client);
+  const tickets = board.agents.filter((agent) => agent.ticketChat).map((agent) => agent.sessionId);
+  const nested = await Promise.all(tickets.map((ticket) => client.call('item.list', { ticket })));
+  return { ...board, items: [...board.items, ...nested.flat()] };
+}
+
+/** The ticket whose own board the caller is on: its own if it is a ticket's chat, its chat's if it is a helper. */
+export function callerTicket(board: Board, caller: BoardCaller | null): string | null {
+  if (caller?.kind !== 'agent') return null;
+  const agent = board.agents.find((each) => each.sessionId === caller.sessionId);
+  if (agent === undefined) return null;
+  return agent.ticketChat ? agent.sessionId : agent.ticket;
 }
 
 export const REF_KINDS = ['zone', 'agent', 'shell', 'edge', 'item', 'connector'] as const;
@@ -598,9 +629,21 @@ function connectorZone(refs: BoardRefs, connector: Connector): string | null {
   return null;
 }
 
-/** The connectors listed under the zone `zoneId` (null for loose). */
+/** The ticket whose own board a connector is on (both its ends are), or null for the main board. */
+function connectorTicket(refs: BoardRefs, connector: Connector): string | null {
+  const { type, id } = connector.from;
+  const ticket = type === 'item' ? refs.board.items.find((each) => each.id === id)?.ticket : undefined;
+  return typeof ticket === 'string' ? ticket : null;
+}
+
+/** The connectors listed under the zone `zoneId` (null for loose) on the main board. */
 export function connectorsIn(refs: BoardRefs, zoneId: string | null): Connector[] {
-  return refs.board.connectors.filter((connector) => connectorZone(refs, connector) === zoneId);
+  return refs.board.connectors.filter((connector) => connectorTicket(refs, connector) === null && connectorZone(refs, connector) === zoneId);
+}
+
+/** The connectors on the ticket `ticket`'s own board. */
+export function connectorsOnTicket(refs: BoardRefs, ticket: string): Connector[] {
+  return refs.board.connectors.filter((connector) => connectorTicket(refs, connector) === ticket);
 }
 
 export function zoneLine(refs: BoardRefs, zone: Zone): string {
@@ -659,9 +702,15 @@ export function identifyView(refs: BoardRefs, caller: BoardCaller | null, socket
   };
 }
 
-/** `tree`: every zone with its tiles and items, then what is loose on the board. */
+/**
+ * `tree`: every zone with its tiles and items, then what is loose on the board, then what is on each ticket's own board
+ * it was read with (the caller's, from `readCards`).
+ */
 export function treeView(refs: BoardRefs, caller: BoardCaller | null): BoardView {
-  const { zones, agents, shells, items } = refs.board;
+  const { zones, agents, shells } = refs.board;
+  const items = refs.board.items.filter((item) => typeof item.ticket !== 'string');
+  const tickets = [...new Set(refs.board.items.flatMap((item) => (typeof item.ticket === 'string' ? [item.ticket] : [])))];
+  const onTicket = (ticket: string) => refs.board.items.filter((item) => item.ticket === ticket);
   const sections = [...zones.map((zone) => zone.id), null].map((zoneId) => {
     const inZone = <T extends { zoneId: string | null }>(list: T[]) => list.filter((each) => each.zoneId === zoneId);
     return { zoneId, agents: inZone(agents), shells: inZone(shells), items: inZone(items), connectors: connectorsIn(refs, zoneId) };
@@ -678,6 +727,11 @@ export function treeView(refs: BoardRefs, caller: BoardCaller | null): BoardView
     if (zone === undefined && rows.length === 0) continue;
     lines.push(zone === undefined ? 'loose on the board' : zoneLine(refs, zone));
     lines.push(...(rows.length === 0 ? ['(empty)'] : rows).map((row) => `  ${row}`));
+  }
+  for (const ticket of tickets) {
+    lines.push(`on ${ticketBoardName(refs, ticket)}`);
+    lines.push(...onTicket(ticket).map((item) => `  ${itemLine(refs, item)}`));
+    lines.push(...connectorsOnTicket(refs, ticket).map((connector) => `  ${connectorLine(refs, connector)}`));
   }
   return {
     text: lines.length === 0 ? 'The board is empty.' : lines.join('\n'),
@@ -698,6 +752,11 @@ export function treeView(refs: BoardRefs, caller: BoardCaller | null): BoardView
         items: sections.at(-1)!.items.map((item) => itemJson(refs, item)),
         connectors: sections.at(-1)!.connectors.map((connector) => connectorJson(refs, connector)),
       },
+      ticketBoards: tickets.map((ticket) => ({
+        ticket: refs.of('agent', ticket),
+        items: onTicket(ticket).map((item) => itemJson(refs, item)),
+        connectors: connectorsOnTicket(refs, ticket).map((connector) => connectorJson(refs, connector)),
+      })),
     },
   };
 }
@@ -726,6 +785,17 @@ export function shellsView(refs: BoardRefs, caller: BoardCaller | null): BoardVi
     text: shells.length === 0 ? 'No shell tiles.' : shells.map((shell) => `${shellLine(refs, shell, caller)}  ${inZone(refs, shell.zoneId)}`).join('\n'),
     json: shells.map((shell) => shellJson(refs, shell, caller)),
   };
+}
+
+/** Where an item is: on a ticket's own board, in a zone, or loose on the main board. */
+export function itemPlace(refs: BoardRefs, item: Pick<BoardItem, 'zoneId' | 'ticket'>): string {
+  return typeof item.ticket === 'string' ? `(on ${ticketBoardName(refs, item.ticket)})` : inZone(refs, item.zoneId);
+}
+
+/** A ticket's own board by its chat's ref and name: `agent:ab12 Fix login's ticket board`. */
+export function ticketBoardName(refs: BoardRefs, ticket: string): string {
+  const chat = refs.board.agents.find((each) => each.sessionId === ticket);
+  return `${refs.of('agent', ticket)}${chat === undefined ? '' : ` ${chat.name}`}'s ticket board`;
 }
 
 export function inZone(refs: BoardRefs, zoneId: string | null): string {
@@ -908,7 +978,7 @@ export function showView(refs: BoardRefs, object: BoardObject, caller: BoardCall
       return {
         text: [
           `${ref}  ${shape === undefined ? item.kind : `shape ${shape.shape}`}`,
-          ...rows([['zone', inZone(refs, item.zoneId)], ['by', writtenBy(refs, item)]]),
+          ...rows([['zone', itemPlace(refs, item)], ['by', writtenBy(refs, item)]]),
           ...itemText(item).split('\n').map((line) => `  ${line}`),
           ...shapeSectionLines(item).map((line) => `  ${line}`),
           ...(joined.length === 0 ? [] : ['  connectors', ...joined.map((connector) => `    ${connectorLine(refs, connector)}`)]),
@@ -1386,6 +1456,8 @@ export interface StartPrefabOptions {
   /** In a group, the absolute path of the repo (or a folder in one) to cut its worktree from. */
   repo?: string;
   issue?: string;
+  /** For a ticket prefab, the kind of chat in place of the prefab's. */
+  chat?: 'implementer' | 'lead';
   /** What its first agent is for, as `NewAgentOptions.description`. */
   description?: string;
 }
@@ -1406,6 +1478,7 @@ export async function startPrefab(session: BoardSession, options: StartPrefabOpt
     ...(zoneId === undefined ? {} : { zoneId }),
     ...(options.repo === undefined ? {} : { repo: options.repo }),
     ...(options.issue === undefined ? {} : { issueId: options.issue }),
+    ...(options.chat === undefined ? {} : { ticketChat: options.chat }),
     ...(options.description === undefined ? {} : { description: options.description }),
   });
   const lines = [crew.crew === null ? `Started a crew from ${crew.prefab}:` : `Started crew:${crew.crew} from ${crew.prefab}:`];
@@ -1646,6 +1719,29 @@ export async function setAgentEffort(session: BoardSession, ref: string, effort:
     text: `Set ${effort} effort, taken ${EFFORT_APPLIES[applies]}: ${fresh.line}`,
     json: { ...agentJson(fresh.refs, fresh.agent, session.caller), applies },
   };
+}
+
+/**
+ * `watches`: the watches of the ticket `ref` is the chat or a helper of, changed first if `change` names any (each
+ * kind it names, and how often). They read its pull request with the user's own `gh`, and only read.
+ */
+export async function ticketWatches(session: BoardSession, ref: string, change: TicketWatchChange): Promise<BoardView> {
+  const { token, agent } = await orchestratorTarget(session, ref);
+  let chatId = agent.ticketChat ? agent.sessionId : agent.ticket;
+  if (change.watches !== undefined || change.everyMinutes !== undefined) {
+    ({ agent: { sessionId: chatId } } = await session.client.call('orchestrator.setWatches', { token, sessionId: agent.sessionId, ...change }));
+  }
+  if (chatId === null) throw new BoardError(`${ref} is in no ticket: only a ticket's chat and its helpers have watches`);
+  const fresh = await freshAgentLine(session, chatId);
+  const watch = fresh.agent.watch ?? ticketWatchOf(null, null);
+  const pullRequest = watch.pullRequest === null ? 'no pull request yet' : `${watch.pullRequest.repo}#${watch.pullRequest.number} (${watch.pullRequest.state})`;
+  const lines = [
+    `Watches of ${fresh.line}`,
+    `  ${watchesSummary(watch.settings)}; ${pullRequest}${watch.checkedAt === null ? '' : `, checked ${watch.checkedAt}`}`,
+    ...(watch.problem === null ? [] : [`  Could not read it: ${watch.problem}`]),
+    ...watch.news.map((news) => `  New: ${news.text}`),
+  ];
+  return { text: lines.join('\n'), json: { ...agentJson(fresh.refs, fresh.agent, session.caller), watch } };
 }
 
 /**

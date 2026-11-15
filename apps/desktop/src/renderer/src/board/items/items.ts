@@ -104,9 +104,13 @@ export function boundsOnBoard(node: Node, rect: Rect): Rect {
   return isItemNode(node) ? rotatedBounds(rect, node.data.item.rotation) : rect;
 }
 
-/** `nodes` with `change` applied. */
-export function withItemChange<N extends Node>(nodes: N[], change: ItemChange): N[] {
-  return change.type === 'item.updated' ? withItem(nodes, change.item) : withoutItem(nodes, change.id);
+/**
+ * `nodes`, the items of one board, with `change` applied: the main board's (`ticket` null) or a ticket's own board's
+ * (its chat's session id). An item on another board is not drawn here, and one moved to another board leaves this one.
+ */
+export function withItemChange<N extends Node>(nodes: N[], change: ItemChange, ticket: string | null = null): N[] {
+  if (change.type === 'item.updated' && (typeof change.item.ticket === 'string' ? change.item.ticket : null) === ticket) return withItem(nodes, change.item);
+  return withoutItem(nodes, change.type === 'item.updated' ? change.item.id : change.id);
 }
 
 export function withoutItem<N extends Node>(nodes: N[], id: string): N[] {

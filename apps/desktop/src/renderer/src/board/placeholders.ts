@@ -29,6 +29,7 @@ export function placeholderStickies(count: number): ItemNodeType[] {
       id: `placeholder-${index}`,
       kind: 'sticky',
       zoneId: null,
+      ticket: null,
       x: (index % COLUMNS) * (STICKY_SIZE.width + GAP),
       y: 4 * (TILE.height + GAP) + Math.floor(index / COLUMNS) * (STICKY_SIZE.height + GAP),
       ...STICKY_SIZE,

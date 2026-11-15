@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { connectDaemon } from '../src/client.ts';
 import { runAgentBoardCli } from '../src/cli.ts';
+import { MIGRATIONS } from '../src/migrate.ts';
 import { daemonPaths } from '../src/paths.ts';
 import { startTestDaemon, tempDataDir } from './helpers.ts';
 
@@ -60,7 +61,8 @@ describe('agent-board daemon', () => {
   it('exits 1 with a one-line reason when the daemon cannot start', async () => {
     const dataDir = tempDataDir();
     const db = new DatabaseSync(daemonPaths(dataDir).database);
-    db.exec('PRAGMA user_version = 99');
+    // One past the newest migration: a database from a newer daemon, whatever migrations come next.
+    db.exec(`PRAGMA user_version = ${MIGRATIONS.at(-1)!.version + 1}`);
     db.close();
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.spyOn(console, 'log').mockImplementation(() => {});

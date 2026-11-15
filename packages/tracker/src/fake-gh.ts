@@ -351,8 +351,14 @@ function pullRequestJson(pr: FakeGitHubPullRequest) {
     changedFiles: files.length,
     additions: files.reduce((sum, file) => sum + file.additions, 0),
     deletions: files.reduce((sum, file) => sum + file.deletions, 0),
-    reviews: reviews.map((review) => ({ state: review.state, body: review.body, submittedAt: review.submittedAt, author: { login: review.author } })),
-    comments: comments.map(({ author: by, ...comment }) => ({ ...comment, author: { login: by } })),
+    reviews: reviews.map((review) => ({
+      state: review.state,
+      body: review.body,
+      submittedAt: review.submittedAt,
+      author: { login: review.author },
+      authorAssociation: review.association ?? 'MEMBER',
+    })),
+    comments: comments.map(({ author: by, association, ...comment }) => ({ ...comment, author: { login: by }, authorAssociation: association ?? 'MEMBER' })),
   };
 }
 

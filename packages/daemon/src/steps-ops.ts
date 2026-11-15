@@ -1,7 +1,7 @@
 // The steps commands as the CLI and MCP give them (`steps new|ls|read|done|wait|add|answer|close`): the line format
 // and refs turned into the daemon's steps methods, and the cards they answer with as text and JSON (ADR-0010's one API,
 // two faces).
-import { agentToken, BoardError, BoardRefs, inZone, readBoard, resolveAgent, type BoardSession, type BoardView } from './board-ops.ts';
+import { agentToken, BoardError, BoardRefs, itemPlace, readCards, resolveAgent, type BoardSession, type BoardView } from './board-ops.ts';
 import type { BoardItem, Step, StepAnswer, StepDraft, StepsChange, StepsData, StepsWho } from './protocol.ts';
 import { answerWords, parseSteps, stepLine, StepsFormatError } from './steps-format.ts';
 
@@ -17,7 +17,7 @@ async function drafts(session: BoardSession, text: string): Promise<{ title: str
     throw error;
   }
   const named = parsed.steps.some((step) => step.who !== null && step.who !== 'me' && step.who !== 'user');
-  const refs = named ? new BoardRefs(await readBoard(session.client)) : undefined;
+  const refs = named ? new BoardRefs(await readCards(session)) : undefined;
   const steps = parsed.steps.map(({ who, ...step }): StepDraft => {
     if (who === null || who === 'me') return { ...step, who: null };
     if (who === 'user') return { ...step, who: { kind: 'user' } };
@@ -33,7 +33,7 @@ const doneCount = (data: StepsData) => data.steps.filter((step) => step.done !==
 function cardLine(refs: BoardRefs, item: BoardItem): string {
   const data = stepsOf(item);
   const state = data.closedAt !== null ? '  closed' : data.sent !== null ? '  answers sent' : '';
-  return `${refs.of('item', item.id)}  “${data.title}”  ${doneCount(data)}/${data.steps.length} done${state}  by ${whoText(refs, data.madeBy)}  ${inZone(refs, item.zoneId)}`;
+  return `${refs.of('item', item.id)}  “${data.title}”  ${doneCount(data)}/${data.steps.length} done${state}  by ${whoText(refs, data.madeBy)}  ${itemPlace(refs, item)}`;
 }
 
 /** Who as the format writes it: `user`, or an agent's ref (its id's start once it is gone from the board). */
@@ -60,7 +60,7 @@ function cardText(refs: BoardRefs, item: BoardItem): string {
 
 /** The card `ref` names, as the daemon has it for the caller. */
 async function cardFor(session: BoardSession, ref: string): Promise<{ refs: BoardRefs; item: BoardItem }> {
-  const refs = new BoardRefs(await readBoard(session.client));
+  const refs = new BoardRefs(await readCards(session));
   const object = refs.resolve(ref, session.caller);
   if (object.kind !== 'item' || object.item.kind !== 'steps') throw new BoardError(`${ref} is not a steps card: \`agent-board steps ls\` lists them`);
   const [item] = await session.client.call('board.readSteps', { token: agentToken(session, 'read a steps card'), id: object.item.id });
@@ -74,7 +74,7 @@ export async function newSteps(session: BoardSession, options: { title?: string;
   const named = options.title?.trim() || title;
   if (named === null || named === undefined) throw new BoardError('give the card a title: a "# title" line, or --title');
   const item = await session.client.call('board.newSteps', { token, title: named, steps });
-  const refs = new BoardRefs(await readBoard(session.client));
+  const refs = new BoardRefs(await readCards(session));
   const data = stepsOf(item);
   const asks = data.steps.some((step) => step.kind !== 'todo');
   const answers =
@@ -87,7 +87,7 @@ export async function newSteps(session: BoardSession, options: { title?: string;
 /** `steps ls`: the steps cards the caller can read; with `mine`, those with a to-do of its not yet done. */
 export async function listSteps(session: BoardSession, options: { mine?: boolean }): Promise<BoardView> {
   const items = await session.client.call('board.readSteps', { token: agentToken(session, 'list steps cards'), ...(options.mine === true ? { mine: true } : {}) });
-  const refs = new BoardRefs(await readBoard(session.client));
+  const refs = new BoardRefs(await readCards(session));
   const none = options.mine === true ? 'No steps card has a to-do of yours not yet done.' : 'No steps cards you can read.';
   return { text: items.length === 0 ? none : items.map((item) => cardLine(refs, item)).join('\n'), json: items };
 }

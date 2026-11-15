@@ -10,6 +10,7 @@ import {
   type ZoneLayout,
 } from '@agent-board/daemon/protocol';
 import { paneIds } from '@agent-board/daemon/pane-layout';
+import { heldByTicket } from '@agent-board/daemon/ticket-tiles';
 import { isItemNode, type ItemNodeType } from './items/items';
 import { expandedRank, type ExpandedTiles } from './expanded';
 import { tileSizeOf, type TileSizes } from './tile-size';
@@ -36,6 +37,37 @@ const TILE_PREFIXES: Record<TileKind, string> = { agent: AGENT_NODE_PREFIX, shel
  * `tileSizeKey`, as its resized size is kept by it.
  */
 export const tileNodeId = (kind: TileKind, id: string): string => tileSizeKey(kind, id);
+
+/** What decides whether a ticket's chat draws as its ticket's card. */
+type CardFields = Pick<Agent, 'startup' | 'undelivered' | 'trustFolder' | 'untypedPrompt' | 'unsent' | 'hooksSilent'>;
+
+/**
+ * Whether a ticket's chat draws as its ticket's card: not while it starts, or while a row waits on the user's click to
+ * reach it (what it was sent, its trust screen, its first prompt, what was typed and never sent, silent hooks). Its usual
+ * tile has the buttons for those, and its helpers have tiles of their own meanwhile; the card has room for one ask only.
+ * A chat a restart stopped keeps its card, which asks to resume it.
+ */
+export function drawsAsTicket(chat: CardFields): boolean {
+  return chat.startup === null && chat.undelivered.length === 0 && chat.trustFolder === null && chat.untypedPrompt === null && chat.unsent === null && !chat.hooksSilent;
+}
+
+type HeldFields = Pick<Agent, 'sessionId' | 'zoneId' | 'ticket' | 'ticketChat'> & CardFields;
+
+/** Whether its ticket's card holds `agent`: a helper in its chat's zone (`heldByTicket`), while that chat draws as the card. */
+export function heldInCard(agent: HeldFields, agents: readonly HeldFields[]): boolean {
+  if (agent.ticket === null || !heldByTicket(agent, agents)) return false;
+  const chat = agents.find((each) => each.sessionId === agent.ticket);
+  return chat !== undefined && chat.ticketChat && drawsAsTicket(chat);
+}
+
+/**
+ * The session whose tile draws `sessionId`'s agent: its ticket's chat, for a helper its ticket's card holds, which has
+ * no tile of its own; else its own.
+ */
+export function drawnIn(agents: readonly HeldFields[], sessionId: string): string {
+  const agent = agents.find((each) => each.sessionId === sessionId);
+  return agent !== undefined && heldInCard(agent, agents) ? agent.ticket! : sessionId;
+}
 
 /** Which session a tile's node stands for, read from its id; undefined for any other node. */
 export function tileSubject(nodeId: string): { kind: TileKind; id: string } | undefined {
@@ -187,7 +219,14 @@ export function withTiles(
   // An agent's or shell tile's tabs are shells of its session window, not tiles of their own; an agent's tile shows its.
   const tabs = new Map<string, Shell[]>();
   for (const shell of shells) if (shell.owner?.kind === 'agent') tabs.set(shell.owner.id, [...(tabs.get(shell.owner.id) ?? []), shell]);
+  // A ticket's helpers in its chat's zone are drawn inside the chat's card, as icons, not as tiles of their own; while
+  // the chat draws as its usual tile instead, they keep theirs.
+  const helpers = new Map<string, Agent[]>();
+  for (const agent of agents) if (agent.ticketChat && drawsAsTicket(agent)) helpers.set(agent.sessionId, []);
+  const held = new Set(agents.filter((agent) => heldInCard(agent, agents)).map((agent) => agent.sessionId));
+  for (const agent of agents) if (held.has(agent.sessionId)) helpers.get(agent.ticket!)?.push(agent);
   for (const listed of agents) {
+    if (held.has(listed.sessionId)) continue;
     const id = tileNodeId('agent', listed.sessionId);
     const agent = placedAt(listed, pending.get(id));
     // Outside every zone of its repo, its tile says which repo it works in.
@@ -195,8 +234,9 @@ export function withTiles(
     const orchestrator = agent.spawnedBy === null ? undefined : byId.get(agent.spawnedBy);
     const crew = crews.get(agent.sessionId);
     const implementer = agent.reviewOf === null ? undefined : byId.get(agent.reviewOf);
-    // A closed agent is a chip, unless the user unfolded it or it is expanded in place.
-    if (isFolded(agent, unfolded) && expandedRank(expanded, id) === undefined) folded.add(id);
+    // A closed agent is a chip, unless the user unfolded it or it is expanded in place. A ticket's tile never is: it
+    // stays as it is until the user removes it.
+    if (!agent.ticketChat && isFolded(agent, unfolded) && expandedRank(expanded, id) === undefined) folded.add(id);
     add(id, agent.zoneId, {
       label: agent.name,
       harness: agent.harness,
@@ -207,6 +247,7 @@ export function withTiles(
       ...(implementer === undefined ? {} : { implementer }),
       ...(crewFlags.has(agent.sessionId) ? { crewFlags: crewFlags.get(agent.sessionId) } : {}),
       ...(tabs.has(agent.sessionId) ? { tabs: tabs.get(agent.sessionId) } : {}),
+      ...(helpers.has(agent.sessionId) ? { helpers: helpers.get(agent.sessionId) } : {}),
       ...(folded.has(id) ? { folded: true as const, lift: chipLift(tileSizeOf(sizes, id).height) } : {}),
     });
   }

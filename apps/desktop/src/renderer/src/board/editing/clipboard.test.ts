@@ -6,6 +6,7 @@ const item = (id: string, x: number, y: number, data: Record<string, unknown> = 
   id,
   kind: 'sticky',
   zoneId: 'zone',
+  ticket: null,
   x: x - 1000,
   y: y - 1000,
   width: 100,

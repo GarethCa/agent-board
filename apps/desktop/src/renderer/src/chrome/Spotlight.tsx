@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useId, useImperativeHandle, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type Ref } from 'react';
 import * as RadixDialog from '@radix-ui/react-dialog';
-import type { Agent, Shell, Zone } from '@agent-board/daemon/protocol';
-import { MessageCircleDashed, Plus, Search, Settings, LibraryBig, ListFilter } from 'lucide-react';
+import type { Agent, BoardItem, Shell, Zone } from '@agent-board/daemon/protocol';
+import { CircleDot, FileText, Link, MessageCircleDashed, Plus, Search, Settings, LibraryBig, ListFilter, Shapes, StickyNote, type LucideIcon } from 'lucide-react';
 import { CrewFaces } from '../crews/icons';
 import { usePrefabs } from '../crews/prefab-store';
 import { SESSION_SURFACES } from '../board/board-shortcuts';
@@ -50,6 +50,15 @@ export interface SpotlightPlace<C> {
 /** The key of the "New agent named …" row, among the rows' keys as ↑↓ move through them. */
 const NEW_AGENT_KEY = 'new-agent';
 
+/** The icons of the kinds of item ⌘K finds most, by what each is; any other kind's is the shapes'. */
+const ITEM_ICONS: Partial<Record<BoardItem['kind'], LucideIcon>> = { sticky: StickyNote, document: FileText, plan: FileText, link: Link, issue: CircleDot };
+
+/** An item row's icon: its kind's. */
+function ItemIcon({ kind }: { kind: BoardItem['kind'] }) {
+  const Icon = ITEM_ICONS[kind] ?? Shapes;
+  return <Icon />;
+}
+
 /** Opens the switcher from a control, such as the board menu's Find, as ⌘K does. */
 export interface SpotlightHandle {
   open(): void;
@@ -63,6 +72,8 @@ export interface SpotlightProps<C> {
   zones: readonly Zone[];
   /** The board's session windows, listed first under the Simplified design; the other windows have none. */
   windows?: SessionWindows;
+  /** The items on tickets' own boards, found once something is typed; the other windows have none. */
+  ticketItems?: readonly BoardItem[];
   /** Where ⌘K was pressed: `at`, the element it was pressed in (the page's host, for a web tab's page). */
   placeOf(at: Element | null): SpotlightPlace<C>;
   /**
@@ -116,7 +127,7 @@ export function focusKeeper(at: Element | null): () => void {
  * window's: the board's shows the tile or switches the view in focus (`BoardSpotlight`), a popped-out window switches
  * its session (`PopOutSpotlight`).
  */
-export function Spotlight<C>({ ref, agents, shells, zones, windows, placeOf, onPick, canStartAgent, onNewAgent, onCrew }: SpotlightProps<C>) {
+export function Spotlight<C>({ ref, agents, shells, zones, windows, ticketItems, placeOf, onPick, canStartAgent, onNewAgent, onCrew }: SpotlightProps<C>) {
   const prefabs = usePrefabs();
   const [opened, setOpened] = useState<Opened<C>>();
   const [query, setQuery] = useState('');
@@ -159,8 +170,8 @@ export function Spotlight<C>({ ref, agents, shells, zones, windows, placeOf, onP
   // The id of the session the view shows already, from its row key (`agent:<id>`, `shell:<id>`).
   const current = opened?.place.current?.replace(/^(agent|shell):/, '');
   const groups = useMemo(
-    () => spotlightGroups(query, { agents, shells: shells ?? [], zones, shows, windows: listedWindows, current, canStartAgent, prefabs, simplified, windowsListed: simplified || dock !== 'all' }),
-    [query, agents, shells, zones, shows, listedWindows, current, canStartAgent, prefabs, simplified, dock],
+    () => spotlightGroups(query, { agents, shells: shells ?? [], zones, shows, windows: listedWindows, current, canStartAgent, prefabs, simplified, windowsListed: simplified || dock !== 'all', ticketItems }),
+    [query, agents, shells, zones, shows, listedWindows, current, canStartAgent, prefabs, simplified, dock, ticketItems],
   );
   const rows = groups.flatMap((group) => group.rows);
   const place = opened?.place;
@@ -429,6 +440,8 @@ function Row({ id, row, active, compact = false, onHover, onPick }: { id: string
           )
         ) : subject.kind === 'setting' || subject.kind === 'action' ? (
           subject.kind === 'action' && subject.action === 'newAgent' ? <Plus /> : subject.kind === 'action' && subject.action === 'parkThought' ? <MessageCircleDashed /> : <Settings />
+        ) : subject.kind === 'item' ? (
+          <ItemIcon kind={subject.item.kind} />
         ) : subject.kind === 'zone' ? (
           // A zone's colour is its data, not a theme token.
           <span className="spotlight-zone-ring" style={{ '--zone-color': subject.zone.color } as CSSProperties} />
@@ -459,6 +472,8 @@ function Row({ id, row, active, compact = false, onHover, onPick }: { id: string
         <Tag>shell</Tag>
       ) : subject.kind === 'zone' ? (
         <span className="spotlight-act">show zone</span>
+      ) : subject.kind === 'item' ? (
+        <span className="spotlight-act">show</span>
       ) : subject.kind === 'action' ? (
         <span className="spotlight-act">run</span>
       ) : subject.kind === 'filter' ? (

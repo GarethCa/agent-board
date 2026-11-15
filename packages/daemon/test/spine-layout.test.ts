@@ -195,6 +195,15 @@ describe('layOutSpine', () => {
     expect(xy(layout, 'item:c2')).toEqual([layout.more!.x, PAD]);
   });
 
+  it('keeps clocks made in the same millisecond in the order it was given them, whatever their ids', () => {
+    // Made one after another, in one millisecond; their random ids sort the other way.
+    const same = '2026-11-13T11:00:00.000Z';
+    const made = ['zz', 'mm', 'aa'].map((id) => ({ ...clock(id), createdAt: same }));
+    const layout = layOutSpine({ tiles: made, links: [], spacing: 'normal' });
+    expect(xy(layout, 'item:zz')).toEqual([PAD, PAD]);
+    expect(layout.more?.hidden).toEqual(['item:mm', 'item:aa']);
+  });
+
   it('hugs its tiles: as small as what it holds, and what stays put', () => {
     const tiles = [lead(), ticket(1)];
     const layout = layOutSpine({ tiles, links: [], spacing: 'normal' });

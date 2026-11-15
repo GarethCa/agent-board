@@ -2,7 +2,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { app, BrowserWindow, ipcMain } from 'electron';
 import { DaemonRpcError, type DaemonLink } from '@agent-board/daemon/client';
-import { AGENT_ERROR, type AgentRecordKind, type Effort, type AskSelectionParams, type PermissionDecision, type PromptAnswer, type ScheduleSpec, type SpawnAgentParams, type StartMasterParams, type TileMove } from '@agent-board/daemon/protocol';
+import { AGENT_ERROR, type AgentRecordKind, type Effort, type AskSelectionParams, type PermissionDecision, type PromptAnswer, type ScheduleSpec, type SpawnAgentParams, type StartMasterParams, type TicketBoardPlace, type TicketWatchChange, type TileMove } from '@agent-board/daemon/protocol';
 import { revealWindow } from './background';
 import { AGENT_IPC, type AgentStartsResetEvent, type DeleteAgentResult, type RestartAgentResult, type SpawnAgentResult } from '../preload/api';
 import { forwardEvents, sendToAllWindows } from './broadcast';
@@ -81,6 +81,8 @@ export function registerAgentIpc(daemon: DaemonLink, dataDir: string): void {
   passthrough(daemon, AGENT_IPC.markSeen, 'agent.markSeen', (sessionId: string) => ({ sessionId }));
   passthrough(daemon, AGENT_IPC.setMuted, 'agent.setMuted', (sessionId: string, muted: boolean) => ({ sessionId, muted }));
   passthrough(daemon, AGENT_IPC.setEffort, 'agent.setEffort', (sessionId: string, effort: Effort | null) => ({ sessionId, effort }));
+  ipcMain.handle(AGENT_IPC.setWatches, async (_event, sessionId: string, change: TicketWatchChange) => (await daemon.call('ticket.setWatches', { ...change, sessionId })).agent);
+  ipcMain.handle(AGENT_IPC.readWatches, async (_event, sessionId: string) => (await daemon.call('ticket.readWatches', { sessionId })).agent);
   // A role alone is the user's own change; with its template it is given as the user, who sends the template as any message.
   ipcMain.handle(AGENT_IPC.setRole, (_event, sessionId: string, role: string | null, sendTemplate?: boolean) =>
     sendTemplate === true ? daemon.call('orchestrator.giveRole', { sessionId, role, sendTemplate }) : daemon.call('agent.setRole', { sessionId, role }),
@@ -92,6 +94,7 @@ export function registerAgentIpc(daemon: DaemonLink, dataDir: string): void {
     deleted,
   }));
   passthrough(daemon, AGENT_IPC.readDoc, 'agent.readDoc', (sessionId: string, path: string) => ({ sessionId, path }));
+  passthrough(daemon, AGENT_IPC.placeOnTicket, 'agent.placeOnTicket', (sessionId: string, place: TicketBoardPlace) => ({ ...place, sessionId }));
   ipcMain.handle(AGENT_IPC.move, async (_event, sessionId: string, move: TileMove) => {
     const moved = await daemon.call('agent.move', { ...move, sessionId });
     if (moveAnswerDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, moveAnswerDelayMs));

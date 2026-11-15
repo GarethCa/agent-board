@@ -48,6 +48,12 @@ export const VIEW_KEYS = {
   tileShows: 'tileShows',
   /** When the chat's Expand all / Collapse all show: always unless set to show on hover. */
   chatRunsShow: 'chatRunsShow',
+  /** How a ticket's tile opens, Settings › Board › Agent tiles: its chat's terminal unless set to the clean card. */
+  ticketTilesOpenAs: 'ticketTiles.openAs',
+  /** The ticket tiles switched by hand to the card or the terminal, by node id: each keeps its own view. */
+  ticketViews: 'ticketTiles.views',
+  /** Which board the window shows: a ticket's own board, zoomed into from its tile (`{ ticket }`, its chat's session id), else the main board. */
+  boardLevel: 'board.level',
   /** Whether the plan usage pill shows on the board, beside the zoom controls: off unless turned on. */
   usageOnBoard: 'usageOnBoard',
   /** Whether the keys added since the key registry work, the "Extended keyboard shortcuts" setting: on unless turned off. */

@@ -12,6 +12,8 @@ import {
   type LibraryPrefab,
   type PrefabMember,
   type PrefabStart,
+  type TicketChatKind,
+  DEFAULT_TICKET_CHAT_KIND,
 } from '@agent-board/daemon/protocol';
 import { EFFORT_LABELS, MODELS } from '../board/AgentSetup';
 import { Button, Dialog, ErrorText, Field, Hint, IconButton, Input, Segmented, Select, Textarea } from '../ui';
@@ -80,7 +82,7 @@ export function PrefabEditor({ prefab, imported, onClose, onSaved, inline = fals
   const [draft, setDraft] = useState<CrewPrefab>(() => {
     if (prefab === null) return imported ?? blank();
     // The prefab alone: whether it is built in, and when it was saved, are the library's.
-    const own: CrewPrefab = { name: prefab.name, icon: prefab.icon, purpose: prefab.purpose, roundLimit: prefab.roundLimit, onBoard: prefab.onBoard, members: prefab.members };
+    const own: CrewPrefab = { name: prefab.name, icon: prefab.icon, purpose: prefab.purpose, roundLimit: prefab.roundLimit, onBoard: prefab.onBoard, ...(prefab.ticketChat === undefined ? {} : { ticketChat: prefab.ticketChat }), members: prefab.members };
     return copy ? { ...own, name: `${own.name} (mine)` } : own;
   });
   const [picked, setPicked] = useState<string | undefined>(pickedAt ?? draft.members[0]?.id);
@@ -181,13 +183,27 @@ export function PrefabEditor({ prefab, imported, onClose, onSaved, inline = fals
               <Segmented
                 aria-label="On the board"
                 value={draft.onBoard}
-                onChange={(onBoard) => change({ onBoard })}
+                onChange={(onBoard) => setDraft(({ ticketChat, ...current }) => ({ ...current, onBoard, ...(onBoard === 'ticket' ? { ticketChat: ticketChat ?? DEFAULT_TICKET_CHAT_KIND } : {}) }))}
                 options={[
                   { id: 'card', label: 'One card' },
                   { id: 'tiles', label: 'Member tiles' },
+                  { id: 'ticket', label: 'Inside a ticket tile' },
                 ]}
               />
             </Field>
+            {draft.onBoard === 'ticket' && (
+              <Field label="Ticket chat">
+                <Segmented<TicketChatKind>
+                  aria-label="Ticket chat"
+                  value={draft.ticketChat ?? DEFAULT_TICKET_CHAT_KIND}
+                  onChange={(ticketChat) => change({ ticketChat })}
+                  options={[
+                    { id: 'lead', label: 'Its own lead' },
+                    { id: 'implementer', label: 'The implementer' },
+                  ]}
+                />
+              </Field>
+            )}
           </span>
         </div>
         <Input

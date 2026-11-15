@@ -65,6 +65,7 @@ import { useAgentTileMenu } from './agent-tile-menu';
 import { useMenuBarSection } from '../keys/menu-bar-bridge';
 import { CalmShellTile } from './CalmShellTile';
 import { CalmTile } from './CalmTile';
+import { TicketTile } from './TicketTile';
 import { ResumeButton } from './RestartBanner';
 import { ShellFolderChip } from './shell-parts';
 import { useSimplified } from '../design';
@@ -92,6 +93,9 @@ export const HybridTile = memo(function HybridTile({ id, tile, selected = false 
   const harness = tile.harness ?? 'shell';
   const simplified = useSimplified();
   if (tile.start !== undefined) return <StartTile id={id} start={tile.start} />;
+  if (tile.agent !== undefined && tile.helpers !== undefined) {
+    return <TicketTile id={id} selected={selected} chat={tile.agent} helpers={tile.helpers} from={tile.from} implementer={tile.implementer} />;
+  }
   if (tile.agent !== undefined && simplified) {
     return <CalmTile id={id} selected={selected} agent={tile.agent} repo={tile.repo} from={tile.from} crew={tile.crew} crewFlags={tile.crewFlags} implementer={tile.implementer} />;
   }

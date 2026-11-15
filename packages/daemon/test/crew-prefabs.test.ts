@@ -1,6 +1,7 @@
 // A crew prefab's model and its `.crew.json` file: what a prefab holds, what a file may carry, and why one is refused.
 import { describe, expect, it } from 'vitest';
 import { BUILT_IN_PREFABS, parsePrefab, prefabFile } from '../src/crew-prefabs.ts';
+import { withTicketChat } from '../src/ticket-tiles.ts';
 
 /** A small valid file, as a person might write it by hand. */
 const pairFile = () => ({
@@ -46,7 +47,7 @@ describe('a crew prefab file', () => {
     }
   });
 
-  it('ships the six built-ins, Solo agent with one member, Lead and crew with member tiles, and Ticket as a ticket tile', () => {
+  it('ships the eight built-ins, Solo agent with one member, Lead and crew with member tiles, and the tickets as ticket tiles', () => {
     expect(BUILT_IN_PREFABS.map((prefab) => prefab.name)).toEqual([
       'Solo agent',
       'Implementer + reviewer',
@@ -54,10 +55,16 @@ describe('a crew prefab file', () => {
       'Spike + reviewer',
       'Lead and crew',
       'Ticket',
+      'Design, build, review',
+      'Just the chat',
     ]);
     expect(BUILT_IN_PREFABS[0]!.members).toHaveLength(1);
     expect(BUILT_IN_PREFABS.filter((prefab) => prefab.onBoard === 'tiles').map((prefab) => prefab.name)).toEqual(['Lead and crew']);
-    expect(BUILT_IN_PREFABS.filter((prefab) => prefab.onBoard === 'ticket').map((prefab) => prefab.name)).toEqual(['Ticket']);
+    expect(BUILT_IN_PREFABS.filter((prefab) => prefab.onBoard === 'ticket').map((prefab) => [prefab.name, prefab.ticketChat])).toEqual([
+      ['Ticket', 'implementer'],
+      ['Design, build, review', 'lead'],
+      ['Just the chat', 'implementer'],
+    ]);
   });
 
   it('refuses what is not a prefab file, or one from a newer app', () => {
@@ -129,5 +136,49 @@ describe('a crew prefab file', () => {
     ]);
     expect(refusal(withSubagents(Array.from({ length: 6 }, (_, n) => ({ ...check, name: `Check ${n}` }))))).toMatch(/at most 5 subagents/);
     expect(refusal(withSubagents([{ ...check, runs: { paths: [] } }]))).toMatch(/at least one path/);
+  });
+});
+
+describe("a ticket prefab's chat", () => {
+  const named = (name: string) => BUILT_IN_PREFABS.find((prefab) => prefab.name === name)!;
+  const shape = (prefab: ReturnType<typeof named>) => prefab.members.map((member) => [member.id, member.role, member.starts]);
+
+  it('is written in its file, the implementer when unset, and only a ticket prefab has one', () => {
+    const ticket = named('Ticket');
+    expect(JSON.parse(prefabFile({ ...ticket, ticketChat: undefined })).ticketChat).toBe('implementer');
+    expect(parsePrefab(prefabFile(named('Design, build, review'))).ticketChat).toBe('lead');
+    expect(JSON.parse(prefabFile(named('Lead and crew')))).not.toHaveProperty('ticketChat');
+    expect(refusal({ ...pairFile(), ticketChat: 'lead' })).toMatch(/only a prefab that starts inside a ticket tile has a ticket chat/);
+    expect(() => parsePrefab(prefabFile({ ...ticket, ticketChat: 'boss' as never }))).toThrow(/ticketChat is implementer or lead/);
+  });
+
+  it('as the implementer builds: a builder the chat would start goes, and a leading chat builds instead', () => {
+    expect(shape(withTicketChat(named('Design, build, review'), 'implementer'))).toEqual([
+      ['chat', 'implementer', 'prompt'],
+      ['design', 'designer', 'lead'],
+      ['review', 'reviewer', 'lead'],
+    ]);
+    expect(withTicketChat(named('Ticket'), 'implementer')).toEqual(named('Ticket'));
+    // Its first builder's place, and only that one: a second builder stays a helper.
+    const two = named('Design, build, review');
+    const second = { ...two.members.find((each) => each.id === 'build')!, id: 'build-2', name: 'second builder' };
+    expect(shape(withTicketChat({ ...two, members: [...two.members, second] }, 'implementer'))).toEqual([
+      ['chat', 'implementer', 'prompt'],
+      ['design', 'designer', 'lead'],
+      ['review', 'reviewer', 'lead'],
+      ['build-2', 'implementer', 'lead'],
+    ]);
+  });
+
+  it('as its own lead leads, and starts a builder before its reviewers when the prefab has none', () => {
+    const lead = withTicketChat(named('Ticket'), 'lead');
+    expect(lead.ticketChat).toBe('lead');
+    expect(shape(lead)).toEqual([
+      ['chat', 'orchestrator', 'prompt'],
+      ['build', 'implementer', 'lead'],
+      ['review', 'reviewer', 'lead'],
+    ]);
+    expect(withTicketChat(named('Design, build, review'), 'lead')).toEqual(named('Design, build, review'));
+    expect(parsePrefab(prefabFile(lead))).toEqual(lead);
   });
 });

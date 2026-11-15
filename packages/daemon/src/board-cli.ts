@@ -30,6 +30,7 @@ import {
   identifyView,
   interruptAgent,
   setAgentEffort,
+  ticketWatches,
   giveAgentRole,
   continueAgent,
   restartAgent,
@@ -38,6 +39,7 @@ import {
   edgeRules,
   readAgent,
   readBoard,
+  readCards,
   removeDefaultRole,
   removeEdge,
   sendToAgent,
@@ -139,8 +141,15 @@ import {
   MAX_STATUS_LENGTH,
   ORCHESTRATOR_METHODS,
   statusLine,
+  TICKET_WATCH_EVERY_MINUTES,
+  TICKET_WATCH_KINDS,
+  TICKET_WATCH_MODES,
   WAIT_STATES,
   type CrewEventKind,
+  type TicketWatchChange,
+  type TicketWatchEvery,
+  type TicketWatchKind,
+  type TicketWatchMode,
   type PageParams,
   type RecordParams,
   type WaitState,
@@ -272,6 +281,9 @@ ORCHESTRATING
   read <ref> [<path>]   An agent's final message, or a file in its worktree.
   interrupt <ref>       Stop an agent's turn; it waits at its prompt.
   effort <ref> <level>  Change an agent's reasoning effort: low, medium, high, xhigh or max.
+  watches <ref> [<kind>=<mode>...] [--every <minutes>]
+                        Show or change what a ticket watches on its pull request: reviews,
+                        approvals, merge, checks; each off, tile, chat or both.
   role <ref> <role> [--send-template] | --clear
                         Give a running agent a role, orchestrator among them, or none; only
                         its role changes, and --send-template also sends it the role's
@@ -303,7 +315,8 @@ ORCHESTRATING
                         Lay out your zone's tiles: you first, then a lane per issue, its
                         implementer, reviewer and follow-up in columns, then its note.
                         --auto on arranges by itself as you start agents and add notes.
-                        arrange board lays out the whole board's zones and loose tiles.
+                        arrange board lays out the whole board's zones and loose tiles;
+                        arrange ticket, a ticket's own board.
   zone map [<zone ref>] [--boxes]
                         Your zone as a table of its lanes and what is amiss, to check a
                         layout; --boxes draws it in characters.
@@ -772,7 +785,7 @@ in its own worktree and branch, as any agent does.
     usage:
       'agent-board new [--zone <ref>] [--name <name>] [--harness claude|codex] [--model <model>] [--effort <level>] [--role <role>] ' +
       '[--repo <path>] [--branch <branch>] [--base <branch or agent ref>] [--edges auto|manual] [--issue <id>] [--description <text>] [--file <path>] [--] <prompt> | ' +
-      'new --prefab <name> [--zone <ref>] [--repo <path>] [--issue <id>] [--description <text>] [--file <path>] [--] <prompt>',
+      'new --prefab <name> [--zone <ref>] [--repo <path>] [--issue <id>] [--chat implementer|lead] [--description <text>] [--file <path>] [--] <prompt>',
     text: `Starts an agent with <prompt> (or the text of --file) as its first message, in a new worktree and
 branch of its zone's repo, as the user starts one; --repo starts it in another, in any zone. In a
 group (a zone with no repo) without --repo, it works in the group's default repo; with neither, in
@@ -821,6 +834,8 @@ agent-board: see \`agent-board help orchestrate\`. It prints the new agent's ref
                      approves or the round limit: see \`agent-board crew\`. A lead starts its
                      own crew. Takes --zone, --repo, --issue, --description and --file; the
                      prefab sets the rest.
+  --chat <kind>      With a ticket prefab: its chat is the implementer, which builds, or its
+                     own lead, which starts a builder: in place of the prefab's.
   --json             Print the agent as JSON.`,
   },
   prefab: {
@@ -989,6 +1004,25 @@ a permission prompt, or with you typing at it, takes it once it is free, never t
 A Codex agent, or an ended one, takes it when next started. A restart keeps it.
 
   --json   Print the agent as JSON, with when it applies.`,
+  },
+  watches: {
+    usage: 'agent-board watches <ref> [<kind>=<mode>...] [--every 2|5|15] [--json]',
+    text: `Shows a ticket's watches on its pull request, or changes them, as its tile's Watches menu
+does. <ref> is the ticket's chat or one of its helpers; \`me\` is your own ticket. Each watch
+reads the pull request with the user's own \`gh\` sign-in, and only reads: none approves or merges.
+
+  reviews     A new review or comment by a person.
+  approvals   A new approval, or the review decision changing.
+  merge       Merged, closed, conflicting with its base, or behind it.
+  checks      The checks starting to fail, or passing again.
+
+Each is off, tile (the ticket's tile shows it), chat (the ticket's chat is told, as its next
+message) or both. None is on until you turn it on. The pull request is read every 5 minutes
+while one is on, and once straight after the ticket pushes; it stops once merged or closed.
+
+  reviews=both approvals=tile   Turns those on, leaving the others as they are.
+  --every <minutes>             How often to read it: 2, 5 or 15.
+  --json                        Print the ticket's chat as JSON, with its watches.`,
   },
   role: {
     usage: 'agent-board role <ref> <role> [--send-template] [--json] | agent-board role <ref> --clear [--json]',
@@ -1169,7 +1203,7 @@ started, made; in a shell, or outside agent-board, any edge.
   --json             Print the edge as JSON.`,
   },
   move: {
-    usage: 'agent-board move <ref> [--to <zone ref>|board] [--at <x>,<y>] [--near <ref> [--side below|right|left|above]] [--json]',
+    usage: 'agent-board move <ref> [--to <zone ref>|board|<ticket chat ref>|ticket] [--at <x>,<y>] [--near <ref> [--side below|right|left|above]] [--json]',
     text: `Moves a tile (an agent's or a shell's) or a note (any board item), as dragging it would, for an
 orchestrator (\`agent-board help orchestrate\`). In a zone it lands exactly where you say, and
 what is in the way moves aside: right along its row, a whole grid column at a time, so rows
@@ -1185,18 +1219,22 @@ notes or cards, an agent the user started by hand, or an external session's tile
 refused.
 
 What you may move: any tile or note, the agents the user started by hand too.
-Where: any zone, a group, or loose on the board (--to board).
+Where: any zone, a group, or loose on the board (--to board). A note, shape or card also goes
+onto a ticket's own board (--to its chat's ref, or --to ticket for yours) and back off it, with
+--at or --near: a move to another board is refused without a place on it. A tile stays on the
+main board.
 An --at more than 1000 px past the zone's edge is put at that reach; a move that would grow
 the zone over another zone is refused.
 
-  --to <ref>       The zone (or group) to move it into; \`board\` for loose on the board.
-  --at <x>,<y>     Where, relative to the zone.
+  --to <ref>       The zone (or group) to move it into; \`board\` for loose on the board; a
+                   ticket's chat (or \`ticket\`) for that ticket's own board.
+  --at <x>,<y>     Where, relative to the zone (or on the ticket's board).
   --near <ref>     Beside this tile or note.
   --side <side>    below (the default), right, left or above.
   --json           Print where it went as JSON.`,
   },
   arrange: {
-    usage: 'agent-board arrange [<zone ref>] [--by issue|role|state] [--layout rows|columns|cards|grid|wrap|masonry|treemap] [--auto on|off] [--json] | arrange board [--json]',
+    usage: 'agent-board arrange [<zone ref>] [--by issue|role|state] [--layout rows|columns|cards|grid|wrap|masonry|treemap] [--auto on|off] [--json] | arrange board [--json] | arrange ticket|<ticket chat ref> [--json]',
     text: `Lays out the tiles of your zone (or <zone ref>) that you may move, for an
 orchestrator: you first, then
 
@@ -1259,6 +1297,12 @@ loose on the board in rows below them. The notes, shapes and text loose on the b
 and what moves keeps clear of them. It is never run by itself. It takes no --by, --layout or
 --auto.
 
+\`arrange ticket\` (your ticket's) or \`arrange <ticket chat's ref>\` lays out a ticket's own board:
+its chat, with its helpers in a column on its right, the block a gap to the left of the notes
+and cards there, which stay put. Only the tiles' places on that board move, never anything on
+the main board, and arranging a zone or the board never moves what is on a ticket's board. It
+takes no --by, --layout or --auto. After it arranges, it prints the ticket board's map.
+
   --by <b>         ${ARRANGE_BYS.join(', ')}.
   --layout <l>     ${ARRANGE_LAYOUTS.join(', ')}.
   --auto on|off    Arrange by itself as the crew changes, or not (off at first).
@@ -1298,6 +1342,9 @@ really are, whatever the layout, at about three times the length. A zone with a 
 with it in short: each shape's kind, text and how many attributes and methods it has, and each
 connector's ends, relation and labels, at most 40 lines; --sections lists a class's members
 too, a few of each and cut short. \`agent-board show <ref>\` prints one shape whole.
+\`zone map ticket\` (or a ticket's chat's ref) reads a ticket's own board instead: each thing on
+it, where and how big, and the ones on top of each other. A helper beside its ticket reads its
+ticket's board by default; it names its zone's ref for the zone.
 
 \`zone screenshot\` writes a PNG of your zone (or <ref>) and prints where, the
 zone's size, the scale it is drawn at and the map's lint line. The app takes it in a hidden
@@ -1344,7 +1391,8 @@ so it has no colour (--color is ignored, with a warning); --kind sticky makes a 
 signed with 🤖, your name and the time (signed again when edited). In a shell, or outside agent-board, it makes a sticky note (the
 default) or text. It puts the note in your zone (or --to's, any zone or a group you made)
 at its first free spot, or exactly at --at or beside --near, what is there moving aside as for
-\`agent-board move\`. A note (not text) --near an agent, with no --side, goes in its cluster's
+\`agent-board move\`. A helper beside its ticket puts it on its ticket's own board instead;
+--to ticket (or a ticket's chat's ref) puts it on that ticket's board, --to <zone ref> in a zone. A note (not text) --near an agent, with no --side, goes in its cluster's
 slot: added to the end of the note of the cluster \`agent-board arrange\` put it in, after
 what it says (arranging again keeps that text), else in the slot before the agent, which moves
 along with its row (beside it, below, for an agent the user started by hand). Its text is short
@@ -1448,8 +1496,9 @@ their ends, dash and label; a class diagram's classes take their attributes and 
 multiplicities by them. \`style <id> fill:#rrggbb\` sets a fill. It prints the lines it passed over:
 subgraphs are drawn without their box, and clicks, classDefs and notes are left out.
 
-\`diagram export\` prints the shapes named (a zone's, or each shape ref; your zone with none) and the
-connectors between them as Mermaid: a class diagram when a class is among them, else a flowchart.
+\`diagram export\` prints the shapes named (a zone's, or each shape ref) and the connectors between them
+as Mermaid: a class diagram when a class is among them, else a flowchart. With none named it prints
+your ticket's board if you are a helper beside your ticket, else your zone.
 \`shape edit\` and \`connector edit\` change what was drawn.
 
   --file <path>    Read the Mermaid text from a file, or - for stdin.
@@ -1802,6 +1851,25 @@ export async function runBoardCommand(
   }
 }
 
+/** `watches`' `<kind>=<mode>` words and `--every`, as `orchestrator.setWatches` takes them; none of either only shows them. */
+function ticketWatchChange(words: string[], every: string | undefined): TicketWatchChange {
+  const watches: Partial<Record<TicketWatchKind, TicketWatchMode>> = {};
+  for (const word of words) {
+    const [kind, mode, ...rest] = word.split('=');
+    if (!(TICKET_WATCH_KINDS as readonly string[]).includes(kind!) || !(TICKET_WATCH_MODES as readonly string[]).includes(mode ?? '') || rest.length > 0) {
+      throw new UsageError(`${JSON.stringify(word)} is not a watch: give <kind>=<mode>, the kind one of ${TICKET_WATCH_KINDS.join(', ')}, the mode one of ${TICKET_WATCH_MODES.join(', ')}`);
+    }
+    watches[kind as TicketWatchKind] = mode as TicketWatchMode;
+  }
+  const change: TicketWatchChange = words.length > 0 ? { watches } : {};
+  if (every !== undefined) {
+    const minutes = Number(every);
+    if (!(TICKET_WATCH_EVERY_MINUTES as readonly number[]).includes(minutes)) throw new UsageError(`--every takes ${TICKET_WATCH_EVERY_MINUTES.join(', ')} (minutes), not ${JSON.stringify(every)}`);
+    change.everyMinutes = minutes as TicketWatchEvery;
+  }
+  return change;
+}
+
 /**
  * `status set --category`, as `board.setStatus` takes it: `--on "who · ref"` names who it waits on, and their reference
  * after a " · " if it has one. Refuses what the daemon would, naming the options.
@@ -1837,6 +1905,7 @@ const OPTIONS = {
   harness: { type: 'string' },
   model: { type: 'string' },
   effort: { type: 'string' },
+  every: { type: 'string' },
   role: { type: 'string' },
   'no-template': { type: 'boolean' },
   'send-template': { type: 'boolean' },
@@ -1920,6 +1989,7 @@ const OPTIONS = {
   body: { type: 'string' },
   most: { type: 'string' },
   prefab: { type: 'string' },
+  chat: { type: 'string' },
   add: { type: 'boolean' },
   replace: { type: 'boolean' },
 } as const;
@@ -1938,7 +2008,7 @@ export const COMMAND_OPTIONS: Record<string, readonly Option[]> = {
   page: ['file', 'name', 'icon', 'clear'],
   'needs-you': ['via', 'clear'],
   doc: ['title', 'board', 'plan'],
-  new: ['zone', 'name', 'harness', 'model', 'effort', 'role', 'no-template', 'repo', 'branch', 'base', 'edges', 'issue', 'file', 'prefab', 'description'],
+  new: ['zone', 'name', 'harness', 'model', 'effort', 'role', 'no-template', 'repo', 'branch', 'base', 'edges', 'issue', 'file', 'prefab', 'chat', 'description'],
   roles: ['file', 'zone'],
   prefab: ['out', 'add', 'replace'],
   crew: [],
@@ -1965,6 +2035,7 @@ export const COMMAND_OPTIONS: Record<string, readonly Option[]> = {
   memory: ['key', 'no-key', 'file', 'doc', 'search', 'pin', 'unpin'],
   remind: ['mine'],
   queue: ['kind', 'front', 'link', 'file', 'for-user', 'most', 'body', 'result'],
+  watches: ['every'],
 };
 
 /** A command's result: what it prints, and its exit code (0 for a bare string). */
@@ -2053,7 +2124,8 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
     case 'identify':
       return read((refs, session) => identifyView(refs, session.caller, session.socketPath));
     case 'tree':
-      return read((refs, session) => treeView(refs, session.caller));
+      noPositionals();
+      return async (session) => print(treeView(new BoardRefs(await readCards(session)), session.caller));
     case 'zones':
       return read((refs) => zonesView(refs));
     case 'agents':
@@ -2066,7 +2138,7 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
     case 'show': {
       if (positionals.length !== 1) throw new UsageError('give one ref');
       return async (session) => {
-        const refs = new BoardRefs(await readBoard(session.client));
+        const refs = new BoardRefs(await readCards(session));
         return print(showView(refs, refs.resolve(positionals[0]!, session.caller), session.caller));
       };
     }
@@ -2171,9 +2243,12 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
       const prompt = text(0);
       const repo = string('repo');
       const prefab = string('prefab');
+      if (prefab === undefined && values.chat !== undefined) throw new UsageError('--chat picks the kind of ticket chat a ticket prefab starts: give --prefab too');
       if (prefab !== undefined) {
         const set = (['name', 'harness', 'model', 'effort', 'role', 'no-template', 'branch', 'base', 'edges'] as const).find((option) => values[option] !== undefined);
-        if (set !== undefined) throw new UsageError(`--${set} is the prefab's to set: --prefab takes --zone, --repo, --issue, --description and --file`);
+        if (set !== undefined) throw new UsageError(`--${set} is the prefab's to set: --prefab takes --zone, --repo, --issue, --chat, --description and --file`);
+        const chat = string('chat');
+        if (chat !== undefined && chat !== 'implementer' && chat !== 'lead') throw new UsageError('--chat is implementer or lead');
         return async (session) =>
           print(
             await startPrefab(session, {
@@ -2182,6 +2257,7 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
               zone: string('zone'),
               repo: repo === undefined ? undefined : resolve(process.cwd(), repo),
               issue: string('issue'),
+              ...(chat === undefined ? {} : { chat }),
               description: string('description'),
             }),
           );
@@ -2289,6 +2365,12 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
       if (positionals.length !== 2) throw new UsageError('give an agent ref and a level: agent-board effort <ref> <level>');
       const [ref, level] = positionals as [string, string];
       return async (session) => print(await setAgentEffort(session, ref, level));
+    }
+    case 'watches': {
+      if (positionals.length === 0) throw new UsageError('give a ticket: agent-board watches <ref> [<kind>=<mode>...] [--every <minutes>]');
+      const [ref, ...settings] = positionals as [string, ...string[]];
+      const change = ticketWatchChange(settings, values.every as string | undefined);
+      return async (session) => print(await ticketWatches(session, ref, change));
     }
     case 'role': {
       const clear = values.clear === true;

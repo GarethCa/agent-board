@@ -167,7 +167,7 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
   const orphanCrew = db.prepare('UPDATE agents SET spawned_by = NULL, orphaned_from = ? WHERE spawned_by = ?');
   const selectHelpers = db.prepare('SELECT session_id FROM agents WHERE ticket = ?');
   /** A removed ticket's helpers are in no ticket now. */
-  const clearTicket = db.prepare('UPDATE agents SET ticket = NULL WHERE ticket = ?');
+  const clearTicket = db.prepare('UPDATE agents SET ticket = NULL, ticket_x = NULL, ticket_y = NULL WHERE ticket = ?');
   const keepRemovedLead = db.prepare('INSERT OR REPLACE INTO removed_orchestrators (session_id, name, crew_depth) VALUES (?, ?, ?)');
   const dropBareLeads = db.prepare('DELETE FROM removed_orchestrators WHERE session_id NOT IN (SELECT orphaned_from FROM agents WHERE orphaned_from IS NOT NULL)');
   const keepConversation = db.prepare('INSERT INTO agent_conversations (session_id, harness_session_id, transcript_path) VALUES (?, ?, ?)');

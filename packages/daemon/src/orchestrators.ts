@@ -53,10 +53,13 @@ import {
   type RemoveAskResult,
   type RemoveAskTile,
   type SendDelivery,
+  type TicketWatchChange,
   type WaitState,
   type Zone,
   startedByHand,
+  type TicketChatKind,
 } from './protocol.ts';
+import { watchesSummary, type TicketWatchHost } from './ticket-watches.ts';
 import type { LayoutMethods } from './orchestrator-layout.ts';
 import { RpcMethodError, type RpcHandlers } from './rpc.ts';
 import { keptAll, type RemoveAskEnd, type RemoveAskStore } from './remove-asks.ts';
@@ -114,6 +117,7 @@ const LOGGED_METHODS: Partial<Record<DaemonMethod, OrchestratorAction>> = {
   'orchestrator.setStatus': 'set-status',
   'orchestrator.interrupt': 'interrupt',
   'orchestrator.setEffort': 'effort',
+  'orchestrator.setWatches': 'watches',
   'orchestrator.giveRole': 'role',
   'orchestrator.continueOnCredits': 'continue',
   'orchestrator.restart': 'restart',
@@ -127,6 +131,7 @@ const LOGGED_METHODS: Partial<Record<DaemonMethod, OrchestratorAction>> = {
   'orchestrator.move': 'move',
   'orchestrator.arrange': 'arrange',
   'orchestrator.arrangeBoard': 'arrange-board',
+  'orchestrator.arrangeTicket': 'arrange-ticket',
   'orchestrator.addZone': 'add-zone',
   'orchestrator.changeZone': 'change-zone',
   'orchestrator.removeZone': 'remove-zone',
@@ -214,6 +219,8 @@ export interface OrchestratorHostOptions extends BoardCallerSources {
   closeAgent(sessionId: string, why: string): Promise<ClosedKept | null>;
   /** The remove asks orchestrators wait on the user for. */
   removeAsks: Pick<RemoveAskStore, 'ask'>;
+  /** The tickets' watches on their pull requests, which `orchestrator.setWatches` changes. */
+  ticketWatches?: Pick<TicketWatchHost, 'set'>;
   /** How long an agent may answer a message from another: an hour by default. */
   replyWindowMs?: number;
   /** A crew's reviewer's round and last review, for its role's template; undefined for no crew's reviewer. */
@@ -875,6 +882,8 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
                 issueId: optionalStringParam(p, 'issueId'),
                 purpose: optionalStringParam(p, 'description'),
                 ticketChat: optionalBooleanParam(p, 'ticketChat'),
+                // Checked as the agent starts: implementer or lead, with ticketChat.
+                chatKind: p.chatKind as TicketChatKind | undefined,
                 ticket: optionalStringParam(p, 'ticket'),
                 prompt,
                 ...SPAWN_SIZE,
@@ -1130,6 +1139,22 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
             const effort = oneOf(p, 'effort', EFFORTS);
             entry.detail = effort;
             return agents.setEffort(agent.sessionId, effort);
+          });
+        },
+
+        'orchestrator.setWatches': (params, connection) => {
+          const p = paramsObject(params);
+          const me = orchestrator('orchestrator.setWatches', p, connection);
+          const entry: Entry = { detail: '' };
+          return logged(me, 'watches', entry, async () => {
+            const agent = agentNamed(stringParam(p, 'sessionId'));
+            entry.on = agentTarget(agent);
+            if (options.ticketWatches === undefined) throw invalidParams('this board has no ticket watches');
+            // A ticket's chat sets its own ticket's watches too, as the user would on its tile.
+            const chatId = options.ticketWatches.set(agent.sessionId, { watches: p.watches as TicketWatchChange['watches'], everyMinutes: p.everyMinutes as TicketWatchChange['everyMinutes'] });
+            const chat = agentNamed(chatId);
+            entry.detail = chat.watch === undefined ? '' : watchesSummary(chat.watch.settings);
+            return { agent: chat };
           });
         },
 

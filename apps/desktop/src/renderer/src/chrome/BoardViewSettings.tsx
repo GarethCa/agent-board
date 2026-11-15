@@ -109,6 +109,29 @@ export function TileShowsSetting() {
   );
 }
 
+/** Settings › Board › Agent tiles: how a ticket's tile opens. A tile switched by hand keeps its own view. */
+export function TicketTilesOpenAsSetting() {
+  const { ticketTilesOpenAs } = useViewSettings();
+  return (
+    <Fieldset legend="Ticket tiles open as">
+      <Segmented
+        aria-label="Ticket tiles open as"
+        options={[
+          { id: 'terminal', label: 'Terminal' },
+          { id: 'card', label: 'Card' },
+          { id: 'board', label: 'Board' },
+        ]}
+        value={ticketTilesOpenAs}
+        onChange={(value) => setViewSetting('ticketTilesOpenAs', value)}
+      />
+      <Hint>
+        Terminal is the default, as agent tiles work today. Board rests as the card, and a double-click takes you into the ticket&apos;s own board. A tile you switch by hand keeps
+        its own view: changing the default changes no tile you&apos;ve switched.
+      </Hint>
+    </Fieldset>
+  );
+}
+
 /** Settings › Board › Agent tiles: whether the chat's Expand all and Collapse all always show, or only while the pointer is over the header or tab row they sit in. */
 export function ChatRunsShowSetting() {
   const { chatRunsShow } = useViewSettings();

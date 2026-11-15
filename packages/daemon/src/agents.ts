@@ -20,6 +20,7 @@ import { answerTrustScreen, readStartupScreen, screenTail, type StartupScreen } 
 import { type HarnessPaths } from './harness-path.ts';
 import {
   dimensionParam,
+  finiteNumberParam,
   invalidParams,
   oneOf,
   optionalBooleanParam,
@@ -60,6 +61,8 @@ import {
   type Effort,
   type EffortApplies,
   type Harness,
+  type TicketBoardPlace,
+  type TicketChatKind,
   type TileMove,
   type AgentFlag,
   type UndeliveredMessage,
@@ -88,7 +91,8 @@ import { createBackgroundCommands } from './background-commands.ts';
 import { createQuietTurns, QUIET_TURN_MS, readTranscriptTail, showsIdlePrompt, turnEndedInTranscript } from './quiet-turns.ts';
 import { createSubagentStore, subagentsAfterExit } from './subagents.ts';
 import { oneLine, submitsDraft } from './terminal-input.ts';
-import { flagLeadOf } from './ticket-tiles.ts';
+import { flagLeadOf, isTicketChatKind } from './ticket-tiles.ts';
+import { ticketWatchOf } from './ticket-watches.ts';
 import { isWorking, statusAfterTurn } from './turn-status.ts';
 import { AGENT_POSES, CHARACTER_EXPIRY_MS, characterLive, isRestingPose, type AgentFace, type AgentPose, type AgentProp, type CharacterSet } from './character.ts';
 import { stateClock } from './state-since.ts';
@@ -426,6 +430,8 @@ export interface AgentHost {
   removedOrchestrator(sessionId: string): RemovedOrchestrator | undefined;
   /** Moves the agent's tile within its zone, into any other, or out onto the board. Only its tile moves. */
   move(sessionId: string, move: TileMove): Agent;
+  /** Moves the tile of a ticket's helper, or of its chat, on that ticket's own board; its main-board tile stays. */
+  placeOnTicket(sessionId: string, place: TicketBoardPlace): Agent;
   /** The zone of the agent's own repo that speaks for it (`repoZoneOf`), if any. */
   repoZoneId(sessionId: string): string | undefined;
   /**
@@ -678,6 +684,17 @@ export interface AgentRow extends PositionColumns {
   ticket: string | null;
   /** 1 for a ticket tile's chat (`Agent.ticketChat`). */
   ticket_chat: number;
+  /** For a ticket's chat, 1 while it is its own lead, 0 while it is the implementer (`Agent.chatKind`). */
+  ticket_lead: number;
+  /** For a ticket's chat, the kind it switches to at its next hand-off (`Agent.chatSwitch`), or null. */
+  chat_switch: string | null;
+  /** A ticket chat's watches (`Agent.watch`): their settings, as JSON, or null while none is on. */
+  watches: string | null;
+  /** What its watches last saw, and their news, as JSON (`ticket-watches.ts`). */
+  watch_state: string | null;
+  /** Its place on its ticket's own board (`Agent.ticketPlace`); both null until it is placed there. */
+  ticket_x: number | null;
+  ticket_y: number | null;
   /**
    * How deep in a crew it was started (0 for the user's), fixed at spawn. Nothing limits it any more (a crew goes any
    * depth); it is still written so that an older daemon on this database finds it.
@@ -735,6 +752,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   const selectZone = db.prepare(`SELECT ${zoneColumns} FROM zones WHERE id = ?`);
   const selectZones = db.prepare(`SELECT ${zoneColumns} FROM zones`);
   const updatePlace = db.prepare('UPDATE agents SET zone_id = ?, x = ?, y = ?, z = ? WHERE session_id = ?');
+  const updateTicketPlace = db.prepare('UPDATE agents SET ticket_x = ?, ticket_y = ? WHERE session_id = ?');
   const update = db.prepare('UPDATE agents SET state = ? WHERE session_id = ?');
   const updateNotice = db.prepare('UPDATE agents SET notice = ? WHERE session_id = ?');
   const updateHadTurn = db.prepare('UPDATE agents SET had_turn = 1 WHERE session_id = ? AND had_turn = 0');
@@ -1560,6 +1578,9 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
    * older daemon's delete, leaves the column naming a gone chat, and the agent is then a helper of none.
    */
   const ticketOf = (row: AgentRow): string | null => (row.ticket !== null && getRow(row.ticket)?.ticket_chat === 1 ? row.ticket : null);
+  /** Its place on its ticket's own board, while it has one and is in a ticket (`Agent.ticketPlace`). */
+  const ticketPlaceOf = (row: AgentRow): { ticketPlace?: TicketBoardPlace } =>
+    row.ticket_x === null || row.ticket_y === null || (row.ticket_chat !== 1 && ticketOf(row) === null) ? {} : { ticketPlace: { x: row.ticket_x, y: row.ticket_y } };
 
   /**
    * The name of the agent's orchestrator while that one is live: its ticket's chat for a helper, else the agent that
@@ -1711,6 +1732,10 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       orphanedFrom: row.orphaned_from === null ? null : { sessionId: row.orphaned_from, name: (selectRemovedLeadName.get(row.orphaned_from) as { name: string } | undefined)?.name ?? 'a removed orchestrator' },
       ticket: ticketOf(row),
       ticketChat: row.ticket_chat === 1,
+      ...(row.ticket_chat === 1 ? { chatKind: row.ticket_lead === 1 ? ('lead' as const) : ('implementer' as const) } : {}),
+      ...(row.ticket_chat === 1 && isTicketChatKind(row.chat_switch) ? { chatSwitch: row.chat_switch } : {}),
+      ...(row.ticket_chat === 1 ? { watch: ticketWatchOf(row.watches, row.watch_state) } : {}),
+      ...ticketPlaceOf(row),
       ledBy: led(row),
       records: records.of(row.session_id),
       page: pages.of(row.session_id) ?? null,
@@ -2242,6 +2267,15 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       return moved;
     },
 
+    placeOnTicket(sessionId, place) {
+      const agent = requireAgent(sessionId);
+      if (agent.ticket === null && !agent.ticketChat) throw invalidParams(`agent ${sessionId} is not in a ticket`);
+      updateTicketPlace.run(place.x, place.y, sessionId);
+      const placed = get(sessionId)!;
+      options.broadcast({ type: 'agent.updated', agent: placed });
+      return placed;
+    },
+
     markSeen(sessionId) {
       const row = requireRow(sessionId);
       // Claude's trust screen stays flagged until it is answered, what was never delivered until it is resent or
@@ -2574,6 +2608,7 @@ function spawnParams(params: unknown): SpawnAgentParams {
     checkout: optionalStringParam(p, 'checkout') as 'main' | 'worktree' | undefined,
     issueZoneId: optionalStringParam(p, 'issueZoneId'),
     ticketChat: optionalBooleanParam(p, 'ticketChat'),
+    chatKind: optionalStringParam(p, 'chatKind') as TicketChatKind | undefined,
     ticket: optionalStringParam(p, 'ticket'),
     allowProjectCodexConfig: optionalBooleanParam(p, 'allowProjectCodexConfig'),
     prompt: optionalStringParam(p, 'prompt'),
@@ -2686,6 +2721,10 @@ export function agentHandlers<Context>(
     'agent.move': (params) => {
       const p = paramsObject(params);
       return agents.move(stringParam(p, 'sessionId'), moveParams(p));
+    },
+    'agent.placeOnTicket': (params) => {
+      const p = paramsObject(params);
+      return agents.placeOnTicket(stringParam(p, 'sessionId'), { x: finiteNumberParam(p, 'x'), y: finiteNumberParam(p, 'y') });
     },
     'agent.setName': (params) => {
       const p = paramsObject(params);

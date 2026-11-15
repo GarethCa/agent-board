@@ -9,7 +9,7 @@
 import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { boardCaller, connectionAgent, isOwnLiveSession, type BoardCallerSources, type BoardConnection } from './board.ts';
-import { readsItem } from './item-scope.ts';
+import { notReadBecause, readsItem } from './item-scope.ts';
 import { isObject } from './json.ts';
 import { AGENT_TILE_SIZE, freeSpotFor } from './board-layout.ts';
 import { cutText } from './text-cut.ts';
@@ -405,7 +405,7 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
 
   // ---- the cards ----
 
-  const itemsOf = async (kind: 'memory' | 'queue') => (await options.call('item.list', undefined)).filter((item) => item.kind === kind);
+  const itemsOf = async (kind: 'memory' | 'queue') => (await options.call('item.list', { allBoards: true })).filter((item) => item.kind === kind);
   const itemOf = async (kind: 'memory' | 'queue', id: string): Promise<BoardItem> => {
     const found = (await itemsOf(kind)).find((item) => item.id === id);
     if (found === undefined) throw invalidParams(`no ${kind} ${id}`);
@@ -436,7 +436,7 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
     const item = await itemOf(kind, id);
     if (me !== null && !reads(me, item)) {
       throw outOfScope(
-        dataOf(item).noAgents ? `“${titleOf(item)}” is set to No agents: only the user reads it` : `that ${kind} is in a zone you are not in`,
+        dataOf(item).noAgents ? `“${titleOf(item)}” is set to No agents: only the user reads it` : notReadBecause(`that ${kind}`, item),
       );
     }
     return item;

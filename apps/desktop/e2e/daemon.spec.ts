@@ -32,10 +32,10 @@ test('launching the app starts the daemon once, and a second client reuses it', 
 
 test('a daemon that cannot start is reported in the window with its reason, without a long wait, and the board can retry', async () => {
   const dataDir = tempDataDir();
-  // A database from a newer build: the daemon refuses it at startup.
+  // A database from a newer build, far past any migration there is: the daemon refuses it at startup.
   const { DatabaseSync } = await import('node:sqlite');
   const db = new DatabaseSync(`${dataDir}/agent-board.db`);
-  db.exec('PRAGMA user_version = 99');
+  db.exec('PRAGMA user_version = 9999');
   db.close();
   const app = await launchApp(dataDir);
   try {

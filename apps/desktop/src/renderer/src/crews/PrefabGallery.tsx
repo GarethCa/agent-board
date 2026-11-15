@@ -1,5 +1,6 @@
 import type { LibraryPrefab, PrefabMember, Zone } from '@agent-board/daemon/protocol';
 import { CrewPromptDialog } from './CrewPromptDialog';
+import { NewTicketDialog } from './NewTicketDialog';
 import { PrefabEditor } from './PrefabEditor';
 import { PrefabsDialog } from './PrefabsDialog';
 
@@ -90,6 +91,59 @@ export function CrewGallery() {
       <CrewPromptDialog prefab={SOLO} zones={[ZONE, GROUP]} zone={undefined} onAddZone={nothing} onStarted={nothing} onCancel={nothing} inline />
       <CrewPromptDialog prefab={PAIR} zones={[GROUP]} zone={GROUP} onAddZone={nothing} onStarted={nothing} onCancel={nothing} inline />
       <CrewPromptDialog prefab={PAIR} zones={[]} zone={undefined} onAddZone={nothing} onStarted={nothing} onCancel={nothing} inline />
+    </section>
+  );
+}
+
+/** The built-in ticket prefabs, as the library lists them: who builds, and the helpers each starts. */
+const TICKETS: LibraryPrefab[] = [
+  {
+    name: 'Ticket',
+    icon: 'ticket',
+    purpose: 'A ticket whose chat builds, and a reviewer once it hands off',
+    roundLimit: 3,
+    onBoard: 'ticket',
+    ticketChat: 'implementer',
+    builtIn: true,
+    editedAt: null,
+    members: [member({ id: 'chat', starts: 'prompt' }), member({ id: 'review', role: 'reviewer', starts: 'handoff' })],
+  },
+  {
+    name: 'Design, build, review',
+    icon: 'ticket',
+    purpose: 'A ticket led by its chat: a designer, a builder and a reviewer',
+    roundLimit: 3,
+    onBoard: 'ticket',
+    ticketChat: 'lead',
+    builtIn: true,
+    editedAt: null,
+    members: [
+      member({ id: 'chat', role: 'orchestrator', starts: 'prompt' }),
+      member({ id: 'design', role: 'designer', model: 'opus', effort: 'high', starts: 'lead' }),
+      member({ id: 'build', name: 'builder', model: 'opus', effort: 'medium', starts: 'lead' }),
+      member({ id: 'review', role: 'reviewer', model: 'opus', effort: 'medium', starts: 'handoff' }),
+    ],
+  },
+  {
+    name: 'Just the chat',
+    icon: 'ticket',
+    purpose: 'A ticket with its chat alone: it builds, and starts any helper it needs',
+    roundLimit: 3,
+    onBoard: 'ticket',
+    ticketChat: 'implementer',
+    builtIn: true,
+    editedAt: null,
+    members: [member({ id: 'chat', starts: 'prompt' })],
+  },
+];
+
+/** New ▸ Ticket: in a zone, the implementer by default; a prefab asked for that leads; and asking for a zone, one with no repo. */
+export function TicketGallery() {
+  return (
+    <section className="gallery-prefabs" data-testid="ticket-gallery">
+      <NewTicketDialog prefabs={TICKETS} zones={[ZONE]} zone={ZONE} onAddZone={nothing} onStarted={nothing} onCancel={nothing} inline />
+      <NewTicketDialog prefabs={TICKETS} prefab="design, build, review" zones={[ZONE]} zone={ZONE} onAddZone={nothing} onStarted={nothing} onCancel={nothing} inline />
+      <NewTicketDialog prefabs={TICKETS} zones={[GROUP, ZONE]} zone={undefined} onAddZone={nothing} onStarted={nothing} onCancel={nothing} inline />
     </section>
   );
 }

@@ -208,7 +208,7 @@ export function BoardMenu({ menu, onMenu, status, zones, agents, shells, onJump,
         className="board-menu-find"
         icon={<Search />}
         aria-label="Find"
-        tooltip={simplified ? <>Jump to a session or zone <Kbd>{keyText('move.spotlight')}</Kbd></> : 'Jump to a session or zone'}
+        tooltip={simplified ? <>Jump to a session, zone or setting <Kbd>{keyText('move.spotlight')}</Kbd></> : 'Jump to a session, zone or setting'}
         onClick={onFind}
       >
         {/* The Simplified design's magnifier alone: its key is in the tooltip. */}

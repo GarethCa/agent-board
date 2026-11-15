@@ -192,6 +192,8 @@ describe('the board MCP tools and the agent-board CLI', () => {
     { tool: 'read', command: 'read', positional: ['agent', 'path'] },
     { tool: 'interrupt', command: 'interrupt', positional: ['agent'] },
     { tool: 'set_effort', command: 'effort', positional: ['agent', 'effort'] },
+    // The CLI's <kind>=<mode> words are the tool's watches object.
+    { tool: 'ticket_watches', command: 'watches', positional: ['agent', 'watches'], renamed: { every_minutes: 'every' } },
     { tool: 'give_role', command: 'role', positional: ['agent', 'role'], renamed: { send_template: 'send-template' } },
     { tool: 'continue_on_credits', command: 'continue', positional: ['agent'] },
     { tool: 'restart', command: 'restart', positional: ['agent'], renamed: { prompt: 'file' } },

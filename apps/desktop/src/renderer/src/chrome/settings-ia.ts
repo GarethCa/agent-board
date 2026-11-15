@@ -102,6 +102,7 @@ export const SETTINGS_CONTROLS: readonly SettingsControl[] = [
   { id: 'connections', label: 'Show connections', home: 'board.connections', also: 'edges rails lines' },
   { id: 'tethers', label: 'Show tethers', home: 'board.connections', also: 'lines rails captain schedule clock orchestrator crew clutter' },
   { id: 'tileShows', label: 'Tile shows', home: 'board.tiles', classicOnly: true, also: 'quiet branch row corner buttons expand pop out hover model reasoning effort set by status line trusted muted bell' },
+  { id: 'ticketTilesOpenAs', label: 'Ticket tiles open as', home: 'board.tiles', also: 'ticket card terminal board view helpers default' },
   { id: 'chatRunsShow', label: 'Expand all and Collapse all show', home: 'board.tiles', also: 'chat calls runs expand collapse hover header tab row always' },
   { id: 'agentNoteLook', label: 'How a note an agent writes looks', home: 'board.notes', classicOnly: true, also: 'document terminal card' },
   { id: 'dock', label: 'Dock', home: 'board.opening', also: 'minimised windows pin pinned off hide taskbar' },

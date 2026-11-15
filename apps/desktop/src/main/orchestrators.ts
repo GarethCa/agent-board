@@ -2,8 +2,8 @@ import { BrowserWindow, dialog, ipcMain } from 'electron';
 import { readFile } from 'node:fs/promises';
 import type { DaemonLink } from '@agent-board/daemon/client';
 import { parsePrefab, prefabFile } from '@agent-board/daemon/crew-prefabs';
-import { DEFAULT_ACTIVITY_LIMIT, type CrewPrefab } from '@agent-board/daemon/protocol';
-import { ORCHESTRATOR_IPC } from '../preload/api';
+import { DEFAULT_ACTIVITY_LIMIT, type CrewPrefab, type TicketChatKind } from '@agent-board/daemon/protocol';
+import { ORCHESTRATOR_IPC, type StartPrefabParams } from '../preload/api';
 import { forwardEvents } from './broadcast';
 import { passthrough, passthroughVoid } from './passthrough';
 
@@ -45,8 +45,11 @@ export function registerOrchestratorIpc(daemon: DaemonLink): void {
     }
     return saved;
   });
-  passthrough(daemon, ORCHESTRATOR_IPC.startPrefab, 'orchestrator.startPrefab', (params: { name: string; prompt: string; zoneId: string; repo?: string; roundLimit?: number }) => params);
+  passthrough(daemon, ORCHESTRATOR_IPC.startPrefab, 'orchestrator.startPrefab', (params: StartPrefabParams) => params);
+  // From a ticket tile's ⋯ menu: who builds the ticket, switched at a hand-off.
+  ipcMain.handle(ORCHESTRATOR_IPC.setTicketChat, async (_event, sessionId: string, kind: TicketChatKind) => (await daemon.call('ticket.setChat', { sessionId, kind })).agent);
   // The user's own stops of a crew's loop, from its card: checked and logged by the daemon as any other caller's.
+  passthrough(daemon, ORCHESTRATOR_IPC.arrangeTicket, 'orchestrator.arrangeTicket', (ticket: string) => ({ ticket }));
   passthrough(daemon, ORCHESTRATOR_IPC.stopCrew, 'orchestrator.stopCrew', (crewId: string) => ({ crewId }));
   passthrough(daemon, ORCHESTRATOR_IPC.crewRound, 'orchestrator.crewRound', (crewId: string) => ({ crewId }));
   // Only read: the editor shows it whole, and Save adds it.

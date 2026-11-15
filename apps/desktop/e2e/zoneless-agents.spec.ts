@@ -9,6 +9,7 @@ import { withDaemon } from './board-helpers.ts';
 import { agents, launch, pickInChip, sessionWindow, LINEAR_API_KEY, serveLinearFixtures, SHELL_ENV, tile, zoneNamed, zones } from './agent-helpers.ts';
 import { test, addEmptyZone, browseForZone, openAddZone, pickFolderNext, placeWithTool, removeDataDir, tempDataDir } from './launch.ts';
 import { scratch } from './scratch.ts';
+import { startMenuTrail } from './menu-trail.ts';
 
 /** The board as the daemon has stored it. */
 function stored(dataDir: string): Promise<{ zones: Zone[]; agents: Agent[] }> {
@@ -300,11 +301,17 @@ test('an orchestrator in a group with no repo starts in the group’s own folder
     await expect(form.getByRole('group', { name: 'Checkout' })).toHaveCount(0);
 
     // A repo picked brings the checkout choices back; No repo takes them away again.
+    // A menu reopened quickly here once closed itself again, under load. If this step fails again, the trail has
+    // recorded the menus and focus to read.
+    const trail = await startMenuTrail(window);
     await browseRepo(app, window, repo);
     await expect(form.getByRole('group', { name: 'Checkout' }).getByRole('button', { name: 'Main checkout' })).toBeVisible();
     await expect(form.getByTestId('checkout-no-repo')).toHaveCount(0);
-    await form.getByRole('group', { name: 'Repo' }).getByRole('button', { name: /^Repo:/ }).click();
-    await window.getByRole('menuitem', { name: /^No repo\b/ }).filter({ hasText: 'outside git' }).click();
+    await trail.around('No repo picked again', async () => {
+      await form.getByRole('group', { name: 'Repo' }).getByRole('button', { name: /^Repo:/ }).click();
+      // A shorter wait than the test's own: if the item never comes, the trail is written while the page is still open.
+      await window.getByRole('menuitem', { name: /^No repo\b/ }).filter({ hasText: 'outside git' }).click({ timeout: 15_000 });
+    });
     await expect(form.getByTestId('checkout-no-repo')).toBeVisible();
 
     await form.getByRole('button', { name: /^Start/ }).click();
@@ -314,6 +321,95 @@ test('an orchestrator in a group with no repo starts in the group’s own folder
     expect(orchestrator).toMatchObject({ roleName: 'orchestrator', plainFolder: true, ownsWorktree: false, branch: '', worktree: groupFolder });
     // Nothing git-related shows on its tile: no checkout warning.
     await expect(tile(window).getByTestId('checkout-warning')).toHaveCount(0);
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a menu closed before its fade has been seen to start leaves the page at once, and opens again on the next click', async () => {
+  const { dir, env } = scratch('waiting');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, env);
+  try {
+    await addEmptyZone(window, 'Local Banking');
+    await zoneNamed(window, 'Local Banking').getByRole('button', { name: 'New agent' }).click();
+    const form = picker(window);
+    const repoButton = form.getByRole('group', { name: 'Repo' }).getByRole('button', { name: /^Repo:/ });
+    // On a busy machine a menu can close before the page has told it its fade started. Here no animation event
+    // reaches anything, so every menu is in that state.
+    await window.evaluate(() => {
+      for (const type of ['animationstart', 'animationend', 'animationcancel']) document.addEventListener(type, (event) => event.stopImmediatePropagation(), true);
+    });
+    await repoButton.click();
+    await expect(window.getByRole('menu')).toBeVisible();
+    await window.keyboard.press('Escape');
+    // Closed, it is gone at once, not kept for a closing animation it doesn't have.
+    await expect(window.getByRole('menu')).toHaveCount(0);
+    await expect(repoButton).toHaveAttribute('aria-expanded', 'false');
+    // The next click opens it, and it stays open.
+    await repoButton.click();
+    await expect(window.getByRole('menuitem', { name: /^No repo\b/ }).filter({ hasText: 'outside git' })).toBeVisible();
+    await expect(repoButton).toHaveAttribute('aria-expanded', 'true');
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a menu opened again before the last one has given focus back to its button stays open', async () => {
+  const { dir, repo, env } = scratch('waiting');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, env);
+  try {
+    await addEmptyZone(window, 'Local Banking');
+    await zoneNamed(window, 'Local Banking').getByRole('button', { name: 'New agent' }).click();
+    const form = picker(window);
+    const repoButton = form.getByRole('group', { name: 'Repo' }).getByRole('button', { name: /^Repo:/ });
+    // A closing menu gives focus back to its button a task later. On a busy machine that task can run after the
+    // next click has opened the menu again: here it is held until then.
+    // A held timer cleared meanwhile is dropped, as a real one would be. The page's own timer functions are called
+    // bare: called as a method of another object, they throw.
+    await window.evaluate(() => {
+      const held = new Map<number, () => void>();
+      const { setTimeout: ownSet, clearTimeout: ownClear } = globalThis;
+      let next = -1;
+      Object.assign(globalThis, {
+        heldTimers: { held, own: { setTimeout: ownSet, clearTimeout: ownClear } },
+        setTimeout: (run: () => void, ms?: number, ...rest: unknown[]) => {
+          if ((ms ?? 0) !== 0) return ownSet(run, ms, ...rest);
+          held.set(next, run);
+          return next--;
+        },
+        clearTimeout: (id?: number) => (id !== undefined && held.delete(id)) || ownClear(id),
+      });
+    });
+    await browseRepo(app, window, repo);
+    await repoButton.click();
+    const noRepo = window.getByRole('menuitem', { name: /^No repo\b/ }).filter({ hasText: 'outside git' });
+    await expect(noRepo).toBeVisible();
+    // A dismiss marks the button collapsed at once: two tasks after the held timers have run, the menu is still open,
+    // with focus in it.
+    const after = await window.evaluate(async () => {
+      const { held, own } = (globalThis as unknown as { heldTimers: { held: Map<number, () => void>; own: Pick<typeof globalThis, 'setTimeout' | 'clearTimeout'> } }).heldTimers;
+      Object.assign(globalThis, own);
+      const runs = [...held.values()];
+      held.clear();
+      runs.forEach((run) => run());
+      const ownSet = own.setTimeout;
+      for (let task = 0; task < 2; task += 1) await new Promise((done) => ownSet(done, 0));
+      return {
+        expanded: document.querySelector('[aria-label^="Repo:"]')?.getAttribute('aria-expanded'),
+        focusInMenu: document.activeElement?.closest('[role=menu]') !== null,
+      };
+    });
+    expect(after).toEqual({ expanded: 'true', focusInMenu: true });
+    await noRepo.click();
+    await expect(repoButton).toHaveText('No repo');
+    // Closing as it would have without the race, it gives focus back to its button.
+    await expect(repoButton).toBeFocused();
   } finally {
     await app.close();
     await removeDataDir(dataDir);

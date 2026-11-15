@@ -44,6 +44,7 @@ import {
 } from './board-layout.ts';
 import { makeRoom } from './board-room.ts';
 import type { BoardConnection } from './board.ts';
+import { notReadBecause } from './item-scope.ts';
 import { checkedData } from './items.ts';
 import { keyedQueue } from './keyed-queue.ts';
 import type { ActivityEntry, Orchestrator, OrchestratorAccess } from './orchestrators.ts';
@@ -93,6 +94,8 @@ import {
   type DaemonMethods,
   type ExternalSession,
   type LayoutMoved,
+  type TicketArrangeResult,
+  type TicketBoardPlace,
   type LayoutPlace,
   type LayoutTarget,
   type NoteKind,
@@ -118,7 +121,8 @@ import {
 } from './protocol.ts';
 import { RpcMethodError, type RpcHandlers } from './rpc.ts';
 import { cutText } from './text-cut.ts';
-import { heldByTicket } from './ticket-tiles.ts';
+import { spotOnTicketBoard } from './ticket-board.ts';
+import { arrangeTicketBoard, heldByTicket, helpersOf, ownTicketBoard } from './ticket-tiles.ts';
 import { reviewedBy, workTilesOf } from './work-units.ts';
 import { STAGE_BOARD_KIND, stageBoardData, stageBoardMembers } from './stage-board.ts';
 import { buildZoneMap } from './zone-map.ts';
@@ -134,6 +138,7 @@ export type LayoutMethods = Pick<
   | 'orchestrator.move'
   | 'orchestrator.arrange'
   | 'orchestrator.arrangeBoard'
+  | 'orchestrator.arrangeTicket'
   | 'orchestrator.map'
   | 'orchestrator.screenshot'
   | 'orchestrator.addZone'
@@ -172,6 +177,8 @@ export interface LayoutHandlerOptions {
   measures: LayoutMeasures;
   /** The zones' tiles placed by hand (`zones.ts`): putting one back under its zone's rule drops its mark. */
   zones: Pick<ZoneTable, 'dropHandPlaced'>;
+  /** Of `list`, the items `connection` reads: a steps, memory, queue, crew or to-do card only where its audience takes it in. */
+  visible: (list: BoardItem[], connection: BoardConnection) => BoardItem[];
 }
 
 /** How the Lanes rule arranges its zone. Spine lays its zone out by a pass of its own (`spineIn`). */
@@ -374,6 +381,15 @@ interface Placed {
 }
 
 const outOfScope = (message: string) => new RpcMethodError(BOARD_ERROR.outOfScope, message);
+
+/** What a refusal calls a card that only its audience reads. */
+const SCOPED_NAMES: Partial<Record<BoardItem['kind'], string>> = {
+  steps: 'steps card',
+  memory: 'memory',
+  queue: 'queue',
+  crew: 'crew card',
+  todo: 'to-do list',
+};
 
 /** A short quote of a note's text, for a log line or a refusal. */
 const quoted = (text: string) => `“${cutText(text, 40)}”`;
@@ -675,6 +691,10 @@ function placeParams(fields: Record<string, unknown>): LayoutPlace {
     if (fields.zoneId !== null && typeof fields.zoneId !== 'string') throw invalidParams('zoneId must be a string or null');
     place.zoneId = fields.zoneId;
   }
+  if (fields.ticket !== undefined) {
+    if (fields.ticket !== null && typeof fields.ticket !== 'string') throw invalidParams('ticket must be a string or null');
+    place.ticket = fields.ticket;
+  }
   if (fields.at !== undefined) {
     const at = paramsObject(fields.at);
     place.at = { x: finiteNumberParam(at, 'x'), y: finiteNumberParam(at, 'y') };
@@ -757,10 +777,14 @@ const paddingOf = (zone: Pick<Zone, 'spacing'>): number => SPACING_GAPS[zone.spa
 
 /**
  * Where something of `size` goes beside the agent's tile, in its zone (or loose with it): to its right (or `side`),
- * else the nearest spot clear of everything else there. Undefined for an agent with no tile.
+ * else the nearest spot clear of everything else there. A helper's goes on its ticket's own board, clear of what is
+ * there. Undefined for an agent with no tile.
  */
 export async function spotBesideAgent(call: DaemonCall, sessionId: string, size: Size, side: 'right' | 'below' = 'right'): Promise<BoardPlace | undefined> {
   const board = await readLayoutBoard(call);
+  const agent = board.agents.find((each) => each.sessionId === sessionId);
+  const ticket = agent === undefined ? null : ownTicketBoard(agent, board.agents);
+  if (ticket !== null) return spotOnTicketBoard(call, ticket, size);
   const tile = placedOf(board).find((each) => each.kind === 'agent' && each.id === sessionId);
   if (tile === undefined) return undefined;
   const zone = board.zones.find((each) => each.id === tile.zoneId);
@@ -783,6 +807,7 @@ export function layoutHandlers<Context extends BoardConnection>({
   capture,
   measures,
   zones,
+  visible,
   warn = () => {},
 }: LayoutHandlerOptions): RpcHandlers<LayoutMethods & Pick<DaemonMethods, 'orchestrator.spawn' | 'orchestrator.close'>, Context> {
   const zoneMadeBy = db.prepare('SELECT made_by FROM zones WHERE id = ?');
@@ -958,14 +983,65 @@ export function layoutHandlers<Context extends BoardConnection>({
     }
   };
 
-  /** Moves the tile or item to `zoneId` at `spot`, as the board's drag does. */
-  const moveTo = async (placed: Pick<Placed, 'kind' | 'id'>, zoneId: string | null, spot: Point) => {
+  /** Moves the tile or item to `zoneId` at `spot`, as the board's drag does; an item, onto the ticket's own board `ticket` names (null, the main board). */
+  const moveTo = async (placed: Pick<Placed, 'kind' | 'id'>, zoneId: string | null, spot: Point, ticket: string | null = null) => {
     const move = { zoneId, x: spot.x, y: spot.y };
     if (placed.kind === 'agent') await call('agent.move', { sessionId: placed.id, ...move });
     else if (placed.kind === 'shell') await call('shell.move', { shellId: placed.id, ...move });
     else if (placed.kind === 'external') await call('external.move', { id: placed.id, ...move });
-    else await call('item.update', { id: placed.id, ...move });
+    else await call('item.update', { id: placed.id, ...move, ticket });
   };
+
+  /** Every item, on the main board and every ticket's own board: what an item's id is looked for in. */
+  const everyItem = () => call('item.list', { allBoards: true });
+
+  /**
+   * The item `id` on any board, for `connection`: undefined if there is none. A card on a ticket's board that
+   * `connection` doesn't read is refused, as its own methods refuse it, so no command reaches it through its id.
+   */
+  const findItem = async (id: string, connection: BoardConnection): Promise<BoardItem | undefined> => {
+    const item = (await everyItem()).find((each) => each.id === id);
+    if (item !== undefined && typeof item.ticket === 'string' && visible([item], connection).length === 0) {
+      throw outOfScope(notReadBecause(`that ${SCOPED_NAMES[item.kind] ?? item.kind}`, item));
+    }
+    return item;
+  };
+
+  /** The ticket's chat `ticket` names, which has a board of its own. */
+  const checkTicket = (board: Board, ticket: string): Agent => {
+    const chat = board.agents.find((each) => each.sessionId === ticket);
+    if (chat?.ticketChat !== true) throw invalidParams(`${chat?.name ?? ticket} is no ticket's chat: only a ticket's chat has a board of its own`);
+    return chat;
+  };
+
+  /** The board a layout puts things on: the main board (null), or a ticket's own, which holds items and no zone or tile. */
+  const boardAt = async (board: Board, ticket: string | null): Promise<Board> =>
+    ticket === null ? board : { ...board, zones: [], agents: [], shells: [], externals: [], items: await call('item.list', { ticket }) };
+
+  /** What a layout command's reply and log call a board: the ticket's, by its chat's name, or the zone's (`zone`), or the main board. */
+  const boardName = (board: Board, ticket: string | null, zone: Zone | undefined): string =>
+    ticket !== null ? `${board.agents.find((each) => each.sessionId === ticket)?.name ?? ticket}'s ticket board` : (zone?.name ?? 'the board');
+
+  /**
+   * The ticket whose own board `place` puts things on (null, the main board), once checked: the one it names; else
+   * the main board, for a zone it names; else `near`'s; else `fallback`. A ticket's board has no zones, and `near` is on
+   * the board named.
+   */
+  const ticketOfPlace = async (board: Board, place: LayoutPlace, fallback: string | null, connection: BoardConnection): Promise<string | null> => {
+    const near = place.near === undefined ? undefined : place.near.kind === 'item' ? ((await findItem(place.near.id, connection))?.ticket ?? null) : null;
+    if (place.ticket !== undefined && place.ticket !== null && place.zoneId !== undefined && place.zoneId !== null) {
+      throw invalidParams("a ticket's board has no zones: name the ticket's board or a zone, not both");
+    }
+    // The board named (a ticket's, or the main board for a zone or `board`), if one is.
+    const named = place.ticket !== undefined && place.ticket !== null ? place.ticket : place.ticket === null || place.zoneId !== undefined ? null : undefined;
+    if (near !== undefined && named !== undefined && near !== named) throw invalidParams('what it is to go near is on another board than the one named');
+    const ticket = place.ticket !== undefined ? place.ticket : near !== undefined ? near : place.zoneId !== undefined ? null : fallback;
+    if (ticket !== null) checkTicket(board, ticket);
+    return ticket;
+  };
+
+  /** The ticket whose own board `me`'s notes go on when it names no place: a helper's ticket's, while its ticket holds it. */
+  const ownTicketOf = (me: Orchestrator, board: Board): string | null => (me.agent === null ? null : ownTicketBoard(me.agent, board.agents));
 
   /** The group `id`, which `me` may change: a group, made by it or its crew (any, on the user's side). */
   const ownGroup = (me: Orchestrator, board: Board, id: string): Zone => {
@@ -999,9 +1075,12 @@ export function layoutHandlers<Context extends BoardConnection>({
     return item;
   };
 
-  /** The item `id`, which `me` may draw a connector to: any on the board. */
-  const drawable = (_me: Orchestrator, board: Board, id: string): BoardItem => {
-    const item = board.items.find((each) => each.id === id);
+  /**
+   * The item `id`, which `connection` may draw a connector to: any on any board that it reads. Both ends must be on
+   * the same board, as `connector.create` checks.
+   */
+  const drawable = async (connection: BoardConnection, id: string): Promise<BoardItem> => {
+    const item = await findItem(id, connection);
     if (item === undefined) throw invalidParams(`no board item ${id}`);
     return item;
   };
@@ -1661,7 +1740,7 @@ export function layoutHandlers<Context extends BoardConnection>({
         // A tile the board slotted is moved even to where it is drawn: it is saved there, so it stays.
         if (placed.saved && placed.rect.x === spot.x && placed.rect.y === spot.y) continue;
         await moveTo(placed, zone.id, spot);
-        moved.push({ target: { kind: placed.kind as LayoutTarget['kind'], id: placed.id }, zoneId: zone.id, ...spot });
+        moved.push({ target: { kind: placed.kind as LayoutTarget['kind'], id: placed.id }, zoneId: zone.id, ticket: null, ...spot });
       }
       await growTo(zone, { width, height });
       changedAny = moved.length > 0 || width !== zone.width || height !== zone.height;
@@ -1761,7 +1840,7 @@ export function layoutHandlers<Context extends BoardConnection>({
         // A tile the board slotted is moved even to where it is drawn: it is saved there, so it stays.
         if (placed === undefined || (placed.saved && placed.rect.x === spot.x && placed.rect.y === spot.y)) continue;
         await moveTo(placed, zone.id, spot);
-        moved.push({ target: { kind: placed.kind as LayoutTarget['kind'], id: placed.id }, zoneId: zone.id, ...spot });
+        moved.push({ target: { kind: placed.kind as LayoutTarget['kind'], id: placed.id }, zoneId: zone.id, ticket: null, ...spot });
       }
       await growTo(zone, laid.size);
       changedAny = moved.length > 0 || width !== zone.width || height !== zone.height;
@@ -1840,24 +1919,36 @@ export function layoutHandlers<Context extends BoardConnection>({
         const target = targetParam(p, 'target');
         const place = placeParams(p);
         const board = await readBoard();
-        const placed = movable(board, target);
+        // An item is on the main board or a ticket's own; a tile always on the main board.
+        const from = target.kind === 'item' ? ((await findItem(target.id, connection))?.ticket ?? null) : null;
+        const placed = movable(await boardAt(board, from), target);
         entry.on = { id: placed.id, name: placed.name };
-        const zoneId = zoneOfPlace(board, place, placed.zoneId);
-        const zone = checkDestination(me, board, zoneId);
-        entry.detail = `into ${zone?.name ?? 'the board'}`;
+        const ticket = await ticketOfPlace(board, place, from, connection);
+        if (ticket !== from) {
+          if (target.kind !== 'item') {
+            throw invalidParams(`${placed.name} is a tile, and a tile stays on the main board: a ticket's helpers are drawn on its board as its own`);
+          }
+          // Where it was says nothing of where it goes on another board.
+          if (place.at === undefined && place.near === undefined) throw invalidParams('moving to another board takes a place on it: at x,y, or near something there');
+        }
+        const level = await boardAt(board, ticket);
+        const zoneId = ticket === null ? zoneOfPlace(level, place, from === null ? placed.zoneId : null) : null;
+        const zone = checkDestination(me, level, zoneId);
+        const where = boardName(board, ticket, zone);
+        entry.detail = `into ${where}`;
         const size: Size = { width: placed.rect.width, height: placed.rect.height };
         const isNote = target.kind === 'item';
-        const spot = spotFor(board, zone, size, place, tileKey(target), isNote);
+        const spot = spotFor(level, zone, size, place, tileKey(target), isNote);
         const rect = isNote ? { ...spot, ...size } : sizedFootprint(spot, size);
-        const aside = zone === undefined || (place.at === undefined && place.near === undefined) ? [] : roomFor(me, board, zone, rect, tileKey(target));
+        const aside = zone === undefined || (place.at === undefined && place.near === undefined) ? [] : roomFor(me, level, zone, rect, tileKey(target));
         const grown = zone === undefined ? undefined : grownWith(zone, { ...spot, ...size }, isNote, aside);
-        if (zone !== undefined) checkGrowth(board, zone, grown!, 'moved there,');
+        if (zone !== undefined) checkGrowth(level, zone, grown!, 'moved there,');
         // Never placed by hand, wherever it is put: only the user's own move takes a tile out of its zone's rule.
-        await moveTo(placed, zoneId, spot);
+        await moveTo(placed, zoneId, spot, ticket);
         for (const each of aside) await moveTo(each.placed, zoneId, each.spot);
         if (grown !== undefined) await growTo(zone, grown);
-        entry.detail = `into ${zone?.name ?? 'the board'} at ${Math.round(spot.x)},${Math.round(spot.y)}${aside.length === 0 ? '' : `, moving ${aside.length} aside`}`;
-        return { target, zoneId, x: spot.x, y: spot.y };
+        entry.detail = `into ${where} at ${Math.round(spot.x)},${Math.round(spot.y)}${aside.length === 0 ? '' : `, moving ${aside.length} aside`}`;
+        return { target, zoneId, ticket, x: spot.x, y: spot.y };
       });
     },
 
@@ -1911,7 +2002,7 @@ export function layoutHandlers<Context extends BoardConnection>({
             const at = arranged.tiles.get(tile.key);
             if (at === undefined) continue;
             await moveTo(tile, null, at);
-            moved.push({ target: { kind: tile.kind as 'agent' | 'shell', id: tile.id }, zoneId: null, ...at });
+            moved.push({ target: { kind: tile.kind as 'agent' | 'shell', id: tile.id }, zoneId: null, ticket: null, ...at });
           }
           const count = (n: number, what: string) => `${n} ${what}${n === 1 ? '' : 's'}`;
           entry.detail = `${count(zones.length, 'zone')} and ${count(moved.length, 'loose tile')}`;
@@ -1922,6 +2013,44 @@ export function layoutHandlers<Context extends BoardConnection>({
         const keys = ['', ...(await call('zone.list', undefined)).map((zone) => zone.id).sort()];
         return keys.reduceRight<() => Promise<BoardArrangeResult>>((inner, key) => () => arranging(key, inner), arrange)();
       });
+    },
+
+    'orchestrator.arrangeTicket': async (params, connection) => {
+      /** Places a member on the ticket's board, or says it is gone: closed since the board was read. */
+      const placeIfThere = async (sessionId: string, at: TicketBoardPlace): Promise<boolean> => {
+        try {
+          await call('agent.placeOnTicket', { sessionId, ...at });
+          return true;
+        } catch (error) {
+          if ((await call('agent.list', undefined)).some((agent) => agent.sessionId === sessionId)) throw error;
+          return false;
+        }
+      };
+      const p = paramsObject(params);
+      const me = access.caller('orchestrator.arrangeTicket', p, connection);
+      const ticket = stringParam(p, 'ticket');
+      const entry: ActivityEntry = { detail: '' };
+      return access.logged(me, 'arrange-ticket', entry, () =>
+        // In the ticket's board's layout queue, with the notes put there: none of them lands where it reads as free.
+        arranging(ticket, async (): Promise<TicketArrangeResult> => {
+          const board = await readBoard();
+          const chat = checkTicket(board, ticket);
+          entry.on = { id: chat.sessionId, name: chat.name };
+          // Only the tiles' places on the ticket's board: their tiles on the main board, and the items, stay put.
+          const members = [chat, ...helpersOf(board.agents, chat.sessionId)];
+          const places = arrangeTicketBoard(members, await call('item.list', { ticket }));
+          const moved: TicketArrangeResult['moved'] = [];
+          for (const member of members) {
+            const at = places.get(member.sessionId)!;
+            if (member.ticketPlace?.x === at.x && member.ticketPlace.y === at.y) continue;
+            // One closed since the board was read has no place to keep: the rest still arrange.
+            if (!(await placeIfThere(member.sessionId, at))) continue;
+            moved.push({ sessionId: member.sessionId, ...at });
+          }
+          entry.detail = `its ticket board: ${moved.length} tile${moved.length === 1 ? '' : 's'}`;
+          return { ticket, moved };
+        }),
+      );
     },
 
     'orchestrator.map': async (params, connection) => {
@@ -2089,11 +2218,14 @@ export function layoutHandlers<Context extends BoardConnection>({
         const colorParam = agentNote ? undefined : optionalStringParam(p, 'color');
         const colors = noteColor(asked, colorParam ?? (asked === 'sticky' ? STICKY_COLORS[0].value : 'ink'));
         const place = placeParams(p);
-        // In the zone's layout queue, with its arranges and joins: none of them can write over a note added to a sticky.
-        const queued = zoneOfPlace(await readBoard(), place, me.zoneId);
+        // In the zone's (or ticket's board's) layout queue, with its arranges and joins: none of them can write over a
+        // note added to a sticky.
+        const first = await readBoard();
+        const ticket = await ticketOfPlace(first, place, ownTicketOf(me, first), connection);
+        const queued = ticket ?? zoneOfPlace(first, place, me.zoneId);
         return arranging(queued ?? '', async () => {
-          const board = await readBoard();
-          const zoneId = zoneOfPlace(board, place, me.zoneId);
+          const board = await boardAt(await readBoard(), ticket);
+          const zoneId = ticket === null ? zoneOfPlace(board, place, me.zoneId) : null;
           const zone = checkDestination(me, board, zoneId);
           const signed = signs ? stamped(text, me.name) : text;
           // A sticky near a tile, with no side, goes in its cluster's slot: on its cluster's sticky, or before it.
@@ -2153,18 +2285,18 @@ export function layoutHandlers<Context extends BoardConnection>({
             : asked === 'sticky'
               ? (['sticky', { text: signed, ...colors }] as const)
               : (['text', textItemData(signed, colors)] as const);
-          const item = await call('item.create', { kind, zoneId, ...spot, ...size, data: { ...data } });
+          const item = await call('item.create', { kind, zoneId, ticket, ...spot, ...size, data: { ...data } });
           markItem.run(me.agent?.sessionId ?? null, item.id);
           for (const each of aside) await moveTo(each.placed, zoneId, each.spot);
           if (grown !== undefined) await growTo(zone, grown);
           entry.on = { id: item.id, name: `note ${quoted(text)}` };
-          entry.detail = `in ${zone?.name ?? 'the board'}`;
+          entry.detail = `in ${boardName(first, ticket, zone)}`;
           return item;
         });
       });
       // Arranging by itself, its zone is laid out afresh: a note beside an agent of a lane with none becomes its note.
       if (!(await autoArrange(() => me, added.zoneId))) return added;
-      return (await call('item.list', undefined)).find((each) => each.id === added.id) ?? added;
+      return (await everyItem()).find((each) => each.id === added.id) ?? added;
     },
 
     'orchestrator.editNote': async (params, connection) => {
@@ -2173,10 +2305,10 @@ export function layoutHandlers<Context extends BoardConnection>({
       const entry: ActivityEntry = { detail: typeof p.text === 'string' ? quoted(p.text) : '' };
       let grew = false;
       const edited = await access.logged(me, 'edit-note', entry, async () => {
-        const found = (await call('item.list', undefined)).find((each) => each.id === p.id);
-        // In its zone's layout queue: an arrange or join under way can't write over the edit.
-        return arranging(found?.zoneId ?? '', async () => {
-          const item = ownNote(me, stringParam(p, 'id'), await call('item.list', undefined));
+        const found = (await everyItem()).find((each) => each.id === p.id);
+        // In its zone's (or ticket's board's) layout queue: an arrange or join under way can't write over the edit.
+        return arranging(found?.ticket ?? found?.zoneId ?? '', async () => {
+          const item = ownNote(me, stringParam(p, 'id'), await everyItem());
           entry.on = { id: item.id, name: `note ${quoted(noteText(item))}` };
           const text = optionalStringParam(p, 'text');
           const color = optionalStringParam(p, 'color');
@@ -2223,7 +2355,7 @@ export function layoutHandlers<Context extends BoardConnection>({
       });
       // Grown taller, it may reach what is below it: arranging by itself, its zone makes room for it.
       if (!grew || !(await autoArrange(() => me, edited.zoneId))) return edited;
-      return (await call('item.list', undefined)).find((each) => each.id === edited.id) ?? edited;
+      return (await everyItem()).find((each) => each.id === edited.id) ?? edited;
     },
 
     'orchestrator.removeNote': async (params, connection) => {
@@ -2231,7 +2363,7 @@ export function layoutHandlers<Context extends BoardConnection>({
       const me = access.caller('orchestrator.removeNote', p, connection);
       const entry: ActivityEntry = { detail: '' };
       return access.logged(me, 'remove-note', entry, async () => {
-        const item = ownNote(me, stringParam(p, 'id'), await call('item.list', undefined), REMOVABLE_KINDS);
+        const item = ownNote(me, stringParam(p, 'id'), await everyItem(), REMOVABLE_KINDS);
         entry.on = { id: item.id, name: itemName(item) };
         await call('item.delete', { id: item.id });
         return null;
@@ -2247,22 +2379,24 @@ export function layoutHandlers<Context extends BoardConnection>({
         if (shape === undefined) throw invalidParams('shape is required');
         const data = { ...newShapeData(shape), ...shapeDataParams(p, shape) };
         const place = placeParams(p);
-        const queued = zoneOfPlace(await readBoard(), place, me.zoneId);
+        const first = await readBoard();
+        const ticket = await ticketOfPlace(first, place, ownTicketOf(me, first), connection);
+        const queued = ticket ?? zoneOfPlace(first, place, me.zoneId);
         return arranging(queued ?? '', async () => {
-          const board = await readBoard();
-          const zoneId = zoneOfPlace(board, place, me.zoneId);
+          const board = await boardAt(await readBoard(), ticket);
+          const zoneId = ticket === null ? zoneOfPlace(board, place, me.zoneId) : null;
           const zone = checkDestination(me, board, zoneId);
           const size = shapeSize(data);
           const spot = spotFor(board, zone, size, place, null, true);
           const aside = zone === undefined || (place.at === undefined && place.near === undefined) ? [] : roomFor(me, board, zone, { ...spot, ...size }, null);
           const grown = zone === undefined ? undefined : grownWith(zone, { ...spot, ...size }, true, aside);
           if (zone !== undefined) checkGrowth(board, zone, grown!, 'put there,');
-          const item = await call('item.create', { kind: 'shape', zoneId, ...spot, ...size, data });
+          const item = await call('item.create', { kind: 'shape', zoneId, ticket, ...spot, ...size, data });
           markItem.run(me.agent?.sessionId ?? null, item.id);
           for (const each of aside) await moveTo(each.placed, zoneId, each.spot);
           if (grown !== undefined) await growTo(zone, grown);
           entry.on = { id: item.id, name: itemName(item) };
-          entry.detail = `in ${zone?.name ?? 'the board'}`;
+          entry.detail = `in ${boardName(first, ticket, zone)}`;
           return item;
         });
       });
@@ -2283,10 +2417,12 @@ export function layoutHandlers<Context extends BoardConnection>({
         // Every shape checked as the board will store it before any is made, so none is left half drawn.
         for (const shape of drawn.shapes) checkedData('shape', shape.data as unknown as Record<string, unknown>);
         const place = placeParams(p);
-        const queued = zoneOfPlace(await readBoard(), place, me.zoneId);
+        const first = await readBoard();
+        const ticket = await ticketOfPlace(first, place, ownTicketOf(me, first), connection);
+        const queued = ticket ?? zoneOfPlace(first, place, me.zoneId);
         return arranging(queued ?? '', async () => {
-          const board = await readBoard();
-          const zoneId = zoneOfPlace(board, place, me.zoneId);
+          const board = await boardAt(await readBoard(), ticket);
+          const zoneId = ticket === null ? zoneOfPlace(board, place, me.zoneId) : null;
           const zone = checkDestination(me, board, zoneId);
           // Placed as one block, as a note of its size would be.
           const size = { width: drawn.width, height: drawn.height };
@@ -2298,7 +2434,7 @@ export function layoutHandlers<Context extends BoardConnection>({
           const connectors: Connector[] = [];
           try {
             for (const shape of drawn.shapes) {
-              const item = await call('item.create', { kind: 'shape', zoneId, x: spot.x + shape.x, y: spot.y + shape.y, width: shape.width, height: shape.height, data: { ...shape.data } });
+              const item = await call('item.create', { kind: 'shape', zoneId, ticket, x: spot.x + shape.x, y: spot.y + shape.y, width: shape.width, height: shape.height, data: { ...shape.data } });
               markItem.run(me.agent?.sessionId ?? null, item.id);
               items.set(shape.key, item);
             }
@@ -2319,7 +2455,7 @@ export function layoutHandlers<Context extends BoardConnection>({
           for (const each of aside) await moveTo(each.placed, zoneId, each.spot);
           if (grown !== undefined) await growTo(zone, grown);
           entry.on = { id: [...items.values()][0]!.id, name: `a ${diagram.kind === 'class' ? 'class diagram' : 'flowchart'} of ${items.size} shape${items.size === 1 ? '' : 's'}` };
-          entry.detail = `in ${zone?.name ?? 'the board'}`;
+          entry.detail = `in ${boardName(first, ticket, zone)}`;
           return { items: [...items.values()], connectors, skipped: diagram.skipped };
         });
       });
@@ -2330,10 +2466,10 @@ export function layoutHandlers<Context extends BoardConnection>({
       const me = access.caller('orchestrator.editShape', p, connection);
       const entry: ActivityEntry = { detail: typeof p.text === 'string' ? quoted(p.text) : '' };
       return access.logged(me, 'edit-shape', entry, async () => {
-        const found = (await call('item.list', undefined)).find((each) => each.id === p.id);
-        // In its zone's layout queue: an arrange or add under way can't place things by its old size.
-        return arranging(found?.zoneId ?? '', async () => {
-          const item = ownNote(me, stringParam(p, 'id'), await call('item.list', undefined), SHAPE_KINDS);
+        const found = (await everyItem()).find((each) => each.id === p.id);
+        // In its zone's (or ticket's board's) layout queue: an arrange or add under way can't place things by its old size.
+        return arranging(found?.ticket ?? found?.zoneId ?? '', async () => {
+          const item = ownNote(me, stringParam(p, 'id'), await everyItem(), SHAPE_KINDS);
           entry.on = { id: item.id, name: itemName(item) };
           const asked = shapeKindParam(p);
           const was = SHAPE_TYPES.includes(item.data.shape as ShapeType) ? (item.data.shape as ShapeType) : 'rectangle';
@@ -2358,7 +2494,7 @@ export function layoutHandlers<Context extends BoardConnection>({
       const me = access.caller('orchestrator.removeShape', p, connection);
       const entry: ActivityEntry = { detail: '' };
       return access.logged(me, 'remove-shape', entry, async () => {
-        const item = ownNote(me, stringParam(p, 'id'), await call('item.list', undefined), SHAPE_KINDS);
+        const item = ownNote(me, stringParam(p, 'id'), await everyItem(), SHAPE_KINDS);
         entry.on = { id: item.id, name: itemName(item) };
         await call('item.delete', { id: item.id });
         return null;
@@ -2371,15 +2507,16 @@ export function layoutHandlers<Context extends BoardConnection>({
       const entry: ActivityEntry = { detail: typeof p.relation === 'string' ? p.relation : '' };
       return access.logged(me, 'connect', entry, async () => {
         const board = await readBoard();
-        const [from, to] = (['from', 'to'] as const).map((name) => drawable(me, board, stringParam(p, name)));
-        if (from!.id === to!.id) throw invalidParams('a connector joins two different items');
+        const from = await drawable(connection, stringParam(p, 'from'));
+        const to = await drawable(connection, stringParam(p, 'to'));
+        if (from.id === to.id) throw invalidParams('a connector joins two different items');
         const look = connectorLookParams(p);
-        const sides = facingSides(boardRect(board, from!), boardRect(board, to!));
-        entry.on = { id: to!.id, name: `${itemName(from!)} → ${itemName(to!)}` };
+        const sides = facingSides(boardRect(board, from), boardRect(board, to));
+        entry.on = { id: to.id, name: `${itemName(from)} → ${itemName(to)}` };
         entry.detail = look.startEnd === undefined ? '' : `as ${String(p.relation)}`;
         const connector = await call('connector.create', {
-          from: { type: 'item', id: from!.id, side: sides.from },
-          to: { type: 'item', id: to!.id, side: sides.to },
+          from: { type: 'item', id: from.id, side: sides.from },
+          to: { type: 'item', id: to.id, side: sides.to },
           ...look,
         });
         markConnector.run(me.agent?.sessionId ?? null, connector.id);

@@ -8,6 +8,7 @@ const note = (id: string, sessionId: string, kind: BoardItem['kind'] = 'agent-no
   id,
   kind,
   zoneId: null,
+  ticket: null,
   x: 0,
   y: 0,
   width: 272,

@@ -3,7 +3,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { BoardError, BoardRefs, connectorLine, connectorsIn, inZone, itemLine, readBoard, REF_KINDS, resolveAgent, shapeSectionLines, zoneLine, type BoardSession, type BoardView, type RefKind } from './board-ops.ts';
+import { BoardError, BoardRefs, callerTicket, connectorLine, connectorsIn, connectorsOnTicket, itemLine, itemPlace, readEveryBoard, ticketBoardName, REF_KINDS, resolveAgent, shapeSectionLines, zoneLine, type BoardSession, type BoardView, type RefKind } from './board-ops.ts';
 import {
   ARRANGE_BYS,
   ARRANGE_LAYOUTS,
@@ -38,6 +38,8 @@ import {
 } from './protocol.ts';
 import { toMermaid } from './mermaid.ts';
 import { boxPicture, laneTable, lintLine } from './zone-map.ts';
+import { overlaps } from './board-layout.ts';
+import { ownTicketBoard } from './ticket-tiles.ts';
 
 /** A point as typed: `x,y`. Throws `BoardError` for anything else. */
 export function pointOf(text: string, what: string): { x: number; y: number } {
@@ -79,7 +81,7 @@ export function noteLinesOf(value: string | number, clears: boolean): number {
 
 /** What a layout command's options say where to put something, as typed: refs and words, not yet checked. */
 export interface PlaceOptions {
-  /** A zone ref, or `board` for loose on the board. */
+  /** A zone ref, `board` for loose on the main board, a ticket's chat's ref for its ticket's own board, or `ticket` for the caller's. */
   to?: string;
   /** `x,y`, relative to the zone. */
   at?: string;
@@ -112,10 +114,33 @@ function zoneId(refs: BoardRefs, text: string, caller: BoardCaller | null): stri
   return object.zone.id;
 }
 
+/** The ticket whose own board `ref` names: the caller's for `ticket`, else the ticket chat's it names. */
+function ticketOf(refs: BoardRefs, ref: string, caller: BoardCaller | null): string {
+  if (ref === 'ticket') {
+    const ticket = callerTicket(refs.board, caller);
+    if (ticket === null) throw new BoardError("you are on no ticket: `ticket` is a ticket's chat's own board, or its helpers'");
+    return ticket;
+  }
+  const object = refs.resolve(ref, caller);
+  if (object.kind !== 'agent' || !object.agent.ticketChat) {
+    throw new BoardError(`${ref} is no ticket's chat: only a ticket's chat has a board of its own (name its chat, or \`ticket\` for yours)`);
+  }
+  return object.agent.sessionId;
+}
+
+/** Where `to` puts something: the main board loose (`board`), the ticket's board it names (`ticket`, a ticket's chat), or a zone. */
+function destinationOf(refs: BoardRefs, to: string, caller: BoardCaller | null): Pick<LayoutPlace, 'zoneId' | 'ticket'> {
+  if (to === 'board') return { zoneId: null };
+  if (to === 'ticket') return { ticket: ticketOf(refs, to, caller) };
+  const object = refs.resolve(to, caller);
+  if (object.kind === 'agent') return { ticket: ticketOf(refs, to, caller) };
+  return { zoneId: zoneId(refs, to, caller) };
+}
+
 function placeOf(refs: BoardRefs, options: PlaceOptions, caller: BoardCaller | null): LayoutPlace {
   checkPlace(options);
   return {
-    ...(options.to === undefined ? {} : { zoneId: options.to === 'board' ? null : zoneId(refs, options.to, caller) }),
+    ...(options.to === undefined ? {} : destinationOf(refs, options.to, caller)),
     ...(options.at === undefined ? {} : { at: pointOf(options.at, '--at') }),
     ...(options.near === undefined ? {} : { near: layoutTarget(refs, options.near, caller) }),
     ...(options.side === undefined ? {} : { side: options.side as TileSide }),
@@ -133,10 +158,10 @@ const where = (x: number, y: number) => `at ${Math.round(x)},${Math.round(y)}`;
 
 /** `move`: a tile or note to a zone, a place in it, or beside another, clear of what is there. */
 export async function moveTile(session: BoardSession, ref: string, options: PlaceOptions): Promise<BoardView> {
-  const refs = new BoardRefs(await readBoard(session.client));
+  const refs = new BoardRefs(await readEveryBoard(session.client));
   const target = layoutTarget(refs, ref, session.caller);
   const moved = await session.client.call('orchestrator.move', { token: session.token, target, ...placeOf(refs, options, session.caller) });
-  return { text: `Moved ${label(refs, target)} ${inZone(refs, moved.zoneId)} ${where(moved.x, moved.y)}.`, json: moved };
+  return { text: `Moved ${label(refs, target)} ${itemPlace(refs, moved)} ${where(moved.x, moved.y)}.`, json: moved };
 }
 
 export interface ArrangeOptions {
@@ -221,16 +246,74 @@ function diagramLines(refs: BoardRefs, zoneId: string, sections: boolean, face: 
   ];
 }
 
+/** What is on a ticket's own board, as `zone map` reads it out: each thing by its ref, place and size, then what overlaps. */
+export interface TicketBoardMap {
+  ticket: string;
+  items: { ref: string; kind: string; x: number; y: number; width: number; height: number }[];
+  /** Its connectors, each by its ref and its ends' (always items: a ticket's board holds nothing else). */
+  connectors: { ref: string; from: string; to: string }[];
+  overlaps: [string, string][];
+}
+
+/** A ticket's own board as a map: its items, each with where it is and its size, its connectors, and the pairs that overlap. */
+function ticketBoardMap(refs: BoardRefs, ticket: string, sections: boolean): BoardView {
+  const items = refs.board.items.filter((item) => item.ticket === ticket);
+  const overlapping: [string, string][] = [];
+  for (const [index, one] of items.entries()) {
+    for (const other of items.slice(index + 1)) if (overlaps(one, other)) overlapping.push([refs.of('item', one.id), refs.of('item', other.id)]);
+  }
+  const lines = items.map((item) => [
+    `${itemLine(refs, item)}  ${where(item.x, item.y)} ${Math.round(item.width)}×${Math.round(item.height)}`,
+    ...(sections ? shapeSectionLines(item, SECTION_LIMIT).map((line) => `  ${line}`) : []),
+  ]);
+  const connectors = connectorsOnTicket(refs, ticket);
+  const json: TicketBoardMap = {
+    ticket,
+    items: items.map((item) => ({ ref: refs.of('item', item.id), kind: item.kind, x: item.x, y: item.y, width: item.width, height: item.height })),
+    connectors: connectors.map((connector) => ({
+      ref: refs.of('connector', connector.id),
+      from: refs.of('item', connector.from.id),
+      to: refs.of('item', connector.to.id),
+    })),
+    overlaps: overlapping,
+  };
+  return {
+    text: [
+      `${ticketBoardName(refs, ticket)}  ${plural(items.length, 'item')}`,
+      ...(lines.length === 0 ? ['(empty)'] : lines.flat()).map((line) => `  ${line}`),
+      ...connectors.map((connector) => `  ${connectorLine(refs, connector)}`),
+      `lint  ${overlapping.length === 0 ? 'ok · no overlaps' : `check · ${overlapping.length} overlapping (${overlapping.map(([a, b]) => `${a} / ${b}`).join(', ')})`}`,
+    ].join('\n'),
+    json,
+  };
+}
+
+/**
+ * The ticket's own board `zone map` reads, if it reads one: the one `zone` names (`ticket` for the caller's, or a
+ * ticket's chat's ref), or with no `zone` the caller's own if its ticket holds it. Undefined for a zone.
+ */
+function mapTicket(refs: BoardRefs, zone: string | undefined, caller: BoardCaller | null): string | undefined {
+  if (zone === undefined) {
+    const me = caller?.kind === 'agent' ? refs.board.agents.find((agent) => agent.sessionId === caller.sessionId) : undefined;
+    return me === undefined ? undefined : (ownTicketBoard(me, refs.board.agents) ?? undefined);
+  }
+  if (zone === 'ticket') return ticketOf(refs, zone, caller);
+  return refs.resolve(zone, caller).kind === 'agent' ? ticketOf(refs, zone, caller) : undefined;
+}
+
 /**
  * `zone map`: a zone (the caller's by default) as its lanes and what is amiss, or with `boxes` as a box picture; then a
- * summary of its diagram, if it has one, a class's members too with `sections`.
+ * summary of its diagram, if it has one, a class's members too with `sections`. For a ticket's own board (a helper's
+ * by default), what is on it, where, and what overlaps.
  */
 export async function zoneMap(
   session: BoardSession,
   zone: string | undefined,
   options: { boxes?: boolean; sections?: boolean; face?: ReadFace },
 ): Promise<BoardView> {
-  const refs = new BoardRefs(await readBoard(session.client));
+  const refs = new BoardRefs(await readEveryBoard(session.client));
+  const ticket = mapTicket(refs, zone, session.caller);
+  if (ticket !== undefined) return ticketBoardMap(refs, ticket, options.sections === true);
   const map = await session.client.call('orchestrator.map', { token: session.token, ...(zone === undefined ? {} : { zoneId: zoneId(refs, zone, session.caller) }) });
   const diagram = diagramLines(refs, map.zoneId, options.sections === true, options.face ?? 'cli');
   return { text: [mapText(refs, map, options.boxes === true), ...(diagram.length === 0 ? [] : ['', ...diagram])].join('\n'), json: map };
@@ -240,7 +323,10 @@ export async function zoneMap(
 export async function arrangeZone(session: BoardSession, zone: string | undefined, options: ArrangeOptions): Promise<BoardView> {
   checkArrange(options);
   if (zone === 'board') return arrangeWholeBoard(session, options);
-  const refs = new BoardRefs(await readBoard(session.client));
+  const refs = new BoardRefs(await readEveryBoard(session.client));
+  // `ticket` or a chat's ref names a ticket's board; any other agent's ref is refused as no ticket's chat.
+  const ticket = zone === undefined ? undefined : mapTicket(refs, zone, session.caller);
+  if (ticket !== undefined) return arrangeTicket(session, refs, ticket, options);
   const result = await session.client.call('orchestrator.arrange', {
     token: session.token,
     ...(zone === undefined ? {} : { zoneId: zoneId(refs, zone, session.caller) }),
@@ -252,7 +338,7 @@ export async function arrangeZone(session: BoardSession, zone: string | undefine
   const moved = result.moved.map((each) => `  ${label(refs, each.target)} ${where(each.x, each.y)}`);
   // Then the zone's map, so the layout can be checked at once: read afresh, with the labels and notes it made.
   const map = await session.client.call('orchestrator.map', { token: session.token, zoneId: result.zoneId });
-  const after = new BoardRefs(await readBoard(session.client));
+  const after = new BoardRefs(await readEveryBoard(session.client));
   return {
     text: [
       result.moved.length === 0
@@ -277,7 +363,7 @@ const scaleText = (scale: number) => `${Number(scale.toFixed(3))}×`;
 /** `zone screenshot`: a picture of a zone (the caller's by default), as the app draws it or as a plain drawing. */
 export async function zoneScreenshot(session: BoardSession, zone: string | undefined, options: { style?: string }): Promise<ZoneScreenshotView> {
   if (options.style !== undefined && !(CAPTURE_STYLES as readonly string[]).includes(options.style)) throw new BoardError(`style must be ${CAPTURE_STYLES.join(' or ')}`);
-  const refs = new BoardRefs(await readBoard(session.client));
+  const refs = new BoardRefs(await readEveryBoard(session.client));
   const shot = await session.client.call('orchestrator.screenshot', {
     token: session.token,
     ...(zone === undefined ? {} : { zoneId: zoneId(refs, zone, session.caller) }),
@@ -330,13 +416,13 @@ function groupFields(options: GroupOptions) {
 /** `zone add --group`: a group marked as made by the caller, beside its zone unless placed. */
 export async function addGroup(session: BoardSession, options: GroupOptions & { name: string }): Promise<BoardView> {
   const zone = await session.client.call('orchestrator.addZone', { token: session.token, ...groupFields(options), name: options.name });
-  const refs = new BoardRefs(await readBoard(session.client));
+  const refs = new BoardRefs(await readEveryBoard(session.client));
   return { text: `Made ${zoneLine(refs, zone)} ${where(zone.x, zone.y)}, ${zone.width}×${zone.height}.`, json: zone };
 }
 
 /** `zone rename|resize`: changes a group the caller (or its crew) made. */
 export async function changeGroup(session: BoardSession, ref: string, options: GroupOptions): Promise<BoardView> {
-  const refs = new BoardRefs(await readBoard(session.client));
+  const refs = new BoardRefs(await readEveryBoard(session.client));
   const zone = await session.client.call('orchestrator.changeZone', { token: session.token, id: zoneId(refs, ref, session.caller), ...groupFields(options) });
   return { text: `Changed ${zoneLine(refs, zone)}: ${where(zone.x, zone.y)}, ${zone.width}×${zone.height}.`, json: zone };
 }
@@ -353,7 +439,7 @@ const LAYOUT_WORDS: Record<ZoneLayoutChoice, string> = {
 /** `zone layout`: sets how a zone (the caller's by default) lays out what it holds. Only a rule (spine, lanes) moves tiles. */
 export async function setZoneLayout(session: BoardSession, mode: string, zone: string | undefined): Promise<BoardView> {
   if (!(ZONE_LAYOUT_CHOICES as readonly string[]).includes(mode)) throw new BoardError(`the layout must be ${ZONE_LAYOUT_CHOICES.join(', ')}`);
-  const refs = new BoardRefs(await readBoard(session.client));
+  const refs = new BoardRefs(await readEveryBoard(session.client));
   const changed = await session.client.call('orchestrator.zoneLayout', {
     token: session.token,
     mode: mode as ZoneLayoutChoice,
@@ -366,7 +452,7 @@ export async function setZoneLayout(session: BoardSession, mode: string, zone: s
 
 /** `zone remove`: deletes a group the caller (or its crew) made, leaving its tiles and notes loose. */
 export async function removeGroup(session: BoardSession, ref: string): Promise<BoardView> {
-  const refs = new BoardRefs(await readBoard(session.client));
+  const refs = new BoardRefs(await readEveryBoard(session.client));
   const id = zoneId(refs, ref, session.caller);
   await session.client.call('orchestrator.removeZone', { token: session.token, id });
   return { text: `Removed ${refs.of('zone', id)}: its tiles and notes stay where they were, loose on the board.`, json: null };
@@ -405,7 +491,7 @@ const budgetIgnored = (item: BoardItem, lines: number | undefined) =>
 /** `note add`: a note marked as made by the caller, placed clear of what is there: an agent note, from an agent. */
 export async function addNote(session: BoardSession, options: NoteOptions): Promise<BoardView> {
   checkNote(options);
-  const refs = new BoardRefs(await readBoard(session.client));
+  const refs = new BoardRefs(await readEveryBoard(session.client));
   const item = await session.client.call('orchestrator.addNote', {
     token: session.token,
     text: options.text,
@@ -414,8 +500,8 @@ export async function addNote(session: BoardSession, options: NoteOptions): Prom
     ...(options.lines === undefined ? {} : { lines: noteLinesOf(options.lines, false) }),
     ...placeOf(refs, options, session.caller),
   });
-  const fresh = new BoardRefs(await readBoard(session.client));
-  return { text: `Added ${itemLine(fresh, item)} ${inZone(fresh, item.zoneId)} ${where(item.x, item.y)}.${colourIgnored(item, options.color)}`, json: item };
+  const fresh = new BoardRefs(await readEveryBoard(session.client));
+  return { text: `Added ${itemLine(fresh, item)} ${itemPlace(fresh, item)} ${where(item.x, item.y)}.${colourIgnored(item, options.color)}`, json: item };
 }
 
 /** The note `text` names, by its id. */
@@ -430,7 +516,7 @@ export async function editNote(session: BoardSession, ref: string, options: { te
   const { size, lines, ...fields } = options;
   if (size !== undefined && lines !== undefined) throw new BoardError('give --size or --lines, not both');
   const budget = lines === undefined ? undefined : noteLinesOf(lines, true);
-  const refs = new BoardRefs(await readBoard(session.client));
+  const refs = new BoardRefs(await readEveryBoard(session.client));
   const item = await session.client.call('orchestrator.editNote', {
     token: session.token,
     id: noteId(refs, ref, session.caller),
@@ -443,7 +529,7 @@ export async function editNote(session: BoardSession, ref: string, options: { te
 
 /** `note remove`: deletes a note the caller (or its crew) made. */
 export async function removeNote(session: BoardSession, ref: string): Promise<BoardView> {
-  const refs = new BoardRefs(await readBoard(session.client));
+  const refs = new BoardRefs(await readEveryBoard(session.client));
   const id = noteId(refs, ref, session.caller);
   await session.client.call('orchestrator.removeNote', { token: session.token, id });
   return { text: `Removed ${refs.of('item', id)}.`, json: null };
@@ -451,7 +537,7 @@ export async function removeNote(session: BoardSession, ref: string): Promise<Bo
 
 /** `note pass`: gives an agent note or document card to the agent `toRef`, which holds it from then on. */
 export async function passNote(session: BoardSession, ref: string, toRef: string): Promise<BoardView> {
-  const refs = new BoardRefs(await readBoard(session.client));
+  const refs = new BoardRefs(await readEveryBoard(session.client));
   const id = noteId(refs, ref, session.caller);
   const to = resolveAgent(refs, toRef, session.caller);
   const item = await session.client.call('orchestrator.passItem', { token: session.token, id, to: to.sessionId });
@@ -487,7 +573,7 @@ function shapeFields(options: ShapeOptions): DiagramShapeFields {
 /** `shape add`: a shape with text (a class's sections under its name), marked as made by the caller, placed as a note is. */
 export async function addShape(session: BoardSession, options: ShapeOptions & PlaceOptions & { shape: string }): Promise<BoardView> {
   checkPlace(options);
-  const refs = new BoardRefs(await readBoard(session.client));
+  const refs = new BoardRefs(await readEveryBoard(session.client));
   const item = await session.client.call('orchestrator.addShape', {
     token: session.token,
     ...shapeFields(options),
@@ -495,20 +581,20 @@ export async function addShape(session: BoardSession, options: ShapeOptions & Pl
     text: options.text ?? '',
     ...placeOf(refs, options, session.caller),
   });
-  const fresh = new BoardRefs(await readBoard(session.client));
-  return { text: `Added ${itemLine(fresh, item)} ${inZone(fresh, item.zoneId)} ${where(item.x, item.y)}.`, json: item };
+  const fresh = new BoardRefs(await readEveryBoard(session.client));
+  return { text: `Added ${itemLine(fresh, item)} ${itemPlace(fresh, item)} ${where(item.x, item.y)}.`, json: item };
 }
 
 /** `diagram add`: the Mermaid flowchart or class diagram `mermaid` drawn as shapes and connectors, placed as a note is. */
 export async function addDiagram(session: BoardSession, mermaid: string, options: PlaceOptions): Promise<BoardView> {
   checkPlace(options);
-  const refs = new BoardRefs(await readBoard(session.client));
+  const refs = new BoardRefs(await readEveryBoard(session.client));
   const drawn = await session.client.call('orchestrator.addDiagram', { token: session.token, mermaid, ...placeOf(refs, options, session.caller) });
-  const fresh = new BoardRefs(await readBoard(session.client));
+  const fresh = new BoardRefs(await readEveryBoard(session.client));
   const [first] = drawn.items;
   return {
     text: [
-      `Drew ${drawn.items.length} shape${drawn.items.length === 1 ? '' : 's'} and ${drawn.connectors.length} connector${drawn.connectors.length === 1 ? '' : 's'} ${inZone(fresh, first!.zoneId)}:`,
+      `Drew ${drawn.items.length} shape${drawn.items.length === 1 ? '' : 's'} and ${drawn.connectors.length} connector${drawn.connectors.length === 1 ? '' : 's'} ${itemPlace(fresh, first!)}:`,
       ...drawn.items.map((item) => `  ${itemLine(fresh, item)}`),
       ...drawn.connectors.map((connector) => `  ${connectorLine(fresh, connector)}`),
       ...(drawn.skipped.length === 0 ? [] : [`Passed over ${drawn.skipped.length} line${drawn.skipped.length === 1 ? '' : 's'} it does not draw:`, ...drawn.skipped.map((line) => `  ${line}`)]),
@@ -518,15 +604,21 @@ export async function addDiagram(session: BoardSession, mermaid: string, options
 }
 
 /**
- * `diagram export`: the shapes `refs` name (each a shape, or a zone for every shape in it; the caller's zone with none),
- * and the connectors between them, as Mermaid.
+ * `diagram export`: the shapes `refs` name (each a shape, or a zone for every shape in it), and the connectors between
+ * them, as Mermaid. With none, the shapes on the caller's ticket's board if its ticket holds it (where its shapes go),
+ * else those in its zone.
  */
 export async function exportDiagram(session: BoardSession, refs: readonly string[]): Promise<BoardView> {
-  const board = new BoardRefs(await readBoard(session.client));
-  const own = session.caller?.zoneId ?? null;
-  const named = refs.length > 0 ? refs : own === null ? [] : [`zone:${own}`];
-  if (named.length === 0) throw new BoardError('give the zone, or the shapes, to export');
+  const board = new BoardRefs(await readEveryBoard(session.client));
   const shapes = new Map<string, BoardItem>();
+  const ticket = refs.length === 0 ? mapTicket(board, undefined, session.caller) : undefined;
+  if (ticket !== undefined) {
+    for (const item of board.board.items) if (item.kind === 'shape' && item.ticket === ticket) shapes.set(item.id, item);
+    if (shapes.size === 0) throw new BoardError(`there is no shape on ${ticketBoardName(board, ticket)} to export`);
+  }
+  const own = session.caller?.zoneId ?? null;
+  const named = refs.length > 0 ? refs : ticket !== undefined ? [] : own === null ? [] : [`zone:${own}`];
+  if (named.length === 0 && ticket === undefined) throw new BoardError('give the zone, or the shapes, to export');
   for (const ref of named) {
     const object = board.resolve(ref, session.caller);
     if (object.kind === 'zone') {
@@ -554,14 +646,14 @@ function shapeId(refs: BoardRefs, text: string, caller: BoardCaller | null): str
 export async function editShape(session: BoardSession, ref: string, options: ShapeOptions): Promise<BoardView> {
   const fields = shapeFields(options);
   if (Object.keys(fields).length === 0) throw new BoardError('give the shape, text, attributes, methods or fill to change');
-  const refs = new BoardRefs(await readBoard(session.client));
+  const refs = new BoardRefs(await readEveryBoard(session.client));
   const item = await session.client.call('orchestrator.editShape', { token: session.token, id: shapeId(refs, ref, session.caller), ...fields });
-  return { text: `Changed ${itemLine(new BoardRefs(await readBoard(session.client)), item)}.`, json: item };
+  return { text: `Changed ${itemLine(new BoardRefs(await readEveryBoard(session.client)), item)}.`, json: item };
 }
 
 /** `shape remove`: deletes a shape the caller (or its crew) drew, and every connector joined to it. */
 export async function removeShape(session: BoardSession, ref: string): Promise<BoardView> {
-  const refs = new BoardRefs(await readBoard(session.client));
+  const refs = new BoardRefs(await readEveryBoard(session.client));
   const id = shapeId(refs, ref, session.caller);
   await session.client.call('orchestrator.removeShape', { token: session.token, id });
   return { text: `Removed ${refs.of('item', id)}.`, json: null };
@@ -605,14 +697,14 @@ function connectorEnd(refs: BoardRefs, text: string, caller: BoardCaller | null)
 /** `connect`: joins two items with a connector, `from` to `to` as the relation reads, marked as made by the caller. */
 export async function connectItems(session: BoardSession, from: string, to: string, options: ConnectorOptions): Promise<BoardView> {
   const fields = connectorFields(options);
-  const refs = new BoardRefs(await readBoard(session.client));
+  const refs = new BoardRefs(await readEveryBoard(session.client));
   const connector = await session.client.call('orchestrator.connect', {
     token: session.token,
     from: connectorEnd(refs, from, session.caller),
     to: connectorEnd(refs, to, session.caller),
     ...fields,
   });
-  return { text: `Connected ${connectorLine(new BoardRefs(await readBoard(session.client)), connector)}.`, json: connector };
+  return { text: `Connected ${connectorLine(new BoardRefs(await readEveryBoard(session.client)), connector)}.`, json: connector };
 }
 
 /** The connector `text` names, by its id. */
@@ -626,17 +718,32 @@ function connectorId(refs: BoardRefs, text: string, caller: BoardCaller | null):
 export async function editConnector(session: BoardSession, ref: string, options: ConnectorOptions): Promise<BoardView> {
   const fields = connectorFields(options);
   if (Object.keys(fields).length === 0) throw new BoardError('give the relation, style or a label to change');
-  const refs = new BoardRefs(await readBoard(session.client));
+  const refs = new BoardRefs(await readEveryBoard(session.client));
   const connector = await session.client.call('orchestrator.editConnector', { token: session.token, id: connectorId(refs, ref, session.caller), ...fields });
-  return { text: `Changed ${connectorLine(new BoardRefs(await readBoard(session.client)), connector)}.`, json: connector };
+  return { text: `Changed ${connectorLine(new BoardRefs(await readEveryBoard(session.client)), connector)}.`, json: connector };
 }
 
 /** `connector remove`: deletes a connector the caller (or its crew) made. */
 export async function removeConnector(session: BoardSession, ref: string): Promise<BoardView> {
-  const refs = new BoardRefs(await readBoard(session.client));
+  const refs = new BoardRefs(await readEveryBoard(session.client));
   const id = connectorId(refs, ref, session.caller);
   await session.client.call('orchestrator.removeConnector', { token: session.token, id });
   return { text: `Removed ${refs.of('connector', id)}.`, json: null };
+}
+
+/**
+ * `arrange ticket` (or a ticket chat's ref): lays out that ticket's own board, its chat and helpers beside the notes and
+ * cards there, which stay put; nothing on the main board moves. It takes none of a zone's arrange options.
+ */
+async function arrangeTicket(session: BoardSession, refs: BoardRefs, ticket: string, options: ArrangeOptions): Promise<BoardView> {
+  if (Object.values(options).some((value) => value !== undefined)) throw new BoardError("arrange of a ticket's board takes no --by, --layout or --auto: they are a zone's");
+  const result = await session.client.call('orchestrator.arrangeTicket', { token: session.token, ticket });
+  const name = ticketBoardName(refs, ticket);
+  const moved = result.moved.map((each) => `  ${label(refs, { kind: 'agent', id: each.sessionId })} ${where(each.x, each.y)}`);
+  return {
+    text: result.moved.length === 0 ? `${name} was arranged already: nothing moved.` : [`Arranged ${name}:`, ...moved].join('\n'),
+    json: result,
+  };
 }
 
 /**
@@ -646,7 +753,7 @@ export async function removeConnector(session: BoardSession, ref: string): Promi
 async function arrangeWholeBoard(session: BoardSession, options: ArrangeOptions): Promise<BoardView> {
   if (Object.values(options).some((value) => value !== undefined)) throw new BoardError('arrange board takes no --by, --layout or --auto: they are a zone\'s');
   const result = await session.client.call('orchestrator.arrangeBoard', { token: session.token });
-  const refs = new BoardRefs(await readBoard(session.client));
+  const refs = new BoardRefs(await readEveryBoard(session.client));
   const zones = result.zones.map((each) => `  ${refs.of('zone', each.zoneId)} ${refs.board.zones.find((zone) => zone.id === each.zoneId)?.name ?? ''} ${where(each.x, each.y)}`);
   const tiles = result.moved.map((each) => `  ${label(refs, each.target)} ${where(each.x, each.y)}`);
   return {

@@ -129,6 +129,7 @@ export const ZoneBindingContext = createContext<ZoneBindingActions>({
   editRoleTemplates: () => {},
   startCrew: () => {},
   crewLibrary: () => {},
+  newTicket: () => {},
   addStageBoard: () => {},
 });
 

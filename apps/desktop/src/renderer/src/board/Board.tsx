@@ -96,6 +96,8 @@ import { boardDrop } from '../session/window-drags';
 import { documentSurfaceOf, gateSurfaceOf, liveShellCount, planSurfaceOf, pullRequestSurfaceOf, tabSurface } from '../session/tabs';
 import { shownWindow } from '../windows/session-windows';
 import { BoardBackdrop } from './BoardBackdrop';
+import { TicketBoard, useBoardLevel } from './TicketBoard';
+import { keptFocus, levelOf, memberNodeId, zoomsInto, type TicketBoardFocus } from './ticket-board';
 import { oneAtATime } from './one-at-a-time';
 import { installWheelLatch } from './wheel-latch';
 import { installWholeLines } from './items/whole-line';
@@ -230,9 +232,10 @@ import { DEFAULT_REPRESENTATION, RepresentationProvider } from './representation
 import { TileNode } from './TileNode';
 import { TileMenuBoardContext } from './agent-tile-menu';
 import { HandPlacedContext } from './HandPlacedMark';
-import { ClickOpensContext, ShellFoldersContext, TileActionsContext, type ShellFolders, type TileActions, type TileData, type TileNodeType } from './tile';
+import { ClickOpensContext, ShellFoldersContext, TicketViewsContext, TileActionsContext, type ShellFolders, type TileActions, type TileData, type TileNodeType } from './tile';
 import {
   DRAGGED_TILE_Z_INDEX,
+  drawnIn,
   EXTERNAL_NODE_PREFIX,
   isSessionTile,
   isStartTile,
@@ -396,6 +399,8 @@ const NOTICE = 'board-notice';
 
 /** Closes every confirmation of deleting a session. */
 const DELETE_FINAL = "Deleting a session can't be undone.";
+/** The keys that delete the selection on the main board, while it is the level shown. */
+const DELETE_KEYS = ['Backspace', 'Delete'];
 
 /** The id of the hint shown while a "Connect to…" waits for its other end. */
 const CONNECT_HINT = 'connect-to';
@@ -472,7 +477,7 @@ function BoardView() {
   usePrefabs();
   const { windows, windowsRestored, windowsRef, showWindow, closeWindow, popOut, popOutTabWindow, openShell, openAgent, poppedOut, onShellChange } = useBoardWindows();
   /** The view settings every window shares: what a double-click opens, how agent notes look, which connections and tethers are drawn. */
-  const { clickOpens, connections, tethers, agentNoteLook: savedNoteLook } = useViewSettings();
+  const { clickOpens, connections, tethers, agentNoteLook: savedNoteLook, ticketTilesOpenAs } = useViewSettings();
   // The Simplified design has one look for a note an agent writes, a card: the setting is Classic's alone.
   const agentNoteLook: AgentNoteLook = useSimplified() ? 'document' : savedNoteLook;
   const connectionsRef = useRef(connections);
@@ -697,6 +702,26 @@ function BoardView() {
     onShellChange,
     restoreView,
   });
+  /** The ticket's own board the window shows, zoomed into from its tile; null for the main board. */
+  const boardLevel = useBoardLevel(loaded, agents);
+  const levelRef = useRef(boardLevel.level);
+  levelRef.current = boardLevel.level;
+  /** What ⌘K or Needs you asked a ticket's board to show, once it is open; dropped once that board is left. */
+  const [ticketFocus, setTicketFocus] = useState<TicketBoardFocus>();
+  const focusNonce = useRef(0);
+  useEffect(() => setTicketFocus((focus) => keptFocus(focus, boardLevel.level)), [boardLevel.level]);
+  const showOnTicket = useCallback(
+    (ticket: string, nodeId: string) => {
+      if (levelRef.current !== ticket) boardLevel.open(ticket);
+      focusNonce.current += 1;
+      setTicketFocus({ ticket, nodeId, nonce: focusNonce.current });
+    },
+    [boardLevel.open],
+  );
+  /** Back to the main board, if a ticket's board is open, before showing something there. */
+  const toMainBoard = useCallback(() => {
+    if (levelRef.current !== null) boardLevel.leave();
+  }, [boardLevel.leave]);
 
   const {
     shown,
@@ -709,12 +734,20 @@ function BoardView() {
     bringTileToFront,
     collapse,
     collapseFrontTile,
+    setTicketView,
+    ticketViewsShown,
     resizeExpandedTile,
     sizeTile,
     setUnfolded,
     allowOverlap,
     freeOverlaps,
   } = useExpandedTiles({ nodes, loaded, agents, shells, externals, windows, windowsRestored, relayout, crews: crewBlocks });
+  /** Whether reaching a helper of `ticket` (⌘K, Needs you) zooms into its board, as `zoomsInto` says for the views shown now. */
+  const ticketViewsRef = useRef(ticketViewsShown);
+  ticketViewsRef.current = ticketViewsShown;
+  const openAsRef = useRef(ticketTilesOpenAs);
+  openAsRef.current = ticketTilesOpenAs;
+  const zoomsIn = useCallback((ticket: string) => zoomsInto(ticket, levelRef.current, ticketViewsRef.current, openAsRef.current), []);
   /** The crew frames as drawn, for the zones: round where their tiles are drawn, pushed aside by an expanded tile or not. */
   const shownFrames = useMemo(
     () => crewFrames(frameableTiles(nodes), shown.filter(isSessionTile)),
@@ -933,6 +966,7 @@ function BoardView() {
         else if (tile.shell !== undefined) openShell(tile.shell);
       },
       collapse,
+      setTicketView,
       setFolded(nodeId, folded) {
         const open = !folded;
         if (unfoldedRef.current.includes(nodeId) === open) return;
@@ -1036,6 +1070,8 @@ function BoardView() {
           const when = applies === 'after-turn' ? 'once it is back at its prompt' : applies === 'restart' ? 'when it restarts' : undefined;
           if (when !== undefined) toasts.show({ tone: 'info', message: `${agent.name} takes ${effort === null ? 'its default' : EFFORT_LABELS[effort]} reasoning ${when}.` });
         }, report("change the agent's reasoning")),
+      setWatches: (sessionId, change) => void window.agentBoard.agents.setWatches(sessionId, change).then(agentHeard, report("change the ticket's watches")),
+      readWatches: (sessionId) => void window.agentBoard.agents.readWatches(sessionId).then(agentHeard, report("mark the ticket's news read")),
       setRole: (sessionId, role, sendTemplate) =>
         void window.agentBoard.agents.setRole(sessionId, role, sendTemplate).then(({ template, ...agent }) => {
           agentHeard(agent);
@@ -1086,6 +1122,8 @@ function BoardView() {
           report('resume the shell'),
         ),
       startReview: (agent) => void window.agentBoard.reviews.start(agent.sessionId).catch(report('start a review')),
+      setTicketChat: (sessionId, kind) => void window.agentBoard.orchestrators.setTicketChat(sessionId, kind).catch(report('switch who builds the ticket')),
+      openTicketBoard: boardLevel.open,
       openReview(implementer) {
         const agent = agentsRef.current.find((known) => known.sessionId === implementer);
         if (agent === undefined) return;
@@ -1137,7 +1175,7 @@ function BoardView() {
         }
       },
     }),
-    [openAgent, openShell, showWindow, poppedOut, popOut, deleteAgent, deleteShell, dismissExternal, askDelete, restartAgent, getNodes, getInternalNode, inView, bringIntoView, report, setNotice, history, nameOf, showZoneName, expand, bringTileToFront, collapse, sizeTile, setUnfolded, resizeExpandedTile, agentHeard, lifecycleOnce, dropStart],
+    [openAgent, openShell, showWindow, poppedOut, popOut, deleteAgent, deleteShell, dismissExternal, askDelete, restartAgent, getNodes, getInternalNode, inView, bringIntoView, report, setNotice, history, nameOf, showZoneName, expand, bringTileToFront, collapse, setTicketView, sizeTile, setUnfolded, resizeExpandedTile, agentHeard, lifecycleOnce, dropStart, boardLevel.open],
   );
 
   const restartBanner = useRestartBanner(agents, shells, tileActions);
@@ -1629,7 +1667,7 @@ function BoardView() {
       const zoneName = zone !== undefined && isZone(zone) ? zone.data.zone.name : undefined;
       const id = crypto.randomUUID();
       putItem(
-        { id, kind, ...place, ...size, z: topZ() + 1, rotation: 0, data: made.data ?? newData?.({ zoneName }) ?? {}, createdAt: '', updatedAt: '' },
+        { id, kind, ticket: null, ...place, ...size, z: topZ() + 1, rotation: 0, data: made.data ?? newData?.({ zoneName }) ?? {}, createdAt: '', updatedAt: '' },
         { editing: editOnCreate },
       );
       selectOnly(new Set([`${ITEM_NODE_PREFIX}${id}`]));
@@ -1893,6 +1931,20 @@ function BoardView() {
     setTool(undefined);
     setMode(picked);
   }, []);
+
+  // Zoomed into a ticket's board, by the menu or restored on relaunch, nothing of the main board's under it stays
+  // picked, armed or open, for a key (Backspace, Esc) to act on out of sight.
+  const zoomedIn = boardLevel.level !== null;
+  const foldShelves = shelves.fold;
+  const setFlowSelected = flow.setSelected;
+  useEffect(() => {
+    if (!zoomedIn) return;
+    setNodes((current) => (current.some((node) => node.selected === true) ? current.map((node) => (node.selected === true ? { ...node, selected: false } : node)) : current));
+    setSelectedConnectors((current) => (current.size === 0 ? current : new Set()));
+    setFlowSelected((current) => (current.size === 0 ? current : new Set()));
+    setTool(undefined);
+    foldShelves();
+  }, [zoomedIn, setNodes, setFlowSelected, foldShelves]);
 
   // While a connector is dragged, the object near the pointer, other than the one it is drawn from, shows its handles.
   useEffect(() => {
@@ -2438,12 +2490,13 @@ function BoardView() {
   );
 
   // What the menu bar enables: the board's keys, the selection's, and Swap Arrow Direction's.
-  useMenuBarWhen('board', true);
-  useMenuBarWhen('selection', nodes.some((node) => node.selected === true) || selectedConnectors.size > 0);
-  useMenuBarWhen('arrows', selectedConnectors.size > 0);
+  // Zoomed into a ticket's board, none of the main board's: its edit keys, paste and Delete would act out of sight.
+  useMenuBarWhen('board', !zoomedIn);
+  useMenuBarWhen('selection', !zoomedIn && (nodes.some((node) => node.selected === true) || selectedConnectors.size > 0));
+  useMenuBarWhen('arrows', !zoomedIn && selectedConnectors.size > 0);
 
   const editing = useEditing({
-    loaded,
+    loaded: loaded && !zoomedIn,
     nodesRef,
     connectorsRef,
     selectedConnectorsRef,
@@ -2507,7 +2560,8 @@ function BoardView() {
     typeInShape,
     cycleConnections,
     openQuickInsert,
-    loaded,
+    // Zoomed into a ticket's board, the main board's keys are off: what they make or change would be out of sight.
+    loaded: loaded && !zoomedIn,
     tool,
     setTool,
     pickMode,
@@ -2611,7 +2665,7 @@ function BoardView() {
     },
   });
 
-  const { onFilesDropped } = useIncoming({ loaded, createItem, report, pasteItems: editing.paste, pasteDiagram: editing.pasteDiagram, pointer, boardCentre, screenToFlowPosition });
+  const { onFilesDropped } = useIncoming({ loaded: loaded && !zoomedIn, createItem, report, pasteItems: editing.paste, pasteDiagram: editing.pasteDiagram, pointer, boardCentre, screenToFlowPosition });
 
   /** A new sticky note where the screen point `at` is, from a project's right-click menu. */
   const newNoteAt = useCallback((at: { x: number; y: number }) => void createItem('sticky', screenToFlowPosition(at)), [createItem, screenToFlowPosition]);
@@ -2900,12 +2954,13 @@ function BoardView() {
         if (prefab !== undefined) setCrewFlow({ kind: 'prompt', prefab, zone });
       },
       crewLibrary: (zone: Zone) => setCrewFlow({ kind: 'library', zone }),
+      newTicket: (zone: Zone) => setCrewFlow({ kind: 'ticket', zone }),
       // Under what stays outside it, selected so it can be dragged where it is wanted; the daemon keeps it to one a zone.
       addStageBoard: (zone: Zone) => {
         const { size, newData } = ITEM_KINDS.stages;
         const id = crypto.randomUUID();
         const at = newStageBoardPlace(zone.id, shelvedRef.current, agentsRef.current);
-        putItem({ id, kind: 'stages', zoneId: zone.id, ...at, ...size, z: topZ() + 1, rotation: 0, data: newData?.({}) ?? {}, createdAt: '', updatedAt: '' });
+        putItem({ id, kind: 'stages', zoneId: zone.id, ticket: null, ...at, ...size, z: topZ() + 1, rotation: 0, data: newData?.({}) ?? {}, createdAt: '', updatedAt: '' });
         selectOnly(new Set([`${ITEM_NODE_PREFIX}${id}`]));
       },
     }),
@@ -2982,12 +3037,17 @@ function BoardView() {
         const nodeId = `${ITEM_NODE_PREFIX}${itemId}`;
         const node = getInternalNode(nodeId);
         if (node === undefined) return;
+        toMainBoard();
         selectOnly(new Set([nodeId]));
         bringIntoView({ ...node.internals.positionAbsolute, ...sizeOfNode(node) });
       },
       focusSession(sessionId) {
         const shell = shellWithPane(shellsRef.current, sessionId);
-        const nodeId = shell !== undefined ? tileNodeId('shell', shell.id) : tileNodeId('agent', sessionId);
+        const level = shell === undefined ? levelOf(sessionId, agentsRef.current, levelRef.current, zoomsIn) : null;
+        if (level !== null) return showOnTicket(level, memberNodeId(sessionId));
+        toMainBoard();
+        // A helper its ticket holds is found on its ticket's tile.
+        const nodeId = shell !== undefined ? tileNodeId('shell', shell.id) : tileNodeId('agent', drawnIn(agentsRef.current, sessionId));
         if (showFoldedHome(nodeId, bringIntoView)) return;
         const folded = shell === undefined ? unfoldStack(sessionId) : undefined;
         if (folded !== undefined) {
@@ -3000,7 +3060,14 @@ function BoardView() {
         selectOnly(new Set([nodeId]));
         bringIntoView({ ...node.internals.positionAbsolute, ...sizeOfNode(node) });
       },
-      showTile({ kind, id }) {
+      showTile({ kind, id: shown }) {
+        const level = kind === 'agent' ? levelOf(shown, agentsRef.current, levelRef.current, zoomsIn) : null;
+        if (level !== null) {
+          showOnTicket(level, memberNodeId(shown));
+          return true;
+        }
+        toMainBoard();
+        const id = kind === 'agent' ? drawnIn(agentsRef.current, shown) : shown;
         const nodeId = tileNodeId(kind, id);
         if (showFoldedHome(nodeId, flyTo)) return true;
         const folded = kind === 'agent' ? unfoldStack(id) : undefined;
@@ -3016,6 +3083,15 @@ function BoardView() {
         return true;
       },
       openTile({ kind, id }) {
+        // A helper on a ticket's board opens in its window there: it has no tile here to expand.
+        const agent = kind === 'agent' ? agentsRef.current.find((known) => known.sessionId === id) : undefined;
+        const level = agent !== undefined ? levelOf(id, agentsRef.current, levelRef.current, zoomsIn) : null;
+        if (agent !== undefined && level !== null) {
+          showOnTicket(level, memberNodeId(id));
+          openAgent(agent);
+          return true;
+        }
+        toMainBoard();
         const node = nodesRef.current.find((known) => known.id === tileNodeId(kind, id));
         if (node === undefined || !isSessionTile(node)) return false;
         const opens = tileOpenAction(clickOpens, { hasWindow: node.data.external === undefined });
@@ -3038,10 +3114,14 @@ function BoardView() {
         // Where it is now: its node may have been moved or resized since the daemon sent it.
         const node = getNodes().filter(isZone).find((known) => known.id === zoneId);
         if (node === undefined) return false;
+        toMainBoard();
         if (collapseNodeId !== undefined) collapse(collapseNodeId);
         bringIntoView(layoutOf(node));
         setCurrentZone(zoneId);
         return true;
+      },
+      showTicketItem(ticket, itemId) {
+        showOnTicket(ticket, `${ITEM_NODE_PREFIX}${itemId}`);
       },
       canStartAgent: () => nodesRef.current.some((node) => isZone(node) && node.data.zone.clone === null),
       newAgentNamed(name, zoneId) {
@@ -3057,9 +3137,19 @@ function BoardView() {
         if (prefab !== undefined) setCrewFlow({ kind: 'prompt', prefab, suggested });
       },
     }),
-    [getNodes, getInternalNode, zoneLayouts, openShell, openAgent, report, selectOnly, bringIntoView, flyTo, clickOpens, tileActions, collapse, boardCentre, unfoldStack],
+    [getNodes, getInternalNode, zoneLayouts, openShell, openAgent, report, selectOnly, bringIntoView, flyTo, clickOpens, tileActions, collapse, boardCentre, unfoldStack, showOnTicket, toMainBoard, zoomsIn],
   );
   useProvideBoardCommands(loaded ? boardCommands : undefined);
+  /** Opens the agent's window from Needs you, the running count or the master's panel, on the level it is on. */
+  const goToAgent = useCallback(
+    (agent: Agent) => {
+      const level = levelOf(agent.sessionId, agentsRef.current, levelRef.current, zoomsIn);
+      if (level === null) toMainBoard();
+      else showOnTicket(level, memberNodeId(agent.sessionId));
+      openAgent(agent);
+    },
+    [openAgent, showOnTicket, toMainBoard, zoomsIn],
+  );
 
   // A crew may start in a zone out of view, and its builder's tile is all there is of it yet: shown once it is there.
   useEffect(() => {
@@ -3418,6 +3508,7 @@ function BoardView() {
                       <IssueCardContext value={issueCards}>
                       <TileActionsContext value={tileActions}>
                       <ClickOpensContext value={clickOpens}>
+                      <TicketViewsContext value={ticketViewsShown}>
                       <TileMenuBoardContext value={tileBoard}>
                       <HandPlacedContext value={handPlaced}>
                       <ConnectionCountsContext value={hiddenCounts}>
@@ -3556,7 +3647,7 @@ function BoardView() {
                               }}
                               // Items, connectors, sessions and zones are deleted from the keyboard, sessions and zones behind a
                               // confirmation.
-                              deleteKeyCode={['Backspace', 'Delete']}
+                              deleteKeyCode={zoomedIn ? null : DELETE_KEYS}
                               onBeforeDelete={onBeforeDelete}
                               onEdgesDelete={(deleted) => {
                                 for (const edge of deleted.filter(isConnectorEdge)) connectorActions.remove(connectorIdOf(edge));
@@ -3644,6 +3735,9 @@ function BoardView() {
                                 </ViewportPortal>
                               )}
                             </ReactFlow>
+                            {boardLevel.level !== null && (
+                              <TicketBoard chatId={boardLevel.level} agents={agents} onLeave={boardLevel.leave} onOpenAgent={openAgent} onError={report} desk={desk} focus={keptFocus(ticketFocus, boardLevel.level)} />
+                            )}
                             {handOffChoice !== undefined && (
                               <HandOffChooser
                                 at={handOffChoice.at}
@@ -3680,6 +3774,7 @@ function BoardView() {
                       </ConnectionCountsContext>
                       </HandPlacedContext>
                       </TileMenuBoardContext>
+                      </TicketViewsContext>
                       </ClickOpensContext>
                       </TileActionsContext>
                       </IssueCardContext>
@@ -3702,6 +3797,7 @@ function BoardView() {
           <BoardChrome
             onKeyboardHelp={cheatSheet.open}
             loaded={loaded}
+            zoomedIn={zoomedIn}
             empty={loaded && nodes.length === 0 && newAgent === undefined}
             loadedEmpty={loadedEmpty}
             zones={zones}
@@ -3715,17 +3811,20 @@ function BoardView() {
             onAddZone={openAddZone}
             onArrangeBoard={arrangeBoard}
             onCrewLibrary={() => boardCommands.startCrew(null, null)}
+            onTicket={() => setCrewFlow({ kind: 'ticket' })}
             onJump={(zone) => {
               // Where it is now: its node may have been moved or resized since the daemon sent it.
               const node = getNodes().filter(isZone).find((known) => known.id === zone.id);
               if (node === undefined) return;
+              toMainBoard();
               bringIntoView(layoutOf(node));
               setCurrentZone(zone.id);
             }}
             currentZone={currentZone}
-            onOpenAgent={openAgent}
+            onOpenAgent={goToAgent}
             onError={report}
             minimapColor={minimapColor}
+            minimapMarked={minimapMarked}
             grid={grid}
             onGrid={toggleGrid}
             mode={mode}
@@ -3753,7 +3852,7 @@ function BoardView() {
               onSettings={openSettings}
               onShowAgent={(sessionId) => boardCommands.showTile({ kind: 'agent', id: sessionId })}
               onShowZone={(zoneId) => boardCommands.showZone(zoneId)}
-              onOpenAgent={openAgent}
+              onOpenAgent={goToAgent}
               onOpenPlan={(agent) => tileActions.openPlan(agent)}
               onOpenLink={(url) => void window.agentBoard.trackers.openLink(url).catch(report('open the link'))}
             />
@@ -4039,6 +4138,9 @@ function minimapColor(node: Node): string {
   if (isItemNode(boardNode)) return ITEM_KINDS[boardNode.data.item.kind].minimapColor(boardNode.data.item.data);
   return 'var(--raised)';
 }
+
+/** Whether a node is a ticket's tile, which the minimap marks: it has a board of its own. */
+const minimapMarked = (node: Node): boolean => isSessionTile(node) && node.data.agent?.ticketChat === true;
 
 /** The zone tint fewest of `used` have, the first of equals: the daemon's default for a new zone. */
 function leastUsedColor(used: string[]): string {

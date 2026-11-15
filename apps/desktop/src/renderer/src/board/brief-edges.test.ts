@@ -8,6 +8,7 @@ const card = (id: string, data: Partial<BoardItem['data']> = {}): BoardItem => (
   id,
   kind: 'issue',
   zoneId: null,
+  ticket: null,
   x: 0,
   y: 0,
   width: 240,

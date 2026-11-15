@@ -16,7 +16,11 @@ export class DaemonRpcError extends Error {
 export interface DaemonClient {
   call<M extends DaemonMethod>(
     method: M,
-    ...params: DaemonMethods[M]['params'] extends undefined ? [] : [DaemonMethods[M]['params']]
+    ...params: DaemonMethods[M]['params'] extends undefined
+      ? []
+      : undefined extends DaemonMethods[M]['params']
+        ? [DaemonMethods[M]['params']?]
+        : [DaemonMethods[M]['params']]
   ): Promise<DaemonMethods[M]['result']>;
   /** Subscribes to the daemon's event stream. Returns the unsubscribe function. */
   onEvent(listener: (event: DaemonEvent) => void): () => void;

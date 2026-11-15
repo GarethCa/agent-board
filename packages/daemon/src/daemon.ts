@@ -9,8 +9,10 @@ import {
   createGitHubTracker,
   createKeychainStore,
   createLinearTracker,
+  ghLogin,
   mergePullRequest,
   pullRequestOfUrl,
+  pullRequestWatchFacts,
   type CredentialStore,
 } from '@agent-board/tracker';
 import { pullRequestRecord } from './agent-records.ts';
@@ -79,7 +81,7 @@ import {
   type ZoneTracker,
 } from './protocol.ts';
 import { createNodePtyBackend } from './node-pty-backend.ts';
-import { dimensionParam, optionalBooleanParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
+import { dimensionParam, invalidParams, optionalBooleanParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
 import { DEFAULT_PERMISSION_HOLD_MS } from './permissions.ts';
 import { fixtureFetch } from './link-fixture-fetch.ts';
 import type { FetchLike } from './link-metadata.ts';
@@ -109,6 +111,8 @@ import { createPullRequestLookup } from './agent-pull-requests.ts';
 import { pullRequestTabHandlers } from './pull-request-tabs.ts';
 import { createTrackerHost, trackerHandlers, type TrackerFactory } from './trackers.ts';
 import { flagLeadOf, helpersOf } from './ticket-tiles.ts';
+import { createTicketChatHost, ticketChatHandlers } from './ticket-chat.ts';
+import { createTicketWatchHost, hookCommand, pushesWork, ticketWatchHandlers } from './ticket-watches.ts';
 import { setupHandlers } from './setup-checks.ts';
 import { viewStateHandlers } from './view-state.ts';
 import { createZoneSources, type ZoneSources } from './zone-sources.ts';
@@ -434,7 +438,14 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         broadcast({ type: 'hook', sessionId, event, payload });
         // The turn has ended: the agent may just have opened a pull request.
         if (payload.hook_event_name === 'Stop') void pullRequests.refresh(sessionId);
-        return agents.onHook(sessionId, payload, signal);
+        // A ticket's agent pushed, or opened a pull request: its watches look at once, not at their next check.
+        const command = payload.hook_event_name === 'PostToolUse' ? hookCommand(payload) : undefined;
+        const chatId = command !== undefined && pushesWork(command) ? ticketWatches.chatOf(sessionId) : undefined;
+        if (chatId !== undefined) void pullRequests.refresh(sessionId).then(() => ticketWatches.checkNow(chatId));
+        const reply = agents.onHook(sessionId, payload, signal);
+        // A ticket's chat at its prompt again is told the watch news it was too busy for.
+        if (payload.hook_event_name === 'Stop') void Promise.resolve(reply).then(() => ticketWatches.turnEnded(sessionId));
+        return reply;
       },
       // `usage` is created below, before any agent's status line can post.
       onStatusLine: (_sessionId, payload) => usage.record(payload),
@@ -508,6 +519,8 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       onChange: (sessionId) => {
         agents.announce(sessionId);
         flowEdges.recheck(sessionId);
+        // A ticket's next pull request, opened any way (the board's own open-pr, the web), or its last one reopened.
+        ticketWatches.pullRequestsChanged(sessionId);
       },
       // Its rounds start once the orchestrators' crew events hear its reads (below): a first read must reach them.
       startLater: true,
@@ -521,6 +534,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       clock: options.clock ?? systemClock,
       agents: {
         get: (sessionId) => agents.get(sessionId),
+        list: () => agents.list(),
         runScheduled: (...args) => agents.runScheduled(...args),
         spawn: (...args) => agents.spawn(...args),
         finalMessage: (sessionId) => agents.finalMessage(sessionId),
@@ -659,6 +673,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         if (finalMessage !== undefined) void selectionAsks.finished(sessionId, finalMessage);
         clocks.turnEnded(sessionId);
         late.memoryQueue?.turnEnded(sessionId);
+        ticketChats.handedOff(sessionId);
       },
       onTurnCut: (sessionId, why) => clocks.turnCut(sessionId, why),
       endTabs: (sessionId) => shells.deleteOwned(sessionId),
@@ -671,6 +686,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         removeAsks.drop(sessionId);
       },
       onRemoving: (sessionId) => {
+        ticketChats.removed(sessionId);
         flowEdges.dropAgent(sessionId);
         gates.forget(sessionId);
         asks.forget(sessionId);
@@ -688,6 +704,31 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       broadcast,
       log,
     });
+
+    // Who builds a ticket, its chat or a builder the chat leads, switched at a hand-off.
+    const ticketChats = createTicketChatHost({ db, agents, log });
+    // A ticket's watches read its pull request with the user's own gh login, and only read: never approve or merge.
+    const ticketWatches = createTicketWatchHost({
+      db,
+      clock: options.clock ?? systemClock,
+      pullRequestOf: (chatId) => ticketPullRequest([chatId, ...helpersOf(agents.list(), chatId).map((helper) => helper.sessionId)]),
+      read: (ref) => pullRequestWatchFacts(ref, { gh }),
+      viewer: () => ghLogin({ gh }),
+      tell: (chatId, text) => agents.runScheduled(chatId, text),
+      changed: (chatId) => agents.announce(chatId),
+      log,
+    });
+    /** The pull request of a ticket's agents: the newest open one of theirs, else the newest. */
+    const ticketPullRequest = (sessionIds: string[]) => {
+      const found = sessionIds
+        .flatMap((sessionId) => [...pullRequests.get(sessionId), ...pullRequests.pushed(sessionId)])
+        .flatMap((pr) => {
+          const ref = pullRequestOfUrl(pr.url);
+          return ref === undefined ? [] : [{ repo: ref.repo, number: ref.number, url: pr.url, state: pr.state }];
+        })
+        .sort((a, b) => Number(b.state === 'open' || b.state === 'draft') - Number(a.state === 'open' || a.state === 'draft') || b.number - a.number);
+      return found[0] ?? null;
+    };
 
     const reviews = createReviewHost({
       db,
@@ -836,6 +877,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       db,
       sessions,
       agents,
+      ticketWatches,
       shells,
       zones: () => zoneTable.list(),
       flowEdges,
@@ -905,6 +947,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     });
     crew.hearsPullRequests = (sessionId, own, first) => orchestrators.onPullRequestsRead(sessionId, own, first);
     pullRequests.start();
+    ticketWatches.start();
     // An agent started this run has its pull requests read as it starts, not at the next round: what it opens before
     // then is new, not there at its first read.
     const readAtStart = new Set<string>();
@@ -1041,8 +1084,12 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       ...connectorHandlers(db, broadcast),
       ...flowEdges.handlers<SessionSubscriber>(),
       ...items,
-      // An agent lists only the steps cards in its scope, as the steps methods read them.
-      'item.list': async (params, context) => late.visibleItems!(await items['item.list'](params, context), context),
+      // An agent lists only the steps cards in its scope, as the steps methods read them. Every board's items at once is
+      // for the daemon's own hosts, which find a card by kind wherever it is: a client lists one board.
+      'item.list': async (params, context) => {
+        if (params?.allBoards !== undefined && context !== DAEMON_ITSELF) throw invalidParams("allBoards is the daemon's own: list one board, or a ticket's");
+        return late.visibleItems!(await items['item.list'](params, context), context);
+      },
       // A memory's or queue's count is its rows': an undo that sends a card's whole data back may carry an older one. A
       // crew card's data is its crew's, whoever makes or changes the card.
       'item.create': async (params, context) => memoryQueue.recounted(await items['item.create'](crewCards.creating(params), context), true),
@@ -1062,6 +1109,8 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       ...settings.handlers<SessionSubscriber>(),
       ...roleTemplates.handlers<SessionSubscriber>(),
       ...agentHandlers(agents),
+      ...ticketWatchHandlers<SessionSubscriber>(ticketWatches, (sessionId) => agents.get(sessionId)),
+      ...ticketChatHandlers<SessionSubscriber>(ticketChats),
       ...boardHandlers<SessionSubscriber & BoardConnection>({
         sessions,
         agents,
@@ -1083,6 +1132,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         capture: captures.request,
         measures,
         zones: zoneTable,
+        visible: (list, connection) => late.visibleItems!(list, connection),
         warn: log,
       }),
       ...itemOwners.handlers<SessionSubscriber & BoardConnection>(),
@@ -1216,10 +1266,10 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     });
     /** The document cards on the board, of `sessionId`'s documents or of the one document. */
     const documentCards = async (match: (data: DocumentCardData) => boolean) =>
-      (await call('item.list', undefined)).filter((item) => item.kind === 'document' && match(item.data as unknown as DocumentCardData));
+      (await call('item.list', { allBoards: true })).filter((item) => item.kind === 'document' && match(item.data as unknown as DocumentCardData));
     /** The plan cards on the board of the agent `sessionId`'s plans. */
     const planCards = async (sessionId: string) =>
-      (await call('item.list', undefined)).filter((item) => item.kind === 'plan' && (item.data as unknown as PlanCardData).agent.sessionId === sessionId);
+      (await call('item.list', { allBoards: true })).filter((item) => item.kind === 'plan' && (item.data as unknown as PlanCardData).agent.sessionId === sessionId);
     // A document shown on the board is a card beside its agent's tile, joined to it; one card for each document, the
     // check and the making one step for each document, so two shows at once make one card.
     const addingCards = new Set<string>();
@@ -1318,6 +1368,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         crewFlags.close();
         crewCards.close();
         pullRequests.stop();
+        ticketWatches.stop();
         flowEdges.stop();
         zoneRules.stop();
         conditionShell.stop();

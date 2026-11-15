@@ -3,7 +3,7 @@
 // answer with as text and JSON. Every answer names the memory or queue it came from.
 import { readFileSync } from 'node:fs';
 import { basename, resolve as resolvePath } from 'node:path';
-import { agentToken, BoardError, BoardRefs, inZone, readBoard, type BoardSession, type BoardView } from './board-ops.ts';
+import { agentToken, BoardError, BoardRefs, itemPlace, readCards, type BoardSession, type BoardView } from './board-ops.ts';
 import {
   MAX_MEMORY_KEY,
   MEMORY_OLD_DAYS,
@@ -55,7 +55,7 @@ const ROW_NOUNS: Record<QueueJob['kind'], [string, string]> = {
 function cardLine(refs: BoardRefs, item: BoardItem): string {
   const data = item.data as unknown as MemoryData | QueueData;
   const holds = item.kind === 'memory' ? plural(data.count, 'entry', 'entries') : `${data.count} open${'audience' in data && data.audience === 'user' ? '  for the user' : ''}`;
-  return `${refs.of('item', item.id)}  “${data.title}”  ${holds}  by ${whoText(refs, data.madeBy)}  ${inZone(refs, item.zoneId)}`;
+  return `${refs.of('item', item.id)}  “${data.title}”  ${holds}  by ${whoText(refs, data.madeBy)}  ${itemPlace(refs, item)}`;
 }
 
 const isStale = (entry: MemoryEntry, now: Date) => now.getTime() - Date.parse(entry.updatedAt) > MEMORY_OLD_DAYS * 86_400_000;
@@ -139,7 +139,7 @@ function historyText<Row extends MemoryEntry | QueueJob>(refs: BoardRefs, item: 
 
 /** The memory or queue `ref` names: a ref, or its title (any case). */
 async function cardFor(session: BoardSession, kind: 'memory' | 'queue', ref: string): Promise<{ refs: BoardRefs; item: BoardItem }> {
-  const refs = new BoardRefs(await readBoard(session.client));
+  const refs = new BoardRefs(await readCards(session));
   const ofKind = refs.board.items.filter((item) => item.kind === kind);
   const byTitle = ofKind.filter((item) => (item.data as unknown as MemoryData).title.toLowerCase() === ref.trim().toLowerCase());
   if (byTitle.length === 1) return { refs, item: byTitle[0]! };
@@ -159,14 +159,14 @@ async function cardFor(session: BoardSession, kind: 'memory' | 'queue', ref: str
 /** `memory new`: a memory beside the caller's tile. */
 export async function newMemory(session: BoardSession, title: string): Promise<BoardView> {
   const item = await session.client.call('board.newMemory', { token: agentToken(session, 'make a memory'), title });
-  const refs = new BoardRefs(await readBoard(session.client));
+  const refs = new BoardRefs(await readCards(session));
   return { text: `Put ${cardLine(refs, item)} beside your tile. \`agent-board memory add ${refs.of('item', item.id)} key: value\` remembers something.`, json: item };
 }
 
 /** `memory ls`: the memories the caller reads. */
 export async function listMemories(session: BoardSession): Promise<BoardView> {
   const items = await session.client.call('board.listMemories', { token: agentToken(session, 'list memories') });
-  const refs = new BoardRefs(await readBoard(session.client));
+  const refs = new BoardRefs(await readCards(session));
   const none = 'No memories you can read. `agent-board memory new "<title>"` puts one beside your tile: in a zone, for its agents; on the open board, for all.';
   return { text: items.length === 0 ? none : items.map((item) => cardLine(refs, item)).join('\n'), json: items };
 }
@@ -270,14 +270,14 @@ export async function memoryHistory(session: BoardSession, ref: string, entry: s
 /** `queue new`: a queue beside the caller's tile, for agents or, with `forUser`, the user. */
 export async function newQueue(session: BoardSession, title: string, forUser: boolean): Promise<BoardView> {
   const item = await session.client.call('board.newQueue', { token: agentToken(session, 'make a queue'), title, audience: forUser ? 'user' : 'agents' });
-  const refs = new BoardRefs(await readBoard(session.client));
+  const refs = new BoardRefs(await readCards(session));
   return { text: `Put ${cardLine(refs, item)} beside your tile. \`agent-board queue add ${refs.of('item', item.id)} <job>\` queues a job.`, json: item };
 }
 
 /** `queue ls`: the queues the caller reads. */
 export async function listQueues(session: BoardSession): Promise<BoardView> {
   const items = await session.client.call('board.listQueues', { token: agentToken(session, 'list queues') });
-  const refs = new BoardRefs(await readBoard(session.client));
+  const refs = new BoardRefs(await readCards(session));
   const none = 'No queues you can read. `agent-board queue new "<title>"` puts one beside your tile: in a zone, for its agents; on the open board, for all.';
   return { text: items.length === 0 ? none : items.map((item) => cardLine(refs, item)).join('\n'), json: items };
 }

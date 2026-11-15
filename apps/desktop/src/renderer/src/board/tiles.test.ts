@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent, AgentStart, ExternalSession, Shell, TilePosition, Zone } from '@agent-board/daemon/protocol';
 import { AGENT_TILE_SIZE, CHIP_SIZE, freeTileSlot, tileSlot, ZONE_PADDING } from '@agent-board/daemon/board-layout';
-import { DRAGGED_TILE_Z_INDEX, EXPANDED_DRAG_HANDLE, holdsTiles, savedMove, savedPlace, shellWithPane, tileNodeId, tileSubject, withTiles, type BoardNode } from './tiles';
+import { drawnIn, drawsAsTicket, DRAGGED_TILE_Z_INDEX, EXPANDED_DRAG_HANDLE, holdsTiles, savedMove, savedPlace, shellWithPane, tileNodeId, tileSubject, withTiles, type BoardNode } from './tiles';
 import { EXPANDED_SIZE, expandTile } from './expanded';
 import type { TileNodeType } from './tile';
 import { itemNode } from './items/items';
@@ -270,7 +270,7 @@ describe('withTiles', () => {
 
   it('slots a tile with no place clear of the zone\'s board items', () => {
     const item = itemNode({
-      id: 'i', kind: 'issue', zoneId: 'z', x: 30, y: 40, width: 240, height: 112, z: 1, rotation: 0, data: {}, createdAt: '', updatedAt: '',
+      id: 'i', kind: 'issue', zoneId: 'z', ticket: null, x: 30, y: 40, width: 240, height: 112, z: 1, rotation: 0, data: {}, createdAt: '', updatedAt: '',
     });
     const nodes = withTiles([zone('z'), item], [agent('a', 'z')], [], []);
 
@@ -397,5 +397,66 @@ describe('withTiles: folded chips', () => {
   it('draws a chip at the chip size whatever size the tile was resized to', () => {
     const nodes = withTiles([zone('z')], [ended('a')], [], [], new Map(), [], { 'agent:a': { width: 480, height: 320 } });
     expect(tile(nodes, 'agent:a')).toMatchObject({ width: CHIP_SIZE.width, height: CHIP_SIZE.height });
+  });
+});
+
+describe('withTiles: ticket tiles', () => {
+  const rows = { startup: null, undelivered: [], trustFolder: null, untypedPrompt: null, unsent: null, hooksSilent: false };
+  const chat = (zoneId: string | null = 'z', fields: Partial<Agent> = {}) => ({ ...agent('chat', zoneId), ...rows, ticketChat: true, ticket: null, state: 'idle', ...fields }) as Agent;
+  const helper = (sessionId: string, zoneId: string | null = 'z') => ({ ...agent(sessionId, zoneId), ticketChat: false, ticket: 'chat', spawnedBy: 'chat', state: 'running' }) as Agent;
+
+  it('holds the helpers in its chat’s zone inside the chat’s tile, in order, with no tiles of their own', () => {
+    const [builder, reviewer] = [helper('builder'), helper('reviewer')];
+    const nodes = withTiles([zone('z')], [chat(), builder, reviewer, agent('other', 'z')], [], []);
+    expect(tiles(nodes).map((node) => node.id)).toEqual(['agent:chat', 'agent:other']);
+    expect(tile(nodes, 'agent:chat').data.helpers).toEqual([builder, reviewer]);
+    expect(tile(nodes, 'agent:other').data).not.toHaveProperty('helpers');
+  });
+
+  it('gives a helper laid out away from its chat a tile of its own, as any agent', () => {
+    const nodes = withTiles([zone('z'), zone('y', 900)], [chat(), helper('builder', 'y')], [], []);
+    expect(tiles(nodes).map((node) => node.id)).toEqual(['agent:chat', 'agent:builder']);
+    expect(tile(nodes, 'agent:chat').data.helpers).toEqual([]);
+  });
+
+  it('keeps its data while its helpers are unchanged', () => {
+    const builder = helper('builder');
+    const before = withTiles([zone('z')], [chat(), builder], [], []);
+    const after = withTiles(before, [tile(before, 'agent:chat').data.agent!, builder], [], []);
+    expect(tile(after, 'agent:chat').data).toBe(tile(before, 'agent:chat').data);
+  });
+
+  it('finds a held helper in its chat’s tile, and any other agent in its own', () => {
+    const agents = [chat(), helper('builder'), helper('away', 'y'), agent('other', 'z')];
+    expect(drawnIn(agents, 'builder')).toBe('chat');
+    expect(drawnIn(agents, 'away')).toBe('away');
+    expect(drawnIn(agents, 'other')).toBe('other');
+    expect(drawnIn(agents, 'chat')).toBe('chat');
+    expect(drawnIn(agents, 'gone')).toBe('gone');
+  });
+
+  it('gives the helpers their tiles back while their chat draws as its usual tile, so none of them goes missing', () => {
+    const builder = helper('builder');
+    const silent = chat('z', { hooksSilent: true });
+    const nodes = withTiles([zone('z')], [silent, builder], [], []);
+    expect(tiles(nodes).map((node) => node.id)).toEqual(['agent:chat', 'agent:builder']);
+    expect(tile(nodes, 'agent:chat').data).not.toHaveProperty('helpers');
+    expect(drawnIn([silent, builder], 'builder')).toBe('builder');
+  });
+
+  it('draws a chat as its ticket’s card unless it starts or a row waits on the user’s click; a restart keeps the card', () => {
+    expect(drawsAsTicket(chat())).toBe(true);
+    expect(drawsAsTicket(chat('z', { state: 'stopped-by-restart' }))).toBe(true);
+    expect(drawsAsTicket(chat('z', { startup: { failed: false } as Agent['startup'] }))).toBe(false);
+    expect(drawsAsTicket(chat('z', { hooksSilent: true }))).toBe(false);
+    expect(drawsAsTicket(chat('z', { unsent: 'Hand-off' }))).toBe(false);
+    expect(drawsAsTicket(chat('z', { untypedPrompt: 'Go' }))).toBe(false);
+    expect(drawsAsTicket(chat('z', { trustFolder: '/code/app' }))).toBe(false);
+    expect(drawsAsTicket(chat('z', { undelivered: [{}] as Agent['undelivered'] }))).toBe(false);
+  });
+
+  it('never folds a ticket chat to a chip, however it ended', () => {
+    const ended = { ...chat(), endedAt: '2026-01-01T00:00:00Z', state: 'done', shellSessionId: null, shellHarness: null } as Agent;
+    expect(tile(withTiles([zone('z')], [ended], [], []), 'agent:chat').data.folded).toBeUndefined();
   });
 });

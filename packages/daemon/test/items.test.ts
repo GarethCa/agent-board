@@ -137,7 +137,7 @@ describe('board items over the socket', () => {
     expect(itemEvents).toEqual<(ItemUpdatedEvent | ItemRemovedEvent)[]>([
       { type: 'item.updated', item },
       { type: 'item.updated', item: updated },
-      { type: 'item.removed', id: item.id },
+      { type: 'item.removed', id: item.id, ticket: null },
     ]);
   });
 

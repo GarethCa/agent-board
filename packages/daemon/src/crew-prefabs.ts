@@ -18,6 +18,8 @@ import {
   REVIEWER_ROLES,
   isOrchestratorRole,
   parseRole,
+  DEFAULT_TICKET_CHAT_KIND,
+  TICKET_CHAT_KINDS,
   type CrewPrefab,
   type PrefabMember,
   type PrefabSubagent,
@@ -38,7 +40,7 @@ const MAX_PURPOSE_LENGTH = 200;
 const MAX_SUBAGENT_NAME_LENGTH = 24;
 const MAX_PATHS = 20;
 
-const PREFAB_FIELDS = new Set([VERSION_FIELD, 'name', 'icon', 'purpose', 'roundLimit', 'onBoard', 'members']);
+const PREFAB_FIELDS = new Set([VERSION_FIELD, 'name', 'icon', 'purpose', 'roundLimit', 'onBoard', 'ticketChat', 'members']);
 const MEMBER_FIELDS = new Set(['id', 'role', 'name', 'harness', 'model', 'effort', 'template', 'starts', 'subagents']);
 const SUBAGENT_FIELDS = new Set(['name', 'checks', 'model', 'access', 'runs']);
 
@@ -218,12 +220,15 @@ function readPrefab(value: unknown): CrewPrefab {
   const onBoard = choice(fields, 'onBoard', 'onBoard', ['card', 'tiles', 'ticket'] as const, 'card');
   checkFlow(read, onBoard === 'ticket');
   checkTemplates(read);
+  if (fields.ticketChat !== undefined && onBoard !== 'ticket') throw invalidParams('only a prefab that starts inside a ticket tile has a ticket chat');
+  const ticketChat = fields.ticketChat === undefined ? undefined : choice(fields, 'ticketChat', 'ticketChat', TICKET_CHAT_KINDS);
   return {
     name,
     icon,
     purpose: line(fields, 'purpose', "the prefab's purpose", MAX_PURPOSE_LENGTH, ''),
     roundLimit,
     onBoard,
+    ...(ticketChat === undefined ? {} : { ticketChat }),
     members: read,
   };
 }
@@ -241,8 +246,8 @@ export function parsePrefab(text: string): CrewPrefab {
 
 /** `prefab` as a `.crew.json` file's text, every field written out, its version first. */
 export function prefabFile(prefab: CrewPrefab): string {
-  const { name, icon, purpose, roundLimit, onBoard, members } = prefab;
-  return `${JSON.stringify({ [VERSION_FIELD]: FILE_VERSION, name, icon, purpose, roundLimit, onBoard, members }, null, 2)}\n`;
+  const { name, icon, purpose, roundLimit, onBoard, ticketChat, members } = prefab;
+  return `${JSON.stringify({ [VERSION_FIELD]: FILE_VERSION, name, icon, purpose, roundLimit, onBoard, ...(onBoard === 'ticket' ? { ticketChat: ticketChat ?? DEFAULT_TICKET_CHAT_KIND } : {}), members }, null, 2)}\n`;
 }
 
 /** A file name for `prefab`: its name in lowercase words joined by dashes, then `.crew.json`. */
@@ -314,6 +319,29 @@ export const BUILT_IN_PREFABS: readonly CrewPrefab[] = [
     icon: 'ticket',
     purpose: 'One chat for a ticket: it builds, and starts and runs its helpers (designer, builder, reviewer)',
     onBoard: 'ticket',
+    ticketChat: 'implementer',
     members: [member({ id: 'chat', role: 'implementer', starts: 'prompt' }), member({ id: 'review', role: 'reviewer', starts: 'lead' })],
   }),
+  prefab({
+    name: 'Design, build, review',
+    icon: 'ticket',
+    purpose: 'A ticket whose chat leads: a designer, then a builder, then a reviewer',
+    onBoard: 'ticket',
+    ticketChat: 'lead',
+    members: [
+      member({ id: 'chat', role: 'orchestrator', starts: 'prompt' }),
+      member({ id: 'design', role: 'designer', name: 'design', model: 'opus', effort: 'high', starts: 'lead' }),
+      member({ id: 'build', role: 'implementer', name: 'builder', model: 'opus', effort: 'medium', starts: 'lead' }),
+      member({ id: 'review', role: 'reviewer', name: 'review', model: 'opus', effort: 'medium', starts: 'lead' }),
+    ],
+  }),
+  prefab({
+    name: 'Just the chat',
+    icon: 'ticket',
+    purpose: 'A ticket with its chat alone: it builds, and starts any helper it needs',
+    onBoard: 'ticket',
+    ticketChat: 'implementer',
+    members: [member({ id: 'chat', role: 'implementer', starts: 'prompt' })],
+  }),
 ];
+

@@ -24,6 +24,11 @@ export interface BoardChromeProps extends CreateToolbarProps {
   /** Whether the board has loaded: until then only the board menu shows, with the daemon's status. */
   loaded: boolean;
   /**
+   * Whether a ticket's own board is shown, zoomed into from its tile: its breadcrumb takes the creation toolbar's place,
+   * and the main board's zones, zoom controls and welcome are not shown over it.
+   */
+  zoomedIn?: boolean;
+  /**
    * Whether the board holds nothing at all, for the empty board's welcome: nothing, not just no zones, so the welcome
    * never sits over a note or a shell.
    */
@@ -54,10 +59,13 @@ export interface BoardChromeProps extends CreateToolbarProps {
   currentZone?: string;
   /** Opens the keyboard cheat sheet. */
   onKeyboardHelp(): void;
+  /** Opens the agent's session window, from the board menu's list, Needs you and the running count, wherever it is. */
   onOpenAgent(agent: Agent): void;
   onOpenShell(shell: Shell): void;
   onError(action: string): (error: unknown) => void;
   minimapColor(node: Node): string;
+  /** Whether a node carries the minimap's mark of a tile with its own board (a ticket's). */
+  minimapMarked?(node: Node): boolean;
   /** Whether a drag snaps to the grid, and turns that on or off. */
   grid: boolean;
   onGrid(): void;
@@ -73,7 +81,7 @@ export interface BoardChromeProps extends CreateToolbarProps {
  * right. On macOS the traffic lights sit left of the board menu, and the window drags by the thin strip along the top
  * and the board menu's empty space (DecU, U2).
  */
-export function BoardChrome({ loaded, empty, loadedEmpty, zones, agents, pane, onMaster, onNeedsYou, onSettings, shells, onAddZone, onCrewLibrary, onArrangeBoard, onJump, currentZone, onKeyboardHelp, onOpenAgent, onOpenShell, onError, minimapColor, grid, onGrid, onRunInShell, onCloseWindow, ...toolbar }: BoardChromeProps) {
+export function BoardChrome({ loaded, zoomedIn = false, empty, loadedEmpty, zones, agents, pane, onMaster, onNeedsYou, onSettings, shells, onAddZone, onCrewLibrary, onArrangeBoard, onJump, currentZone, onKeyboardHelp, onOpenAgent, onOpenShell, onError, minimapColor, minimapMarked, grid, onGrid, onRunInShell, onCloseWindow, ...toolbar }: BoardChromeProps) {
   const status = useDaemonStatus();
   const [menu, setMenu] = useState<BoardMenuState>({ open: false });
   const onboarding = useOnboarding(loaded, loadedEmpty, onError);
@@ -118,11 +126,15 @@ export function BoardChrome({ loaded, empty, loadedEmpty, zones, agents, pane, o
       {loaded && <BoardSpotlight ref={spotlight} agents={agents} shells={shells} zones={zones} />}
       {loaded && (
         <>
-          <CreateToolbar {...toolbar} />
+          {!zoomedIn && <CreateToolbar {...toolbar} />}
           <NeedsYou agents={agents} onOpen={onOpenAgent} onSettings={onSettings} onMaster={onMaster} onNeedsYou={onNeedsYou} pane={pane} />
-          <ZoneJump zones={zones} current={currentZone} onJump={onJump} onKeyboardHelp={onKeyboardHelp} />
-          <ZoomControls nodeColor={minimapColor} grid={grid} onGrid={onGrid} connections={connections} onConnections={(value) => setViewSetting('connections', value)} tethers={tethers} onTethers={(on) => setViewSetting('tethers', on)} />
-          {empty && !onboarding.open && <EmptyBoard onAddZone={onAddZone} onTool={toolbar.onTool} />}
+          {!zoomedIn && (
+            <>
+              <ZoneJump zones={zones} current={currentZone} onJump={onJump} onKeyboardHelp={onKeyboardHelp} />
+              <ZoomControls nodeColor={minimapColor} nodeMarked={minimapMarked} grid={grid} onGrid={onGrid} connections={connections} onConnections={(value) => setViewSetting('connections', value)} tethers={tethers} onTethers={(on) => setViewSetting('tethers', on)} />
+            </>
+          )}
+          {empty && !zoomedIn && !onboarding.open && <EmptyBoard onAddZone={onAddZone} onTool={toolbar.onTool} />}
           {onboarding.open && onboarding.state !== undefined && (
             <Onboarding
               showInMenu={onboarding.state.showInMenu}

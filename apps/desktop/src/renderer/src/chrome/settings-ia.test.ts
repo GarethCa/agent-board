@@ -58,6 +58,8 @@ describe('the Settings window’s groups', () => {
       'chatRunsShow',
       // Added since, in place of how a crew shows: whether the board draws its tethers.
       'tethers',
+      // Added since: whether a ticket's tile opens as its card or its terminal.
+      'ticketTilesOpenAs',
     ];
     const ids = SETTINGS_CONTROLS.map((control) => control.id);
     expect(new Set(ids).size).toBe(ids.length);

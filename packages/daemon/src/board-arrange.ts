@@ -151,6 +151,12 @@ const byTile = (a: ArrangeTile, b: ArrangeTile) =>
   byText(a.createdAt ?? '', b.createdAt ?? '') ||
   byText(a.name.toLowerCase(), b.name.toLowerCase()) ||
   byText(a.id, b.id);
+/**
+ * Clocks, all named alike, the one made first first. Times are to the millisecond, so clocks made one after another can
+ * share one: those keep the order they were given in, never their ids', which are random. That is the board's order:
+ * by z, which is the order they were made unless one was raised since.
+ */
+const byMade = (a: ArrangeTile, b: ArrangeTile) => byText(a.createdAt ?? '', b.createdAt ?? '');
 
 /**
  * The ticket a branch is named for, as Linear names them (`acme-199-…`, `someone/acme-199-…`): `ACME-199`; else null. Six
@@ -294,7 +300,7 @@ function roleColumns(chain: readonly ArrangeTile[]): Map<string, number> {
 function rowsOf(tiles: readonly ArrangeTile[], links: readonly ArrangeLink[], by: ArrangeBy): Row[] {
   const lead = tiles.filter((tile) => tile.lead).toSorted(byTile);
   // The shells, then the clocks, in the order they were made: never where they are, so the same crew arranges the same way.
-  const shells = [...tiles.filter((tile) => !tile.lead && tile.kind === 'shell').toSorted(byTile), ...tiles.filter((tile) => tile.kind === 'clock').toSorted(byTile)];
+  const shells = [...tiles.filter((tile) => !tile.lead && tile.kind === 'shell').toSorted(byTile), ...tiles.filter((tile) => tile.kind === 'clock').toSorted(byMade)];
   const chains = chainsOf(
     tiles.filter((tile) => !tile.lead && tile.kind === 'agent'),
     links,

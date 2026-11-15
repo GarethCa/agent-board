@@ -1,7 +1,7 @@
 // The to-do commands as the CLI and MCP give them (`remind "<text>"`, `remind ls [--mine]`, `remind done|undo|rm <n>`):
 // lines for the user to do, added to the caller's own to-do list, and the lists it reads, with who ticked each line
 // and when. A line is named by its place in the caller's own list, as `remind ls --mine` numbers it.
-import { agentToken, BoardError, BoardRefs, inZone, readBoard, type BoardSession, type BoardView } from './board-ops.ts';
+import { agentToken, BoardError, BoardRefs, itemPlace, readCards, type BoardSession, type BoardView } from './board-ops.ts';
 import type { BoardItem, StepsWho, TodoData, TodoLine } from './protocol.ts';
 
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
@@ -28,7 +28,7 @@ function listHead(refs: BoardRefs, item: BoardItem, me: string | undefined): str
   const open = data.lines.filter((line) => line.done === null).length;
   const whose = data.owner.kind === 'user' ? "the user's own" : data.owner.sessionId === me ? 'yours' : `${whoText(refs, data.owner, me)}'s`;
   const count = data.lines.length === 0 ? 'empty' : open === 0 ? `all ${data.lines.length} done` : `${open} to do of ${data.lines.length}`;
-  return `${refs.of('item', item.id)}  To do, ${whose}  ${count}  ${inZone(refs, item.zoneId)}`;
+  return `${refs.of('item', item.id)}  To do, ${whose}  ${count}  ${itemPlace(refs, item)}`;
 }
 
 /** A line: its place, its tick, its text, who ticked it and when, and who wrote it when not the list's owner. */
@@ -51,7 +51,7 @@ export async function remind(session: BoardSession, texts: string[]): Promise<Bo
   const lines = texts.flatMap((text) => text.split('\n')).filter((text) => text.trim() !== '');
   if (lines.length === 0) throw new BoardError('give the to-do: `agent-board remind "<what the user must do>"`');
   const { item, added } = await session.client.call('board.remind', { token: agentToken(session, 'add a to-do for the user'), text: lines });
-  const refs = new BoardRefs(await readBoard(session.client));
+  const refs = new BoardRefs(await readCards(session));
   const open = (item.data as unknown as TodoData).lines.filter((line) => line.done === null).length;
   return {
     text:
@@ -64,7 +64,7 @@ export async function remind(session: BoardSession, texts: string[]): Promise<Bo
 /** `remind ls [--mine]`: the to-do lists the caller reads, or only its own. */
 export async function readTodos(session: BoardSession, mine: boolean): Promise<BoardView> {
   const items = await session.client.call('board.readTodos', { token: agentToken(session, 'read to-do lists'), mine });
-  const refs = new BoardRefs(await readBoard(session.client));
+  const refs = new BoardRefs(await readCards(session));
   const me = session.caller?.kind === 'agent' ? session.caller.sessionId : undefined;
   if (items.length === 0) return { text: mine ? NO_LIST : 'No to-do lists you can read.', json: items };
   return { text: items.map((item) => listText(refs, item, me)).join('\n\n'), json: items };
@@ -80,7 +80,7 @@ export async function changeTodo(session: BoardSession, action: 'done' | 'undo' 
   if (line === undefined) throw new BoardError(lines.length === 0 ? 'your to-do list is empty' : `give a line from 1 to ${lines.length}, as \`agent-board remind ls --mine\` numbers them`);
   const change = action === 'rm' ? ({ action: 'remove', line: line.id } as const) : ({ action: 'tick', line: line.id, done: action === 'done' } as const);
   const changed = await session.client.call('board.changeTodo', { token, change });
-  const refs = new BoardRefs(await readBoard(session.client));
+  const refs = new BoardRefs(await readCards(session));
   const did = action === 'rm' ? 'Took off' : action === 'done' ? 'Ticked' : 'Unticked';
   return { text: `${did} “${line.text}”.\n${listText(refs, changed, session.caller?.kind === 'agent' ? session.caller.sessionId : undefined)}`, json: changed };
 }

@@ -296,6 +296,7 @@ interface ItemRow {
   id: string;
   kind: BoardItemKind;
   zone_id: string | null;
+  ticket: string | null;
   x: number;
   y: number;
   width: number;
@@ -326,15 +327,19 @@ export function itemHandlers<Context>(
   { images, sweeper, linkCards, log }: ItemHandlerOptions,
 ): RpcHandlers<ItemMethods, Context> {
   const selectAll = db.prepare('SELECT * FROM board_items ORDER BY z, rowid');
+  const selectMain = db.prepare('SELECT * FROM board_items WHERE ticket IS NULL ORDER BY z, rowid');
+  const selectOnTicket = db.prepare('SELECT * FROM board_items WHERE ticket = ? ORDER BY z, rowid');
   const selectOne = db.prepare('SELECT * FROM board_items WHERE id = ?');
   const insert = db.prepare(
-    `INSERT INTO board_items (id, kind, zone_id, x, y, width, height, z, rotation, data)
-     VALUES (?, ?, ?, ?, ?, ?, ?, (SELECT coalesce(max(z), 0) + 1 FROM board_items), ?, ?)`,
+    `INSERT INTO board_items (id, kind, zone_id, ticket, x, y, width, height, z, rotation, data)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, (SELECT coalesce(max(z), 0) + 1 FROM board_items), ?, ?)`,
   );
   const update = db.prepare(
-    `UPDATE board_items SET zone_id = ?, x = ?, y = ?, width = ?, height = ?, z = ?, rotation = ?, data = ?,
+    `UPDATE board_items SET zone_id = ?, ticket = ?, x = ?, y = ?, width = ?, height = ?, z = ?, rotation = ?, data = ?,
      updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`,
   );
+  const ticketChat = db.prepare('SELECT ticket_chat FROM agents WHERE session_id = ?');
+  const connectorOn = db.prepare("SELECT 1 FROM connectors WHERE (from_type = 'item' AND from_id = ?1) OR (to_type = 'item' AND to_id = ?1) LIMIT 1");
   const remove = db.prepare('DELETE FROM board_items WHERE id = ?');
   const unenrichedLinks = db.prepare("SELECT id FROM board_items WHERE kind = 'link' AND json_extract(data, '$.domain') IS NULL");
   const zoneOrigin = db.prepare('SELECT x, y FROM zones WHERE id = ?');
@@ -352,6 +357,13 @@ export function itemHandlers<Context>(
     const zone = zoneOrigin.get(zoneId) as { x: number; y: number } | undefined;
     if (zone === undefined) throw invalidParams(`no zone ${zoneId}`);
     return zone;
+  };
+
+  /** Checks an item may go on `ticket`'s board: a ticket chat's, and in no zone there. */
+  const checkTicketPlace = (ticket: string, zoneId: string | null) => {
+    const row = ticketChat.get(ticket) as { ticket_chat: number } | undefined;
+    if (row?.ticket_chat !== 1) throw invalidParams(`${ticket} is no ticket's chat: only a ticket's chat has a board of its own`);
+    if (zoneId !== null) throw invalidParams("an item on a ticket's board is in no zone: give zoneId null");
   };
 
   /** Checks a stage board goes in a zone, and in one that has none yet: a zone has at most one. */
@@ -381,7 +393,7 @@ export function itemHandlers<Context>(
 
   const writeData = (item: BoardItem, patch: Record<string, unknown>): BoardItem => {
     const data = checkedData(item.kind, { ...item.data, ...patch });
-    update.run(item.zoneId, item.x, item.y, item.width, item.height, item.z, item.rotation, data, item.id);
+    update.run(item.zoneId, item.ticket, item.x, item.y, item.width, item.height, item.z, item.rotation, data, item.id);
     return get(item.id);
   };
 
@@ -397,13 +409,20 @@ export function itemHandlers<Context>(
   return {
     'image.import': (params) => images.importFile(stringParam(paramsObject(params), 'path')),
     'image.paste': (params) => ({ path: images.pasteFile(stringParam(paramsObject(params), 'path')) }),
-    'item.list': () => (selectAll.all() as unknown as ItemRow[]).map(toItem),
+    'item.list': (params) => {
+      const fields = params === undefined || params === null ? {} : paramsObject(params);
+      const rows =
+        fields.allBoards === true ? selectAll.all() : fields.ticket === undefined ? selectMain.all() : selectOnTicket.all(stringParam(fields, 'ticket'));
+      return (rows as unknown as ItemRow[]).map(toItem);
+    },
     'item.create': (params) => {
       const fields = paramsObject(params);
       const kind = fields.kind;
       if (!BOARD_ITEM_KINDS.includes(kind as BoardItemKind)) throw invalidParams(`unknown board item kind ${String(kind)}`);
       const zoneId = zoneIdParam(fields);
       originOf(zoneId);
+      const ticket = ticketParam(fields);
+      if (ticket !== null) checkTicketPlace(ticket, zoneId);
       const data = dataParam(fields);
       checkedData(kind as BoardItemKind, data);
       checkImagesStored(data);
@@ -415,6 +434,7 @@ export function itemHandlers<Context>(
         id,
         kind as BoardItemKind,
         zoneId,
+        ticket,
         finiteNumberParam(fields, 'x'),
         finiteNumberParam(fields, 'y'),
         sizeParam(fields, 'width'),
@@ -431,8 +451,17 @@ export function itemHandlers<Context>(
       const item = get(stringParam(fields, 'id'));
       const has = (name: string) => fields[name] !== undefined;
       let { x, y } = item;
-      const zoneId = has('zoneId') ? zoneIdParam(fields) : item.zoneId;
-      if (zoneId !== item.zoneId) {
+      const ticket = fields.ticket === undefined ? item.ticket : ticketParam(fields);
+      // Onto a ticket's board, it leaves its zone: that board has none.
+      const zoneId = has('zoneId') ? zoneIdParam(fields) : ticket !== null ? null : item.zoneId;
+      if (ticket !== null) checkTicketPlace(ticket, zoneId);
+      if (ticket !== item.ticket) {
+        // Another level: its place on the board it goes to, as one board's positions mean nothing on another's.
+        if (!has('x') || !has('y')) throw invalidParams("moving an item to another board takes its x and y there");
+        if (connectorOn.get(item.id) !== undefined) throw invalidParams("that item is joined by a connector to an object on its board: remove the connector first");
+        if (item.kind === STAGE_BOARD_KIND) checkStageBoardPlace(item.id, zoneId);
+        originOf(zoneId);
+      } else if (zoneId !== item.zoneId) {
         if (item.kind === STAGE_BOARD_KIND) checkStageBoardPlace(item.id, zoneId);
         // Moved to another zone: the same place on the board, in the new zone's terms.
         const from = originOf(item.zoneId);
@@ -458,6 +487,7 @@ export function itemHandlers<Context>(
       } else if (patch !== undefined) encoded = checkedData(item.kind, data);
       update.run(
         zoneId,
+        ticket,
         x,
         y,
         has('width') ? sizeParam(fields, 'width') : item.width,
@@ -478,7 +508,7 @@ export function itemHandlers<Context>(
       // Its images stay through the grace period, so undoing the delete can make it again.
       for (const sha256 of imagesOf(doomed.data)) images.spare(sha256);
       remove.run(id);
-      broadcast({ type: 'item.removed', id }, doomed);
+      broadcast({ type: 'item.removed', id, ticket: doomed.ticket }, doomed);
       sweeper.sweep();
       return null;
     },
@@ -511,6 +541,7 @@ function toItem(row: ItemRow): BoardItem {
     id: row.id,
     kind: row.kind,
     zoneId: row.zone_id,
+    ticket: row.ticket,
     x: row.x,
     y: row.y,
     width: row.width,
@@ -533,6 +564,11 @@ function sizeParam(fields: Record<string, unknown>, name: string): number {
 /** An angle in degrees, as kept. */
 function rotationParam(fields: Record<string, unknown>): number {
   return normalisedAngle(finiteNumberParam(fields, 'rotation'));
+}
+
+/** The level an item goes on: a ticket chat's session id, or null (or none) for the main board. */
+function ticketParam(fields: Record<string, unknown>): string | null {
+  return fields.ticket === undefined || fields.ticket === null ? null : stringParam(fields, 'ticket');
 }
 
 function dataParam(fields: Record<string, unknown>): Record<string, unknown> {

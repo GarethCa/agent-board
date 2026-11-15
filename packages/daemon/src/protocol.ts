@@ -553,13 +553,16 @@ export type BoardItemKind = (typeof BOARD_ITEM_KINDS)[number];
 
 /**
  * A non-session object on the board, such as a sticky note. Inside a zone its position is relative to the zone, so it
- * moves with it; outside every zone (`zoneId` null) it is a board position.
+ * moves with it; outside every zone (`zoneId` null) it is a board position. On a ticket's board (`ticket` set) it is in
+ * no zone and its position is on that board.
  */
 export interface BoardItem {
   id: string;
   kind: BoardItemKind;
-  /** The zone it sits in, or null. */
+  /** The zone it sits in, or null. Always null on a ticket's board. */
   zoneId: string | null;
+  /** The level it is on: the session id of the ticket chat whose own board holds it, or null for the main board. */
+  ticket: string | null;
   x: number;
   y: number;
   width: number;
@@ -740,11 +743,13 @@ export interface SelectionGroup {
   nodes: string[];
 }
 
-/** A place on the board: in a zone (relative to it) or loose (null). */
+/** A place on the board: in a zone (relative to it), loose (null), or on a ticket's own board (`ticket`, in no zone). */
 export interface BoardPlace {
   zoneId: string | null;
   x: number;
   y: number;
+  /** The ticket chat's session id, on whose own board it is; the main board without. */
+  ticket?: string | null;
 }
 
 /** `master.start`'s: the harness (`claude` by default) and model (`opus` for Claude by default) of a new master. */
@@ -1079,14 +1084,27 @@ export interface CreateItemParams {
   height: number;
   /** Its angle, straight (0) if not given. */
   rotation?: number;
+  /** The ticket chat whose own board it goes on (with `zoneId` null), or the main board if not given. */
+  ticket?: string | null;
   data: Record<string, unknown>;
 }
 
 /**
  * A change to a board item: only the fields given change, and `data`'s keys are merged into its data. Moving it to
- * another zone (or out of every zone, with null) without `x` and `y` keeps it where it is on the board.
+ * another zone (or out of every zone, with null) without `x` and `y` keeps it where it is on the board. Moving it to
+ * another level (`ticket`) takes both `x` and `y`, on the board it goes to: one board's positions mean nothing on
+ * another's.
  */
 export type UpdateItemParams = { id: string } & Partial<Omit<BoardItem, 'id' | 'kind' | 'createdAt' | 'updatedAt'>>;
+
+/**
+ * Which board's items `item.list` lists: with none, the main board's; with `ticket`, that ticket chat's own board's.
+ * `allBoards` lists every level's, for the daemon's own hosts only.
+ */
+export interface ListItemsParams {
+  ticket?: string;
+  allBoards?: boolean;
+}
 
 /** The kinds of board object a connector can end on. Each id is that object's own: a zone's, an item's, a session's. */
 export const CONNECTOR_END_TYPES = ['zone', 'item', 'agent', 'shell', 'external'] as const;
@@ -1571,6 +1589,12 @@ export interface TilePosition {
   z: number | null;
 }
 
+/** A tile's place on a ticket's own board (`Agent.ticketPlace`), in that board's coordinates. */
+export interface TicketBoardPlace {
+  x: number;
+  y: number;
+}
+
 /** Where to put a tile: `zoneId` null for loose on the board, and `x`, `y` relative to the zone if there is one. */
 export interface TileMove {
   zoneId: string | null;
@@ -1798,6 +1822,90 @@ export const INTERRUPT_KEY = '\x03';
 
 /** What an agent's first prompt is called once it is typed and not sent (`Agent.unsent`), or not delivered. */
 export const FIRST_PROMPT = 'Its first prompt';
+
+/**
+ * What a ticket tile can watch on its pull request, each a watch of its own: its people's reviews and comments, its
+ * approvals, whether it merges (merged, closed, a conflict, behind its base) and its checks. None is on until chosen.
+ */
+export const TICKET_WATCH_KINDS = ['reviews', 'approvals', 'merge', 'checks'] as const;
+export type TicketWatchKind = (typeof TICKET_WATCH_KINDS)[number];
+
+/** Where one watch's news goes: onto the ticket's tile, to its chat, or both. Both off is the watch off. */
+export interface TicketWatchSwitch {
+  tile: boolean;
+  chat: boolean;
+}
+
+/** One watch's switches as a word, for the CLI and MCP: `off`, `tile` (On tile), `chat` (Tell chat) or `both`. */
+export const TICKET_WATCH_MODES = ['off', 'tile', 'chat', 'both'] as const;
+export type TicketWatchMode = (typeof TICKET_WATCH_MODES)[number];
+
+/**
+ * What a ticket's chat is (`Agent.chatKind`): `implementer`, one session that talks to the user and writes the code; or
+ * `lead`, which talks and runs the ticket while a builder helper writes the code on the chat's branch, in its worktree.
+ */
+export const TICKET_CHAT_KINDS = ['implementer', 'lead'] as const;
+export type TicketChatKind = (typeof TICKET_CHAT_KINDS)[number];
+/** A new ticket's chat builds, so there are fewer sessions, unless its prefab or the user says otherwise. */
+export const DEFAULT_TICKET_CHAT_KIND: TicketChatKind = 'implementer';
+
+/** How often a ticket's watches read its pull request, in minutes, as its settings offer. */
+export const TICKET_WATCH_EVERY_MINUTES = [2, 5, 15] as const;
+export type TicketWatchEvery = (typeof TICKET_WATCH_EVERY_MINUTES)[number];
+export const DEFAULT_TICKET_WATCH_EVERY: TicketWatchEvery = 5;
+
+/** A ticket's watches: each kind's switches, and how often they read its pull request (and once after a push). */
+export type TicketWatchSettings = Record<TicketWatchKind, TicketWatchSwitch> & { everyMinutes: TicketWatchEvery };
+
+/** A change to a ticket's watches: the kinds named, as switches or a word, and how often; the rest stay as they are. */
+export interface TicketWatchChange {
+  watches?: Partial<Record<TicketWatchKind, TicketWatchSwitch | TicketWatchMode>>;
+  everyMinutes?: TicketWatchEvery;
+}
+
+/** One thing a watch saw change: a review, an approval, a merge, a conflict, checks failing or passing again. */
+export interface TicketWatchNews {
+  kind: TicketWatchKind;
+  /** It in a line, as the tile and the chat show it: "sam approved", "Checks failing: 1 of 3 passing". */
+  text: string;
+  /** When it happened on GitHub, or when the check saw it if GitHub gives no time. */
+  at: string;
+  /** Whose it is, for a review or a comment; null for the rest. */
+  by: string | null;
+}
+
+/**
+ * What a ticket tile's watches show (`Agent.watch`): its settings, the pull request they read, what the last check saw,
+ * and the news its tile has not shown yet.
+ */
+export interface TicketWatch {
+  settings: TicketWatchSettings;
+  /** The ticket's pull request: its chat's or a helper's, the newest open one first. Null until one is opened. */
+  pullRequest: { repo: string; number: number; url: string; state: PullRequestState } | null;
+  /** What the last check read of it, for the tile's watch icons; null before the first. */
+  seen: {
+    /** Its people's latest review, not a bot's nor the user's own; `state` is '' for one by someone outside the repo. */
+    lastReview: { by: string; state: string; at: string } | null;
+    /**
+     * Who of the repo's own people approved it, and what its reviews add up to under the repo's rules (`APPROVED`,
+     * `REVIEW_REQUIRED`, …), which a bot's or the user's own approval may move too.
+     */
+    approvals: { by: string[]; decision: string | null };
+    merge: { state: PullRequestState; mergeable: string; mergeStateStatus: string };
+    checks: { state: ChecksState; passing: number; total: number };
+  } | null;
+  /** The news of watches with On tile that the tile has not shown yet (`ticket.readWatches` clears it), oldest first. */
+  news: TicketWatchNews[];
+  /**
+   * The ticket's ask from its watches: `new-review` while a review or approval is news on its tile that its chat was
+   * not told of (Tell chat off), as then it is the user's to read. Null for none.
+   */
+  ask: 'new-review' | null;
+  /** When it last read the pull request; null before the first. */
+  checkedAt: string | null;
+  /** Why the last check failed (signed out of `gh`, GitHub's rate limit), or null. */
+  problem: string | null;
+}
 
 /**
  * An agent: a session running a harness in its own worktree, drawn as a tile in any zone or loose on the board. Where
@@ -2034,6 +2142,24 @@ export interface Agent {
    * builder, reviewer) into it. Kept as it was started.
    */
   ticketChat: boolean;
+  /**
+   * For a ticket's chat, which kind it is (`TicketChatKind`): the implementer, which writes the ticket's code itself, or
+   * its own lead, whose builder helper does. Left out for every other agent.
+   */
+  chatKind?: TicketChatKind;
+  /**
+   * For a ticket's chat, the kind it switches to at the next hand-off (`ticket.setChat`), while that waits for one: its
+   * own turn's end, to become the lead; its builder's hand-off, to become the implementer. Left out while none waits.
+   */
+  chatSwitch?: TicketChatKind;
+  /** A ticket's chat's watches on its pull request (`ticket.setWatches`); left out for every other agent. */
+  watch?: TicketWatch;
+  /**
+   * Where its tile sits on its ticket's own board (`agent.placeOnTicket`): a helper's on its ticket's, a ticket chat's
+   * on its own. Board coordinates on that board, apart from `position`, its place on the main board. Left out until it
+   * is placed there, and for an agent in no ticket.
+   */
+  ticketPlace?: TicketBoardPlace;
   /**
    * The name of the orchestrator that started it while that one is live, else null (a loose agent, or one whose
    * orchestrator has ended); for a helper, its ticket's chat while that one is live. Its turns, questions and open
@@ -3753,7 +3879,7 @@ export interface EarlierConversation {
  * What an orchestrator did, or tried: the control verbs, each logged (`OrchestratorActivity`). An edge it made or
  * removed is `add-edge` or `remove-edge`, its target the edge's `to` agent. A `handoff` is any agent's, an orchestrator's
  * or not: one line per edge it handed off along, its target that edge's `to` agent. The layout commands' lines
- * (`move`, `arrange`, `arrange-board`, a group's `add-zone`, `change-zone` and `remove-zone`, a zone's `zone-layout`, a note's `add-note`, `edit-note` and
+ * (`move`, `arrange`, `arrange-board`, `arrange-ticket`, a group's `add-zone`, `change-zone` and `remove-zone`, a zone's `zone-layout`, a note's `add-note`, `edit-note` and
  * `remove-note`) name the tile, zone or note as their target. `set-role` and `remove-role` change the app's default roles,
  * the role's name their detail. `hold` and `release` (placing and lifting a zone's budget hold) are kept so activity logged
  * before pacing by usage was removed still reads.
@@ -3778,6 +3904,7 @@ export const ORCHESTRATOR_ACTIONS = [
   'move',
   'arrange',
   'arrange-board',
+  'arrange-ticket',
   'add-zone',
   'change-zone',
   'remove-zone',
@@ -3806,6 +3933,7 @@ export const ORCHESTRATOR_ACTIONS = [
   'set-status',
   'hold',
   'release',
+  'watches',
 ] as const;
 export type OrchestratorAction = (typeof ORCHESTRATOR_ACTIONS)[number];
 
@@ -3866,6 +3994,8 @@ export interface OrchestratorSpawnParams {
   description?: string;
   /** As `SpawnAgentParams.ticketChat`. */
   ticketChat?: boolean;
+  /** As `SpawnAgentParams.chatKind`. */
+  chatKind?: TicketChatKind;
   /** As `SpawnAgentParams.ticket`: the caller's own ticket's, or none, without. */
   ticket?: string;
 }
@@ -3912,21 +4042,27 @@ export interface LayoutTarget {
 
 /**
  * Where `orchestrator.move` puts a tile, or `orchestrator.addNote` a note: in the zone `zoneId` (null, loose on the
- * board), at `at` (relative to that zone), or a gap beside `near` on its `side` (`below` without), in `near`'s zone.
- * Each is a wish: what lands there would overlap something is moved the least distance clear of it. Without any, a
- * tile stays in its zone (a note goes in the caller's), at the first free slot.
+ * board), on the ticket's own board `ticket` names (its chat's session id; null, the main board), at `at` (relative to
+ * that zone or board), or a gap beside `near` on its `side` (`below` without), in `near`'s zone or board. Each is a
+ * wish: what lands there would overlap something is moved the least distance clear of it. Without any, a tile stays
+ * in its zone and an item on its board; a note goes in the caller's zone, or a helper's on its ticket's board, at the
+ * first free slot. An item moved to another board is put at `at` there, which the move needs; a tile stays on the
+ * main board.
  */
 export interface LayoutPlace {
   zoneId?: string | null;
+  ticket?: string | null;
   at?: { x: number; y: number };
   near?: LayoutTarget;
   side?: TileSide;
 }
 
-/** Where a layout command left a tile or note: its zone (null for none) and its place, relative to it. */
+/** Where a layout command left a tile or note: its zone (null for none) or ticket's board, and its place, relative to it. */
 export interface LayoutMoved {
   target: LayoutTarget;
   zoneId: string | null;
+  /** The ticket chat's session id, on whose own board it is; null on the main board. */
+  ticket: string | null;
   x: number;
   y: number;
 }
@@ -3954,6 +4090,12 @@ export interface ArrangeResult {
   height: number;
   moved: LayoutMoved[];
   unmeasured: boolean;
+}
+
+/** What an arrange of a ticket's own board did: the tiles it moved there, each to its new place on that board. */
+export interface TicketArrangeResult {
+  ticket: string;
+  moved: ({ sessionId: string } & TicketBoardPlace)[];
 }
 
 /** A box on the board, px: relative to its zone, or a board position when loose. */
@@ -4494,6 +4636,12 @@ export interface CrewPrefab {
    * ticket tile's chat (`Agent.ticketChat`), and the rest, and whoever that chat starts, are its helpers.
    */
   onBoard: 'card' | 'tiles' | 'ticket';
+  /**
+   * For a `ticket` prefab, the kind of chat a ticket from it starts with (`Agent.chatKind`), which the New ticket sheet
+   * starts on: `DEFAULT_TICKET_CHAT_KIND` without. As the implementer, the chat takes its first builder's place (the
+   * first member the lead starts in the implementer role); as the lead, it starts that builder on its own branch.
+   */
+  ticketChat?: TicketChatKind;
   members: PrefabMember[];
 }
 
@@ -4696,6 +4844,8 @@ export type SpawnAgentParams = TerminalSize & {
   issueZoneId?: string;
   /** Start it as a ticket tile's chat (`Agent.ticketChat`): the agents it starts are its ticket's helpers. Not with `ticket`. */
   ticketChat?: boolean;
+  /** With `ticketChat`, which kind of chat it is (`Agent.chatKind`): `DEFAULT_TICKET_CHAT_KIND` without. */
+  chatKind?: TicketChatKind;
   /**
    * The ticket it is a helper of (`Agent.ticket`), by its chat's session id. Without, its starter's ticket: the chat's own,
    * for an agent a ticket's chat starts, else that of the helper that starts it, else none.
@@ -5253,6 +5403,20 @@ export interface DaemonMethods {
    */
   'agent.setEffort': { params: SessionRef & { effort: Effort | null }; result: { agent: Agent; applies: EffortApplies } };
   /**
+   * Changes a ticket's watches, those named and how often, and leaves the rest. `sessionId` is its chat or one of its
+   * helpers. A watch turned on from none reads the pull request at once, taking what it shows then as no news.
+   */
+  'ticket.setWatches': { params: SessionRef & TicketWatchChange; result: { agent: Agent } };
+  /** Marks the ticket's watch news read, as its tile's Read does: clears `TicketWatch.news` and its ask. */
+  'ticket.readWatches': { params: SessionRef; result: { agent: Agent } };
+  /**
+   * Switches a ticket's chat (`sessionId`, the chat) to `kind`, at a hand-off, never mid-edit. To the lead: once the
+   * chat is between turns, a builder helper starts on its branch, in its worktree, and the chat stays on to talk. To the
+   * implementer: before a builder starts, or once it hands off, the chat takes its branch over and the builder closes.
+   * Until then it waits (`Agent.chatSwitch`); asking for the kind it is cancels a switch waiting. Answers the chat.
+   */
+  'ticket.setChat': { params: SessionRef & { kind: TicketChatKind }; result: { agent: Agent } };
+  /**
    * Marks the agent's current ask seen, because its session was opened or focused: it stops needing the user until it
    * asks again. Does nothing unless the agent waits for the user. Fails with `invalidParams` for an unknown agent.
    */
@@ -5336,6 +5500,8 @@ export interface DaemonMethods {
    * takes it: now, once its turn ends, or when next started.
    */
   'orchestrator.setEffort': { params: { token?: string; sessionId: string; effort: Effort }; result: { agent: Agent; applies: EffortApplies } };
+  /** Sets a ticket's watches (`ticket.setWatches`): of the ticket its chat or a helper `sessionId` names. */
+  'orchestrator.setWatches': { params: { token?: string; sessionId: string } & TicketWatchChange; result: { agent: Agent } };
   /**
    * Gives an agent a role, or none with null (`agent.setRole`): an agent it may steer, or its own tile. With
    * `sendTemplate`, the new role's template, filled in for that agent as New agent fills one, then goes to it as a
@@ -5410,6 +5576,13 @@ export interface DaemonMethods {
   'orchestrator.arrange': { params: { token?: string; zoneId?: string; by?: ArrangeBy; layout?: ArrangeLayout; auto?: boolean }; result: ArrangeResult };
   /** Lays out the whole board: its zones and its loose tiles, never what is in a zone. */
   'orchestrator.arrangeBoard': { params: { token?: string }; result: BoardArrangeResult };
+  /**
+   * Lays out a ticket's own board, the one its chat `ticket` has (`ticket-tiles.ts`, `arrangeTicketBoard`): the chat,
+   * its helpers in a column beside it, the block clear of the notes and cards there, which stay put. Only the tiles'
+   * places on that board move (`Agent.ticketPlace`): nothing on the main board, and an arrange of the main board or a
+   * zone never moves these. Fails with `invalidParams` when `ticket` is no ticket's chat.
+   */
+  'orchestrator.arrangeTicket': { params: { token?: string; ticket: string }; result: TicketArrangeResult };
   /**
    * A zone (its own by default) as a map: its lanes, where everything is and what is amiss
    * (`ZoneMap`). It moves nothing.
@@ -5544,7 +5717,18 @@ export interface DaemonMethods {
    * listed in `later`, and the crew (`crew`) starts them at each of its builder's hand-offs. `roundLimit` replaces the prefab's for this crew alone (the prompt box's Stop after).
    */
   'orchestrator.startPrefab': {
-    params: { token?: string; name: string; prompt?: string; zoneId?: string; repo?: string; issueId?: string; description?: string; roundLimit?: number };
+    params: {
+      token?: string;
+      name: string;
+      prompt?: string;
+      zoneId?: string;
+      repo?: string;
+      issueId?: string;
+      description?: string;
+      roundLimit?: number;
+      /** For a `ticket` prefab, the kind of chat this ticket starts with, in place of the prefab's (`CrewPrefab.ticketChat`). */
+      ticketChat?: TicketChatKind;
+    };
     result: PrefabStarted;
   };
   /** The running crews the caller reaches (by their builders), newest first; the one `crewId` names alone if given. */
@@ -5814,6 +5998,11 @@ export interface DaemonMethods {
    */
   'agent.move': { params: SessionRef & TileMove; result: Agent };
   /**
+   * Moves the tile of a ticket's helper, or of the ticket's chat, on that ticket's own board. Its main-board tile stays
+   * where it is. Fails with `invalidParams` for an unknown agent or one in no ticket.
+   */
+  'agent.placeOnTicket': { params: SessionRef & TicketBoardPlace; result: Agent };
+  /**
    * Every external session agent-board has heard of and not dismissed, live or ended, oldest first. Only reads: the
    * Unsorted group is made when a session first appears, at daemon start, and when a zone change leaves one with no
    * zone (`zone.unbind`, `zone.remove`, `zone.dissolve`), never here.
@@ -5858,8 +6047,8 @@ export interface DaemonMethods {
    * 64 KiB, kept across restarts. Null forgets the key.
    */
   'view.set': { params: { key: string; value: unknown }; result: null };
-  /** Every board item, lowest `z` first. */
-  'item.list': { params: undefined; result: BoardItem[] };
+  /** The items on one board, lowest `z` first: the main board's unless `ticket` names a ticket chat's (`ListItemsParams`). */
+  'item.list': { params: ListItemsParams | undefined; result: BoardItem[] };
   /** Adds an item on top of the others. Fails with `invalidParams` for an unknown kind or zone, or a size under 1. */
   'item.create': { params: CreateItemParams; result: BoardItem };
   /** Changes an item. Fails with `invalidParams` for an unknown item or zone, or a size under 1. */
@@ -6193,6 +6382,7 @@ export const ORCHESTRATOR_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMet
   'orchestrator.read',
   'orchestrator.interrupt',
   'orchestrator.setEffort',
+  'orchestrator.setWatches',
   'orchestrator.giveRole',
   'orchestrator.continueOnCredits',
   'orchestrator.restart',
@@ -6206,6 +6396,7 @@ export const ORCHESTRATOR_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMet
   'orchestrator.move',
   'orchestrator.arrange',
   'orchestrator.arrangeBoard',
+  'orchestrator.arrangeTicket',
   'orchestrator.map',
   'orchestrator.screenshot',
   'orchestrator.addZone',
@@ -6416,6 +6607,8 @@ export interface ItemUpdatedEvent {
 export interface ItemRemovedEvent {
   type: 'item.removed';
   id: string;
+  /** The level it went from: its ticket chat's session id, or null for the main board. */
+  ticket: string | null;
 }
 
 /** Sent to every client when a clock is planned again or fires, or a run of it ends. */

@@ -1,0 +1,668 @@
+{
+ "_about": "gh pr view 648 --repo acme/app --json number,url,state,isDraft,mergeable,mergeStateStatus,reviewDecision,reviews,comments,statusCheckRollup, as gh 2.x answers it, at each stage of one pull request. The signed-in user is octocat.",
+ "review-requested": {
+  "comments": [
+   {
+    "author": {
+     "login": "github-actions",
+     "is_bot": true
+    },
+    "authorAssociation": "MEMBER",
+    "body": "Preview deployed.",
+    "createdAt": "2026-11-14T10:13:00Z",
+    "id": "IC_kwDOgithub-actions10",
+    "includesCreatedEdit": false,
+    "isMinimized": false,
+    "minimizedReason": "",
+    "reactionGroups": [],
+    "url": "https://github.com/acme/app/pull/648#issuecomment-1",
+    "viewerDidAuthor": false
+   }
+  ],
+  "isDraft": false,
+  "mergeStateStatus": "BLOCKED",
+  "mergeable": "MERGEABLE",
+  "number": 648,
+  "reviewDecision": "REVIEW_REQUIRED",
+  "reviews": [
+   {
+    "author": {
+     "login": "octocat"
+    },
+    "authorAssociation": "MEMBER",
+    "body": "Round 1 review: two findings.",
+    "commit": {
+     "oid": "9f1c2e7"
+    },
+    "id": "PRR_kwDOoctocat",
+    "includesCreatedEdit": false,
+    "reactionGroups": [],
+    "state": "COMMENTED",
+    "submittedAt": "2026-11-14T10:10:00Z"
+   },
+   {
+    "author": {
+     "login": "copilot-pull-request-reviewer",
+     "is_bot": true
+    },
+    "authorAssociation": "MEMBER",
+    "body": "Copilot reviewed 4 of 4 changed files.",
+    "commit": {
+     "oid": "9f1c2e7"
+    },
+    "id": "PRR_kwDOcopilot-pull-request-reviewer",
+    "includesCreatedEdit": false,
+    "reactionGroups": [],
+    "state": "COMMENTED",
+    "submittedAt": "2026-11-14T10:12:00Z"
+   }
+  ],
+  "state": "OPEN",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "completedAt": "0001-01-01T00:00:00Z",
+    "conclusion": "",
+    "detailsUrl": "https://github.com/acme/app/actions/runs/1/job/test",
+    "name": "test",
+    "startedAt": "2026-11-14T10:00:00Z",
+    "status": "IN_PROGRESS",
+    "workflowName": "CI"
+   },
+   {
+    "__typename": "CheckRun",
+    "completedAt": "2026-11-14T10:05:00Z",
+    "conclusion": "SUCCESS",
+    "detailsUrl": "https://github.com/acme/app/actions/runs/1/job/lint",
+    "name": "lint",
+    "startedAt": "2026-11-14T10:00:00Z",
+    "status": "COMPLETED",
+    "workflowName": "CI"
+   }
+  ],
+  "url": "https://github.com/acme/app/pull/648"
+ },
+ "changes-requested": {
+  "comments": [
+   {
+    "author": {
+     "login": "github-actions",
+     "is_bot": true
+    },
+    "authorAssociation": "MEMBER",
+    "body": "Preview deployed.",
+    "createdAt": "2026-11-14T10:13:00Z",
+    "id": "IC_kwDOgithub-actions10",
+    "includesCreatedEdit": false,
+    "isMinimized": false,
+    "minimizedReason": "",
+    "reactionGroups": [],
+    "url": "https://github.com/acme/app/pull/648#issuecomment-1",
+    "viewerDidAuthor": false
+   },
+   {
+    "author": {
+     "login": "sam"
+    },
+    "authorAssociation": "MEMBER",
+    "body": "Also, does this need a changelog line?",
+    "createdAt": "2026-11-14T11:03:00Z",
+    "id": "IC_kwDOsam11",
+    "includesCreatedEdit": false,
+    "isMinimized": false,
+    "minimizedReason": "",
+    "reactionGroups": [],
+    "url": "https://github.com/acme/app/pull/648#issuecomment-1",
+    "viewerDidAuthor": false
+   }
+  ],
+  "isDraft": false,
+  "mergeStateStatus": "BLOCKED",
+  "mergeable": "MERGEABLE",
+  "number": 648,
+  "reviewDecision": "CHANGES_REQUESTED",
+  "reviews": [
+   {
+    "author": {
+     "login": "octocat"
+    },
+    "authorAssociation": "MEMBER",
+    "body": "Round 1 review: two findings.",
+    "commit": {
+     "oid": "9f1c2e7"
+    },
+    "id": "PRR_kwDOoctocat",
+    "includesCreatedEdit": false,
+    "reactionGroups": [],
+    "state": "COMMENTED",
+    "submittedAt": "2026-11-14T10:10:00Z"
+   },
+   {
+    "author": {
+     "login": "copilot-pull-request-reviewer",
+     "is_bot": true
+    },
+    "authorAssociation": "MEMBER",
+    "body": "Copilot reviewed 4 of 4 changed files.",
+    "commit": {
+     "oid": "9f1c2e7"
+    },
+    "id": "PRR_kwDOcopilot-pull-request-reviewer",
+    "includesCreatedEdit": false,
+    "reactionGroups": [],
+    "state": "COMMENTED",
+    "submittedAt": "2026-11-14T10:12:00Z"
+   },
+   {
+    "author": {
+     "login": "sam"
+    },
+    "authorAssociation": "MEMBER",
+    "body": "Three things before this goes in: the lockout message, the retry cap and a test.",
+    "commit": {
+     "oid": "9f1c2e7"
+    },
+    "id": "PRR_kwDOsam",
+    "includesCreatedEdit": false,
+    "reactionGroups": [],
+    "state": "CHANGES_REQUESTED",
+    "submittedAt": "2026-11-14T11:02:00Z"
+   },
+   {
+    "author": {
+     "login": "tom"
+    },
+    "authorAssociation": "MEMBER",
+    "body": "",
+    "commit": {
+     "oid": "9f1c2e7"
+    },
+    "id": "PRR_kwDOtom",
+    "includesCreatedEdit": false,
+    "reactionGroups": [],
+    "state": "PENDING",
+    "submittedAt": ""
+   }
+  ],
+  "state": "OPEN",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "completedAt": "2026-11-14T10:05:00Z",
+    "conclusion": "FAILURE",
+    "detailsUrl": "https://github.com/acme/app/actions/runs/1/job/test",
+    "name": "test",
+    "startedAt": "2026-11-14T10:00:00Z",
+    "status": "COMPLETED",
+    "workflowName": "CI"
+   },
+   {
+    "__typename": "CheckRun",
+    "completedAt": "2026-11-14T10:05:00Z",
+    "conclusion": "SUCCESS",
+    "detailsUrl": "https://github.com/acme/app/actions/runs/1/job/lint",
+    "name": "lint",
+    "startedAt": "2026-11-14T10:00:00Z",
+    "status": "COMPLETED",
+    "workflowName": "CI"
+   }
+  ],
+  "url": "https://github.com/acme/app/pull/648"
+ },
+ "approved": {
+  "comments": [
+   {
+    "author": {
+     "login": "github-actions",
+     "is_bot": true
+    },
+    "authorAssociation": "MEMBER",
+    "body": "Preview deployed.",
+    "createdAt": "2026-11-14T10:13:00Z",
+    "id": "IC_kwDOgithub-actions10",
+    "includesCreatedEdit": false,
+    "isMinimized": false,
+    "minimizedReason": "",
+    "reactionGroups": [],
+    "url": "https://github.com/acme/app/pull/648#issuecomment-1",
+    "viewerDidAuthor": false
+   },
+   {
+    "author": {
+     "login": "sam"
+    },
+    "authorAssociation": "MEMBER",
+    "body": "Also, does this need a changelog line?",
+    "createdAt": "2026-11-14T11:03:00Z",
+    "id": "IC_kwDOsam11",
+    "includesCreatedEdit": false,
+    "isMinimized": false,
+    "minimizedReason": "",
+    "reactionGroups": [],
+    "url": "https://github.com/acme/app/pull/648#issuecomment-1",
+    "viewerDidAuthor": false
+   }
+  ],
+  "isDraft": false,
+  "mergeStateStatus": "CLEAN",
+  "mergeable": "MERGEABLE",
+  "number": 648,
+  "reviewDecision": "APPROVED",
+  "reviews": [
+   {
+    "author": {
+     "login": "octocat"
+    },
+    "authorAssociation": "MEMBER",
+    "body": "Round 1 review: two findings.",
+    "commit": {
+     "oid": "9f1c2e7"
+    },
+    "id": "PRR_kwDOoctocat",
+    "includesCreatedEdit": false,
+    "reactionGroups": [],
+    "state": "COMMENTED",
+    "submittedAt": "2026-11-14T10:10:00Z"
+   },
+   {
+    "author": {
+     "login": "copilot-pull-request-reviewer",
+     "is_bot": true
+    },
+    "authorAssociation": "MEMBER",
+    "body": "Copilot reviewed 4 of 4 changed files.",
+    "commit": {
+     "oid": "9f1c2e7"
+    },
+    "id": "PRR_kwDOcopilot-pull-request-reviewer",
+    "includesCreatedEdit": false,
+    "reactionGroups": [],
+    "state": "COMMENTED",
+    "submittedAt": "2026-11-14T10:12:00Z"
+   },
+   {
+    "author": {
+     "login": "sam"
+    },
+    "authorAssociation": "MEMBER",
+    "body": "Three things before this goes in: the lockout message, the retry cap and a test.",
+    "commit": {
+     "oid": "9f1c2e7"
+    },
+    "id": "PRR_kwDOsam",
+    "includesCreatedEdit": false,
+    "reactionGroups": [],
+    "state": "CHANGES_REQUESTED",
+    "submittedAt": "2026-11-14T11:02:00Z"
+   },
+   {
+    "author": {
+     "login": "priya"
+    },
+    "authorAssociation": "MEMBER",
+    "body": "Looks good.",
+    "commit": {
+     "oid": "b41d0a3"
+    },
+    "id": "PRR_kwDOpriya",
+    "includesCreatedEdit": false,
+    "reactionGroups": [],
+    "state": "APPROVED",
+    "submittedAt": "2026-11-14T13:30:00Z"
+   },
+   {
+    "author": {
+     "login": "sam"
+    },
+    "authorAssociation": "MEMBER",
+    "body": "",
+    "commit": {
+     "oid": "b41d0a3"
+    },
+    "id": "PRR_kwDOsam",
+    "includesCreatedEdit": false,
+    "reactionGroups": [],
+    "state": "APPROVED",
+    "submittedAt": "2026-11-14T13:41:00Z"
+   }
+  ],
+  "state": "OPEN",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "completedAt": "2026-11-14T10:05:00Z",
+    "conclusion": "SUCCESS",
+    "detailsUrl": "https://github.com/acme/app/actions/runs/1/job/test",
+    "name": "test",
+    "startedAt": "2026-11-14T10:00:00Z",
+    "status": "COMPLETED",
+    "workflowName": "CI"
+   },
+   {
+    "__typename": "CheckRun",
+    "completedAt": "2026-11-14T10:05:00Z",
+    "conclusion": "SUCCESS",
+    "detailsUrl": "https://github.com/acme/app/actions/runs/1/job/lint",
+    "name": "lint",
+    "startedAt": "2026-11-14T10:00:00Z",
+    "status": "COMPLETED",
+    "workflowName": "CI"
+   },
+   {
+    "__typename": "CheckRun",
+    "completedAt": "2026-11-14T10:05:00Z",
+    "conclusion": "SKIPPED",
+    "detailsUrl": "https://github.com/acme/app/actions/runs/1/job/e2e",
+    "name": "e2e",
+    "startedAt": "2026-11-14T10:00:00Z",
+    "status": "COMPLETED",
+    "workflowName": "CI"
+   }
+  ],
+  "url": "https://github.com/acme/app/pull/648"
+ },
+ "conflicting": {
+  "comments": [
+   {
+    "author": {
+     "login": "github-actions",
+     "is_bot": true
+    },
+    "authorAssociation": "MEMBER",
+    "body": "Preview deployed.",
+    "createdAt": "2026-11-14T10:13:00Z",
+    "id": "IC_kwDOgithub-actions10",
+    "includesCreatedEdit": false,
+    "isMinimized": false,
+    "minimizedReason": "",
+    "reactionGroups": [],
+    "url": "https://github.com/acme/app/pull/648#issuecomment-1",
+    "viewerDidAuthor": false
+   },
+   {
+    "author": {
+     "login": "sam"
+    },
+    "authorAssociation": "MEMBER",
+    "body": "Also, does this need a changelog line?",
+    "createdAt": "2026-11-14T11:03:00Z",
+    "id": "IC_kwDOsam11",
+    "includesCreatedEdit": false,
+    "isMinimized": false,
+    "minimizedReason": "",
+    "reactionGroups": [],
+    "url": "https://github.com/acme/app/pull/648#issuecomment-1",
+    "viewerDidAuthor": false
+   }
+  ],
+  "isDraft": false,
+  "mergeStateStatus": "DIRTY",
+  "mergeable": "CONFLICTING",
+  "number": 648,
+  "reviewDecision": "APPROVED",
+  "reviews": [
+   {
+    "author": {
+     "login": "octocat"
+    },
+    "authorAssociation": "MEMBER",
+    "body": "Round 1 review: two findings.",
+    "commit": {
+     "oid": "9f1c2e7"
+    },
+    "id": "PRR_kwDOoctocat",
+    "includesCreatedEdit": false,
+    "reactionGroups": [],
+    "state": "COMMENTED",
+    "submittedAt": "2026-11-14T10:10:00Z"
+   },
+   {
+    "author": {
+     "login": "copilot-pull-request-reviewer",
+     "is_bot": true
+    },
+    "authorAssociation": "MEMBER",
+    "body": "Copilot reviewed 4 of 4 changed files.",
+    "commit": {
+     "oid": "9f1c2e7"
+    },
+    "id": "PRR_kwDOcopilot-pull-request-reviewer",
+    "includesCreatedEdit": false,
+    "reactionGroups": [],
+    "state": "COMMENTED",
+    "submittedAt": "2026-11-14T10:12:00Z"
+   },
+   {
+    "author": {
+     "login": "sam"
+    },
+    "authorAssociation": "MEMBER",
+    "body": "Three things before this goes in: the lockout message, the retry cap and a test.",
+    "commit": {
+     "oid": "9f1c2e7"
+    },
+    "id": "PRR_kwDOsam",
+    "includesCreatedEdit": false,
+    "reactionGroups": [],
+    "state": "CHANGES_REQUESTED",
+    "submittedAt": "2026-11-14T11:02:00Z"
+   },
+   {
+    "author": {
+     "login": "priya"
+    },
+    "authorAssociation": "MEMBER",
+    "body": "Looks good.",
+    "commit": {
+     "oid": "b41d0a3"
+    },
+    "id": "PRR_kwDOpriya",
+    "includesCreatedEdit": false,
+    "reactionGroups": [],
+    "state": "APPROVED",
+    "submittedAt": "2026-11-14T13:30:00Z"
+   },
+   {
+    "author": {
+     "login": "sam"
+    },
+    "authorAssociation": "MEMBER",
+    "body": "",
+    "commit": {
+     "oid": "b41d0a3"
+    },
+    "id": "PRR_kwDOsam",
+    "includesCreatedEdit": false,
+    "reactionGroups": [],
+    "state": "APPROVED",
+    "submittedAt": "2026-11-14T13:41:00Z"
+   }
+  ],
+  "state": "OPEN",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "completedAt": "2026-11-14T10:05:00Z",
+    "conclusion": "SUCCESS",
+    "detailsUrl": "https://github.com/acme/app/actions/runs/1/job/test",
+    "name": "test",
+    "startedAt": "2026-11-14T10:00:00Z",
+    "status": "COMPLETED",
+    "workflowName": "CI"
+   },
+   {
+    "__typename": "CheckRun",
+    "completedAt": "2026-11-14T10:05:00Z",
+    "conclusion": "SUCCESS",
+    "detailsUrl": "https://github.com/acme/app/actions/runs/1/job/lint",
+    "name": "lint",
+    "startedAt": "2026-11-14T10:00:00Z",
+    "status": "COMPLETED",
+    "workflowName": "CI"
+   },
+   {
+    "__typename": "CheckRun",
+    "completedAt": "2026-11-14T10:05:00Z",
+    "conclusion": "SKIPPED",
+    "detailsUrl": "https://github.com/acme/app/actions/runs/1/job/e2e",
+    "name": "e2e",
+    "startedAt": "2026-11-14T10:00:00Z",
+    "status": "COMPLETED",
+    "workflowName": "CI"
+   }
+  ],
+  "url": "https://github.com/acme/app/pull/648"
+ },
+ "merged": {
+  "comments": [
+   {
+    "author": {
+     "login": "github-actions",
+     "is_bot": true
+    },
+    "authorAssociation": "MEMBER",
+    "body": "Preview deployed.",
+    "createdAt": "2026-11-14T10:13:00Z",
+    "id": "IC_kwDOgithub-actions10",
+    "includesCreatedEdit": false,
+    "isMinimized": false,
+    "minimizedReason": "",
+    "reactionGroups": [],
+    "url": "https://github.com/acme/app/pull/648#issuecomment-1",
+    "viewerDidAuthor": false
+   },
+   {
+    "author": {
+     "login": "sam"
+    },
+    "authorAssociation": "MEMBER",
+    "body": "Also, does this need a changelog line?",
+    "createdAt": "2026-11-14T11:03:00Z",
+    "id": "IC_kwDOsam11",
+    "includesCreatedEdit": false,
+    "isMinimized": false,
+    "minimizedReason": "",
+    "reactionGroups": [],
+    "url": "https://github.com/acme/app/pull/648#issuecomment-1",
+    "viewerDidAuthor": false
+   }
+  ],
+  "isDraft": false,
+  "mergeStateStatus": "UNKNOWN",
+  "mergeable": "UNKNOWN",
+  "number": 648,
+  "reviewDecision": "APPROVED",
+  "reviews": [
+   {
+    "author": {
+     "login": "octocat"
+    },
+    "authorAssociation": "MEMBER",
+    "body": "Round 1 review: two findings.",
+    "commit": {
+     "oid": "9f1c2e7"
+    },
+    "id": "PRR_kwDOoctocat",
+    "includesCreatedEdit": false,
+    "reactionGroups": [],
+    "state": "COMMENTED",
+    "submittedAt": "2026-11-14T10:10:00Z"
+   },
+   {
+    "author": {
+     "login": "copilot-pull-request-reviewer",
+     "is_bot": true
+    },
+    "authorAssociation": "MEMBER",
+    "body": "Copilot reviewed 4 of 4 changed files.",
+    "commit": {
+     "oid": "9f1c2e7"
+    },
+    "id": "PRR_kwDOcopilot-pull-request-reviewer",
+    "includesCreatedEdit": false,
+    "reactionGroups": [],
+    "state": "COMMENTED",
+    "submittedAt": "2026-11-14T10:12:00Z"
+   },
+   {
+    "author": {
+     "login": "sam"
+    },
+    "authorAssociation": "MEMBER",
+    "body": "Three things before this goes in: the lockout message, the retry cap and a test.",
+    "commit": {
+     "oid": "9f1c2e7"
+    },
+    "id": "PRR_kwDOsam",
+    "includesCreatedEdit": false,
+    "reactionGroups": [],
+    "state": "CHANGES_REQUESTED",
+    "submittedAt": "2026-11-14T11:02:00Z"
+   },
+   {
+    "author": {
+     "login": "priya"
+    },
+    "authorAssociation": "MEMBER",
+    "body": "Looks good.",
+    "commit": {
+     "oid": "b41d0a3"
+    },
+    "id": "PRR_kwDOpriya",
+    "includesCreatedEdit": false,
+    "reactionGroups": [],
+    "state": "APPROVED",
+    "submittedAt": "2026-11-14T13:30:00Z"
+   },
+   {
+    "author": {
+     "login": "sam"
+    },
+    "authorAssociation": "MEMBER",
+    "body": "",
+    "commit": {
+     "oid": "b41d0a3"
+    },
+    "id": "PRR_kwDOsam",
+    "includesCreatedEdit": false,
+    "reactionGroups": [],
+    "state": "APPROVED",
+    "submittedAt": "2026-11-14T13:41:00Z"
+   }
+  ],
+  "state": "MERGED",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "completedAt": "2026-11-14T10:05:00Z",
+    "conclusion": "SUCCESS",
+    "detailsUrl": "https://github.com/acme/app/actions/runs/1/job/test",
+    "name": "test",
+    "startedAt": "2026-11-14T10:00:00Z",
+    "status": "COMPLETED",
+    "workflowName": "CI"
+   },
+   {
+    "__typename": "CheckRun",
+    "completedAt": "2026-11-14T10:05:00Z",
+    "conclusion": "SUCCESS",
+    "detailsUrl": "https://github.com/acme/app/actions/runs/1/job/lint",
+    "name": "lint",
+    "startedAt": "2026-11-14T10:00:00Z",
+    "status": "COMPLETED",
+    "workflowName": "CI"
+   },
+   {
+    "__typename": "CheckRun",
+    "completedAt": "2026-11-14T10:05:00Z",
+    "conclusion": "SKIPPED",
+    "detailsUrl": "https://github.com/acme/app/actions/runs/1/job/e2e",
+    "name": "e2e",
+    "startedAt": "2026-11-14T10:00:00Z",
+    "status": "COMPLETED",
+    "workflowName": "CI"
+   }
+  ],
+  "url": "https://github.com/acme/app/pull/648"
+ }
+}

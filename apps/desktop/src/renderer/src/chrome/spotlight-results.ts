@@ -1,17 +1,20 @@
 // What the ⌘K switcher lists: grouped before anything is typed, one ranked fuzzy list after. Pure, so the
 // grouping and the ranking are unit-tested.
-import { needsYouNow, permissionPrompt, planPending, questionPrompt, type Agent, type LibraryPrefab, type NeedsYouShows, type Shell, type Zone } from '@agent-board/daemon/protocol';
+import { needsYouNow, permissionPrompt, planPending, questionPrompt, type Agent, type BoardItem, type LibraryPrefab, type NeedsYouShows, type Shell, type Zone } from '@agent-board/daemon/protocol';
 import type { Placement, SessionWindows } from '../windows/session-windows';
 import { extendedShortcuts } from '../keys/extended-shortcuts';
 import { binding, isActive, keyText, type KeyId } from '../keys/registry';
 import { SETTINGS_GROUPS } from './settings-ia';
 import { controlsIn, drawnSections, searchable } from './settings-search';
+import { itemKindTitle } from '../board/items/kind-labels';
 
 /** What a row of the switcher is about: a setting's row opens the Settings window at its section (`group.section`). */
 export type SpotlightSubject =
   | { kind: 'agent'; agent: Agent }
   | { kind: 'shell'; shell: Shell }
   | { kind: 'zone'; zone: Zone }
+  /** A note or document on a ticket's own board, and that ticket's chat's session id: whose board it is. */
+  | { kind: 'item'; item: BoardItem; ticket: string }
   | { kind: 'setting'; pane: string }
   | { kind: 'action'; action: SpotlightAction }
   | { kind: 'crew'; prefab: string | null }
@@ -137,6 +140,8 @@ export interface SpotlightSources {
   simplified?: boolean;
   /** Whether the extended keyboard shortcuts work, so an action's key is shown only while it does; the setting's own by default. */
   extended?: boolean;
+  /** The items on tickets' own boards, found once something is typed; none if unset. */
+  ticketItems?: readonly BoardItem[];
   /** Whether the Windows group is listed: always under the Simplified design (the default), and under Classic with the windows the dock leaves out. */
   windowsListed?: boolean;
 }
@@ -184,8 +189,10 @@ const ACTIONS: readonly { action: SpotlightAction; name: string; sub: string; al
  * Actions group, with New agent (where one can start) and Open Settings, comes above Settings. Classic has no Windows
  * group, and its Actions group holds Park a thought alone.
  */
-export function spotlightGroups(query: string, { agents, shells, zones, shows, windows = [], current, canStartAgent = false, prefabs = [], simplified = false, windowsListed = simplified, extended = extendedShortcuts() }: SpotlightSources): SpotlightGroup[] {
+export function spotlightGroups(query: string, { agents, shells, zones, shows, windows = [], current, canStartAgent = false, prefabs = [], simplified = false, windowsListed = simplified, extended = extendedShortcuts(), ticketItems = [] }: SpotlightSources): SpotlightGroup[] {
   const zoneName = (zoneId: string | null) => (zoneId === null ? 'Loose' : (zones.find((zone) => zone.id === zoneId)?.name ?? 'Loose'));
+  // A helper is on its ticket's board: its ticket is where it is, as a zone is another agent's.
+  const placeOf = (agent: Agent) => (agent.ticket === null ? undefined : ticketName(agent.ticket, agents)) ?? zoneName(agent.zoneId);
   // A shell that is a tab is its owner's window's, not a tile of its own.
   const tiles = shells.filter((shell) => shell.owner === null);
   const wanted = query.trim();
@@ -197,7 +204,7 @@ export function spotlightGroups(query: string, { agents, shells, zones, shows, w
     for (const entry of windows) {
       const agent = entry.kind === 'session' ? agents.find((each) => each.sessionId === entry.id) : undefined;
       const shell = entry.kind === 'shell' ? tiles.find((each) => each.id === entry.id) : undefined;
-      const base = agent !== undefined ? agentRow(agent, zoneName, [], shows) : shell !== undefined ? shellRow(shell, zoneName, []) : undefined;
+      const base = agent !== undefined ? agentRow(agent, placeOf, [], shows) : shell !== undefined ? shellRow(shell, zoneName, []) : undefined;
       if (base === undefined) continue;
       const marks = match(base.name);
       if (marks === undefined) continue;
@@ -211,14 +218,14 @@ export function spotlightGroups(query: string, { agents, shells, zones, shows, w
   if (wanted === '') {
     const needing = agents.filter((agent) => needsYouNow(agent, shows) && !listed.has(agent.sessionId));
     const rest = [
-      ...agents.filter((agent) => !needsYouNow(agent, shows) && !listed.has(agent.sessionId)).map((agent) => ({ at: agent.finishedAt ?? agent.createdAt, row: agentRow(agent, zoneName, [], shows) })),
+      ...agents.filter((agent) => !needsYouNow(agent, shows) && !listed.has(agent.sessionId)).map((agent) => ({ at: agent.finishedAt ?? agent.createdAt, row: agentRow(agent, placeOf, [], shows) })),
       ...tiles.filter((shell) => !listed.has(shell.id)).map((shell) => ({ at: shell.createdAt, row: shellRow(shell, zoneName, []) })),
     ];
     const recent = rest.sort((a, b) => b.at.localeCompare(a.at)).slice(0, RECENT_LIMIT);
     const groups: SpotlightGroup[] = [
       { label: WINDOWS_GROUP, rows: windowRows(() => []).map(({ row }) => row) },
       // A narrow column beside Recent: what it asks, without its zone.
-      { label: NEEDS_YOU_GROUP, rows: needing.map((agent) => ({ ...agentRow(agent, zoneName, [], shows), sub: askOf(agent) })) },
+      { label: NEEDS_YOU_GROUP, rows: needing.map((agent) => ({ ...agentRow(agent, placeOf, [], shows), sub: askOf(agent) })) },
       { label: RECENT_GROUP, rows: recent.map(({ row }) => row) },
       { label: 'Zones', rows: [...zones].sort((a, b) => a.name.localeCompare(b.name)).map((zone) => zoneRow(zone, agents, tiles, [])) },
     ];
@@ -232,7 +239,7 @@ export function spotlightGroups(query: string, { agents, shells, zones, shows, w
     if (offered.length > 0) return [{ label: FILTERS_GROUP, rows: offered.map(({ prefix, sub }) => ({ key: `filter:${prefix}`, subject: { kind: 'filter', prefix }, name: prefix, sub, marks: [] })) }];
   }
   const { filters, rest } = parseFilters(wanted);
-  if (filters.length > 0) return [{ rows: filteredRows(filters, rest, { agents, tiles, zoneName, shows }) }];
+  if (filters.length > 0) return [{ rows: filteredRows(filters, rest, { agents, tiles, zoneName, placeOf, shows }) }];
 
   // The windows that match lead, in their own group, whatever else matches better: they are what is on screen. A
   // session whose window matched is listed there only; one that matched by its branch or issue stays in the list.
@@ -247,13 +254,20 @@ export function spotlightGroups(query: string, { agents, shells, zones, shows, w
   };
   for (const agent of agents) {
     if (inWindows.has(agent.sessionId)) continue;
-    consider(agent.name, agentFields(agent, zoneName), (marks) => agentRow(agent, zoneName, marks, shows));
+    consider(agent.name, agentFields(agent, zoneName), (marks) => agentRow(agent, placeOf, marks, shows));
   }
   for (const shell of tiles) {
     if (inWindows.has(shell.id)) continue;
     consider(shell.name, [{ text: zoneName(shell.zoneId), weight: FIELD_WEIGHTS.zone, label: 'zone' }], (marks) => shellRow(shell, zoneName, marks));
   }
   for (const zone of zones) consider(zone.name, [], (marks) => zoneRow(zone, agents, tiles, marks));
+  for (const item of ticketItems) {
+    const ticket = typeof item.ticket === 'string' ? item.ticket : null;
+    const where = ticket === null ? undefined : ticketName(ticket, agents);
+    const words = itemWords(item);
+    if (ticket === null || where === undefined || words === '') continue;
+    consider(words, [], (marks) => ({ key: `item:${item.id}`, subject: { kind: 'item', item, ticket }, name: words, sub: joined(itemKindTitle(item.kind), where), marks }));
+  }
   ranked.sort((a, b) => b.score - a.score || a.row.name.localeCompare(b.row.name));
   const groups: SpotlightGroup[] = [{ label: matchedWindows.length > 0 ? WINDOWS_GROUP : undefined, rows: matchedWindows.map(({ row }) => row) }, { rows: ranked.map(({ row }) => row) }, { label: ACTIONS_GROUP, rows: actionRows(wanted, canStartAgent, simplified, extended) }, { label: CREWS_GROUP, rows: canStartAgent ? crewRows(wanted, prefabs) : [] }, { label: SETTINGS_GROUP, rows: settingRows(wanted, simplified) }];
   return groups.filter((group) => group.rows.length > 0);
@@ -427,7 +441,7 @@ export function parseFilters(query: string): { filters: SpotlightFilter[]; rest:
 function filteredRows(
   filters: readonly SpotlightFilter[],
   rest: string,
-  { agents, tiles, zoneName, shows }: { agents: readonly Agent[]; tiles: readonly Shell[]; zoneName: (zoneId: string | null) => string; shows: NeedsYouShows },
+  { agents, tiles, zoneName, placeOf, shows }: { agents: readonly Agent[]; tiles: readonly Shell[]; zoneName: (zoneId: string | null) => string; placeOf: (agent: Agent) => string; shows: NeedsYouShows },
 ): SpotlightRow[] {
   const inZone = (zoneId: string | null, value: string) => value === '' || zoneName(zoneId).toLowerCase().includes(value.toLowerCase());
   const holds = (value: string, ...texts: (string | undefined)[]) => value === '' || texts.some((text) => text !== undefined && fuzzyMatch(value, text, true) !== undefined);
@@ -450,7 +464,7 @@ function filteredRows(
     const best = rest === '' ? { score: 1 } : bestMatch(rest, agent.name, agentFields(agent, zoneName));
     if (best === undefined) continue;
     const snippet = best.snippet ?? kept;
-    const row = agentRow(agent, zoneName, rest === '' ? [] : (fuzzyMatch(rest, agent.name)?.positions ?? []), shows);
+    const row = agentRow(agent, placeOf, rest === '' ? [] : (fuzzyMatch(rest, agent.name)?.positions ?? []), shows);
     found.push({ score: best.score, at: agent.finishedAt ?? agent.createdAt, row: snippet === undefined ? row : { ...row, snippet } });
   }
   if (filters.every(({ prefix }) => prefix === 'zone:')) {
@@ -467,12 +481,32 @@ function filteredRows(
  * An agent's row: its sub line is what it asks while it needs you, else what it says it is for, else its zone and
  * branch.
  */
-function agentRow(agent: Agent, zoneName: (zoneId: string | null) => string, marks: readonly number[], shows: NeedsYouShows): SpotlightRow {
+function agentRow(agent: Agent, placeOf: (agent: Agent) => string, marks: readonly number[], shows: NeedsYouShows): SpotlightRow {
   const row = { key: `agent:${agent.sessionId}`, subject: { kind: 'agent', agent }, name: agent.name, marks } as const;
-  if (needsYouNow(agent, shows)) return { ...row, sub: joined(zoneName(agent.zoneId), askOf(agent)) };
+  if (needsYouNow(agent, shows)) return { ...row, sub: joined(placeOf(agent), askOf(agent)) };
   if (agent.purpose) return { ...row, sub: agent.purpose, purpose: true };
-  return { ...row, sub: joined(zoneName(agent.zoneId), agent.branch) };
+  return { ...row, sub: joined(placeOf(agent), agent.branch) };
 }
+
+/** A ticket's name, by its chat's session id: its issue's id, else its chat's name; undefined if that chat is no ticket's on the board. */
+function ticketName(chatId: string, agents: readonly Agent[]): string | undefined {
+  const chat = agents.find((agent) => agent.sessionId === chatId && agent.ticketChat);
+  return chat === undefined ? undefined : (chat.issue?.id ?? chat.name);
+}
+
+/** What an item is called on its row's second line. */
+
+/** The words an item is found by, on one line and cut short: a link's title, an issue's id and title, else its text; '' for none. */
+function itemWords(item: BoardItem): string {
+  const data = item.data as Record<string, unknown>;
+  const text = (value: unknown) => (typeof value === 'string' ? value : '');
+  const words = item.kind === 'link' ? text(data.title) || text(data.url) : item.kind === 'issue' ? `${text(data.id)} ${text(data.title)}` : text(data.text);
+  const line = flat(words) ?? '';
+  return line.length > ITEM_WORDS_MAX ? `${line.slice(0, ITEM_WORDS_MAX - 1)}…` : line;
+}
+
+/** How long an item's row name may run before it is cut. */
+const ITEM_WORDS_MAX = 80;
 
 function shellRow(shell: Shell, zoneName: (zoneId: string | null) => string, marks: readonly number[]): SpotlightRow {
   return { key: `shell:${shell.id}`, subject: { kind: 'shell', shell }, name: shell.name, sub: joined(zoneName(shell.zoneId), shell.cwd), marks };

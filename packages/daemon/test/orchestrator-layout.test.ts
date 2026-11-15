@@ -2101,7 +2101,7 @@ describe('orchestrator.arrangeBoard', () => {
     // The loose shell goes below the zones, the only tile moved; the sticky stays where it is.
     const moved = shells.find((each) => each.id === loose.id)!;
     expect(moved.position!.y - PERCH_ROOM).toBe(Math.max(web.height, other.height) + BOARD_ARRANGE_GAP);
-    expect(result.moved).toEqual([{ target: { kind: 'shell', id: loose.id }, zoneId: null, x: moved.position!.x, y: moved.position!.y }]);
+    expect(result.moved).toEqual([{ target: { kind: 'shell', id: loose.id }, zoneId: null, ticket: null, x: moved.position!.x, y: moved.position!.y }]);
     expect((await setup.client.call('item.list')).find((item) => item.id === sticky.id)).toMatchObject({ x: 9000, y: 9000 });
     expect(await lastLine(setup.client)).toMatchObject({ action: 'arrange-board', outcome: 'done', detail: '1 zone and 1 loose tile' });
   });
