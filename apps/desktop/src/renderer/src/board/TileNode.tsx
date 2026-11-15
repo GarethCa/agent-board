@@ -1,6 +1,7 @@
 import { memo, useContext, useRef } from 'react';
 import { NodeResizeControl, ResizeControlVariant, type ControlPosition, type NodeProps } from '@xyflow/react';
 import { ExpandedTile } from './ExpandedTile';
+import { TicketOpenTile } from './TicketOpenTile';
 import { FoldedChip } from './FoldedChip';
 import { parentKindOf, resizeAllowed } from './expanded';
 import { RepresentationContext, tileComponentFor } from './representations';
@@ -29,7 +30,9 @@ export const TileNode = memo(function TileNode({ id, data, parentId, selected: p
   const Tile = tileComponentFor(data.style ?? style, registry);
   return (
     <>
-      {data.expanded ? (
+      {data.expanded && data.agent !== undefined && data.helpers !== undefined ? (
+        <TicketOpenTile id={id} tile={data} parent={parentKindOf(parentId)} />
+      ) : data.expanded ? (
         <ExpandedTile id={id} tile={data} parent={parentKindOf(parentId)} />
       ) : data.folded && data.agent !== undefined ? (
         <FoldedChip id={id} agent={data.agent} />

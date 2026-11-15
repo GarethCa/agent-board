@@ -569,7 +569,7 @@ describe('displaced', () => {
     const middle = { x: 1000, y: 1000 };
     // Straight, it would be clear of the expanded tile by more than the gap; turned 45°, its corners reach under it.
     const note = {
-      id: 'tilted', kind: 'sticky', zoneId: null, x: middle.x + EXPANDED_SIZE.width + 30, y: middle.y, width: 200, height: 200, z: 0,
+      id: 'tilted', kind: 'sticky', zoneId: null, ticket: null, x: middle.x + EXPANDED_SIZE.width + 30, y: middle.y, width: 200, height: 200, z: 0,
       rotation: 45, data: {}, createdAt: '', updatedAt: '',
     } satisfies BoardItem;
     const expanded = expandTile([], s('a'));

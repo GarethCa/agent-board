@@ -36,7 +36,7 @@ describe('forwardEvents', () => {
     forwardEvents(daemon, ['zone.updated', 'zone.removed'], 'zones:changed', (channel, event) => sent.push([channel, event]));
 
     const removed: DaemonEvent = { type: 'zone.removed', id: 'z1' };
-    const other: DaemonEvent = { type: 'item.removed', id: 'i1' };
+    const other: DaemonEvent = { type: 'item.removed', id: 'i1', ticket: null };
     daemon.emit(removed);
     daemon.emit(other);
 

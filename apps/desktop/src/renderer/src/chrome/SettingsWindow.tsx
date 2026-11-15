@@ -16,7 +16,7 @@ import { AppearanceSetting } from './AppearanceSetting';
 import { BoardBackgroundSetting } from './BoardBackgroundSetting';
 import { ArrangeSpacingSetting } from './ArrangeSpacingSetting';
 import { DockSetting } from './DockSetting';
-import { AgentNoteLookSetting, ChatRunsShowSetting, ClickOpensSetting, ConnectionsSetting, TethersSetting, TileShowsSetting } from './BoardViewSettings';
+import { AgentNoteLookSetting, ChatRunsShowSetting, ClickOpensSetting, ConnectionsSetting, TethersSetting, TicketTilesOpenAsSetting, TileShowsSetting } from './BoardViewSettings';
 import { ChatStyleSetting } from './ChatStyleSetting';
 import { ChatThemeSetting } from './ChatThemeSetting';
 import { ClickableLinksSetting } from './ClickableLinksSetting';
@@ -73,12 +73,13 @@ function AgentsChatSettings() {
   );
 }
 
-/** Settings › Board › Agent tiles: under Classic, what a tile shows at rest; then when the chat's Expand all / Collapse all show. */
+/** Settings › Board › Agent tiles: under Classic, what a tile shows at rest; how a ticket's tile opens; then when the chat's Expand all / Collapse all show. */
 function AgentTilesSettings() {
   const simplified = useSimplified();
   return (
     <>
       {!simplified && <TileShowsSetting />}
+      <TicketTilesOpenAsSetting />
       <ChatRunsShowSetting />
     </>
   );

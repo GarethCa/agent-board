@@ -655,6 +655,8 @@
    */
   --shadow-tile: 0 1px 0 rgb(40 32 16 / 12%), 0 3px 0 -1px rgb(40 32 16 / 7%), 0 6px 0 -3px rgb(40 32 16 / 4%);
   --shadow-raised: var(--shadow-tile); /* the inbox, the dock */
+  /* Under a ticket's tile, the edges of the two cards it holds: unblurred, as a tile's shadow is. */
+  --shadow-ticket-stack: 0 12px 0 -8px var(--raised), 0 12px 0 -7px var(--border), 0 24px 0 -16px var(--raised), 0 24px 0 -15px var(--border);
   --shadow-control: 0 1px 0 rgb(43 42 39 / 7%), 0 1px 2px rgb(43 42 39 / 5%); /* a button */
   --shadow-primary: 0 1px 0 rgb(30 50 140 / 25%), inset 0 1px 0 rgb(255 255 255 / 18%);
   --shadow-input: inset 0 1px 1px rgb(43 42 39 / 4%);
@@ -691,6 +693,7 @@
   --layer-raised: 2; /* over a sibling: a split shell's divider */
   --layer-tool: 4; /* an armed tool's overlay: over the board's items, under React Flow's panels (5) */
   --layer-connector-label: 4; /* a connector's label and style bar: over the lines, which are over the objects they join */
+  --layer-level: 6; /* a ticket's own board, zoomed into: over the main board and its panels (5), under the chrome */
   --layer-chrome: 10; /* the islands floating over the board: over its panels (5), under a session window */
   --layer-window: 20; /* a session window shown on the board */
   --layer-dock: 21; /* the dock, over a shown session window */
@@ -813,9 +816,11 @@
   --size-pill: 20px; /* a state pill's height */
   --size-tag: 22px; /* a tag's height */
   --size-chip: 18px; /* a chip's height: a tile's PR, issue key or schedule */
+  --size-watch-label: 72px; /* the widest a ticket tile's watch label grows: a reviewer's name, cut with an ellipsis */
   --size-dot: 6px; /* a state pill's dot */
   --size-dot-md: 8px; /* the Needs-you pill's dot */
   --size-dot-lg: 10px; /* a zone's colour beside its name */
+  --size-helper-ring: 1.5px; /* the ring round a ticket's helper while it works or asks */
   --size-swatch-sm: 9px; /* a zone's colour in a list */
   --size-overview-search: 230px; /* the Overview's search box */
   --size-overview-column: 210px; /* the narrowest a project's column in the Overview gets */
@@ -881,6 +886,11 @@
   --size-tile-head: 22px; /* a tile's head row */
   --size-header-chip-min: 56px; /* a session window header's branch and "N of M" chips, narrowest: they shrink before its title does */
   --size-tile-name: 96px; /* a tile's name, narrowest: it never gives way to badges */
+  --size-ticket-crumb-title: 360px; /* a ticket's title in the breadcrumb over its own board, longest */
+  --size-ticket-board-gallery-width: 960px; /* a ticket's own board as the gallery draws it: a small window's worth */
+  --size-ticket-board-gallery-height: 520px;
+  --size-ticket-helper-card: 150px; /* a helper's card in an opened ticket's strip, narrowest */
+  --size-ticket-side: 220px; /* an opened ticket's column of helpers, narrowest */
   --size-tab-label: 220px; /* a terminal tab's label, longest before it is cut short */
   --size-tab-slot: 56px; /* the slot in a tab strip where a dragged tab would land */
   --size-astray-hint: 320px; /* the hint that a shell runs in another agent's worktree, longest before it is cut short */

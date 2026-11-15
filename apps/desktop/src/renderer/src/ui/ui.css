@@ -827,6 +827,16 @@
   animation: ui-fade var(--motion-fast) var(--ease-out);
 }
 
+/*
+ * A menu has no closing animation: closed, it leaves the page at once. Radix keeps a closing menu mounted while it
+ * thinks an exit animation runs, which it guesses from the animation's name; a menu closed before its fade has been
+ * seen to start would wait for it, still mounted, and a click opening it again would reopen that old menu, whose
+ * outside-click check takes the click on its own button as a click outside and closes it.
+ */
+.ui-menu[data-state='closed'] {
+  animation: none;
+}
+
 .ui-menu-item {
   display: flex;
   align-items: center;

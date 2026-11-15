@@ -42,6 +42,8 @@ export function useShelves() {
   const showDone = useCallback((zoneId: string) => setDoneShown((current) => (current.has(zoneId) ? current : new Set([...current, zoneId]))), []);
   /** Fans the stack out, whatever was open: to show an agent folded into it. */
   const openStack = useCallback((zoneId: string, key: string) => setOpen({ zoneId, key }), []);
+  /** Folds any stack fanned out: as the board goes out of sight under a ticket's board, for Esc to be that board's. */
+  const fold = useCallback(() => setOpen(null), []);
   const toggleStack = useCallback((zoneId: string, key: string) => setOpen((current) => (current?.zoneId === zoneId && current.key === key ? null : { zoneId, key })), []);
   const toggleDone = useCallback(
     (zoneId: string) =>
@@ -53,5 +55,5 @@ export function useShelves() {
     [],
   );
   const choice = useMemo((): ShelvesChoice => ({ freed, doneShown, open }), [freed, doneShown, open]);
-  return { choice, setPinned, openStack, showDone, toggleStack, toggleDone };
+  return { choice, setPinned, openStack, showDone, toggleStack, toggleDone, fold };
 }

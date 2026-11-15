@@ -3,12 +3,13 @@ import type { CrewPrefab, LibraryPrefab, Zone } from '@agent-board/daemon/protoc
 import { errorMessage } from '../../../shared/errors';
 import { useToast } from '../ui';
 import { CrewPromptDialog } from './CrewPromptDialog';
+import { NewTicketDialog } from './NewTicketDialog';
 import { PrefabEditor } from './PrefabEditor';
 import { PrefabsDialog } from './PrefabsDialog';
 import { currentPrefabs, refreshPrefabs } from './prefab-store';
 
 /** Where the crew dialogs open: the library, or the prompt box of the prefab named, in a zone if one is meant. */
-export type CrewFlowStart = ({ kind: 'library' } | { kind: 'prompt'; prefab: LibraryPrefab }) & {
+export type CrewFlowStart = ({ kind: 'library' } | { kind: 'prompt'; prefab: LibraryPrefab } | { kind: 'ticket' }) & {
   /** The zone it was asked from: its crew starts there, and the prompt box says so. */
   zone?: Zone;
   /** With no such zone, the one the prompt box's Zone starts on: nearest what was clicked, or in view. */
@@ -17,7 +18,7 @@ export type CrewFlowStart = ({ kind: 'library' } | { kind: 'prompt'; prefab: Lib
   fromSheet?: { position?: { x: number; y: number } };
 };
 
-type Step = { kind: 'library' } | { kind: 'prompt'; prefab: LibraryPrefab } | { kind: 'edit'; prefab: LibraryPrefab | null; imported?: CrewPrefab };
+type Step = { kind: 'library' } | { kind: 'ticket'; prefab?: string } | { kind: 'prompt'; prefab: LibraryPrefab } | { kind: 'edit'; prefab: LibraryPrefab | null; imported?: CrewPrefab };
 
 interface CrewFlowProps {
   start: CrewFlowStart;
@@ -35,10 +36,26 @@ interface CrewFlowProps {
  * back to it; opened on a prompt box, closing it closes them all.
  */
 export function CrewFlow({ start, zones, onStarted, onClose, onAddZone }: CrewFlowProps) {
-  const [step, setStep] = useState<Step>(start.kind === 'library' ? { kind: 'library' } : { kind: 'prompt', prefab: start.prefab });
+  const [step, setStep] = useState<Step>(start.kind === 'prompt' ? { kind: 'prompt', prefab: start.prefab } : start.kind === 'ticket' ? { kind: 'ticket' } : { kind: 'library' });
   const toasts = useToast();
   const back = () => (start.kind === 'library' ? setStep({ kind: 'library' }) : onClose());
 
+  // A prefab that starts inside a ticket tile starts from the New ticket sheet, on that prefab.
+  if (step.kind === 'ticket' || (step.kind === 'prompt' && step.prefab.onBoard === 'ticket')) {
+    const picked = step.kind === 'prompt' ? step.prefab.name : step.prefab;
+    return (
+      <NewTicketDialog
+        prefabs={currentPrefabs()}
+        {...(picked === undefined ? {} : { prefab: picked })}
+        zones={zones}
+        zone={start.zone}
+        {...(start.suggested === undefined ? {} : { suggested: start.suggested })}
+        onAddZone={onAddZone}
+        onStarted={onStarted}
+        onCancel={back}
+      />
+    );
+  }
   if (step.kind === 'prompt') {
     return <CrewPromptDialog prefab={step.prefab} zones={zones} zone={start.zone} suggested={start.suggested} onAddZone={onAddZone} onStarted={onStarted} onCancel={back} />;
   }

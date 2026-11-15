@@ -105,6 +105,7 @@ describe('clockTethers', () => {
     id,
     kind: 'clock',
     zoneId: null,
+    ticket: null,
     x: 0,
     y: 0,
     width: 256,

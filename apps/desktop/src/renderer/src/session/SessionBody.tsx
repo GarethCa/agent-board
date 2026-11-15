@@ -93,6 +93,11 @@ interface SessionBodyProps {
    * before the Chat | Timeline | Terminal switch.
    */
   chatControlsSlot: HTMLElement | null;
+  /**
+   * The one view an agent's own pane shows, with no switch to another: its live terminal, or its chat. A ticket's tile
+   * opened in place names one, and shows no details beside it; anywhere else the view is the one picked for the session.
+   */
+  view?: 'terminal' | 'chat';
 }
 
 /**
@@ -114,6 +119,7 @@ export function SessionBody({
   controlsSlot,
   chatControlsSlot,
   compactControls = false,
+  view,
 }: SessionBodyProps) {
   const agent = content.kind === 'session' ? content.agent : undefined;
   const shell = content.kind === 'shell' ? content.shell : undefined;
@@ -182,7 +188,8 @@ export function SessionBody({
   const deferredIds = useDeferredDecisions();
   const conversationAs = useConversationAs();
   const windowOpensOn = headerSwitch ? openingView(opensOn, conversationAs) : 'terminal';
-  const [pickedView, pickView] = useSessionView(agent?.sessionId, windowOpensOn);
+  const [savedView, pickView] = useSessionView(agent?.sessionId, windowOpensOn);
+  const pickedView = view ?? savedView;
   const chatPicked = pickedView !== 'terminal' && agent !== undefined;
   const onShowTerminal = () => switchView('terminal');
   const chat = chatPicked && (panes === undefined || panes.showing(OWN_SURFACE));
@@ -270,7 +277,7 @@ export function SessionBody({
 
   // How the agent's pane shows it, over the pane it changes: the same in a session window and an expanded tile. Over a
   // shell tab it reads Terminal, which is what shows; pressing Chat brings the agent's own tab forward.
-  const viewSwitch = agent && !headerSwitch && <Segmented<SessionView> className="session-view-switch" aria-label="View" value={chat ? 'chat' : 'terminal'} onChange={switchView} options={VIEW_OPTIONS} />;
+  const viewSwitch = agent && !headerSwitch && view === undefined && <Segmented<SessionView> className="session-view-switch" aria-label="View" value={chat ? 'chat' : 'terminal'} onChange={switchView} options={VIEW_OPTIONS} />;
   // In the header, the three views, always there: Terminal reads as picked while a shell tab shows, as it is what shows.
   // The chat's controls, while it shows. The style switch is the header's Chat | Timeline | Terminal under Simplified.
   const runsShow = useChatRunsShow();
@@ -333,7 +340,8 @@ export function SessionBody({
       data-tab-drop={from === undefined ? undefined : dropKey(from)}
       data-drop-over={(from !== undefined && dropOver === dropKey(from)) || undefined}
     >
-      {content.kind !== 'tabs' && !shelves && (
+      {/* A ticket's tile names its one view, and has its helpers where the details would be. */}
+      {content.kind !== 'tabs' && !shelves && view === undefined && (
       <SessionDetails
         sessionId={controlSession}
         agent={agent}
@@ -351,7 +359,7 @@ export function SessionBody({
         onOpenWeb={panes?.openWeb}
       />
       )}
-      {content.kind !== 'tabs' && !shelves && <DetailsHandle collapsed={detailsCollapsed} onCollapsed={onDetailsCollapsed} />}
+      {content.kind !== 'tabs' && !shelves && view === undefined && <DetailsHandle collapsed={detailsCollapsed} onCollapsed={onDetailsCollapsed} />}
       {shelvesAgent && (
         <>
           <LiveShelves

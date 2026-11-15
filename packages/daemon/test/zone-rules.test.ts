@@ -65,7 +65,7 @@ describe('what sets a zone off to be laid out by its rule again', () => {
     expect(zonesChangedBy({ type: 'item.updated', item: { ...board, height: 300 } }, inputs)).toEqual(['z1']);
     expect(zonesChangedBy({ type: 'item.updated', item: { ...board, height: 300, x: 50 } }, inputs)).toEqual(['z1']);
     expect(zonesChangedBy({ type: 'item.updated', item: { ...board, height: 300, x: 50, data: { joined: ['s1'], left: [] } } }, inputs)).toEqual(['z1']);
-    expect(zonesChangedBy({ type: 'item.removed', id: 'b1' }, inputs)).toEqual(['z1']);
+    expect(zonesChangedBy({ type: 'item.removed', id: 'b1', ticket: null }, inputs)).toEqual(['z1']);
     expect(zonesChangedBy({ type: 'item.updated', item: { ...board, id: 'n1', kind: 'sticky' } as BoardItem }, inputs)).toEqual([]);
   });
 
@@ -86,8 +86,8 @@ describe('what sets a zone off to be laid out by its rule again', () => {
     expect(zonesChangedBy({ type: 'item.updated', item: clock }, inputs)).toEqual(['z1']);
     expect(zonesChangedBy({ type: 'item.updated', item: { ...clock, x: 300 } }, inputs)).toEqual([]);
     expect(zonesChangedBy({ type: 'item.updated', item: { ...clock, id: 'n1', kind: 'sticky' } }, inputs)).toEqual([]);
-    expect(zonesChangedBy({ type: 'item.removed', id: 'n1' }, inputs)).toEqual([]);
-    expect(zonesChangedBy({ type: 'item.removed', id: 'c1' }, inputs)).toEqual(['z1']);
+    expect(zonesChangedBy({ type: 'item.removed', id: 'n1', ticket: null }, inputs)).toEqual([]);
+    expect(zonesChangedBy({ type: 'item.removed', id: 'c1', ticket: null }, inputs)).toEqual(['z1']);
   });
 });
 

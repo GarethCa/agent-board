@@ -39,6 +39,7 @@ import { checkNamedTemplate, fillTemplate, roleChoice, type TemplateValues } fro
 import { RpcMethodError } from './rpc.ts';
 import { sessionEnv, type SessionHost } from './sessions.ts';
 import { oneLine } from './terminal-input.ts';
+import { isTicketChatKind } from './ticket-tiles.ts';
 import { frontZ } from './tile-position.ts';
 import { hashToken, newToken } from './tokens.ts';
 import {
@@ -80,6 +81,8 @@ const REVIEWER_OFFSET = 48;
 interface TicketPlace {
   ticket: string | null;
   ticketChat: boolean;
+  /** A chat that is its own lead (`Agent.chatKind`): false for any other agent. */
+  lead: boolean;
 }
 
 /**
@@ -88,23 +91,25 @@ interface TicketPlace {
  * `chatOf(id)` is the agent `id` as far as tickets go, undefined when there is none.
  */
 function ticketPlace(
-  asked: { ticket?: string; ticketChat?: boolean },
+  asked: { ticket?: string; ticketChat?: boolean; chatKind?: unknown },
   starter: string | undefined,
   chatOf: (sessionId: string) => (TicketPlace & { name: string }) | undefined,
 ): TicketPlace {
+  if (asked.chatKind !== undefined && !isTicketChatKind(asked.chatKind)) throw invalidParams(`unknown ticket chat kind ${String(asked.chatKind)}`);
+  if (asked.chatKind !== undefined && asked.ticketChat !== true) throw invalidParams("only a ticket's chat has a kind: give ticketChat too");
   if (asked.ticketChat === true) {
     if (asked.ticket !== undefined) throw invalidParams("a ticket's chat belongs to no other ticket: give ticketChat or ticket, not both");
-    return { ticket: null, ticketChat: true };
+    return { ticket: null, ticketChat: true, lead: asked.chatKind === 'lead' };
   }
   if (asked.ticket !== undefined) {
     const chat = chatOf(asked.ticket);
     if (chat === undefined) throw invalidParams(`no agent ${asked.ticket}`);
     if (!chat.ticketChat) throw invalidParams(`${chat.name} is not a ticket's chat: name the chat of the ticket it helps`);
-    return { ticket: asked.ticket, ticketChat: false };
+    return { ticket: asked.ticket, ticketChat: false, lead: false };
   }
   const by = starter === undefined ? undefined : chatOf(starter);
-  if (by === undefined) return { ticket: null, ticketChat: false };
-  return { ticket: by.ticketChat ? starter! : by.ticket, ticketChat: false };
+  if (by === undefined) return { ticket: null, ticketChat: false, lead: false };
+  return { ticket: by.ticketChat ? starter! : by.ticket, ticketChat: false, lead: false };
 }
 
 /** What starting an agent reads of the host. */
@@ -258,7 +263,20 @@ export function createAgentSpawns(
   const setReadOnly = db.prepare('UPDATE agents SET read_only = 1 WHERE session_id = ?');
   const setPurpose = db.prepare('UPDATE agents SET purpose = ? WHERE session_id = ?');
   const setMaster = db.prepare('UPDATE agents SET master = 1 WHERE session_id = ?');
-  const setTicket = db.prepare('UPDATE agents SET ticket = ?, ticket_chat = ? WHERE session_id = ?');
+  /**
+   * Where a lead chat's builder works: in the chat's own worktree, on its branch, which it never owns, so the chat can
+   * take the branch back at a hand-off (`ticket-chat.ts`). Only its first implementer helper with no branch, base or
+   * repo of its own, while no other builder works there.
+   */
+  const builderPlace = (params: SpawnAgentParams, ticket: TicketPlace): FolderPlace | undefined => {
+    if (ticket.ticket === null || params.role !== 'implementer') return undefined;
+    if (params.branch !== undefined || params.baseBranch !== undefined || params.repo !== undefined || params.checkout !== undefined) return undefined;
+    const chat = getRow(ticket.ticket);
+    if (chat === undefined || chat.ticket_lead !== 1 || chat.plain_folder === 1 || chat.ended_at !== null) return undefined;
+    const taken = rows().some((row) => row.ticket === chat.session_id && row.ended_at === null && row.owns_worktree === 0 && row.worktree === chat.worktree);
+    return taken ? undefined : { cwd: chat.worktree, repoRoot: chat.repo_root, readOnly: false };
+  };
+  const setTicket = db.prepare('UPDATE agents SET ticket = ?, ticket_chat = ?, ticket_lead = ? WHERE session_id = ?');
   const selectBranchReviews = db.prepare('SELECT * FROM branch_reviews WHERE repo_root = ? AND branch = ? ORDER BY id');
   const insertBranchReview = db.prepare('INSERT INTO branch_reviews (repo_root, branch, head, session_id) VALUES (?, ?, ?, ?)');
   /** One deeper than the agent that started it; its crew depth is kept even if that agent is deleted later. */
@@ -578,7 +596,12 @@ export function createAgentSpawns(
     }
     // The folder outside git the group was added for, else the one the app makes for it.
     const folder = inGroup ? (zone.group_folder ?? groupFolder(options.groupsDir, zone.id)) : undefined;
-    const at: FolderPlace | undefined = place ?? (folder === undefined ? undefined : { cwd: folder, repoRoot: folder, readOnly: false });
+    const ticket = ticketPlace(params, spawnedBy, (sessionId) => {
+      const row = getRow(sessionId);
+      return row === undefined ? undefined : { name: row.name, ticket: row.ticket, ticketChat: row.ticket_chat === 1, lead: row.ticket_lead === 1 };
+    });
+    const at: FolderPlace | undefined =
+      place ?? (folder === undefined ? builderPlace(params, ticket) : { cwd: folder, repoRoot: folder, readOnly: false });
     // The repo's own checkout, with no worktree, is the user's to give (ADR-0011): an orchestrator's agents each get their own.
     const mainCheckout = params.checkout === 'main' && at === undefined;
     if (mainCheckout && spawnedBy !== undefined) throw invalidParams("an orchestrator's agents each work in a worktree of their own");
@@ -586,10 +609,6 @@ export function createAgentSpawns(
       throw invalidParams("an agent in the repo's own checkout takes no branch, base branch or reviewer role: it works on the branch checked out there");
     }
     const fromZone = issueId === undefined ? undefined : issueZone({ ...params, issueId }, zone, spawnedBy);
-    const ticket = ticketPlace(params, spawnedBy, (sessionId) => {
-      const row = getRow(sessionId);
-      return row === undefined ? undefined : { name: row.name, ticket: row.ticket, ticketChat: row.ticket_chat === 1 };
-    });
     const id = randomUUID();
     // Named for now by what it was given; one started from an issue is named after it once the issue is read.
     const shownName = name?.trim() || (issueId !== undefined ? issueId : prompt.trim() === '' ? freeAgentName() : defaultName(prompt.trim()));
@@ -813,7 +832,7 @@ export function createAgentSpawns(
       if (readOnly) setReadOnly.run(id);
       if (plain) setPlainFolder.run(id);
       if (place?.master === true) setMaster.run(id);
-      if (ticket.ticket !== null || ticket.ticketChat) setTicket.run(ticket.ticket, ticket.ticketChat ? 1 : 0, id);
+      if (ticket.ticket !== null || ticket.ticketChat) setTicket.run(ticket.ticket, ticket.ticketChat ? 1 : 0, ticket.lead ? 1 : 0, id);
       if (spawnedBy !== undefined) {
         setCrewDepth.run(spawnedBy, id);
         options.records.put(spawnedBy, { kind: 'crew', key: id });

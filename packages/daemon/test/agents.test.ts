@@ -1372,6 +1372,45 @@ describe('Claude agents', () => {
       expect((await fourth.client.call('agent.list'))[0]).toMatchObject({ undelivered: [] });
     });
 
+    it('keeps a clock run queued for an agent not yet up when the daemon shuts down, flagged with Resend, its run settled', async () => {
+      const dataDir = tempDataDir();
+      const clock = createFakeClock(new Date(2026, 9, 10, 7, 30));
+      const first = await agentDaemon('output', { dataDir, clock, noSessionStart: true });
+      const zone = await addZone(first.client, tempRepo());
+      const agent = await first.client.call('agent.spawn', { zoneId: zone.id, ...SIZE });
+      const made = await first.client.call('clock.add', { place: { beside: agent.sessionId }, data: { cron: '0 * * * *', prompt: 'Check Slack', hibernate: false } });
+      clock.advance(30 * 60_000);
+      await first.recorder.waitFor((e): e is DaemonEvent => e.type === 'clock.updated' && e.status.id === made.id && e.status.runs.length > 0);
+      await vi.waitFor(async () => expect((await first.client.call('agent.list'))[0]!.queuedUntilUp).toBe(1));
+      await first.daemon.stop();
+
+      // Back a few minutes later, its next fire an hour off: the run under test is its only one.
+      const second = await agentDaemon('output', { dataDir, clock: createFakeClock(new Date(2026, 9, 10, 8, 5)) });
+      expect((await second.client.call('agent.list'))[0]).toMatchObject({
+        undelivered: [{ what: 'A scheduled run', text: 'Check Slack', reason: expect.any(String) }],
+        flag: { to: 'user', reason: expect.stringMatching(/^A scheduled run was not delivered .*Resend/) },
+      });
+      // Its run is over, not left waiting on a turn that never starts.
+      await vi.waitFor(async () => {
+        const [status] = await second.client.call('clock.list');
+        expect(status!.runs).toEqual([expect.objectContaining({ outcome: 'failed', reason: 'the app stopped during its run', finishedAt: expect.any(String) })]);
+      });
+    });
+
+    it('keeps the flag of a message not delivered because its agent ended before it was up, across a restart', async () => {
+      const dataDir = tempDataDir();
+      const first = await agentDaemon('output', { dataDir, noSessionStart: true });
+      const zone = await addZone(first.client, tempRepo());
+      const agent = await first.client.call('agent.spawn', { zoneId: zone.id, ...SIZE });
+      expect(await first.client.call('agent.answer', { sessionId: agent.sessionId, text: 'Also lint' })).toEqual({ queued: true });
+      await first.client.call('agent.stop', { sessionId: agent.sessionId });
+      const lost = await untilAgent(first.recorder, agent.sessionId, (a) => a.endedAt !== null && a.undelivered.length > 0);
+      await first.daemon.stop();
+
+      const second = await agentDaemon('output', { dataDir });
+      expect((await second.client.call('agent.list'))[0]).toMatchObject({ undelivered: lost.undelivered, flag: { to: 'user', reason: lost.flag!.reason } });
+    });
+
     it('keeps a message still waiting behind a first prompt being sent as the daemon shuts down, as not delivered', async () => {
       const dataDir = tempDataDir();
       // Its Enters are lost: the daemon is still pressing Enter on its task when it stops, the message behind it.

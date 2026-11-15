@@ -26,6 +26,7 @@ const VERBS: Record<OrchestratorAction, { done: string; tried: string; of?: stri
   move: { done: 'moved', tried: 'move', nothing: 'a tile' },
   arrange: { done: 'arranged', tried: 'arrange', nothing: 'a zone' },
   'arrange-board': { done: 'arranged', tried: 'arrange', nothing: 'the board' },
+  'arrange-ticket': { done: 'arranged', tried: 'arrange', nothing: "a ticket's board" },
   'add-zone': { done: 'made', tried: 'make', of: 'the group ', nothing: 'a group' },
   'change-zone': { done: 'changed', tried: 'change', of: 'the group ', nothing: 'a group' },
   'remove-zone': { done: 'removed', tried: 'remove', of: 'the group ', nothing: 'a group' },
@@ -54,6 +55,7 @@ const VERBS: Record<OrchestratorAction, { done: string; tried: string; of?: stri
   'stop-crew': { done: 'stopped', tried: 'stop', of: 'the crew ', nothing: 'a crew' },
   'crew-round': { done: 'gave one more round to', tried: 'give one more round to', of: 'the crew ', nothing: 'a crew' },
   'set-status': { done: 'set the status of', tried: 'set the status of' },
+  watches: { done: 'changed the ticket watches of', tried: 'change the ticket watches of' },
 };
 
 /** What the line says it did to whom ("started web impl"), or tried to ("tried to close …"). */

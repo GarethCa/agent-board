@@ -19,6 +19,7 @@ import {
 import { EMPTY_STAGE_BOARD_SIZE } from '@agent-board/daemon/stage-board';
 import { fillToken, foldColors, foldFills, shapeColors, slotName, slotPaint, slotToken, stickyPaint } from '../../board-colors';
 import { foldedNow } from './use-folded-slots';
+import { ITEM_KIND_LABELS } from './kind-labels';
 import { itemNodeType, type ItemNodeType, type ItemNodeTypeName } from './items';
 import { AgentNoteNode } from './AgentNoteNode';
 import { clockData } from '../clocks';
@@ -80,7 +81,7 @@ export interface ItemColors {
 
 export const ITEM_KINDS: Record<BoardItemKind, ItemKind> = {
   sticky: {
-    label: 'sticky note',
+    label: ITEM_KIND_LABELS.sticky,
     node: StickyNode,
     size: STICKY_SIZE,
     newData: () => ({ ...newStickyData() }),
@@ -89,7 +90,7 @@ export const ITEM_KINDS: Record<BoardItemKind, ItemKind> = {
     colors: { label: 'Note colour', presets: () => STICKY_COLORS.map((preset) => ({ ...preset, color: stickyPaint(preset.value).color })), of: (data) => stickyData(data).color, patch: (color) => ({ color }) },
   },
   text: {
-    label: 'text',
+    label: ITEM_KIND_LABELS.text,
     node: TextNode,
     size: { width: 40, height: 36 },
     newData: () => ({ ...newTextData() }),
@@ -103,7 +104,7 @@ export const ITEM_KINDS: Record<BoardItemKind, ItemKind> = {
     },
   },
   shape: {
-    label: 'shape',
+    label: ITEM_KIND_LABELS.shape,
     node: ShapeNode,
     size: SHAPE_SIZE,
     newData: () => ({ ...newShapeData() }),
@@ -124,21 +125,21 @@ export const ITEM_KINDS: Record<BoardItemKind, ItemKind> = {
     },
   },
   image: {
-    label: 'image',
+    label: ITEM_KIND_LABELS.image,
     node: ImageNode,
     size: { width: 300, height: 200 },
     editOnCreate: false,
     minimapColor: (data) => (imageData(data) === undefined ? 'var(--raised)' : 'var(--muted)'),
   },
   link: {
-    label: 'link card',
+    label: ITEM_KIND_LABELS.link,
     node: LinkNode,
     size: LINK_CARD_SIZE,
     editOnCreate: false,
     minimapColor: () => 'var(--raised)',
   },
   issue: {
-    label: 'issue card',
+    label: ITEM_KIND_LABELS.issue,
     node: IssueNode,
     size: ISSUE_CARD_SIZE,
     editOnCreate: false,
@@ -146,7 +147,7 @@ export const ITEM_KINDS: Record<BoardItemKind, ItemKind> = {
   },
   // Made by agents only (`note add`), never from the toolbar.
   'agent-note': {
-    label: 'agent note',
+    label: ITEM_KIND_LABELS['agent-note'],
     node: AgentNoteNode,
     size: AGENT_NOTE_SIZE,
     editOnCreate: false,
@@ -154,7 +155,7 @@ export const ITEM_KINDS: Record<BoardItemKind, ItemKind> = {
   },
   // Made by agents only (`show_doc` on the board), never from the toolbar.
   document: {
-    label: 'document',
+    label: ITEM_KIND_LABELS.document,
     node: DocumentNode,
     size: DOCUMENT_CARD_SIZE,
     editOnCreate: false,
@@ -162,7 +163,7 @@ export const ITEM_KINDS: Record<BoardItemKind, ItemKind> = {
   },
   // Made by agents only (a plan shown on the board), never from the toolbar.
   plan: {
-    label: 'plan card',
+    label: ITEM_KIND_LABELS.plan,
     node: PlanNode,
     size: PLAN_CARD_SIZE,
     editOnCreate: false,
@@ -170,7 +171,7 @@ export const ITEM_KINDS: Record<BoardItemKind, ItemKind> = {
   },
   // Made from the board's menu, or a tile's Schedule…, then set in its editor.
   clock: {
-    label: 'clock',
+    label: ITEM_KIND_LABELS.clock,
     node: ClockNode,
     size: CLOCK_SIZE,
     newData: () => ({ ...clockData({}) }),
@@ -179,7 +180,7 @@ export const ITEM_KINDS: Record<BoardItemKind, ItemKind> = {
   },
   // An agent's (`steps new`), or the user's from the board's menu or K, typed in as it is made.
   steps: {
-    label: 'steps card',
+    label: ITEM_KIND_LABELS.steps,
     node: StepsNode,
     size: STEPS_CARD_SIZE,
     newData: () => ({ ...newStepsData() }),
@@ -188,7 +189,7 @@ export const ITEM_KINDS: Record<BoardItemKind, ItemKind> = {
   },
   // Made from the board's menu (or M), named after its zone, or by an agent's `memory new`.
   memory: {
-    label: 'memory',
+    label: ITEM_KIND_LABELS.memory,
     node: MemoryNode,
     size: MEMORY_CARD_SIZE,
     newData: ({ zoneName }) => ({ ...newMemoryData(zoneName) }),
@@ -197,7 +198,7 @@ export const ITEM_KINDS: Record<BoardItemKind, ItemKind> = {
   },
   // Made from the board's menu (or Q), for agents and named after its zone, or by an agent's `queue new`.
   queue: {
-    label: 'queue',
+    label: ITEM_KIND_LABELS.queue,
     node: QueueNode,
     size: QUEUE_CARD_SIZE,
     newData: ({ zoneName }) => ({ ...newQueueData(zoneName) }),
@@ -206,7 +207,7 @@ export const ITEM_KINDS: Record<BoardItemKind, ItemKind> = {
   },
   // An agent's (`remind`), under its tile, or the user's from the board's menus, its add field open as it is made.
   todo: {
-    label: 'to-do list',
+    label: ITEM_KIND_LABELS.todo,
     node: TodoNode,
     size: TODO_CARD_SIZE,
     newData: () => ({ ...newTodoData() }),
@@ -215,7 +216,7 @@ export const ITEM_KINDS: Record<BoardItemKind, ItemKind> = {
   },
   // The daemon's, made as a crew starts: none is made from the board's menus.
   crew: {
-    label: 'crew card',
+    label: ITEM_KIND_LABELS.crew,
     node: CrewCardNode,
     size: CREW_CARD_SIZE,
     editOnCreate: false,
@@ -223,7 +224,7 @@ export const ITEM_KINDS: Record<BoardItemKind, ItemKind> = {
   },
   // A zone's, from its menu, one to a zone: it draws its own size from its stages, empty to begin with.
   stages: {
-    label: 'stage board',
+    label: ITEM_KIND_LABELS.stages,
     node: StagesNode,
     size: EMPTY_STAGE_BOARD_SIZE,
     newData: () => ({ joined: [], left: [] }),

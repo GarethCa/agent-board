@@ -80,7 +80,6 @@ export interface SpineLayout {
 }
 
 const sizeOf = (tile: ArrangeTile): Size => tile.size ?? AGENT_TILE_SIZE;
-const byStart = (a: ArrangeTile, b: ArrangeTile) => (a.createdAt ?? '').localeCompare(b.createdAt ?? '') || a.id.localeCompare(b.id);
 
 interface Band {
   key: string;
@@ -100,7 +99,8 @@ export function layOutSpine({ tiles, links, spacing, places: saved, fixed = [], 
   const spine = SPINE_GAPS[spacing];
   const { top, lanes } = lanesOf(tiles, links);
   const head = top.filter((tile) => tile.kind !== 'clock');
-  const clocks = top.filter((tile) => tile.kind === 'clock').toSorted(byStart);
+  // Already in the order they were made (`lanesOf`).
+  const clocks = top.filter((tile) => tile.kind === 'clock');
   const clockHeight = Math.max(0, ...clocks.map((tile) => sizeOf(tile).height));
   // The tiles' perches start a lane's gap below the clocks.
   const below = gaps.padding + (clocks.length > 0 ? clockHeight + gaps.lane - PERCH_ROOM : 0);

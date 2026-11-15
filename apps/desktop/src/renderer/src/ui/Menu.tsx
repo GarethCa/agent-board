@@ -263,11 +263,29 @@ const contentProps = {
  * and gives focus back to the button.
  */
 export function Menu({ children, entries, align = 'start', side = 'bottom', open, onOpenChange, onCloseFocus }: MenuProps) {
+  const button = useRef<HTMLButtonElement>(null);
+  const content = useRef<HTMLDivElement>(null);
   return (
     <RadixMenu.Root modal={false} open={open} onOpenChange={onOpenChange}>
-      <RadixMenu.Trigger asChild>{children}</RadixMenu.Trigger>
+      <RadixMenu.Trigger ref={button} asChild>
+        {children}
+      </RadixMenu.Trigger>
       <RadixMenu.Portal>
-        <RadixMenu.Content {...contentProps} align={align} side={side} onCloseAutoFocus={onCloseFocus}>
+        <RadixMenu.Content
+          {...contentProps}
+          align={align}
+          side={side}
+          onCloseAutoFocus={onCloseFocus}
+          // A menu closed just before this one opened gives focus back to the button a moment later. That is not focus
+          // leaving this menu, which would close it under the pointer and keep it from giving focus back as it closes:
+          // the menu keeps open and takes the focus back, as an ordinary open leaves it.
+          onInteractOutside={(event) => {
+            if (event.type !== 'dismissableLayer.focusOutside' || !button.current?.contains(event.target as Node)) return;
+            event.preventDefault();
+            content.current?.focus({ preventScroll: true });
+          }}
+          ref={content}
+        >
           <Entries entries={entries} />
         </RadixMenu.Content>
       </RadixMenu.Portal>

@@ -761,6 +761,12 @@
   height: var(--size-minimap-height);
 }
 
+/* A ticket's tile on the minimap: a small board in its corner says it opens onto a board of its own. */
+.react-flow__panel.board-minimap .board-minimap-mark {
+  fill: var(--accent);
+  pointer-events: none;
+}
+
 /* The empty board's welcome, in the middle of the view; the board around it still takes clicks. */
 .empty-board {
   position: absolute;

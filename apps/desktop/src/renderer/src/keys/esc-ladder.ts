@@ -1,12 +1,13 @@
 // The one Esc ladder: every Esc the board and its windows answer to, in the order it is undone. An input method's
 // composition, a field, a menu, popover or dialog take their own Esc first (they are the innermost things); then, one
 // step a press: a hand-off being dragged, Connect to…, the armed tool, the open shelves, the expanded tile or session
-// window with the focus (collapsed or minimised, the focus back on its tile), and last the expanded tile in front. Each handler adds its
-// step here with `useEscStep`, rather than listening on its own and holding its place by the phase it listens in.
+// window with the focus (collapsed or minimised, the focus back on its tile), a ticket's own board (zoomed out of),
+// and last the expanded tile in front. Each handler adds its step here with `useEscStep`, rather than listening on its
+// own and holding its place by the phase it listens in.
 import { useEffect, useRef } from 'react';
 
 /** A step's place on the ladder. */
-export type EscRung = 'handOff' | 'connect' | 'tool' | 'shelves' | 'surface' | 'frontTile';
+export type EscRung = 'handOff' | 'connect' | 'tool' | 'shelves' | 'surface' | 'frontTile' | 'level';
 
 interface Rung {
   rung: EscRung;
@@ -27,6 +28,8 @@ export const ESC_LADDER: readonly Rung[] = [
   { rung: 'tool', phase: 'bubble', yields: false },
   { rung: 'shelves', phase: 'bubble', yields: true },
   { rung: 'surface', phase: 'bubble', yields: true },
+  // Zoomed into a ticket's board, Esc goes back out to the board it was opened from, whose tile in front is hidden.
+  { rung: 'level', phase: 'bubble', yields: true },
   { rung: 'frontTile', phase: 'bubble', yields: true },
 ];
 

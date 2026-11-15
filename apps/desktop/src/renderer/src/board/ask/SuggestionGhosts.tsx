@@ -69,7 +69,7 @@ export function useSuggestionCommands({ item, rectOf, putItem, putConnector, upd
           for (const shape of plan.shapes) {
             const size = { width: shape.rect.width, height: shape.rect.height };
             const data = { ...newShapeData(shape.shape), text: shape.text };
-            putItem({ id: shape.id, kind: 'shape', ...placeOnBoard(shape.rect, size, layouts), ...size, z: ++z, rotation: 0, data, createdAt: '', updatedAt: '' });
+            putItem({ id: shape.id, kind: 'shape', ticket: null, ...placeOnBoard(shape.rect, size, layouts), ...size, z: ++z, rotation: 0, data, createdAt: '', updatedAt: '' });
           }
           for (const { id, from, to, label } of plan.connectors) {
             putConnector({ id, from, to, ...DEFAULT_CONNECTOR_LOOK, label, points: [], createdAt: '', updatedAt: '' });

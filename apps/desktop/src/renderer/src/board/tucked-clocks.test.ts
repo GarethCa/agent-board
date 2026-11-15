@@ -9,6 +9,7 @@ const clock = (id: string, zoneId: string | null, data: Record<string, unknown> 
     id,
     kind: 'clock',
     zoneId,
+    ticket: null,
     x: 400,
     y: 28,
     ...CLOCK_SIZE,

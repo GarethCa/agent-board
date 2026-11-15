@@ -1,7 +1,8 @@
 import { createContext } from 'react';
 import type { Node } from '@xyflow/react';
-import type { Agent, DocumentSummary, Effort, ExternalSession, Harness, PullRequest, RecentFolder, Shell } from '@agent-board/daemon/protocol';
+import type { Agent, DocumentSummary, Effort, ExternalSession, Harness, PullRequest, RecentFolder, Shell, TicketChatKind, TicketWatchChange } from '@agent-board/daemon/protocol';
 import type { ClickOpens } from './click-opens';
+import type { TicketView, TicketViews } from './ticket-view';
 import { renameDirect, type RenameTarget } from './rename';
 import type { ShownStart } from './use-agent-starts';
 
@@ -38,6 +39,8 @@ export type TileData = {
   implementer?: Agent;
   /** The tabs of the agent's session window, when it has any: its shells chip lists their shells. */
   tabs?: Shell[];
+  /** For a ticket's chat (`Agent.ticketChat`) drawn as its ticket's card, the helpers it holds, in order: they have no tiles of their own. */
+  helpers?: Agent[];
 };
 
 export type TileNodeType = Node<TileData, 'tile'>;
@@ -59,8 +62,12 @@ export interface TileActions {
   expand(nodeId: string): void;
   /** Unfolds a closed agent's chip to its full tile (`open`), or folds the tile back to its chip. */
   setFolded(nodeId: string, folded: boolean): void;
-  /** Returns the expanded tile to compact; its session keeps running. */
+  /** Returns the expanded tile to compact; its session keeps running. A ticket tile in the terminal view goes to its card. */
   collapse(nodeId: string): void;
+  /** Switches a ticket tile to its card, its terminal or its board (by node id); it keeps that view. */
+  setTicketView(nodeId: string, view: TicketView): void;
+  /** Zooms into the ticket's own board (by its chat's session id): its chat and helpers as tiles, beside its notes. */
+  openTicketBoard(chatSessionId: string): void;
   /**
    * Saves the size the user let a compact tile go at, and its `place` if resizing from the left or top moved
    * it; both are one undo step. No size puts it back to the default.
@@ -100,6 +107,10 @@ export interface TileActions {
   setMuted(sessionId: string, muted: boolean): void;
   /** Sets the agent's reasoning effort: typed at its prompt between turns, or kept for its next restart, as it can. */
   setEffort(sessionId: string, effort: Effort | null): void;
+  /** Changes a ticket's watches from its tile's Watches menu: the kinds named and how often. */
+  setWatches(sessionId: string, change: TicketWatchChange): void;
+  /** Marks a ticket's watch news read, from its tile's Read. */
+  readWatches(sessionId: string): void;
   /**
    * Gives the agent a role (a built-in one or any name), or none with null; only its role changes, unless `sendTemplate`
    * also sends it the role's template as a message.
@@ -140,6 +151,8 @@ export interface TileActions {
   resumeShell(shell: Shell): Promise<void>;
   /** Starts the agent's next review round, spawning its reviewer. */
   startReview(agent: Agent): void;
+  /** Who builds a ticket: its chat as the implementer, or its own lead with a builder helper, switched at a hand-off. */
+  setTicketChat(sessionId: string, kind: TicketChatKind): void;
   /** Opens the implementer's session window on its Review tab. */
   openReview(implementer: string): void;
   /**
@@ -171,12 +184,17 @@ export interface TileActions {
   renameStart(sessionId: string, name: string): Promise<void>;
 }
 
+/** The ticket tiles switched by hand to the card or the terminal: the rest show as Settings › Board says. */
+export const TicketViewsContext = createContext<TicketViews>({});
+
 /** What a double-click on an agent's or shell tile opens: its tiles' tooltips and ⋯ menus say so. */
 export const ClickOpensContext = createContext<ClickOpens>('window');
 
 export const TileActionsContext = createContext<TileActions>({
   expand: () => {},
   collapse: () => {},
+  setTicketView: () => {},
+  openTicketBoard: () => {},
   setFolded: () => {},
   resizeTile: () => {},
   resizeExpanded: () => {},
@@ -193,6 +211,8 @@ export const TileActionsContext = createContext<TileActions>({
   scheduleAgent: () => {},
   setMuted: () => {},
   setEffort: () => {},
+  setWatches: () => {},
+  readWatches: () => {},
   setRole: () => {},
   // Outside the board (a popped-out window) there is no history to record in.
   rename: async (target, name) => void (await renameDirect(target, name)),
@@ -211,6 +231,7 @@ export const TileActionsContext = createContext<TileActions>({
   restartAgent: () => {},
   resumeShell: async () => {},
   startReview: () => {},
+  setTicketChat: () => {},
   openReview: () => {},
   openTab: () => {},
   openGate: () => {},

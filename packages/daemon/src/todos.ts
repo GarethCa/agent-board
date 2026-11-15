@@ -156,7 +156,7 @@ export function createTodoHost(options: TodoHostOptions): TodoHost {
   const one = <T>(task: () => Promise<T>) => queue('todo', task);
 
   const dataOf = (item: BoardItem) => item.data as unknown as TodoData;
-  const lists = async () => (await options.call('item.list', undefined)).filter((item) => item.kind === 'todo');
+  const lists = async () => (await options.call('item.list', { allBoards: true })).filter((item) => item.kind === 'todo');
   const listOf = async (id: string) => {
     const found = (await lists()).find((item) => item.id === id);
     if (found === undefined) throw invalidParams(`no to-do list ${id}`);

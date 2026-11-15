@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import { fakeHarnessEnv, McpClient } from '@agent-board/fake-harness';
-import { prefabFile } from '../src/crew-prefabs.ts';
+import { BUILT_IN_PREFABS, prefabFile } from '../src/crew-prefabs.ts';
 import { MAX_PURPOSE_LENGTH, RPC_ERROR, type CrewPrefab, type DaemonEvent, type HookEvent } from '../src/protocol.ts';
 import { connectTestClient, recordEvents, startTestDaemon, TEST_CLI_LAUNCHER, tempDataDir, tempRepo } from './helpers.ts';
 
@@ -67,6 +67,8 @@ describe('the crew prefab library', () => {
       ['Spike + reviewer', true],
       ['Lead and crew', true],
       ['Ticket', true],
+      ['Design, build, review', true],
+      ['Just the chat', true],
     ]);
 
     const saved = await setup.client.call('orchestrator.savePrefab', { text: prefabFile(pair()) });
@@ -130,7 +132,7 @@ describe('the crew prefab library', () => {
   it('is changed by the user or any agent, with no role, and each change is logged', async () => {
     const setup = await prefabDaemon();
     const boardLead = await lead(setup);
-    expect((await boardLead.connection.call('orchestrator.prefabs', { token: boardLead.token })).prefabs).toHaveLength(6);
+    expect((await boardLead.connection.call('orchestrator.prefabs', { token: boardLead.token })).prefabs).toHaveLength(BUILT_IN_PREFABS.length);
     await boardLead.connection.call('orchestrator.savePrefab', { token: boardLead.token, text: prefabFile(pair()) });
     await boardLead.connection.call('orchestrator.removePrefab', { token: boardLead.token, name: 'Pair' });
     const [removed, saved] = await setup.client.call('orchestrator.activity', { orchestratorId: boardLead.agent.sessionId, limit: 2 });

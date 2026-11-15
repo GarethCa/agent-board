@@ -26,12 +26,15 @@ export interface ItemOwnersOptions {
 
 export interface ItemOwners {
   handlers<Context extends BoardConnection>(): RpcHandlers<ItemOwnerMethods, Context>;
-  /** The agent `sessionId` is being removed: the agent notes it holds go with it, but not one the user edited. */
+  /**
+   * The agent `sessionId` is being removed: the agent notes it holds go with it, but not one the user edited. A ticket's
+   * chat takes its ticket's board with it, every item on it.
+   */
   agentRemoved(sessionId: string): Promise<void>;
   /**
    * At start: the agent notes of agents no longer on the board (removed while the daemon was down, or mid-way through
    * taking their notes away) go too. Not one the user edited, nor a lane's note an arrange made, which the next
-   * arrange in its zone takes over.
+   * arrange in its zone takes over. So do the items on the board of a ticket whose chat is gone.
    */
   sweep(): Promise<void>;
 }
@@ -50,6 +53,8 @@ export function createItemOwners(options: ItemOwnersOptions): ItemOwners {
   const madeByOf = db.prepare('SELECT made_by FROM board_items WHERE id = ?');
   const mark = db.prepare('UPDATE board_items SET made_by = ? WHERE id = ?');
   const notesOf = db.prepare("SELECT id, data FROM board_items WHERE kind = 'agent-note' AND made_by = ?");
+  const onTicket = db.prepare('SELECT id FROM board_items WHERE ticket = ? ORDER BY rowid');
+  const orphans = db.prepare('SELECT id, ticket FROM board_items WHERE ticket IS NOT NULL AND ticket NOT IN (SELECT session_id FROM agents) ORDER BY rowid');
   const strays = db.prepare(
     `SELECT id, made_by, data FROM board_items WHERE kind = 'agent-note' AND made_by IS NOT NULL
        AND made_by NOT IN (SELECT session_id FROM agents) AND made_by NOT IN (SELECT id FROM external_sessions)`,
@@ -71,7 +76,7 @@ export function createItemOwners(options: ItemOwnersOptions): ItemOwners {
           const entry: ActivityEntry = { detail: '' };
           return access.logged(me, 'pass', entry, async () => {
             const id = stringParam(p, 'id');
-            const item = (await call('item.list', undefined)).find((each) => each.id === id);
+            const item = (await call('item.list', { allBoards: true })).find((each) => each.id === id);
             if (item === undefined) throw invalidParams(`no board item ${id}`);
             if (item.kind !== 'agent-note' && item.kind !== 'document') {
               throw invalidParams(`that is a ${item.kind} item: an agent passes only an agent note or a document`);
@@ -120,9 +125,16 @@ export function createItemOwners(options: ItemOwnersOptions): ItemOwners {
         }
         await call('item.delete', { id: note.id }).catch((error: unknown) => options.log(`could not take ${sessionId}'s note ${note.id} off the board: ${(error as Error).message}`));
       }
+      // A ticket's chat takes its own board with it: every item on it is the ticket's, as its helpers are.
+      for (const { id } of onTicket.all(sessionId) as { id: string }[]) {
+        await call('item.delete', { id }).catch((error: unknown) => options.log(`could not take ${id} off the board of ${sessionId}'s ticket: ${(error as Error).message}`));
+      }
     },
 
     async sweep() {
+      for (const item of orphans.all() as { id: string; ticket: string }[]) {
+        await call('item.delete', { id: item.id }).catch((error: unknown) => options.log(`could not take ${item.id} off the board of ${item.ticket}'s ticket, gone: ${(error as Error).message}`));
+      }
       for (const note of strays.all() as { id: string; made_by: string; data: string }[]) {
         const data = JSON.parse(note.data) as { editedByUser?: unknown; arrange?: unknown };
         if (data.arrange !== undefined) continue;

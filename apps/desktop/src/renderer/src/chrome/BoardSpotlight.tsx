@@ -5,6 +5,7 @@ import { shownWindow } from '../windows/session-windows';
 import { useSessionWindows } from '../windows/SessionWindows';
 import { rowKeyOf, Spotlight, windowTargetOf, type SpotlightHandle, type SpotlightPlace } from './Spotlight';
 import type { BoardSubject } from './spotlight-results';
+import { useTicketItems } from './ticket-items';
 
 /**
  * Where ⌘K was pressed in the board's window: the board, the session window shown over it, or an expanded tile with the
@@ -20,11 +21,12 @@ const tileOf = (subject: BoardSubject): TileRef | undefined =>
  * The board window's ⌘K switcher. On the board, ↵ flies to the tile, pulses and selects it, and ⌘↵ opens it. In
  * the session window shown on the board, ↵ switches it to the session, as ‹ › do; in an expanded tile with the focus,
  * the session picked expands in its place. A session popped out into an OS window of its own comes forward there. A
- * zone is brought into view, out of the session window or expanded tile.
+ * zone, or an item on a ticket's board, is brought into view, out of the session window or expanded tile.
  */
 export function BoardSpotlight({ ref, agents, shells, zones }: { ref?: Ref<SpotlightHandle>; agents: readonly Agent[]; shells: readonly Shell[] | undefined; zones: readonly Zone[] }) {
   const sessionWindows = useSessionWindows();
   const board = useBoardCommands();
+  const ticketItems = useTicketItems(agents);
 
   const placeOf = (at: Element | null): SpotlightPlace<BoardContext> => {
     const shown = shownWindow(sessionWindows.windows);
@@ -41,6 +43,12 @@ export function BoardSpotlight({ ref, agents, shells, zones }: { ref?: Ref<Spotl
       const shown = board.showZone(subject.zone.id, context.kind === 'expanded' ? context.nodeId : undefined);
       if (shown && context.kind === 'window') sessionWindows.close(context.id);
       return shown;
+    }
+    // An item on a ticket's board: the board shows it there, out of the session window or expanded tile.
+    if (subject.kind === 'item') {
+      board.showTicketItem(subject.ticket, subject.item.id);
+      if (context.kind === 'window') sessionWindows.close(context.id);
+      return true;
     }
     const tile = tileOf(subject)!;
     // A row of the Windows group brings its window back, minimised or not, wherever ⌘K was pressed, and flies the board
@@ -76,6 +84,7 @@ export function BoardSpotlight({ ref, agents, shells, zones }: { ref?: Ref<Spotl
       shells={shells}
       zones={zones}
       windows={sessionWindows.windows}
+      ticketItems={ticketItems}
       placeOf={placeOf}
       onPick={onPick}
       canStartAgent={board.canStartAgent()}

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Node } from '@xyflow/react';
 import type { BoardItem } from '@agent-board/daemon/protocol';
-import { boundsOnBoard, itemNode, placeOnBoard, restoredData, withItem, withoutItem } from './items';
+import { boundsOnBoard, itemNode, placeOnBoard, restoredData, withItem, withItemChange, withoutItem } from './items';
 
 const zones = [
   { id: 'a', x: 0, y: 0, width: 500, height: 400 },
@@ -13,6 +13,7 @@ const item = (overrides: Partial<BoardItem> = {}): BoardItem => ({
   id: 'i1',
   kind: 'sticky',
   zoneId: null,
+  ticket: null,
   x: 10,
   y: 20,
   width: 100,
@@ -108,6 +109,29 @@ describe('withItem', () => {
 
   it('removes an item', () => {
     expect(withoutItem(withItem([zone], item()), 'i1')).toEqual([zone]);
+  });
+});
+
+describe('withItemChange', () => {
+  const zone = { id: 'a', type: 'zone', position: { x: 0, y: 0 }, data: {} };
+
+  it("never draws an item on a ticket's own board, and takes one moved there off this board", () => {
+    expect(withItemChange([zone], { type: 'item.updated', item: item({ ticket: 'chat-1' }) })).toEqual([zone]);
+    const shown = withItemChange([zone], { type: 'item.updated', item: item() });
+    expect(shown.map((node) => node.id)).toEqual(['a', 'item:i1']);
+    expect(withItemChange(shown, { type: 'item.updated', item: item({ ticket: 'chat-1', x: 0, y: 0 }) })).toEqual([zone]);
+    expect(withItemChange(shown, { type: 'item.removed', id: 'i1', ticket: null })).toEqual([zone]);
+  });
+
+  it("on a ticket's own board, draws only that ticket's items, and takes one moved to another board off it", () => {
+    const none: Node[] = [];
+    expect(withItemChange(none, { type: 'item.updated', item: item() }, 'chat-1')).toEqual([]);
+    expect(withItemChange(none, { type: 'item.updated', item: item({ ticket: 'chat-2' }) }, 'chat-1')).toEqual([]);
+    const shown = withItemChange(none, { type: 'item.updated', item: item({ ticket: 'chat-1' }) }, 'chat-1');
+    expect(shown.map((node) => node.id)).toEqual(['item:i1']);
+    expect(withItemChange(shown, { type: 'item.updated', item: item() }, 'chat-1')).toEqual([]);
+    expect(withItemChange(shown, { type: 'item.updated', item: item({ ticket: 'chat-2' }) }, 'chat-1')).toEqual([]);
+    expect(withItemChange(shown, { type: 'item.removed', id: 'i1', ticket: 'chat-1' }, 'chat-1')).toEqual([]);
   });
 });
 

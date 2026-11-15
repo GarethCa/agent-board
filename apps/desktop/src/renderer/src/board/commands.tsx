@@ -25,6 +25,8 @@ export interface BoardCommands {
   switchExpanded(fromNodeId: string, tile: TileRef): boolean;
   /** Brings the zone into view, collapsing the expanded tile `collapseNodeId` first, if given. */
   showZone(zoneId: string, collapseNodeId?: string): boolean;
+  /** Opens the ticket's own board and shows the item on it. */
+  showTicketItem(ticket: string, itemId: string): void;
   /** Whether there is a zone a new agent can start in from ⌘K. */
   canStartAgent(): boolean;
   /** Opens New agent with the name filled in: in the zone, if it can start there, else the one the board picks. */
@@ -53,6 +55,7 @@ export function useBoardCommands(): BoardCommands {
       openTile: (tile) => commands.current?.openTile(tile) ?? false,
       switchExpanded: (fromNodeId, tile) => commands.current?.switchExpanded(fromNodeId, tile) ?? false,
       showZone: (zoneId, collapseNodeId) => commands.current?.showZone(zoneId, collapseNodeId) ?? false,
+      showTicketItem: (ticket, itemId) => commands.current?.showTicketItem(ticket, itemId),
       canStartAgent: () => commands.current?.canStartAgent() ?? false,
       newAgentNamed: (name, zoneId) => commands.current?.newAgentNamed(name, zoneId),
       startCrew: (prefab, zoneId) => commands.current?.startCrew(prefab, zoneId),

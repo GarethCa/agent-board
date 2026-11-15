@@ -19,6 +19,7 @@ import {
   type ClockMode,
   type Agent,
   type BoardItem,
+  type BoardPlace,
   type ClockData,
   type ClockPlace,
   type DaemonEvent,
@@ -38,6 +39,8 @@ import type { ClockTemplateHost } from './clock-templates.ts';
 import { isObject } from './json.ts';
 import { asksSomething } from './hook-states.ts';
 import { AGENT_TILE_SIZE, freeSpotFor } from './board-layout.ts';
+import { spotOnTicketBoard } from './ticket-board.ts';
+import { ownTicketBoard } from './ticket-tiles.ts';
 
 type ClockMethods = Pick<DaemonMethods, 'clock.list' | 'clock.add' | 'agent.setSchedule'>;
 type OrchestratorClockMethods = Pick<DaemonMethods, 'orchestrator.addClock' | 'orchestrator.removeClock'>;
@@ -83,7 +86,7 @@ function freshAgentName(prompt: string, count: number): string {
 export interface ClockHostOptions {
   db: DatabaseSync;
   clock: Clock;
-  agents: Pick<AgentHost, 'get' | 'runScheduled' | 'spawn' | 'finalMessage' | 'delete' | 'stop' | 'deliver' | 'announce' | 'flag' | 'clearFlag' | 'pause'>;
+  agents: Pick<AgentHost, 'get' | 'list' | 'runScheduled' | 'spawn' | 'finalMessage' | 'delete' | 'stop' | 'deliver' | 'announce' | 'flag' | 'clearFlag' | 'pause'>;
   /** The daemon's own methods: clocks, notes and their changes are made as the board makes them. */
   call: DaemonCall;
   broadcast(event: DaemonEvent): void;
@@ -472,10 +475,15 @@ export function createClockHost(options: ClockHostOptions): ClockHost {
   };
 
 
-  /** Where a new clock goes beside an agent's tile: on its left, in its zone, or on its right without room there. */
-  const besideTile = (sessionId: string): { zoneId: string | null; x: number; y: number } => {
+  /**
+   * Where a new clock goes beside an agent's tile: on its left, in its zone, or on its right without room there. A
+   * helper's goes on its ticket's own board, clear of what is there.
+   */
+  const besideTile = async (sessionId: string): Promise<BoardPlace> => {
     const agent = agents.get(sessionId);
     if (agent === undefined) throw invalidParams(`no agent ${sessionId}`);
+    const ticket = ownTicketBoard(agent, agents.list());
+    if (ticket !== null) return spotOnTicketBoard(call, ticket, CLOCK_SIZE);
     const tile = agent.position ?? { x: 0, y: 0 };
     const left = tile.x - CLOCK_GAP - CLOCK_SIZE.width;
     const x = left >= 16 || agent.zoneId === null ? left : tile.x + AGENT_TILE_SIZE.width + CLOCK_GAP;
@@ -491,7 +499,7 @@ export function createClockHost(options: ClockHostOptions): ClockHost {
   };
 
   const add = async (data: Partial<ClockData>, place: ClockPlace): Promise<BoardItem> => {
-    const spot = 'beside' in place ? besideTile(place.beside) : place;
+    const spot = 'beside' in place ? await besideTile(place.beside) : place;
     const joined = 'beside' in place ? { agent: place.beside } : {};
     return call('item.create', { kind: 'clock', ...spot, ...CLOCK_SIZE, data: { ...newClockData(), ...joined, ...data } });
   };

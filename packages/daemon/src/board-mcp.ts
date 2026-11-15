@@ -32,6 +32,7 @@ import {
   identifyView,
   interruptAgent,
   setAgentEffort,
+  ticketWatches,
   giveAgentRole,
   continueAgent,
   restartAgent,
@@ -39,6 +40,7 @@ import {
   openBoardSession,
   readAgent,
   readBoard,
+  readCards,
   sendToAgent,
   setDefaultRole,
   categoryAnswer,
@@ -136,6 +138,11 @@ import {
   CLOCK_MODES,
   CLOCK_RESULTS,
   EFFORTS,
+  TICKET_WATCH_EVERY_MINUTES,
+  TICKET_WATCH_KINDS,
+  TICKET_WATCH_MODES,
+  type TicketWatchChange,
+  type TicketWatchEvery,
   HARNESSES,
   isCrewSince,
   isWaitState,
@@ -870,8 +877,8 @@ const AGENT_REF = { type: 'string', description: 'The agent, by ref (agent:9c1e)
 
 /** Where the layout tools put something, as `agent-board move` takes it. */
 const PLACE_PROPERTIES = {
-  to: { type: 'string', description: 'The zone or group to put it in, by ref; `board` for loose on the board. Its own zone without.' },
-  at: { type: 'string', description: 'x,y relative to the zone, such as 40,120.' },
+  to: { type: 'string', description: "The zone or group to put it in, by ref; `board` for loose on the main board; a ticket's chat, by ref, for that ticket's own board, or `ticket` for yours. Without, its own place: a new note your zone, or your ticket's board if you are a helper beside your ticket." },
+  at: { type: 'string', description: "x,y relative to the zone (or on a ticket's board), such as 40,120. Moving a note to another board takes at or near." },
   near: { type: 'string', description: 'A tile or note to put it a gap beside, by ref.' },
   side: { type: 'string', enum: [...TILE_SIDES], description: 'Which side of near: below by default.' },
 };
@@ -954,7 +961,13 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
             'Start a crew from this crew prefab (as `agent-board prefab ls` lists them) in place of one agent: its member ' +
             'that starts on the prompt, its builder or its lead, gets the prompt, started as the prefab says. Its reviewers ' +
             'start on the builder\'s branch each time the builder hands off, and their reviews go back to it, until each approves ' +
-            'or the round limit (`agent-board crew`); a lead starts its own crew. Takes zone, repo, issue and description; the prefab sets the rest.',
+            'or the round limit (`agent-board crew`); a lead starts its own crew. Takes zone, repo, issue, description and chat; the prefab sets the rest.',
+        },
+        chat: {
+          type: 'string',
+          enum: ['implementer', 'lead'],
+          description:
+            "With a prefab that starts inside a ticket tile: who builds the ticket. implementer: its chat builds it (one session fewer); lead: its chat leads a builder helper. The prefab's own choice without.",
         },
       },
       required: ['prompt'],
@@ -1036,6 +1049,30 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
       type: 'object',
       properties: { agent: AGENT_REF, effort: { type: 'string', enum: [...EFFORTS], description: 'The new level.' } },
       required: ['agent', 'effort'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'ticket_watches',
+    description:
+      "Show a ticket's watches on its pull request, or change them, as its tile's Watches menu does: agent is the ticket's " +
+      'chat or a helper (`me` for your own ticket). Each kind is off, tile (its tile shows the news), chat (the chat is told, ' +
+      'as its next message) or both; none is on until turned on, and kinds left out stay as they are. They read the pull ' +
+      "request with the user's own gh, every_minutes apart (5 unless set) and once straight after the ticket pushes, and " +
+      'only read: none approves or merges. As `agent-board watches`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agent: AGENT_REF,
+        watches: {
+          type: 'object',
+          description: 'The kinds to change: reviews (a person reviews or comments), approvals (approved, or the decision changes), merge (merged, closed, conflicting, behind), checks (failing, or passing again).',
+          properties: Object.fromEntries(TICKET_WATCH_KINDS.map((kind) => [kind, { type: 'string', enum: [...TICKET_WATCH_MODES] }])),
+          additionalProperties: false,
+        },
+        every_minutes: { type: 'number', enum: [...TICKET_WATCH_EVERY_MINUTES], description: 'How often to read the pull request.' },
+      },
+      required: ['agent'],
       additionalProperties: false,
     },
   },
@@ -1150,6 +1187,7 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
     description:
       'Move a tile (an agent, a shell, or you) or a note, as dragging it would: into a zone ' +
       "or a group you made, exactly at a place (on the zone's grid) or beside another, what is in the way moving aside. " +
+      "A note, shape or card also goes onto a ticket's own board (to its chat's ref, with at or near) and back off it (to a zone or board, with at or near); a tile stays on the main board. " +
       'As `agent-board move`.',
     inputSchema: {
       type: 'object',
@@ -1174,7 +1212,7 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
         zone: {
           type: 'string',
           description:
-            "The zone, by ref; yours by default. `board`: the whole board's zones in rows a gap apart and its loose agents and shells below them, never what is in a zone (no by, layout or auto).",
+            "The zone, by ref; yours by default. `board`: the whole board's zones in rows a gap apart and its loose agents and shells below them, never what is in a zone (no by, layout or auto). `ticket` (yours) or a ticket's chat, by ref: that ticket's own board, its chat with its helpers in a column beside it, clear of the notes and cards there, which stay put; nothing on the main board moves (no by, layout or auto).",
         },
         by: { type: 'string', enum: [...ARRANGE_BYS], description: 'What a row holds: issue at first, then as you last asked.' },
         layout: {
@@ -1215,11 +1253,12 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
     description:
       'Your zone as arrange sees it, to check a layout without a screenshot: a line per lane with a cell per slot ' +
       '(implementer, reviewer, follow-up, notes), each tile\'s ref, name and state, and a lint line naming overlaps, the ' +
-      'widest gap in a lane, the space between lanes, a label far from its tiles, a zone mostly empty, and tiles not where an arrange would put them or out of their lane. Moves nothing. As `agent-board zone map`.',
+      'widest gap in a lane, the space between lanes, a label far from its tiles, a zone mostly empty, and tiles not where an arrange would put them or out of their lane. ' +
+      "For a ticket's own board (yours by default if you are a helper beside your ticket), what is on it, where, its size, and what overlaps. Moves nothing. As `agent-board zone map`.",
     inputSchema: {
       type: 'object',
       properties: {
-        zone: { type: 'string', description: 'The zone, by ref; yours by default.' },
+        zone: { type: 'string', description: "The zone, by ref; a ticket's chat, by ref, for its ticket's own board, or `ticket` for yours. Yours by default: your ticket's board if you are a helper beside your ticket." },
         boxes: { type: 'boolean', description: 'Draw the zone in characters instead, overlaps and gaps where they really are (about three times as long).' },
         sections: { type: 'boolean', description: "List a diagram's class members under each shape (cut short), not only their counts." },
       },
@@ -1336,7 +1375,7 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
       'flowchart. As `agent-board diagram export`.',
     inputSchema: {
       type: 'object',
-      properties: { refs: { type: 'array', items: { type: 'string' }, description: 'Zones (every shape in each) or shapes, by ref; your zone if left out.' } },
+      properties: { refs: { type: 'array', items: { type: 'string' }, description: "Zones (every shape in each) or shapes, by ref. Left out: your ticket's board if you are a helper beside your ticket, else your zone." } },
       additionalProperties: false,
     },
   },
@@ -1759,7 +1798,7 @@ export interface BoardMcpContext {
 /** What each tool does with a board session, its arguments and the caller's folder: the text the model reads, or what it sees. */
 const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, unknown>, cwd: string) => Promise<ToolAnswer>> = {
   whoami: async (session) => identifyView(new BoardRefs(await readBoard(session.client)), session.caller, session.socketPath).text,
-  board: async (session) => treeView(new BoardRefs(await readBoard(session.client)), session.caller).text,
+  board: async (session) => treeView(new BoardRefs(await readCards(session)), session.caller).text,
   usage: async (session) => (await usageView(session)).text,
   connections: async (session) => connectionsView(new BoardRefs(await readBoard(session.client)), session.caller).text,
   open_pr: async (session) => (await openOwnPullRequest(session)).text,
@@ -1828,9 +1867,12 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
   },
   new_agent: async (session, args) => {
     const prefab = stringArg(args, 'prefab', true);
+    const chat = stringArg(args, 'chat', true);
+    if (chat !== undefined && chat !== 'implementer' && chat !== 'lead') throw new BoardError('chat is implementer or lead');
+    if (chat !== undefined && prefab === undefined) throw new BoardError("chat picks the kind of ticket chat a ticket prefab starts: give prefab too");
     if (prefab !== undefined) {
       const set = ['name', 'harness', 'model', 'effort', 'role', 'template', 'branch', 'base', 'edges'].find((key) => args[key] !== undefined);
-      if (set !== undefined) throw new BoardError(`${set} is the prefab's to set: with prefab, give zone, repo, issue and description alone`);
+      if (set !== undefined) throw new BoardError(`${set} is the prefab's to set: with prefab, give zone, repo, issue, chat and description alone`);
       return (
         await startPrefab(session, {
           name: prefab,
@@ -1839,6 +1881,7 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
           repo: stringArg(args, 'repo', true),
           issue: stringArg(args, 'issue', true),
           description: stringArg(args, 'description', true),
+          ...(chat === undefined ? {} : { chat }),
         })
       ).text;
     }
@@ -1904,6 +1947,13 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
   read: async (session, args) => (await readAgent(session, stringArg(args, 'agent'), stringArg(args, 'path', true))).text,
   interrupt: async (session, args) => (await interruptAgent(session, stringArg(args, 'agent'))).text,
   set_effort: async (session, args) => (await setAgentEffort(session, stringArg(args, 'agent'), stringArg(args, 'effort'))).text,
+  ticket_watches: async (session, args) =>
+    (
+      await ticketWatches(session, stringArg(args, 'agent'), {
+        ...(args.watches === undefined ? {} : { watches: args.watches as TicketWatchChange['watches'] }),
+        ...(args.every_minutes === undefined ? {} : { everyMinutes: args.every_minutes as TicketWatchEvery }),
+      })
+    ).text,
   give_role: async (session, args) => {
     const role = stringArg(args, 'role', true);
     const clear = booleanArg(args, 'clear') === true;

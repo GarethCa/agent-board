@@ -29,6 +29,14 @@ export {
   type PullRequestState,
 } from './pull-requests.ts';
 export {
+  ghLogin,
+  pullRequestWatchFacts,
+  type PullRequestAuthor,
+  type PullRequestWatchComment,
+  type PullRequestWatchFacts,
+  type PullRequestWatchReview,
+} from './pull-request-watch.ts';
+export {
   allowedActions,
   approvePullRequest,
   pullRequestDetails,

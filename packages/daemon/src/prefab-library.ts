@@ -4,11 +4,14 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { BoardConnection } from './board.ts';
 import { BUILT_IN_PREFABS, parsePrefab, prefabFile } from './crew-prefabs.ts';
+import { withTicketChat } from './ticket-tiles.ts';
 import type { ActivityEntry, OrchestratorAccess } from './orchestrators.ts';
 import { invalidParams, optionalBooleanParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
 import {
+  DEFAULT_TICKET_CHAT_KIND,
   MAX_REVIEW_CAP,
   REVIEWER_ROLES,
+  TICKET_CHAT_KINDS,
   type CrewPrefab,
   type DaemonMethods,
   type LibraryPrefab,
@@ -16,6 +19,7 @@ import {
   type OrchestratorSpawned,
   type PrefabMember,
   type PrefabStarted,
+  type TicketChatKind,
 } from './protocol.ts';
 import type { RpcHandlers } from './rpc.ts';
 import { shellQuote } from './shell-words.ts';
@@ -75,10 +79,13 @@ function crewBuilder(prefab: CrewPrefab): PrefabMember | undefined {
 function leadBrief(prefab: CrewPrefab): string {
   const crew = prefab.members.filter((member) => member.starts === 'lead');
   const builder = crewBuilder(prefab);
+  const helpers = 'each agent you start is its helper, whose questions and flags come to you. Start each helper when its work is ready, with the command shown:';
   const opening =
-    prefab.onBoard === 'ticket'
-      ? "You are this ticket's chat: you run its work, and each agent you start is its helper, whose questions and flags come to you. Start each helper when its work is ready, with the command shown:"
-      : `You lead a crew from the ${prefab.name} prefab. Start each member when its work is ready, with the command shown:`;
+    prefab.onBoard !== 'ticket'
+      ? `You lead a crew from the ${prefab.name} prefab. Start each member when its work is ready, with the command shown:`
+      : prefab.ticketChat === 'lead'
+        ? `You are this ticket's chat and its own lead: you talk to the user and run its work, and leave the code to its builder, which works on your branch in your worktree. ${helpers.replace(/^each/, 'Each')}`
+        : `You are this ticket's chat and its implementer: you build it yourself, on your branch, and run its work; ${helpers}`;
   return [
     opening,
     ...crew.map((member) => rosterLine(member, builder)),
@@ -186,6 +193,11 @@ export function createPrefabLibrary(db: DatabaseSync): PrefabLibrary {
               }
               prefab = { ...prefab, roundLimit };
             }
+            // For this ticket alone, as the New ticket sheet picks it: the prefab keeps its own.
+            const kind = fields.ticketChat;
+            if (kind !== undefined && !TICKET_CHAT_KINDS.includes(kind as never)) throw invalidParams(`a ticket's chat is ${TICKET_CHAT_KINDS.join(' or ')}`);
+            if (kind !== undefined && prefab.onBoard !== 'ticket') throw invalidParams(`${prefab.name} starts no ticket tile: only a ticket's chat has a kind`);
+            if (prefab.onBoard === 'ticket') prefab = { ...prefab, ...withTicketChat(prefab, (kind as TicketChatKind | undefined) ?? prefab.ticketChat ?? DEFAULT_TICKET_CHAT_KIND) };
           } catch (error) {
             // Refused before any agent is asked for: logged as a refused start, as `spawn` logs its own refusals.
             const name = typeof fields.name === 'string' ? fields.name.trim() : '';
@@ -214,7 +226,7 @@ export function createPrefabLibrary(db: DatabaseSync): PrefabLibrary {
               ...(first.role === null ? {} : { role: first.role }),
               ...(first.name === null ? {} : { name: first.name }),
               ...(first.template === null ? {} : { template: first.template }),
-              ...(prefab.onBoard === 'ticket' ? { ticketChat: true } : {}),
+              ...(prefab.onBoard === 'ticket' ? { ticketChat: true, chatKind: prefab.ticketChat ?? DEFAULT_TICKET_CHAT_KIND } : {}),
             },
             connection,
           );

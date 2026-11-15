@@ -126,7 +126,7 @@ export function windowMenu(mac: boolean, overview: () => void, minimised: readon
       { role: 'zoom' },
       { type: 'separator' },
       keys.key('Board Menu', 'move.boardMenu'),
-      keys.key('Jump to Session or Zone…', 'move.spotlight'),
+      keys.key('Jump to Session, Zone or Setting…', 'move.spotlight'),
       keys.action('Needs You', 'needsYou'),
       keys.key('Open the Captain', 'move.master'),
       { type: 'separator' },

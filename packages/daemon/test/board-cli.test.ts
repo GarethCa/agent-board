@@ -822,6 +822,8 @@ describe('crew prefabs from the command line', () => {
     await usage('prefab', ['ls', '--add'], '--add and --replace are only for `prefab import`');
     await usage('prefab', ['copy', 'x'], 'the prefab commands are');
     await usage('new', ['--prefab', 'Pair', '--model', 'opus', '--', 'Go'], "--model is the prefab's to set");
+    await usage('new', ['--prefab', 'Ticket', '--chat', 'boss', '--', 'Go'], '--chat is implementer or lead');
+    await usage('new', ['--chat', 'lead', '--', 'Go'], 'give --prefab too');
   });
 
   it('lists the library, exports a prefab, imports it back only with --add, and removes it', async () => {
@@ -882,6 +884,11 @@ describe('crew prefabs from the command line', () => {
       later: [],
     });
     expect((await run(env, 'new', '--prefab', 'Lead and crew', '--zone', ref('zone', web.id), '--', 'Lead it')).out).toContain('  impl: for lead to start when its work is ready');
+    const ticket = JSON.parse((await run(env, 'new', '--prefab', 'ticket', '--chat', 'lead', '--zone', ref('zone', web.id), '--json', '--', 'Build it')).out) as {
+      started: { member: string }[];
+      later: { member: string }[];
+    };
+    expect(ticket.later.map((each) => each.member)).toEqual(['build', 'review']);
     expect(await run(env, 'new', '--prefab', 'Nope', '--zone', ref('zone', web.id), '--', 'Go')).toMatchObject({
       code: 1,
       err: expect.stringContaining('no crew prefab named Nope'),

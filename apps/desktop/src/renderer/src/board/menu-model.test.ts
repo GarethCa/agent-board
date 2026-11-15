@@ -364,6 +364,7 @@ describe("a zone's ⋯ menu", () => {
   it("lists a repo zone's rows, in order", () => {
     expect(menuIds(zoneMenu(zoneInput(repoZone)))).toEqual([
       'crew',
+      'crew/new-ticket',
       'crew/crew-library',
       'tidy',
       'spacing',
@@ -400,7 +401,7 @@ describe("a zone's ⋯ menu", () => {
   it('leads with the chips folded off its tab', () => {
     const folded: ModelEntry[] = [{ id: 'tab-new-agent', label: 'New agent', onSelect: () => {} }];
     const entries = zoneMenu(zoneInput(repoZone, { folded }));
-    expect(menuIds(entries).slice(0, 4)).toEqual(['tab-new-agent', 'crew', 'crew/crew-library', 'tidy']);
+    expect(menuIds(entries).slice(0, 4)).toEqual(['tab-new-agent', 'crew', 'crew/new-ticket', 'crew/crew-library']);
     expect(entries[2]).toBe('separator');
   });
 
@@ -412,9 +413,9 @@ describe("a zone's ⋯ menu", () => {
     const actions = spies<ProjectContextMenuInput['actions']>();
     const crew = row(zoneMenu(zoneInput(repoZone, { actions })), 'crew') as { entries: ModelEntry[] };
     library.current = [];
-    expect(menuIds(crew.entries)).toEqual(['crew-Docs pass', 'crew-Solo agent', 'crew-library']);
-    // A line between yours and the built-ins, and before the library.
-    expect(crew.entries.filter((entry) => entry === 'separator')).toHaveLength(2);
+    expect(menuIds(crew.entries)).toEqual(['new-ticket', 'crew-Docs pass', 'crew-Solo agent', 'crew-library']);
+    // A line after a new ticket, between yours and the built-ins, and before the library.
+    expect(crew.entries.filter((entry) => entry === 'separator')).toHaveLength(3);
     (row(crew.entries, 'crew-Docs pass') as { onSelect(): void }).onSelect();
     (row(crew.entries, 'crew-library') as { onSelect(): void }).onSelect();
     expect(actions.calls).toEqual([
@@ -1207,6 +1208,11 @@ describe("every row's fields", () => {
         {
           "entries": [
             {
+              "id": "new-ticket",
+              "label": "New ticket…",
+            },
+            "separator",
+            {
               "id": "crew-library",
               "label": "Library…",
             },
@@ -1375,6 +1381,11 @@ describe("every row's fields", () => {
         },
         {
           "entries": [
+            {
+              "id": "new-ticket",
+              "label": "New ticket…",
+            },
+            "separator",
             {
               "id": "crew-library",
               "label": "Library…",
@@ -1965,6 +1976,7 @@ describe("every row's handler", () => {
       ...wiring(tidyMenu(repoZone, undefined, actions), actions.calls),
     ]).toMatchInlineSnapshot(`
       [
+        "crew/new-ticket → newTicket(#z1)",
         "crew/crew-library → crewLibrary(#z1)",
         "tidy → tidy(#z1)",
         "spacing/layout-free → setLayoutMode(#z1, "free")",
@@ -1986,6 +1998,7 @@ describe("every row's handler", () => {
         "gate-command → editGateCommand(#z1)",
         "role-templates → editRoleTemplates(#z1)",
         "delete → deleteZone(#z1)",
+        "crew/new-ticket → newTicket(#g1)",
         "crew/crew-library → crewLibrary(#g1)",
         "tidy → tidy(#g1)",
         "spacing/layout-free → setLayoutMode(#g1, "free")",
@@ -2156,6 +2169,7 @@ describe("a project's menus, under the Simplified design", () => {
       [
         "— a repo",
         "new-agent → newAgent(#z1)",
+        "crew/new-ticket → newTicket(#z1)",
         "crew/crew-library → crewLibrary(#z1)",
         "new-shell → newShell(#z1)",
         "new-note → newNote()",
@@ -2164,6 +2178,7 @@ describe("a project's menus, under the Simplified design", () => {
         "tidy → tidy(#z1)",
         "colour-menu/colour → recolor(#z1, "picked")",
         "options/new-agent → newAgent(#z1)",
+        "options/crew/new-ticket → newTicket(#z1)",
         "options/crew/crew-library → crewLibrary(#z1)",
         "options/new-shell → newShell(#z1)",
         "options/rename → rename()",
@@ -2192,6 +2207,7 @@ describe("a project's menus, under the Simplified design", () => {
         "delete → deleteZone(#z1)",
         "— a group with a default repo, outside git",
         "new-agent → newAgent(#z1)",
+        "crew/new-ticket → newTicket(#z1)",
         "crew/crew-library → crewLibrary(#z1)",
         "new-shell → newShell(#z1)",
         "new-note → newNote()",
@@ -2199,6 +2215,7 @@ describe("a project's menus, under the Simplified design", () => {
         "tidy → tidy(#z1)",
         "colour-menu/colour → recolor(#z1, "picked")",
         "options/new-agent → newAgent(#z1)",
+        "options/crew/new-ticket → newTicket(#z1)",
         "options/crew/crew-library → crewLibrary(#z1)",
         "options/new-shell → newShell(#z1)",
         "options/rename → rename()",
@@ -2243,6 +2260,7 @@ describe("a project's menus, under the Simplified design", () => {
     expect(menuIds(projectMenu(projectInput(projects[0]![1])))).toEqual([
       'new-agent',
       'crew',
+      'crew/new-ticket',
       'crew/crew-library',
       'new-shell',
       'rename',
@@ -2284,7 +2302,7 @@ describe("a project's menus, under the Simplified design", () => {
 
   it('lists the right-click menu: making things first, then the everyday actions, then ⋯ as Project options', () => {
     const ids = menuIds(projectContextMenu(projectInput(projects[0]![1]))).filter((id) => !id.startsWith('options/'));
-    expect(ids).toEqual(['new-agent', 'crew', 'crew/crew-library', 'new-shell', 'new-note', 'add-issue', 'rename', 'tidy', 'colour-menu', 'colour-menu/colour', 'options', 'delete']);
+    expect(ids).toEqual(['new-agent', 'crew', 'crew/new-ticket', 'crew/crew-library', 'new-shell', 'new-note', 'add-issue', 'rename', 'tidy', 'colour-menu', 'colour-menu/colour', 'options', 'delete']);
   });
 
   it('marks its agent settings on or off, and flips them', () => {

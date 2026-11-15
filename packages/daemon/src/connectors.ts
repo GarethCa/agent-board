@@ -169,6 +169,14 @@ export function connectorHandlers<Context>(
     if (exists[type]!.get(id) === undefined) throw invalidParams(`no ${END_TABLES[type].label} ${id}`);
   };
 
+  // The board each end is on: an item's level (a ticket's board, or null for the main board); every other object is on
+  // the main board.
+  const itemLevel = db.prepare('SELECT ticket FROM board_items WHERE id = ?');
+  const levelOf = ({ type, id }: ConnectorEnd) => (type === 'item' ? ((itemLevel.get(id) as { ticket: string | null } | undefined)?.ticket ?? null) : null);
+  const checkSameBoard = (from: ConnectorEnd, to: ConnectorEnd) => {
+    if (levelOf(from) !== levelOf(to)) throw invalidParams("a connector joins only objects on the same board: its ends are on different boards (a ticket's own board, or the main board)");
+  };
+
   const announce = (connector: Connector): Connector => {
     broadcast({ type: 'connector.updated', connector });
     return connector;
@@ -183,6 +191,7 @@ export function connectorHandlers<Context>(
       if (from.type === to.type && from.id === to.id) throw invalidParams('a connector can not join an object to itself');
       checkEndExists(from);
       checkEndExists(to);
+      checkSameBoard(from, to);
       const id = fields.id === undefined ? randomUUID() : stringParam(fields, 'id');
       if (!CLIENT_ID.test(id)) throw invalidParams('a connector id is letters, digits and -, at most 64');
       if (selectOne.get(id) !== undefined) throw invalidParams(`connector ${id} already exists`);
@@ -212,6 +221,7 @@ export function connectorHandlers<Context>(
       if (from.type === to.type && from.id === to.id) throw invalidParams('a connector can not join an object to itself');
       if (given('from')) checkEndExists(from);
       if (given('to')) checkEndExists(to);
+      if (given('from') || given('to')) checkSameBoard(from, to);
       update.run(
         ...lookColumns(lookParams(fields, connector)),
         JSON.stringify(given('points') ? pointsParam(fields, 'points') : connector.points),

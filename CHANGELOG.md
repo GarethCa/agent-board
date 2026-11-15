@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.6.26 (2026-11-15)
+
+- Ticket tiles B3: ⌘K, the minimap and Needs you across levels
+- Ticket tiles B5: arrange inside a ticket's board
+- Ticket tiles open as Board, from Settings or each tile's own switch
+- Ticket tiles B2: zoom into a ticket's board (breadcrumb, Esc, restored on relaunch)
+- The opened card view shows the one ask with Read, and Simplified hides grey watches
+- Ticket tiles B4: agent tools act on a ticket's own board (move, notes, clocks, cards, map, board)
+- A ticket's tile opened as its terminal shows its watches and the eye
+- Main red after #681: the ticket gallery goes last, the Simplified "More to start" test expects New ticket…, and two stale shots re-taken
+- A closed menu leaves the page at once, so reopening it quickly no longer closes it again
+- Add orchestrator:set-ticket-chat to the IPC channels test
+- Ticket tiles B1: board items on a ticket's own board (storage and protocol)
+- Clocks made in the same millisecond keep the order they were made (Spine set-aside clocks flake)
+- A ticket's chat builds it or leads a builder: ticket prefabs, New ▸ Ticket, the builds mark, and the ⋯ switch at a hand-off
+- Watches on the ticket tile: its Watches menu, news on the card, and Read
+- Ticket tiles 3: a ticket's tile opens as its terminal, with a Card | Terminal switch and helpers shown in place
+- A menu opened again before the last one gave focus back stays open
+- Ticket tiles 2: a ticket's tile at rest, one calm card with its helpers as icons and one ask
+- The Find tooltip and ⌘K shortcut label say it finds settings too
+- Ticket watches, daemon and protocol: per-ticket watches on its pull request through gh, on the tile and told to the chat
+- A queued clock run and an ended-first flag are kept across a daemon restart (tests)
+
 ## v0.6.25 (2026-11-14)
 
 - Role ▸ With its template test picks its row in its own submenu, with Enter

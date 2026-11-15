@@ -1,3 +1,4 @@
+import { ticketViewsFrom, type TicketViews } from './ticket-view';
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import type { Viewport } from '@xyflow/react';
 import type { Agent, Connector, ExternalSession, Shell } from '@agent-board/daemon/protocol';
@@ -44,6 +45,8 @@ export interface SavedView {
   tileSizes: TileSizes;
   unfolded: Unfolded;
   overlapsAllowed: OverlapsAllowed;
+  /** The ticket tiles switched by hand to the card or the terminal. */
+  ticketViews: TicketViews;
   clickOpens: ClickOpens;
   connections: ConnectionsView;
   agentNoteLook: AgentNoteLook;
@@ -215,9 +218,10 @@ export function useBoardData({ setNodes, report, setNotice, onShellChange, resto
         window.agentBoard.view.get(VIEW_KEYS.agentNoteLook),
         window.agentBoard.view.get(VIEW_KEYS.unfolded),
         window.agentBoard.view.get(VIEW_KEYS.hiddenExpanded),
-      ]).catch(() => [null, null, null, null, null, null, null, null, null, null] as const),
+        window.agentBoard.view.get(VIEW_KEYS.ticketViews),
+      ]).catch(() => [null, null, null, null, null, null, null, null, null, null, null] as const),
     ]).then(
-      ([zones, loadedAgents, loadedExternals, items, listedShells, listedConnectors, [viewport, savedExpanded, savedClickOpens, savedSizes, savedOverlaps, savedTileSizes, savedConnections, savedAgentNoteLook, savedUnfolded, savedHidden]]) => {
+      ([zones, loadedAgents, loadedExternals, items, listedShells, listedConnectors, [viewport, savedExpanded, savedClickOpens, savedSizes, savedOverlaps, savedTileSizes, savedConnections, savedAgentNoteLook, savedUnfolded, savedHidden, savedTicketViews]]) => {
         if (cancelled) return;
         const search = window.location.search;
         // Items after zones: a child node needs its parent first.
@@ -240,6 +244,7 @@ export function useBoardData({ setNodes, report, setNotice, onShellChange, resto
           tileSizes: tileSizesFrom(savedTileSizes),
           unfolded: unfoldedFrom(savedUnfolded),
           overlapsAllowed: overlapsFrom(savedOverlaps),
+          ticketViews: ticketViewsFrom(savedTicketViews),
           clickOpens: clickOpensFrom(savedClickOpens),
           connections: connectionsViewFrom(savedConnections),
           agentNoteLook: agentNoteLookFrom(savedAgentNoteLook),

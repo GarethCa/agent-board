@@ -2,10 +2,11 @@ import { CalmTileGallery } from './board/CalmTileGallery';
 import { CharacterGallery } from './board/CharacterGallery';
 import { MemoryGallery } from './board/items/MemoryGallery';
 import { QueueGallery } from './board/items/QueueGallery';
-import { CrewGallery, PrefabGallery } from './crews/PrefabGallery';
+import { CrewGallery, PrefabGallery, TicketGallery } from './crews/PrefabGallery';
 import { StatusMarkGallery } from './board/StatusMarkGallery';
 import { CrowdedOrchestratorGallery, TileGallery } from './board/TileGallery';
 import { StepsGallery } from './board/items/StepsGallery';
+import { TicketBoardGallery, TicketOpenGallery, TicketTileGallery, TicketWatchGallery } from './board/TicketTileGallery';
 import { QuickAskDialogGallery, QuickAskGallery } from './board/QuickAskGallery';
 import { useSimplified } from './design';
 import { ComponentGallery, ReadoutGallery } from './ui/ComponentGallery';
@@ -36,6 +37,11 @@ export function Gallery() {
       <CrowdedOrchestratorGallery />
       <ReadoutGallery />
       <QuickAskDialogGallery />
+      <TicketTileGallery />
+      <TicketWatchGallery />
+      <TicketOpenGallery />
+      <TicketGallery />
+      <TicketBoardGallery />
       <GalleryFoot />
     </div>
   );

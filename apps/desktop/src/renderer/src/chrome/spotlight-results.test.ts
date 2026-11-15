@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Agent, Shell, Zone } from '@agent-board/daemon/protocol';
+import type { Agent, BoardItem, Shell, Zone } from '@agent-board/daemon/protocol';
 import { fuzzyMatch, RECENT_LIMIT, SETTINGS_LIMIT, CREWS_GROUP, FILTERS_GROUP, newAgentLeads, parseFilters, sideBySide, spotlightGroups, spotlightStep, type SpotlightRow } from './spotlight-results';
 
 const zone = (id: string, name: string): Zone => ({ id, name, color: '#3b5bdb' }) as Zone;
@@ -503,5 +503,31 @@ describe('spotlightStep, the arrow keys over Needs you beside Recent', () => {
     expect(spotlightStep(flat, key('Qx1'), 'down')).toBe(key('Qx2'));
     expect(spotlightStep(flat, key('Qx2'), 'down')).toBe(key('Qx1'));
     expect(spotlightStep(flat, key('Qx1'), 'up')).toBe(key('Qx2'));
+  });
+});
+
+describe('spotlightGroups through the boards of tickets', () => {
+  const chat = agent('Ticket chat', { sessionId: 'chat', ticketChat: true, ticket: null, issue: { id: 'ENG-12', title: 'Ticket tiles' } as Agent['issue'] });
+  const builder = agent('Builder', { sessionId: 'builder', ticket: 'chat', ticketChat: false });
+  const note = (id: string, data: Record<string, unknown>, more: Partial<BoardItem> = {}) => ({ id, kind: 'sticky', ticket: 'chat', zoneId: null, data, ...more }) as BoardItem;
+
+  it('says a helper is on its ticket, where another agent says its zone', () => {
+    const [found] = spotlightGroups('build', { agents: [chat, builder], shells: [], zones, shows: 'turns' });
+    expect(found!.rows[0]).toMatchObject({ name: 'Builder', sub: 'ENG-12 · builder' });
+  });
+
+  it('finds the notes and documents on a ticket’s board by their words, once something is typed, saying whose board', () => {
+    const ticketItems = [note('n1', { text: 'Make the dot\n8 px on dark' }), note('n2', { text: '' }), note('d1', { text: 'Ticket tiles mock' }, { kind: 'document' })];
+    const sources = { agents: [chat, builder], shells: [], zones, shows: 'turns' as const, ticketItems };
+    const rows = spotlightGroups('dot', sources).flatMap((group) => group.rows);
+    const item = rows.find((row) => row.subject.kind === 'item');
+    expect(item).toMatchObject({ key: 'item:n1', name: 'Make the dot 8 px on dark', sub: 'Sticky note · ENG-12', subject: { kind: 'item', item: { id: 'n1' }, ticket: 'chat' } });
+    expect(spotlightGroups('mock', sources).flatMap((group) => group.rows).find((row) => row.subject.kind === 'item')).toMatchObject({ sub: 'Document · ENG-12' });
+    expect(spotlightGroups('', sources).flatMap((group) => group.rows).some((row) => row.subject.kind === 'item')).toBe(false);
+  });
+
+  it('leaves out an item whose ticket’s chat is no longer on the board as one', () => {
+    const rows = spotlightGroups('dot', { agents: [builder], shells: [], zones, shows: 'turns', ticketItems: [note('n1', { text: 'the dot' })] }).flatMap((group) => group.rows);
+    expect(rows.some((row) => row.subject.kind === 'item')).toBe(false);
   });
 });

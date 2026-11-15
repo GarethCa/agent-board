@@ -61,6 +61,7 @@ import {
   UnfoldVertical,
   Unlink,
   X,
+  Ticket,
   Users,
   Zap,
   LibraryBig,
@@ -534,6 +535,9 @@ export function menuBarAgentEntries(entries: readonly ModelEntry[]): ModelEntry[
   return entries.map((entry) => (entry !== 'separator' && !('heading' in entry) && entry.id === 'agent' && 'entries' in entry ? { ...entry, label: 'Selected agent' } : entry));
 }
 
+/** A tile's menu with no Rename, at any depth: for a tile whose name is not its own to change. */
+export const withoutRename = (entries: readonly ModelEntry[]): ModelEntry[] => without(entries, new Set(['rename']));
+
 /** The menu without the rows `taken` names, at any depth: no heading left over nothing, no separator left at an end or doubled, no empty group. */
 function without(entries: readonly ModelEntry[], taken: ReadonlySet<string>): ModelEntry[] {
   const kept = entries.flatMap((entry): ModelEntry[] => {
@@ -748,6 +752,8 @@ export interface ZoneBindingActions {
   startCrew(prefab: string, zone: Zone): void;
   /** Opens the app's crew library, one for every board, a crew from it starting in the zone. */
   crewLibrary(zone: Zone): void;
+  /** Opens the New ticket sheet: one ticket tile, from a ticket prefab, starting in the zone. */
+  newTicket(zone: Zone): void;
   /** Adds the zone's stage board, which holds the work its agents started (one to a zone). */
   addStageBoard(zone: Zone): void;
 }
@@ -1091,11 +1097,13 @@ const newAgentRow = ({ zone, noAgents, actions }: ProjectMenuInput, label: strin
 });
 
 /** A crew to start in the zone, from the library as last known, yours first; or the library itself. */
-const crewRow = (zone: Zone, actions: Pick<ZoneMenuActions, 'startCrew' | 'crewLibrary'>, label: string): ModelEntry => ({
+const crewRow = (zone: Zone, actions: Pick<ZoneMenuActions, 'startCrew' | 'crewLibrary' | 'newTicket'>, label: string): ModelEntry => ({
   id: 'crew',
   label,
   icon: <Users />,
   entries: [
+    { id: 'new-ticket', label: 'New ticket…', icon: <Ticket />, onSelect: () => actions.newTicket(zone) },
+    'separator',
     ...crewGroups().flatMap((group): ModelEntry[] => [
       ...group.map((prefab): ModelEntry => ({ id: `crew-${prefab.name}`, label: prefab.name, icon: <CrewFaces members={prefab.members} />, onSelect: () => actions.startCrew(prefab.name, zone) })),
       'separator',

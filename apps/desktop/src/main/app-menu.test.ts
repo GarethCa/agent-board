@@ -116,7 +116,7 @@ describe('the Window menu', () => {
   it('is Overview over the standard one, the board’s and a session window’s, while nothing is minimised', () => {
     expect(labels(windowMenu(true, vi.fn(), []).submenu as MenuItemConstructorOptions[])).toEqual([
       'Overview', 'separator', 'minimize', 'zoom', 'separator',
-      'Board Menu', 'Jump to Session or Zone…', 'Needs You', 'Open the Captain', 'separator',
+      'Board Menu', 'Jump to Session, Zone or Setting…', 'Needs You', 'Open the Captain', 'separator',
       'Previous Session in Group', 'Next Session in Group', 'Split Beside', 'Split Below', 'separator', 'front',
     ]);
   });

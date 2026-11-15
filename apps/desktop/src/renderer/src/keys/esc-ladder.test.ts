@@ -16,8 +16,18 @@ const esc = (held: Partial<Pick<KeyboardEvent, 'metaKey' | 'ctrlKey' | 'altKey' 
 const step = (rung: EscStep['rung'], takes = true): EscStep => ({ rung, takes: () => takes, run: vi.fn() });
 
 describe('the Esc ladder', () => {
-  it('is written down once, innermost first: a gesture under way, the armed tool, the open shelves, the window or tile with the focus, then the tile in front', () => {
-    expect(ESC_LADDER.map((rung) => rung.rung)).toEqual(['handOff', 'connect', 'tool', 'shelves', 'surface', 'frontTile']);
+  it('is written down once, innermost first: a gesture under way, the armed tool, the open shelves, the window or tile with the focus, a ticket’s board, then the tile in front', () => {
+    expect(ESC_LADDER.map((rung) => rung.rung)).toEqual(['handOff', 'connect', 'tool', 'shelves', 'surface', 'level', 'frontTile']);
+  });
+
+  it('zooms out of a ticket’s board before the hidden board under it collapses its tile in front, and never over a press something inside took', () => {
+    const level = step('level');
+    const front = step('frontTile');
+    const surface = step('surface');
+    expect(escStep([front, level], esc(), 'bubble')).toBe(level);
+    expect(escStep([front, level, surface], esc(), 'bubble')).toBe(surface);
+    expect(escStep([front, step('level', false)], esc(), 'bubble')).toBe(front);
+    expect(escStep([level], esc({ defaultPrevented: true }), 'bubble')).toBeUndefined();
   });
 
   it('takes one step a press, the innermost that takes it, whatever order the steps came in', () => {

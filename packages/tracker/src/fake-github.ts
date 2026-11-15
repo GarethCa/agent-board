@@ -91,10 +91,13 @@ export interface FakeGitHubPullRequest {
   mergeStateStatus?: string;
   /** Its changed files, as the REST API's `pulls/N/files` gives them. */
   files?: { filename: string; status: string; additions: number; deletions: number; patch?: string; previous_filename?: string }[];
-  /** Its reviews, oldest first. Approving through `gh api …/reviews` adds one, with the commit it approved. */
-  reviews?: { author: string; state: string; body: string; submittedAt: string; commitId?: string }[];
-  /** Its conversation's comments, oldest first. */
-  comments?: { author: string; body: string; createdAt: string }[];
+  /**
+   * Its reviews, oldest first. Approving through `gh api …/reviews` adds one, with the commit it approved. Each
+   * author's `authorAssociation` (how they belong to the repo) is `MEMBER` unless set.
+   */
+  reviews?: { author: string; state: string; body: string; submittedAt: string; commitId?: string; association?: string }[];
+  /** Its conversation's comments, oldest first, each author a `MEMBER` unless set. */
+  comments?: { author: string; body: string; createdAt: string; association?: string }[];
   /** Its review comments on lines of its diff, oldest first. */
   reviewComments?: { id: number; author: string; path: string; line: number | null; body: string; createdAt: string }[];
 }

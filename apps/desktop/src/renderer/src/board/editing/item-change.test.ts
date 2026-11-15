@@ -7,6 +7,7 @@ const shape: BoardItem = {
   id: 'box',
   kind: 'shape',
   zoneId: null,
+  ticket: null,
   x: 0,
   y: 0,
   width: 160,

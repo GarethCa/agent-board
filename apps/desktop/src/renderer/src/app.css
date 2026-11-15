@@ -133,8 +133,9 @@ kbd {
   background-color: var(--surface);
 }
 
-.board {
-  /* React Flow's own chrome (the minimap and the selection box), in the theme. */
+.board,
+.ticket-board {
+  /* React Flow's own chrome (the minimap and the selection box), in the theme: on the main board and a ticket's own. */
   --xy-minimap-background-color: var(--island);
   --xy-minimap-mask-background-color: var(--minimap-mask);
   --xy-selection-background-color: var(--selection);
@@ -1259,7 +1260,7 @@ kbd {
   transition: opacity var(--motion-fast) var(--ease-out);
 }
 
-.hybrid-tile[data-corner='hover']:is(:hover, :focus-within, [data-needs-you], [data-status='needs-you']) :is(.hybrid-tile-corner, .calm-tile-controls),
+.hybrid-tile[data-corner='hover']:is(:hover, :focus-within, :where(:not(.ticket-tile)):is([data-needs-you], [data-status='needs-you'])) :is(.hybrid-tile-corner, .calm-tile-controls),
 .react-flow__node.selected .hybrid-tile[data-corner='hover'] :is(.hybrid-tile-corner, .calm-tile-controls),
 .hybrid-tile[data-corner='hover'] :is(.hybrid-tile-corner, .calm-tile-controls):has([data-state='open']) {
   opacity: 1;
@@ -1271,15 +1272,16 @@ kbd {
 
 /* While the tile needs you its buttons stay shown, so they sit beside its name, which ends in an ellipsis rather than
    under them; it is a change of state, not a hover, that moves them. The same on a screen with no hover (touch), where
-   a tap must not land on a button it can't see. */
-.hybrid-tile[data-corner='hover']:is([data-needs-you], [data-status='needs-you']) :is(.hybrid-tile-corner, .calm-tile-controls) {
+   a tap must not land on a button it can't see. A ticket's tile keeps its corner on hover: its one button answers, and
+   its title keeps the room. */
+.hybrid-tile[data-corner='hover']:not(.ticket-tile):is([data-needs-you], [data-status='needs-you']) :is(.hybrid-tile-corner, .calm-tile-controls) {
   position: static;
   padding-inline-start: 0;
   background: none;
 }
 
 /* Beside the buttons, the name gives way first, down to its ellipsis, so every button stays inside a narrow tile. */
-.hybrid-tile[data-corner='hover']:is([data-needs-you], [data-status='needs-you']) .hybrid-tile-name {
+.hybrid-tile[data-corner='hover']:not(.ticket-tile):is([data-needs-you], [data-status='needs-you']) .hybrid-tile-name {
   min-width: 0;
 }
 
@@ -1646,6 +1648,965 @@ kbd {
 /* A flat tile still lifts while it is dragged: the flat rule above outranks the drag rule, so this one restates it. */
 .react-flow__node.dragging .hybrid-tile-agent[data-flat] {
   box-shadow: var(--shadow-lifted);
+}
+
+/* A ticket's tile: its chat's card, holding its helpers' cards, whose two edges show under it. It asks for one thing:
+   Needs you is the usual tile's orange outline; Ready to merge is a green one; merged or at rest, it lies flat. */
+.ticket-tile {
+  box-shadow: var(--shadow-tile), var(--shadow-ticket-stack);
+}
+
+/* Flat, it keeps its stacked edges: as specific as the flat tile's rule above, and after it, so this one wins. */
+.hybrid-tile-agent.ticket-tile[data-flat] {
+  box-shadow: var(--shadow-ticket-stack);
+}
+
+.ticket-tile[data-flat] :is(.hybrid-tile-name, .ticket-tile-now) {
+  color: var(--muted);
+}
+
+.ticket-tile[data-ask='ready-to-merge'] {
+  outline-color: var(--success);
+}
+
+/* Its Merge is green, as its ring and its word are: one colour to a tile. */
+.ticket-tile .ui-button.ticket-tile-act[data-kind='merge']:not(:disabled) {
+  border-color: var(--success-fill);
+  background: var(--success-fill);
+  color: var(--on-primary);
+}
+
+/* Merged, its pull request is good news in green, not the app's purple. */
+.ticket-tile .ticket-tile-watch[data-state='merged'] {
+  --chip: var(--success-soft);
+  --chip-ink: var(--success);
+}
+
+/* Its title on one line, after its ticket's id: the card's lines below it say the rest. */
+.ticket-tile .hybrid-tile-name {
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
+}
+
+.ticket-tile-id {
+  display: inline-flex;
+  flex: none;
+  gap: var(--space-1);
+  align-items: center;
+  padding: 0 var(--space-1-25);
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-semibold);
+}
+
+.ticket-tile-id svg {
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+}
+
+.ticket-tile-now {
+  color: var(--text-soft);
+}
+
+/* A chat that builds its ticket itself, by its title: one session fewer, no builder among its helpers. */
+.ticket-tile-builds {
+  display: inline-flex;
+  flex: none;
+  gap: var(--space-1);
+  align-items: center;
+  padding: 0 var(--space-1-25);
+  border-radius: var(--radius-sm);
+  background: var(--success-soft);
+  color: var(--success);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-semibold);
+}
+
+.ticket-tile-builds[data-compact] {
+  padding: 0 var(--space-1);
+}
+
+.ticket-tile-builds svg {
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+}
+
+/* Its helpers as icons on the left, its pull request on the right. */
+.ticket-tile-mid,
+.ticket-tile-foot {
+  display: flex;
+  flex: none;
+  gap: var(--space-2);
+  align-items: center;
+  justify-content: space-between;
+  min-height: var(--size-tag);
+}
+
+.ticket-tile-mid {
+  margin-top: auto;
+}
+
+.ticket-tile-helpers {
+  display: flex;
+  flex: 0 1 auto;
+  gap: var(--space-1);
+  align-items: center;
+  flex-wrap: wrap;
+  min-width: 0;
+  /* Only when nothing else gives way: a helper with no room wraps to a hidden second line, whole, never cut in half;
+     the margin keeps a working helper's ring and a done one's tick. */
+  height: var(--size-tag);
+  overflow: clip;
+  overflow-clip-margin: var(--space-0-5);
+}
+
+.ticket-tile-helper {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: var(--size-tag);
+  height: var(--size-tag);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--hover);
+  color: var(--neutral-ink);
+  cursor: pointer;
+}
+
+.ticket-tile-helper svg {
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+}
+
+.ticket-tile-helper:focus-visible {
+  outline: var(--focus-ring-width) solid var(--accent);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.ticket-tile-helper[data-state='working'] {
+  background: var(--success-soft);
+  color: var(--success);
+  box-shadow: 0 0 0 var(--size-helper-ring) var(--state-running);
+}
+
+.ticket-tile-helper[data-state='you'] {
+  background: var(--state-waiting-soft);
+  color: var(--state-waiting-ink);
+  box-shadow: 0 0 0 var(--size-helper-ring) var(--state-waiting);
+}
+
+.ticket-tile-helper[data-state='done'] {
+  color: var(--muted);
+}
+
+.ticket-tile-helper[data-state='failed'] {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.ticket-tile-helper[data-state='sleep'] {
+  background: var(--state-idle-soft);
+  color: var(--muted);
+}
+
+/* A done helper's tick, on its icon's corner. */
+.ticket-tile-tick {
+  position: absolute;
+  right: calc(-1 * var(--space-0-5));
+  bottom: calc(-1 * var(--space-0-5));
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--size-dot-lg);
+  height: var(--size-dot-lg);
+  border: var(--size-helper-ring) solid var(--raised);
+  border-radius: var(--radius-pill);
+  background: var(--state-running);
+  color: var(--on-accent);
+}
+
+.ticket-tile-tick svg {
+  width: var(--size-dot);
+  height: var(--size-dot);
+  stroke-width: 4;
+}
+
+.ticket-tile-watch {
+  flex: none;
+}
+
+/* Its watches that are on, beside its pull request: grey while nothing is new, blue with news, green or orange. They
+   never give way: who builds and the watches' words drop first (the face's model), and a helper with no room goes
+   last, whole. */
+.ticket-tile-watches {
+  display: flex;
+  flex: none;
+  gap: var(--space-1);
+  align-items: center;
+  margin-left: auto;
+}
+
+.ticket-tile-watch-icon {
+  display: inline-flex;
+  gap: var(--space-0-5);
+  align-items: center;
+  height: var(--size-tag);
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-pill);
+  background: var(--hover);
+  color: var(--muted);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-semibold);
+}
+
+.ticket-tile-watch-icon svg {
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+}
+
+.ticket-tile-watch-label {
+  max-width: var(--size-watch-label);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ticket-tile-watches[data-crowded] {
+  gap: var(--space-0-5);
+}
+
+.ticket-tile-watches[data-crowded] .ticket-tile-watch-icon {
+  padding: 0 var(--space-0-5);
+}
+
+.ticket-tile-watch-icon[data-tone='new'] {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.ticket-tile-watch-icon[data-tone='good'] {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.ticket-tile-watch-icon[data-tone='bad'] {
+  background: var(--state-waiting-soft);
+  color: var(--state-waiting-ink);
+}
+
+/* Its line is its watches' news, which its chat was not told: in full ink, over a flat tile's muted line. */
+.ticket-tile .ticket-tile-now[data-tone='news'] {
+  color: var(--text);
+}
+
+/* The Watches menu, from the eye in its header. */
+.ui-popover.ticket-watches-popover {
+  width: var(--size-popover-wide);
+  padding: var(--space-3);
+}
+
+.ticket-watches {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.ticket-watches p {
+  margin: 0;
+}
+
+.ticket-watches-title {
+  font-weight: var(--weight-semibold);
+}
+
+.ticket-watches-rows {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  gap: var(--space-2) var(--space-3);
+  align-items: center;
+}
+
+.ticket-watches-heads {
+  display: contents;
+  color: var(--muted);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-semibold);
+  text-transform: uppercase;
+}
+
+.ticket-watches-heads span:first-child {
+  grid-column: 3;
+}
+
+.ticket-watches-row {
+  display: contents;
+}
+
+.ticket-watches-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--size-tag);
+  height: var(--size-tag);
+  border-radius: var(--radius-pill);
+  background: var(--hover);
+  color: var(--neutral-ink);
+}
+
+.ticket-watches-icon svg {
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+}
+
+.ticket-watches-name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-medium);
+}
+
+.ticket-watches-detail,
+.ticket-watches-fine,
+.ticket-watches-note {
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-regular);
+}
+
+.ticket-watches-every {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--font-size-sm);
+}
+
+.ticket-watches-problem {
+  color: var(--state-waiting-ink);
+  font-size: var(--font-size-xs);
+}
+
+.ticket-watches-news {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-size: var(--font-size-sm);
+}
+
+.ticket-watches-news ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Its one state word, with a dot in its colour, then its one button. */
+.ticket-tile-state {
+  display: inline-flex;
+  gap: var(--space-1-5);
+  align-items: center;
+  min-width: 0;
+  color: var(--text-soft);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+}
+
+.ticket-tile-dot {
+  flex: none;
+  width: var(--size-dot-md);
+  height: var(--size-dot-md);
+  border-radius: var(--radius-pill);
+  background: var(--state-running);
+}
+
+.ticket-tile-state[data-kind='you'] {
+  color: var(--state-waiting-ink);
+}
+
+.ticket-tile-state[data-kind='you'] .ticket-tile-dot {
+  background: var(--state-waiting);
+}
+
+.ticket-tile-state[data-kind='merge'] {
+  color: var(--success);
+}
+
+.ticket-tile-state[data-kind='merge'] .ticket-tile-dot {
+  background: var(--success);
+}
+
+.ticket-tile-state[data-kind='new'] {
+  color: var(--accent-ink);
+}
+
+.ticket-tile-state[data-kind='new'] .ticket-tile-dot {
+  background: var(--accent);
+}
+
+.ticket-tile-state[data-kind='rest'] .ticket-tile-dot {
+  background: var(--muted);
+}
+
+.ticket-tile-state[data-kind='failed'] .ticket-tile-dot {
+  background: var(--danger);
+}
+
+.ticket-tile-state .hybrid-tile-when {
+  font-weight: var(--weight-medium);
+}
+
+/* Simplified: its id in plain grey, a lighter title and word, and its helpers' icons with no fill or working ring. */
+:root[data-design='simplified'] .ticket-tile-id {
+  padding: 0;
+  background: transparent;
+  color: var(--muted);
+}
+
+:root[data-design='simplified'] .ticket-tile .hybrid-tile-name {
+  font-weight: var(--weight-semibold);
+}
+
+:root[data-design='simplified'] .ticket-tile-state {
+  font-weight: var(--weight-medium);
+}
+
+:root[data-design='simplified'] .ticket-tile-helper:not([data-state='you'], [data-state='failed']) {
+  background: transparent;
+  box-shadow: none;
+}
+
+/* Its Card | Terminal switch: two icons in one small track, the view it shows raised. */
+.ticket-view-switch {
+  display: inline-flex;
+  flex: none;
+  gap: var(--space-px);
+  padding: var(--space-px);
+  border-radius: var(--radius-sm);
+  background: var(--hover);
+}
+
+.ticket-view-switch button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--size-tag);
+  height: var(--size-tag);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.ticket-view-switch button svg {
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+}
+
+.ticket-view-switch button:hover {
+  color: var(--text);
+}
+
+.ticket-view-switch button[aria-pressed='true'] {
+  background: var(--raised);
+  color: var(--text);
+  box-shadow: var(--shadow-tile);
+}
+
+.ticket-view-switch button:focus-visible {
+  outline: var(--focus-ring-width) solid var(--accent);
+  outline-offset: var(--focus-ring-offset);
+}
+
+/* A ticket's tile opened in place: its header, a breadcrumb while a helper shows, then its body and helpers. */
+.ticket-open[data-ask='ready-to-merge'] {
+  border-color: var(--success);
+}
+
+.ticket-open-head {
+  gap: var(--space-2);
+}
+
+.ticket-open-title {
+  /* As wide as it reads, giving way only when the header is full: the gap after it takes the rest. */
+  flex: 0 1 auto;
+  overflow: hidden;
+  min-width: 0;
+  font-weight: var(--weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ticket-open-crumb {
+  display: flex;
+  flex: none;
+  gap: var(--space-1-5);
+  align-items: center;
+  padding: var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  font-size: var(--font-size-xs);
+}
+
+.ticket-open-crumb svg {
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+}
+
+.ticket-open-crumb-back {
+  display: inline-flex;
+  gap: var(--space-0-5);
+  align-items: center;
+  padding: var(--space-0-5) var(--space-1);
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--accent-ink);
+  font: inherit;
+  font-weight: var(--weight-semibold);
+  cursor: pointer;
+}
+
+.ticket-open-crumb-back:hover {
+  background: var(--hover);
+}
+
+.ticket-open-crumb-sep {
+  color: var(--muted);
+}
+
+.ticket-open-crumb b {
+  color: var(--text);
+  font-weight: var(--weight-semibold);
+}
+
+/* The terminal over its strip of helpers; opened as a card, the chat beside its column of helpers. */
+.ticket-open-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.ticket-open-main[data-view='card'] {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(var(--size-ticket-side), 1fr);
+}
+
+/* Its footer holds the window's lower corners, in either view. */
+.ticket-open .ticket-open-body {
+  border-radius: 0;
+}
+
+.ticket-open-strip {
+  display: grid;
+  flex: none;
+  grid-template-columns: repeat(auto-fit, minmax(var(--size-ticket-helper-card), 1fr));
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.ticket-open-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-3);
+  border-left: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.ticket-open-side-head {
+  display: flex;
+  gap: var(--space-1-5);
+  align-items: center;
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-semibold);
+}
+
+.ticket-open-side-head span {
+  color: var(--text-soft);
+}
+
+/* A helper as a card: its icon, its name, its word in the column, and its line under them. */
+.ticket-helper-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--space-0-5) var(--space-2);
+  align-items: center;
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--raised);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ticket-helper-card:hover {
+  border-color: var(--control-edge);
+}
+
+.ticket-helper-card:focus-visible {
+  outline: var(--focus-ring-width) solid var(--accent);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.ticket-helper-card[data-open] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 var(--size-helper-ring) var(--accent-soft);
+}
+
+.ticket-helper-card[data-ask] {
+  border-color: var(--state-waiting);
+  background: var(--state-waiting-soft);
+}
+
+.ticket-helper-card-icon {
+  display: inline-flex;
+  grid-row: span 2;
+  align-items: center;
+  justify-content: center;
+  width: var(--size-tag);
+  height: var(--size-tag);
+  border-radius: var(--radius-pill);
+  background: var(--hover);
+  color: var(--neutral-ink);
+}
+
+.ticket-helper-card-icon svg {
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+}
+
+.ticket-helper-card-icon[data-state='working'] {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.ticket-helper-card-icon[data-state='you'] {
+  background: var(--raised);
+  color: var(--state-waiting-ink);
+}
+
+.ticket-helper-card-icon[data-state='failed'] {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.ticket-helper-card-name {
+  overflow: hidden;
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ticket-helper-card-word {
+  color: var(--text-soft);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-semibold);
+}
+
+.ticket-helper-card-word[data-state='working'] {
+  color: var(--success);
+}
+
+.ticket-helper-card-word[data-state='you'] {
+  color: var(--state-waiting-ink);
+}
+
+.ticket-helper-card-word[data-state='failed'] {
+  color: var(--danger);
+}
+
+.ticket-helper-card-line {
+  grid-column: 2 / -1;
+  overflow: hidden;
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * A ticket's own board, zoomed into from its tile: a board of its own over the main one, which it hides, under the
+ * chrome. The breadcrumb takes the top-centre island's place, with its watches' news in an island beside it.
+ */
+.ticket-board {
+  position: absolute;
+  inset: 0;
+  z-index: var(--layer-level);
+  background: var(--surface);
+}
+
+/* Focused as it opens, for its keys: no ring round the whole board. */
+.ticket-board:focus {
+  outline: none;
+}
+
+.ticket-board-bar {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.ticket-board-bar > .ui-island {
+  box-sizing: border-box;
+  height: 100%;
+}
+
+.ticket-board-watches {
+  padding: 0 var(--space-1) 0 var(--space-2-5);
+}
+
+.ticket-board-watches .ticket-tile-watches {
+  margin-left: 0;
+}
+
+.ticket-board-crumb {
+  display: flex;
+  gap: var(--space-1-5);
+  align-items: center;
+  padding: 0 var(--space-3) 0 var(--space-1);
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+}
+
+.ticket-board-crumb svg {
+  flex: none;
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+}
+
+.ticket-board-crumb-back {
+  display: inline-flex;
+  gap: var(--space-1);
+  align-items: center;
+  height: calc(var(--island-height) - 2 * var(--space-1-5));
+  padding: 0 var(--space-2) 0 var(--space-1);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-soft);
+  font: inherit;
+  cursor: pointer;
+}
+
+.ticket-board-crumb-back:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.ticket-board-crumb-back:focus-visible {
+  outline: var(--focus-ring-width) solid var(--accent);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.ticket-board-crumb-sep {
+  color: var(--muted);
+}
+
+.ticket-board-crumb-here {
+  display: inline-flex;
+  gap: var(--space-1-5);
+  align-items: center;
+  min-width: 0;
+  color: var(--text);
+}
+
+.ticket-board-crumb .ticket-board-crumb-icon {
+  color: var(--accent-ink);
+}
+
+.ticket-board-crumb-title {
+  overflow: hidden;
+  max-width: var(--size-ticket-crumb-title);
+  text-overflow: ellipsis;
+}
+
+.ticket-board-tile {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  box-shadow: var(--shadow-tile);
+  cursor: grab;
+}
+
+.ticket-board-tile[data-selected] {
+  border-color: var(--accent);
+}
+
+.react-flow__node.dragging .ticket-board-tile {
+  cursor: grabbing;
+}
+
+.ticket-board-chat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1-5);
+  padding: var(--space-2-5) var(--space-3-5);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  border-radius: var(--radius-xl);
+  background: var(--raised);
+  color: var(--text);
+}
+
+.ticket-board-chat[data-ask='needs-you'] {
+  border-color: var(--state-waiting);
+}
+
+/* What it asks for, in its tile's colours: green to merge, blue for a new review. */
+.ticket-board-chat[data-ask='ready-to-merge'] {
+  border-color: var(--success);
+}
+
+.ticket-board-chat[data-ask='new-review'] {
+  border-color: var(--accent);
+}
+
+.ticket-board-chat .ui-button.ticket-tile-act[data-kind='merge']:not(:disabled) {
+  border-color: var(--success-fill);
+  background: var(--success-fill);
+  color: var(--on-primary);
+}
+
+/* The box to message the ticket, in its chat's tile: the composer, one line high, in the board's colours, with no well. */
+.ticket-board-composer .composer {
+  padding: 0;
+  border-top: 0;
+  background: transparent;
+}
+
+.ticket-board-composer .composer-field {
+  min-height: 0;
+  padding-block: var(--space-0-5);
+  border-color: var(--control-edge);
+  background: var(--sunken);
+}
+
+.ticket-board-composer .ui-input.composer-input,
+.ticket-board-composer .ui-input.composer-input:is(:hover, :focus) {
+  max-height: var(--size-composer);
+  padding-block: var(--space-1);
+}
+
+.ticket-board-composer :is(.composer-hint, .composer-key) {
+  display: none;
+}
+
+.ticket-board-chat-foot {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  justify-content: space-between;
+}
+
+.ticket-board-tile-head {
+  display: flex;
+  gap: var(--space-1-5);
+  align-items: center;
+  font-size: var(--font-size-md);
+}
+
+.ticket-board-tile-icon {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  color: var(--accent-ink);
+}
+
+.ticket-board-tile-line {
+  display: -webkit-box;
+  flex: 1;
+  overflow: hidden;
+  color: var(--text-soft);
+  font-size: var(--font-size-sm);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.ticket-open-foot {
+  padding: var(--space-1-5) var(--space-3);
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 var(--radius-window) var(--radius-window);
+}
+
+/* Simplified, a ticket's board: its chat on a plain edge with no accent or lift, and its ticket's id in plain grey. */
+:root[data-design='simplified'] .ticket-board-chat:not([data-ask='needs-you'], [data-ask='ready-to-merge'], [data-ask='new-review'], [data-selected]) {
+  border-color: var(--border);
+}
+
+:root[data-design='simplified'] .ticket-board-tile {
+  box-shadow: none;
+}
+
+:root[data-design='simplified'] .ticket-board-crumb-here b {
+  color: var(--muted);
+  font-weight: var(--weight-medium);
+}
+
+/* Simplified: its helpers' cards on a soft fill with no edge (a selected one keeps its edge, to show it), and its
+   column on the window's own ground. */
+:root[data-design='simplified'] .ticket-helper-card:not([data-open], [data-ask], [data-selected]) {
+  border-color: transparent;
+  background: var(--hover);
+}
+
+:root[data-design='simplified'] .ticket-open-side,
+:root[data-design='simplified'] .ticket-open-strip {
+  background: transparent;
+}
+
+:root[data-design='simplified'] .ticket-view-switch button[aria-pressed='true'] {
+  box-shadow: none;
+}
+
+/* The gallery's stand-in for a session it cannot attach to: still lines of a terminal, or of a chat. */
+.ticket-gallery-terminal,
+.ticket-gallery-chat {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  font-size: var(--font-size-xs);
+}
+
+.ticket-gallery-terminal {
+  background: var(--window-bg);
+  color: var(--window-ink);
+  font-family: var(--font-mono);
+  white-space: pre;
+}
+
+.ticket-gallery-chat {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.ticket-gallery-chat p {
+  margin: 0;
 }
 
 /* A warning keeps its colour in a word too: a rate limit reads Waiting, in amber. */
@@ -2367,6 +3328,17 @@ kbd {
   grid-template-columns: repeat(3, auto);
   gap: var(--space-8) var(--space-6);
   padding: var(--space-6);
+}
+
+/* A ticket's own board in the gallery (TicketTileGallery.tsx): a window's worth of it, its islands at its top. */
+.ticket-board-gallery {
+  position: relative;
+  overflow: hidden;
+  width: var(--size-ticket-board-gallery-width);
+  height: var(--size-ticket-board-gallery-height);
+  margin: var(--space-6);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-window);
 }
 
 /* The agent sidebar's gallery (ShelvesGallery.tsx): each sidebar beside a stand-in terminal, in rows of frames. */
@@ -16509,6 +17481,31 @@ button.steps-link-open:focus-visible {
 .prefab-mark.small svg {
   width: var(--space-3-5);
   height: var(--space-3-5);
+}
+
+/* New ticket: its helpers presets, each with its helpers as icons. */
+.new-ticket-presets {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.new-ticket-helpers {
+  display: inline-flex;
+  gap: var(--space-1);
+  align-items: center;
+  color: var(--text-soft);
+}
+
+.new-ticket-helpers svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+}
+
+.new-ticket-builds,
+.new-ticket-helpers.new-ticket-builds {
+  color: var(--success);
+  font-weight: var(--weight-semibold);
 }
 
 /* A crew's one prompt box. */

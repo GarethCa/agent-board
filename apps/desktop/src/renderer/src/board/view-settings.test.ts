@@ -26,7 +26,7 @@ afterEach(() => {
 
 describe('the board view settings', () => {
   it('start as the board has always opened', () => {
-    expect(DEFAULT_VIEW_SETTINGS).toEqual({ clickOpens: 'window', connections: 'all', tethers: false, agentNoteLook: 'document', agentSidebar: 'shelves', gpuTerminals: true, keepTerminals: false, tileShows: QUIET_TILE, chatRunsShow: 'always' });
+    expect(DEFAULT_VIEW_SETTINGS).toEqual({ clickOpens: 'window', connections: 'all', tethers: false, agentNoteLook: 'document', agentSidebar: 'shelves', gpuTerminals: true, keepTerminals: false, tileShows: QUIET_TILE, chatRunsShow: 'always', ticketTilesOpenAs: 'terminal' });
   });
 
   it('change at once and are saved in the view state under their keys', () => {

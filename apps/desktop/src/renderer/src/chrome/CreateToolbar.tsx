@@ -30,6 +30,8 @@ export interface CreateToolbarProps {
   onQueue(): void;
   /** Puts a new to-do list of the user's in the middle of the board, ready to type its first line into. */
   onTodo(): void;
+  /** Opens the New ticket sheet: one ticket tile, from a ticket prefab. */
+  onTicket?(): void;
   /** The size on screen of the ghost tile the Agent and Shell tools carry, at the board's zoom. */
   ghostSize: { width: number; height: number };
   /** The Agent or Shell tool dragged straight off the toolbar and let go at `at`, on the screen. */
@@ -47,7 +49,7 @@ export type DraggedTool = 'agent' | 'shell';
  * Under the Simplified design it holds fewer buttons: Select, Box select and Hand as in Classic, a Draw menu with the
  * drawing tools, and New agent, whose menu adds the Shell tool as a new terminal. Every tool keeps its key.
  */
-export function CreateToolbar({ mode, onMode, tool, onTool, onSticky, onSteps, onMemory, onQueue, onTodo, ghostSize, onDropTool }: CreateToolbarProps) {
+export function CreateToolbar({ mode, onMode, tool, onTool, onSticky, onSteps, onMemory, onQueue, onTodo, onTicket, ghostSize, onDropTool }: CreateToolbarProps) {
   const drag = useToolDrag(onDropTool);
   const simplified = useSimplified();
   // A click arms the tool, for a click on the board; a drag off the button puts the tile where it is let go.
@@ -91,6 +93,7 @@ export function CreateToolbar({ mode, onMode, tool, onTool, onSticky, onSteps, o
             entries={[
               { label: 'New agent', icon: <Plus />, shortcut: keyText('make.agent'), onSelect: () => onTool('agent') },
               { label: 'New terminal', icon: <SquareTerminal />, shortcut: keyText('make.shell'), onSelect: () => onTool('shell') },
+              ...(onTicket === undefined ? [] : [{ label: 'New ticket…', icon: <Ticket />, onSelect: onTicket }]),
             ]}
             align="end"
           >

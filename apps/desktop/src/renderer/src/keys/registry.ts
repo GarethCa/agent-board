@@ -70,7 +70,7 @@ export const KEYS = [
   { id: 'tile.delete', label: 'Delete or close (asks first)', section: 'tile', scope: 'tile', status: 'today', keys: [{ text: '⌫' }] },
 
   // Getting round the board, and the keys that work anywhere.
-  { id: 'move.spotlight', label: 'Jump to a session or zone', section: 'move', scope: 'terminal-safe', status: 'today', keys: [{ mod: 'window', code: 'KeyK', text: 'K' }] },
+  { id: 'move.spotlight', label: 'Jump to a session, zone or setting', section: 'move', scope: 'terminal-safe', status: 'today', keys: [{ mod: 'window', code: 'KeyK', text: 'K' }] },
   { id: 'move.boardMenu', label: 'Board menu', section: 'move', scope: 'board', status: 'today', keys: [{ mod: 'command', key: '\\' }] },
   { id: 'move.select', label: 'Select and move', section: 'move', scope: 'board', status: 'today', keys: [bare('v')] },
   { id: 'move.box', label: 'Box select', section: 'move', scope: 'board', status: 'today', keys: [bare('b')] },
