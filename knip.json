@@ -15,21 +15,22 @@
     },
     "apps/desktop": {
       "entry": [
-        "src/main/index.ts",
-        "src/main/daemon.ts",
-        "src/preload/index.ts",
-        "src/renderer/src/main.tsx",
+        "src/main/index.ts!",
+        "src/main/daemon.ts!",
+        "src/preload/index.ts!",
+        "src/renderer/src/main.tsx!",
         "e2e/**/*.spec.ts",
-        "src/renderer/src/ui/index.ts",
+        "src/renderer/src/ui/index.ts!",
         "electron.vite.config.ts"
       ],
       "project": [
-        "src/**/*.{ts,tsx}",
+        "src/**/*.{ts,tsx}!",
         "e2e/**/*.ts"
       ],
       "ignoreDependencies": [
         "node-pty",
-        "@xterm/addon-serialize"
+        "@xterm/addon-serialize",
+        "@xterm/headless!"
       ]
     },
     "packages/fake-harness": {
@@ -54,10 +55,12 @@
     },
     "packages/daemon": {
       "entry": [
-        "scripts/*.ts"
+        "scripts/*.ts",
+        "src/cli-main.ts",
+        "src/hook-main.ts"
       ],
       "project": [
-        "src/**/*.ts",
+        "src/**/*.ts!",
         "test/**/*.ts",
         "scripts/*.ts"
       ]

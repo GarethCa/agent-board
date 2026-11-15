@@ -28,6 +28,9 @@ export interface NeedsYouProps {
   pane: PaneSide | undefined;
 }
 
+/** What Classic's pill says: how many agents need the user. */
+const pillWords = (count: number): string => (count === 0 ? 'Nothing needs you' : `${count} need${count === 1 ? 's' : ''} you`);
+
 /**
  * The top-right island (chrome C): the Needs-you pill, which says how many agents wait for you and opens the inbox
  * over the board, the quiet count of agents on a command beside it, the Captain's button, with the same count, and
@@ -93,8 +96,11 @@ export function NeedsYou({ agents, onOpen, onSettings, onMaster, onNeedsYou, pan
             data-attention={count > 0}
             icon={<span className="needs-you-dot" aria-hidden />}
             trailingIcon={open ? <ChevronUp aria-hidden /> : <ChevronDown aria-hidden />}
+            aria-label={pillWords(count)}
+            title={pillWords(count)}
           >
-            {count === 0 ? 'Nothing needs you' : `${count} need${count === 1 ? 's' : ''} you`}
+            {/* On a narrow top row the words give way (chrome-folds.ts): the dot, which shows attention, and the chevron stay. */}
+            <span className="needs-you-words">{pillWords(count)}</span>
           </Button>
         </Popover>
       )}

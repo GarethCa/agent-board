@@ -15,7 +15,6 @@ import { AGENT_TILE_SIZE, freeSpotFor } from './board-layout.ts';
 import { cutText } from './text-cut.ts';
 import { jobBrief, jobTextOf } from './memory-lines.ts';
 import type { Answered } from './deliveries.ts';
-import type { DaemonCall } from './orchestrator-layout.ts';
 import { invalidParams, optionalStringParam, paramsObject, stringParam } from './params.ts';
 import {
   BOARD_ERROR,
@@ -62,6 +61,7 @@ import {
   MAX_DRAIN_DROPS,
   takesHandOn,
   type StepsWho,
+  type DaemonCall,
 } from './protocol.ts';
 import { RpcMethodError, type RpcHandlers } from './rpc.ts';
 import type { AgentHost } from './agents.ts';
@@ -896,6 +896,11 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
     } catch (error) {
       undo();
       throw error;
+    }
+    // Held as the user types there (only another agent's message is, never the board's): the agent never got it.
+    if ('userTyping' in answered) {
+      undo();
+      throw invalidParams(`${agent.name} didn't get it (the user is typing at its prompt): the job is waiting again`);
     }
     // Typed but given up on, Enter starting no turn: the agent never got it. Queued until its session is up, or for
     // after a turn it started as the text landed: it gets it then, so the job is its.

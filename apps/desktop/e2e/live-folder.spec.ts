@@ -2,7 +2,7 @@ import { expect, type Page } from '@playwright/test';
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { run } from './board-helpers.ts';
-import { agents, launch, sessionWindow, SHELL_ENV, showDetails, spawnAgent, tile, useFullSidebar } from './agent-helpers.ts';
+import { agents, launch, sessionWindow, SHELL_ENV, showDetails, spawnAgent, tile } from './agent-helpers.ts';
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
 import { scratch } from './scratch.ts';
 
@@ -46,14 +46,13 @@ test("a shell window's details follow the focused pane's folder through cd and p
   }
 });
 
-test("an agent window shows its live folder beside its fixed worktree, hinting when the shell it dropped into leaves it", async () => {
+test("an agent window's shelves follow its live folder, into the shell it dropped into, and say when it leaves its worktree", async () => {
   const { dir, repo, env } = scratch('waiting');
   const elsewhere = join(dir, 'elsewhere');
   mkdirSync(elsewhere);
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, { ...env, ...SHELL_ENV });
   try {
-    await useFullSidebar(window);
     await pickFolderNext(app, repo);
     await browseForZone(window);
     await spawnAgent(window, 'monorepo', 'Pick a database');
@@ -61,23 +60,25 @@ test("an agent window shows its live folder beside its fixed worktree, hinting w
     const [agent] = await agents(window);
     await tile(window).dblclick();
     await expect(sessionWindow(window)).toBeVisible();
-    await showDetails(sessionWindow(window));
 
-    const worktree = sessionWindow(window).getByRole('region', { name: 'Worktree and branch' }).getByText(agent!.worktree, { exact: true });
-    await expect(folder(window)).toHaveText(agent!.cwd);
-    await expect(worktree).toBeVisible();
-    await expect(window.getByTestId('details-outside-worktree')).toHaveCount(0);
+    // The shelves' footer names where it works, and holds the folder it is in now; Setup's folder row says it is live.
+    const where = sessionWindow(window).getByTestId('shelves-footer').locator('.agent-shelves-footer-branch');
+    await expect(where).toHaveAttribute('title', agent!.cwd);
+    await sessionWindow(window).getByTestId('agent-shelves').getByRole('tab', { name: 'Setup' }).click();
+    const folderRow = sessionWindow(window).getByTestId('setup-folder');
+    await expect(folderRow).toHaveAttribute('title', agent!.cwd);
+    await expect(folderRow).toContainText('folder (live)');
 
-    // Quit claude: the pane drops into a shell, which cds out of the worktree. The worktree row doesn't move.
+    // Quit claude: the pane drops into a shell, which cds out of the worktree.
     await sessionWindow(window).getByTestId('session-terminal').click();
     await window.keyboard.press('Control+D');
     await expect(sessionWindow(window).getByTestId('session-window-status')).toHaveText('ended · shell');
     await sessionWindow(window).getByTestId('session-terminal').click();
     await window.keyboard.type(`cd ${elsewhere}`);
     await window.keyboard.press('Enter');
-    await expect(folder(window)).toHaveText(elsewhere);
-    await expect(window.getByTestId('details-outside-worktree')).toBeVisible();
-    await expect(worktree).toBeVisible();
+    await expect(where).toHaveAttribute('title', elsewhere);
+    await expect(folderRow).toHaveAttribute('title', elsewhere);
+    await expect(folderRow).toContainText('outside its worktree · live');
   } finally {
     await app.close();
     await removeDataDir(dataDir);

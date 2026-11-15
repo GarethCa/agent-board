@@ -105,7 +105,9 @@ stays), so its connectors are hidden with it and return with it. The daemon chec
 sessions the restart banner was dismissed for) lives in a `view_state` key/value table of JSON values (64 KiB each),
 behind `view.get` and `view.set`, not in the renderer's localStorage: a hard kill can lose what Chromium hasn't flushed,
 and the daemon owns board state. Sessions' saved screens are files under the data dir, not rows: they are large, written
-often, and only read back whole.
+often, and only read back whole. The app saves a key a little after its last change (`viewSaver`), so a quit holds back
+until every window, and main, has sent the saves it was waiting to make (`view:flush`, answered with `view:flushed`; a
+window that doesn't answer within a second isn't waited for): a session window closed just before a quit stays closed.
 
 **Update**: a session window's terminal tabs are rows of the `shells` table with an owner (`owner_kind`,
 `owner_id`: for now an agent, by its session id), not a table of their own: a tab is a pane tree, as a shell tile is, so

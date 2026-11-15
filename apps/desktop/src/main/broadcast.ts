@@ -1,16 +1,20 @@
 import { webContents } from 'electron';
 import type { DaemonLink } from '@agent-board/daemon/client';
 import type { DaemonEvent } from '@agent-board/daemon/protocol';
+import { isAppWindow } from './app-windows';
 
-/** Sends a message on `channel` to every window: the board, session windows and popped-out ones. */
+/**
+ * Sends a message on `channel` to every one of the app's own windows: the board, Settings, session windows and popped-out
+ * ones. A web tab's page or a plan's view, which have web contents of their own, hear nothing.
+ */
 export function sendToAllWindows(channel: string, ...args: unknown[]): void {
   sendToWindowsExcept(undefined, channel, ...args);
 }
 
-/** Sends a message on `channel` to every window but `except`: the one that made the change, which has shown it already. */
+/** Sends a message on `channel` to every one of the app's own windows but `except`: the one that made the change, which has shown it already. */
 export function sendToWindowsExcept(except: Electron.WebContents | undefined, channel: string, ...args: unknown[]): void {
   for (const contents of webContents.getAllWebContents()) {
-    if (contents !== except && !contents.isDestroyed()) contents.send(channel, ...args);
+    if (contents !== except && isAppWindow(contents)) contents.send(channel, ...args);
   }
 }
 

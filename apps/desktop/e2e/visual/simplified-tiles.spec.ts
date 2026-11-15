@@ -8,7 +8,7 @@ import { RENDER_ARGS, RENDER_ENV, VIEWPORT, ignorePointer, pinFonts, pinNow, pin
 import { scratch } from '../scratch.ts';
 import { centreOf, drag, settledBox } from '../board-helpers.ts';
 import { openSettings, settingsSection } from '../settings-helpers.ts';
-import { SHOT, needsBaselines, viewSettled, nodesStill, THEMES, launchGallery, shootSimplifiedNotes } from './shared.ts';
+import { SHOT, needsBaselines, viewSettled, nodesStill, coloursSettled, THEMES, launchGallery, shootSimplifiedNotes } from './shared.ts';
 
 test.use({ viewport: null });
 
@@ -498,6 +498,7 @@ for (const { theme, suffix } of [
       await pinRandomText(window);
       const restorePointer = await ignorePointer(window);
       await settle(window);
+      await coloursSettled(window, '.agent-note-bubble, [data-testid="agent-tile"]');
       await expect.soft(window.locator('.board')).toHaveScreenshot(`ask-claude-answer${suffix}.png`, SHOT);
       await restorePointer();
 

@@ -5,7 +5,6 @@ import type { DatabaseSync } from 'node:sqlite';
 import { agentNoteAuthor, agentNoteData, agentNoteSize } from './agent-notes.ts';
 import type { AgentHost } from './agents.ts';
 import type { Clock } from './clock.ts';
-import type { DaemonCall } from './orchestrator-layout.ts';
 import { finiteNumberParam, invalidParams, optionalBooleanParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
 import {
   CLOCK_SIZE,
@@ -28,14 +27,15 @@ import {
   type Zone,
   BOARD_ERROR,
   type ClockStatus,
+  type ClockTemplateData,
+  type DaemonCall,
 } from './protocol.ts';
 import { boardCaller, isOwnLiveSession, type BoardCallerSources, type BoardConnection } from './board.ts';
-import type { OrchestratorAccess } from './orchestrators.ts';
+import type { OrchestratorAccess } from './orchestrator-types.ts';
 import { RpcMethodError, type RpcHandlers } from './rpc.ts';
 import { cronWords, looksStuck, sinceWords, stuckFlagReason } from './cron.ts';
 import { createScheduleHost, type FiringClock, type Fired, type OpenRun, type ScheduleHost } from './schedules.ts';
 import { cutText } from './text-cut.ts';
-import type { ClockTemplateHost } from './clock-templates.ts';
 import { isObject } from './json.ts';
 import { asksSomething } from './hook-states.ts';
 import { AGENT_TILE_SIZE, freeSpotFor } from './board-layout.ts';
@@ -92,7 +92,7 @@ export interface ClockHostOptions {
   broadcast(event: DaemonEvent): void;
   log(message: string): void;
   /** The saved templates a new clock can start from, by id or name. */
-  templates?: Pick<ClockTemplateHost, 'dataOf'>;
+  templates?: { dataOf(ref: string): ClockTemplateData };
 }
 
 export interface ClockHost {

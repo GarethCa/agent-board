@@ -2,7 +2,7 @@ import { expect, type ElectronApplication, type Page } from '@playwright/test';
 import type { Agent } from '@agent-board/daemon/protocol';
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { launch, screen, sessionWindow, setClickOpens, spawnAgent, tile, TURN_MS, useFullSidebar, windowKey } from './agent-helpers.ts';
+import { launch, screen, sessionWindow, setClickOpens, spawnAgent, tile, TURN_MS, windowKey } from './agent-helpers.ts';
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test, tabText } from './launch.ts';
 import { scratch } from './scratch.ts';
 import { centreOf, drag, settledBox } from './board-helpers.ts';
@@ -318,47 +318,6 @@ test('a selected document card resizes from a side and a corner, undoes in one s
     await expect.poll(saved).toEqual([width0! + 100, 76]);
     await page.getByRole('button', { name: 'Show the page' }).click();
     await expect.poll(saved).toEqual([width0! + 100, height0! + 70]);
-  });
-});
-
-test("an agent's sidebar lists the documents it showed and what it pinned, each opening where it belongs; the user deletes a pin with Undo", async () => {
-  await withApp(async (window) => {
-    await useFullSidebar(window);
-    const agent = await spawn(window, 'Pins: notes/report.md');
-    await expect.poll(async () => (await latest(window, agent)).records.filter((record) => record.kind === 'pin').length, { timeout: TURN_MS }).toBe(4);
-    await agentTile(window, agent).getByTestId('tile-docs').click();
-    // The strip opens collapsed; its rail's Pins opens it.
-    await sessionWindow(window).getByRole('navigation', { name: 'Session controls' }).getByRole('button', { name: 'Pins' }).click();
-    const details = sessionWindow(window).getByRole('complementary', { name: 'Session details' });
-
-    // The document it showed, which opens its Document tab.
-    const documents = details.getByTestId('details-document');
-    await expect(documents).toHaveCount(1);
-    await expect(documents).toContainText('Release 1.4 plan');
-    await expect(documents).toContainText('v1 · shown');
-
-    const pins = details.getByTestId('details-pin');
-    await expect(pins).toHaveCount(4);
-    await expect(pins.nth(0)).toContainText('Report');
-    await expect(pins.nth(1)).toContainText('shot.png');
-    await expect(pins.nth(2)).toContainText('localhost:9/preview');
-    await expect(pins.nth(3)).toContainText('Test logins');
-    await expect(pins.nth(3)).toContainText('Seeded 3 users: ann, bob, cy');
-
-    // A pinned Markdown file opens in a Doc tab; a link in a web tab.
-    await pins.nth(0).getByRole('button').first().click();
-    await expect(sessionWindow(window).getByTestId('doc-view').getByTestId('doc-body')).toContainText('Merge the flake fix first');
-    await pins.nth(2).getByRole('button').first().click();
-    await expect(sessionWindow(window).getByRole('tab', { name: 'localhost:9' })).toBeVisible();
-    await documents.getByRole('button').click();
-    await expect(docView(window)).toBeVisible();
-
-    // The user deletes a pin, and Undo brings it back.
-    await pins.nth(3).hover();
-    await pins.nth(3).getByRole('button', { name: 'Delete record' }).click();
-    await window.getByRole('button', { name: 'Undo' }).click();
-    await expect.poll(async () => (await latest(window, agent)).records.find((record) => record.key === 'note:Test logins')?.deletedAt).toBeNull();
-    await expect(pins.nth(3)).not.toHaveAttribute('data-gone');
   });
 });
 

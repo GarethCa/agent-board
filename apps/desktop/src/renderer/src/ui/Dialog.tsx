@@ -36,7 +36,8 @@ interface DialogProps {
 
 /**
  * A modal dialog: a header with the title and a close button, a body, and a footer of actions. Focus is trapped in it
- * while it is open and returns to what opened it after; Esc closes it. It opens on the body's first field (or the one
+ * while it is open and returns to what opened it after, unless something else already took the focus as it closed (a
+ * hand-over to Add zone), which keeps it; Esc closes it. It opens on the body's first field (or the one
  * marked autoFocus), else on the footer's last button, the primary action; an alertdialog on its first, the safe answer.
  */
 export function Dialog({ title, headEnd, onClose, footer, footerStart, children, role = 'dialog', onSubmit, inline = false, ...rest }: DialogProps) {
@@ -110,6 +111,14 @@ export function Dialog({ title, headEnd, onClose, footer, footerStart, children,
           }}
           onCloseAutoFocus={(event) => {
             event.preventDefault();
+            // Something took the focus as the dialog handed over to it (Add zone's search field): leave it there, and
+            // keep the opener for that to give the focus back to when it closes.
+            held = null;
+            const active = document.activeElement;
+            if (active instanceof HTMLElement && active !== document.body) {
+              if (opener !== null) held = { opener, to: active };
+              return;
+            }
             // Without scrolling: an opener on the board sits in React Flow's overflow-hidden pane, and scrolling that
             // would slide the board out from under its own view.
             if (opener?.isConnected) opener.focus({ preventScroll: true });
@@ -133,6 +142,19 @@ function openerOf(active: Element | null): HTMLElement | null {
   const menu = active?.closest('[role="menu"]');
   const trigger = menu ? document.getElementById(menu.getAttribute('aria-labelledby') ?? '') : active;
   return trigger instanceof HTMLElement ? trigger : null;
+}
+
+/** A dialog that closed onto another element that already had the focus: its opener, and the element it handed on to. */
+let held: { opener: HTMLElement; to: HTMLElement } | null = null;
+
+/**
+ * The opener of a dialog that closed to hand the focus on to something inside `within` (Add zone), for that to give
+ * the focus back to when it closes. Once, and only if the dialog handed on to `within` and the opener is still there.
+ */
+export function takeHeldOpener(within: Element): HTMLElement | null {
+  const taken = held;
+  held = null;
+  return taken !== null && taken.opener.isConnected && within.contains(taken.to) ? taken.opener : null;
 }
 
 const onToast = (target: EventTarget | null) => target instanceof Element && target.closest('.ui-toasts') !== null;

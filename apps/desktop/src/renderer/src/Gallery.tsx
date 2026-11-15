@@ -6,7 +6,7 @@ import { CrewGallery, PrefabGallery, TicketGallery } from './crews/PrefabGallery
 import { StatusMarkGallery } from './board/StatusMarkGallery';
 import { CrowdedOrchestratorGallery, TileGallery } from './board/TileGallery';
 import { StepsGallery } from './board/items/StepsGallery';
-import { TicketBoardGallery, TicketOpenGallery, TicketTileGallery, TicketWatchGallery } from './board/TicketTileGallery';
+import { TicketBoardGallery, TicketOpenGallery, TicketOpenReadGallery, TicketTileGallery, TicketWatchGallery } from './board/TicketTileGallery';
 import { QuickAskDialogGallery, QuickAskGallery } from './board/QuickAskGallery';
 import { useSimplified } from './design';
 import { ComponentGallery, ReadoutGallery } from './ui/ComponentGallery';
@@ -42,6 +42,7 @@ export function Gallery() {
       <TicketOpenGallery />
       <TicketGallery />
       <TicketBoardGallery />
+      <TicketOpenReadGallery />
       <GalleryFoot />
     </div>
   );

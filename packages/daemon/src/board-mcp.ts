@@ -461,7 +461,7 @@ export const BOARD_MCP_TOOLS: Tool[] = [
   {
     name: 'pin',
     description:
-      'Pin something you want the user to see on your sidebar, as a Pinned block of your page or in the Full sidebar\'s Pins: a file (a Markdown or HTML one opens in a Doc tab, ' +
+      'Pin something you want the user to see on your sidebar, as a Pinned block of your page: a file (a Markdown or HTML one opens in a Doc tab, ' +
       'any other is shown in its folder), an http(s) link (opens in a web tab), or a short note with a label. Give one of ' +
       'path, url or note. Pinning the same file, link or note label again replaces it; the user may delete a pin, not ' +
       'edit it. With for_orchestrator, it goes on the orchestrator that started you instead. As `agent-board pin`.',

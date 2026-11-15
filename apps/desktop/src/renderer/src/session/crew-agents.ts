@@ -1,5 +1,5 @@
-// The agents a details strip needs: the ones an agent started, and the ones it recorded starting. Pure, so it is
-// unit-tested; `useCrewAgents` keeps the strip from rendering for any other agent's change.
+// The agents an agent's shelves need: the ones it started, and the ones it recorded starting. Pure, so it is
+// unit-tested; `useShelvesAgents` keeps the shelves from rendering for any other agent's change.
 import type { Agent } from '@agent-board/daemon/protocol';
 
 /** Whether `parentId` started `agent`: the one rule for who is in a crew, shared with the Crew section. */
@@ -71,10 +71,10 @@ export interface CrewTracker extends AgentTracker {
   setKeys(keys: readonly string[]): void;
 }
 
-/** Follows the whole board's agents and exposes only the crew of `parentId`. */
-export function crewTracker(parentId: string): CrewTracker {
+/** An agent tracker whose `pick` also reads the crew record keys, picking again whenever they are set. */
+function keyedTracker(pick: (all: ReadonlyMap<string, Agent>, previous: Agent[] | undefined, keys: ReadonlySet<string>) => Agent[]): CrewTracker {
   let keys: ReadonlySet<string> = new Set();
-  const tracker = agentTracker((all) => crewAgents(all.values(), parentId, keys));
+  const tracker = agentTracker((all, previous) => pick(all, previous, keys));
   return {
     ...tracker,
     setKeys(next) {
@@ -82,6 +82,26 @@ export function crewTracker(parentId: string): CrewTracker {
       tracker.refresh();
     },
   };
+}
+
+/** The session ids an agent's crew records name, which count as its crew whoever started them. */
+export const crewKeys = (agent: Pick<Agent, 'records'>): string[] => agent.records.filter((record) => record.kind === 'crew').map((record) => record.key);
+
+/**
+ * Follows the whole board's agents and exposes what an agent's shelves read: the crew of `sessionId`, and before it
+ * the agent that started it (`starterId`), for the status line's "started by". The starter is kept as it was until its
+ * name or whether it is the Captain changes, as that is all the line reads of it, so its other changes leave the array
+ * the same one. A starter that is crew as well (a record names it) is kept live, as crew.
+ */
+export function shelvesTracker(sessionId: string, starterId: string | null): CrewTracker {
+  return keyedTracker((all, previous, keys) => {
+    const crew = crewAgents(all.values(), sessionId, keys);
+    const starter = starterId === null ? undefined : all.get(starterId);
+    if (starter === undefined || crew.includes(starter)) return crew;
+    const known = previous?.find((each) => each.sessionId === starterId);
+    const kept = known !== undefined && known.name === starter.name && known.master === starter.master ? known : starter;
+    return [kept, ...crew];
+  });
 }
 
 export interface DirectoryTracker extends AgentTracker {

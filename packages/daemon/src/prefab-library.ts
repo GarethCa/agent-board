@@ -5,7 +5,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { BoardConnection } from './board.ts';
 import { BUILT_IN_PREFABS, parsePrefab, prefabFile } from './crew-prefabs.ts';
 import { withTicketChat } from './ticket-tiles.ts';
-import type { ActivityEntry, OrchestratorAccess } from './orchestrators.ts';
+import type { ActivityEntry, OrchestratorAccess } from './orchestrator-types.ts';
 import { invalidParams, optionalBooleanParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
 import {
   DEFAULT_TICKET_CHAT_KIND,

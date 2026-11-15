@@ -19,9 +19,10 @@ export const daemonEntry = fileURLToPath(new URL('../out/main/daemon.js', import
 /**
  * Keeps the app from activating itself, taking focus or switching Spaces while a developer works, and its windows off
  * the screen: they paint offscreen, so WindowServer does no work for them. `AGENT_BOARD_HEADED=1` in the environment of
- * the run shows them, to watch it (see CONTRIBUTING.md).
+ * the run shows them, to watch it (see CONTRIBUTING.md). `AGENT_BOARD_TEST=1` has a packaged app, and its daemon, honour
+ * these and the other test overrides, which it otherwise ignores.
  */
-export const BACKGROUND_ENV = { AGENT_BOARD_E2E_BACKGROUND: '1', AGENT_BOARD_HEADLESS: '1' };
+export const BACKGROUND_ENV = { AGENT_BOARD_E2E_BACKGROUND: '1', AGENT_BOARD_HEADLESS: '1', AGENT_BOARD_TEST: '1' };
 
 /** Data dirs and apps the current test made, which the `test` fixture below reaps when it ends. */
 const dataDirs = new Set<string>();

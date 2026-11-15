@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { submittedText } from '../src/terminal-input.ts';
 import { drawRateLimitMenu, rateLimitMenuRows } from '@agent-board/fake-harness';
-import { createDeliveries, type DeliveryRow, type KeptWaiting, type PromptNow, type WaitingStore } from '../src/deliveries.ts';
+import { createDeliveries, USER_IDLE_MS, type DeliveryRow, type KeptWaiting, type PromptNow, type WaitingStore } from '../src/deliveries.ts';
 import { invalidParams } from '../src/params.ts';
-import type { AgentState, PermissionPrompt } from '../src/protocol.ts';
+import { CREW_FLAG_GATHER_MS, createCrewFlags } from '../src/crew-flags.ts';
+import type { Agent, AgentState, PermissionPrompt } from '../src/protocol.ts';
 import type { RunStart } from '../src/schedules.ts';
 import { createFakeClock } from './fake-clock.ts';
 
@@ -49,7 +50,7 @@ function memoryStore(): WaitingStore & { rows: KeptWaiting[] } {
  * Deliveries over the agents `rows`, on a fake clock, recording what is written, relaunched and announced. Each prompt
  * stands where `prompt` says.
  */
-function setup(rows: Row[], notReady?: string, waiting?: WaitingStore) {
+function setup(rows: Row[], notReady?: string, waiting?: WaitingStore, draftHeldFor?: (sessionId: string) => number | undefined) {
   const writes: [string, string][] = [];
   const relaunches: { sessionId: string; prompt: string | undefined; why: string; codexSessionId: string | null | undefined }[] = [];
   const announced: { sessionId: string; handingOff: boolean }[] = [];
@@ -62,8 +63,11 @@ function setup(rows: Row[], notReady?: string, waiting?: WaitingStore) {
   const prompt: { now: PromptNow } = { now: 'at-prompt' };
   /** The state the agents show, and what they last said. */
   const shown: { state: AgentState; lastMessage?: string; permissions?: PermissionPrompt[] } = { state: 'idle' };
-  /** Why the agents can't take a run now, if they can't. */
-  const ready: { why: string | undefined } = { why: notReady };
+  /**
+   * Why the agents can't take a run now, if they can't; and what a draft past its hold refuses, for all but a message
+   * others sent (`lapsedDrafts` false).
+   */
+  const ready: { why: string | undefined; lapsedDraft?: string } = { why: notReady };
   /** What writing to an agent's terminal throws, if it fails. */
   const failing: { write: Error | undefined } = { write: undefined };
   /**
@@ -91,7 +95,7 @@ function setup(rows: Row[], notReady?: string, waiting?: WaitingStore) {
       if (found === undefined) throw invalidParams(`no agent ${sessionId}`);
       return { name: found.name, endedAt: found.ended_at, state: shown.state, lastMessage: shown.lastMessage ?? null, permissions: shown.permissions ?? [] };
     },
-    whyNotReady: () => ready.why,
+    whyNotReady: (_row, _evenAsking, lapsedDrafts) => ready.why ?? (lapsedDrafts === false ? undefined : ready.lapsedDraft),
     pausing: () => undefined,
     relaunch(target, prompt, why, codexSessionId): RunStart {
       relaunches.push({ sessionId: target.session_id, prompt, why, codexSessionId });
@@ -109,6 +113,7 @@ function setup(rows: Row[], notReady?: string, waiting?: WaitingStore) {
     clock,
     submitConfirmMs: 1_000,
     ...(waiting === undefined ? {} : { waiting }),
+    ...(draftHeldFor === undefined ? {} : { draftHeldFor }),
   });
 
   /** Moves the fake clock on by `ms` a millisecond at a time, letting what waits on each timer run before the next. */
@@ -1559,5 +1564,222 @@ describe('continuing on credits', () => {
     shown.state = 'idle';
     await expect(deliveries.continueOnCredits('a', screen)).rejects.toMatchObject({ message: 'a is not rate-limited: only a turn its usage limit stopped continues on credits' });
     expect(data()).toEqual([]);
+  });
+});
+
+describe('the user typing in an agent terminal', () => {
+  it('holds a crew flag while the user pressed a key in the last few seconds, and types it once they stop', async () => {
+    const { deliveries, writes, advance, land } = setup([row('a')]);
+    deliveries.typed('a', 'h');
+    expect(await deliveries.tell('a', 'A crew flag')).toEqual({ started: false, reason: 'you were typing in its terminal', busy: true });
+    await advance(USER_IDLE_MS - 1);
+    expect((await deliveries.tell('a', 'A crew flag')).started).toBe(false);
+    await advance(1);
+    const told = deliveries.tell('a', 'A crew flag');
+    await land('a');
+    expect(await told).toEqual({ started: true });
+    expect(writes).toEqual([
+      ['a', 'A crew flag'],
+      ['a', '\r'],
+    ]);
+  });
+
+  it('counts only keys: a focus or mouse report from the terminal is no typing', async () => {
+    const { deliveries } = setup([row('a')]);
+    deliveries.typed('a', '\x1b[I');
+    deliveries.typed('a', '\x1b[<0;10;5M');
+    expect(deliveries.userTyping('a')).toBe(false);
+    deliveries.typed('a', '\x7f');
+    expect(deliveries.userTyping('a')).toBe(true);
+  });
+
+  it('waits for nothing after Enter, which sent what the user typed, yet tells clients once they are idle', async () => {
+    const { deliveries, announced, advance } = setup([row('a')]);
+    deliveries.queueAfterTurn('a', { text: 'Waiting', typing: () => {}, settled: () => {} });
+    deliveries.typed('a', 'Say hi');
+    deliveries.typed('a', '\r');
+    expect(deliveries.userTyping('a')).toBe(false);
+    const before = announced.length;
+    await advance(USER_IDLE_MS);
+    expect(announced.slice(before)).toEqual([{ sessionId: 'a', handingOff: false }]);
+  });
+
+  it('says the user is typing while their draft is at the prompt, however long ago they typed it', async () => {
+    const { deliveries, prompt, advance } = setup([row('a')]);
+    expect(deliveries.userTyping('a')).toBe(false);
+    deliveries.typed('a', 'half a');
+    await advance(USER_IDLE_MS);
+    expect(deliveries.userTyping('a')).toBe(false);
+    prompt.now = 'typing';
+    expect(deliveries.userTyping('a')).toBe(true);
+  });
+
+  it('keeps a waiting message until the user stops typing, then tells clients the agent changed, so it is typed', async () => {
+    const { deliveries, writes, announced, advance, land } = setup([row('a')]);
+    const heard: string[] = [];
+    deliveries.queueAfterTurn('a', { text: 'Waiting', typing: () => void heard.push('typing'), settled: (started) => void heard.push(`${started}`) });
+    deliveries.typed('a', 'x');
+    deliveries.deliverAfterTurn('a');
+    await advance(USER_IDLE_MS - 1);
+    expect(writes).toEqual([]);
+    const before = announced.length;
+
+    await advance(1);
+    expect(announced.slice(before)).toEqual([{ sessionId: 'a', handingOff: false }]);
+    deliveries.deliverAfterTurn('a');
+    await land('a');
+    expect(writes).toEqual([
+      ['a', 'Waiting'],
+      ['a', '\r'],
+    ]);
+    expect(heard).toEqual(['typing', 'true']);
+  });
+
+  it('holds what others send at a draft only as long as it is held, then tells clients again, so what waits is typed', async () => {
+    const holdMs = 60_000;
+    const draft: { until: number | undefined } = { until: undefined };
+    const { deliveries, writes, announced, ready, advance, land, clock } = setup([row('a')], undefined, undefined, () =>
+      draft.until === undefined ? undefined : Math.max(0, draft.until - clock.now()),
+    );
+    deliveries.typed('a', 'half a');
+    draft.until = clock.now() + holdMs;
+    const before = announced.length;
+    await advance(USER_IDLE_MS);
+    expect(announced.slice(before)).toHaveLength(1);
+    expect(deliveries.userTyping('a')).toBe(true);
+    clock.advance(holdMs - USER_IDLE_MS - 1);
+    await flush();
+    expect(deliveries.userTyping('a')).toBe(true);
+    expect(announced.slice(before)).toHaveLength(1);
+    await advance(1);
+    expect(deliveries.userTyping('a')).toBe(false);
+    expect(announced.slice(before)).toEqual([
+      { sessionId: 'a', handingOff: false },
+      { sessionId: 'a', handingOff: false },
+    ]);
+    // The draft is still there for a run, but a message waiting goes.
+    ready.lapsedDraft = 'you were typing in its terminal';
+    expect(deliveries.runScheduled('a', 'Sweep')).toEqual({ started: false, reason: 'you were typing in its terminal' });
+    deliveries.queueAfterTurn('a', { text: 'Waiting', typing: () => {}, settled: () => {} });
+    deliveries.deliverAfterTurn('a');
+    await land('a');
+    expect(writes).toEqual([
+      ['a', 'Waiting'],
+      ['a', '\r'],
+    ]);
+  });
+
+  it("types no agent's message while the user is typing there, saying so; the user's own goes", async () => {
+    const { deliveries, writes, land } = setup([row('a')]);
+    deliveries.typed('a', 'x');
+    expect(await deliveries.answer('a', 'From the lead', false, undefined, 'lead')).toEqual({ userTyping: true });
+    expect(writes).toEqual([]);
+
+    const mine = deliveries.answer('a', 'Mine');
+    await land('a');
+    expect(await mine).toEqual({ queued: false });
+    expect(writes).toEqual([
+      ['a', 'Mine'],
+      ['a', '\r'],
+    ]);
+  });
+
+  it("tells clients once the user is idle, nothing waiting, so a crew's flag held meanwhile is typed then", async () => {
+    const { deliveries, writes, announced, advance, land, clock } = setup([row('a')]);
+    const lead = { sessionId: 'a', name: 'lead', state: 'idle', endedAt: null, spawnedBy: null, ticket: null, flag: null } as unknown as Agent;
+    const crew = {
+      sessionId: 'c',
+      name: 'crew',
+      state: 'idle',
+      endedAt: null,
+      spawnedBy: 'a',
+      ticket: null,
+      flag: { id: 1, reason: 'Blocked on the schema', at: '2026-10-22T10:00:00.000Z', via: null, to: 'orchestrator' },
+    } as unknown as Agent;
+    const flags = createCrewFlags({
+      agent: (sessionId) => (sessionId === 'a' ? lead : crew),
+      crewOf: (sessionId) => (sessionId === 'a' ? [crew] : []),
+      tell: deliveries.tell,
+      clock,
+      log: () => {},
+    });
+    // A key that leaves nothing typed: no draft, only the last few seconds hold the flag.
+    deliveries.typed('a', '\x15');
+    flags.observe(crew);
+    await advance(CREW_FLAG_GATHER_MS + 10);
+    expect(writes).toEqual([]);
+    const before = announced.length;
+    await advance(USER_IDLE_MS);
+    // The daemon hands each announced change to the crew's flags, as it does every agent.updated.
+    for (const { sessionId } of announced.slice(before)) if (sessionId === 'a') flags.observe(lead);
+    await land('a');
+    expect(writes[0]?.[1]).toContain('Blocked on the schema');
+    flags.close();
+  });
+
+  it('holds a scheduled run while the user pressed a key there lately, and types it once they stop', async () => {
+    const { deliveries, writes, advance, land } = setup([row('a')]);
+    const notTyped: string[] = [];
+    deliveries.typed('a', '\x1b[A\x15');
+    expect(deliveries.runScheduled('a', 'Sweep', (reason) => notTyped.push(reason))).toEqual({ started: true });
+    // One run waits at a time: a second fire meanwhile is skipped, saying why.
+    expect(deliveries.runScheduled('a', 'Again')).toEqual({ started: false, reason: 'a run waits for the user to stop typing' });
+    await advance(USER_IDLE_MS - 1);
+    expect(writes).toEqual([]);
+    await advance(1);
+    await land('a');
+    expect(writes).toEqual([
+      ['a', 'Sweep'],
+      ['a', '\r'],
+    ]);
+    expect(notTyped).toEqual([]);
+  });
+
+  it('gives up on a held run when the user presses Enter first, as a turn of theirs may start, or its session ends', async () => {
+    const a = row('a');
+    const { deliveries, writes, advance } = setup([a]);
+    const notTyped: string[] = [];
+    deliveries.typed('a', '\x15');
+    deliveries.runScheduled('a', 'Sweep', (reason) => notTyped.push(`Sweep: ${reason}`));
+    deliveries.typed('a', 'go\r');
+    expect(notTyped).toEqual(['Sweep: the user sent a message of their own there first']);
+
+    deliveries.typed('a', '\x15');
+    deliveries.runScheduled('a', 'Lint', (reason) => notTyped.push(`Lint: ${reason}`));
+    a.ended_at = '2026-10-22T10:00:01Z';
+    deliveries.ended('a');
+    await advance(USER_IDLE_MS);
+    expect(writes).toEqual([]);
+    expect(notTyped).toEqual(['Sweep: the user sent a message of their own there first', 'Lint: its session has ended']);
+  });
+
+  it("keeps another agent's message queued until the session was up when the user is typing there by then", async () => {
+    const { deliveries, writes, advance, land } = setup([row('a')]);
+    const { promise: up, resolve: comeUp } = Promise.withResolvers<boolean>();
+    deliveries.firstPrompt('a', undefined, up);
+    expect(await deliveries.answer('a', 'From the lead', false, undefined, 'lead')).toEqual({ queued: true });
+    deliveries.typed('a', 'x');
+    comeUp(true);
+    await advance(10);
+    expect(writes).toEqual([]);
+    expect(deliveries.waitingAfterTurn('a')).toBe(1);
+
+    deliveries.typed('a', '\x15');
+    await advance(USER_IDLE_MS);
+    deliveries.deliverAfterTurn('a');
+    await land('a');
+    expect(writes).toEqual([
+      ['a', 'From the lead'],
+      ['a', '\r'],
+    ]);
+  });
+
+  it('forgets the keys of an agent whose session ended', async () => {
+    const a = row('a');
+    const { deliveries } = setup([a]);
+    deliveries.typed('a', 'x');
+    a.ended_at = '2026-10-22T10:00:01Z';
+    deliveries.ended('a');
+    expect(deliveries.userTyping('a')).toBe(false);
   });
 });

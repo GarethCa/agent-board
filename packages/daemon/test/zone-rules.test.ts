@@ -4,7 +4,7 @@ import { fakeHarnessEnv } from '@agent-board/fake-harness';
 import type { DaemonClient } from '../src/client.ts';
 import { migrate } from '../src/migrate.ts';
 import { daemonPaths } from '../src/paths.ts';
-import type { DaemonCall } from '../src/orchestrator-layout.ts';
+import type { DaemonCall } from '../src/protocol.ts';
 import { zoneSnapshot, type Agent, type BoardItem, type FlowEdge, type Shell, type Zone } from '../src/protocol.ts';
 import { createZoneRules, RULE_SETTLE_MS, zonesChangedBy, type RuleInputs } from '../src/zone-rules.ts';
 import { createZoneTable } from '../src/zones.ts';

@@ -1,6 +1,11 @@
 import type xtermHeadless from '@xterm/headless';
 import type xtermSerialize from '@xterm/addon-serialize';
-import type { SavedScreen } from './sessions.ts';
+import type { TerminalSize } from './protocol.ts';
+
+/** A saved screen: what `serialize` gave, and the size it was laid out at. */
+export interface SavedScreen extends TerminalSize {
+  data: string;
+}
 
 /**
  * How soon after leaving its alternate screen a session must exit for that screen to be its last: long enough for a

@@ -13,8 +13,10 @@ import { createCwdLookup } from './cwd-lookup.ts';
 import { foregroundOf, harnessOfProgram, type Foreground } from './foreground.ts';
 import { lastExitStatus, shellIntegrationEnv } from './shell-integration.ts';
 import { processCwd } from './process-cwd.ts';
-import { watchLeftScreen, type LeftScreen } from './left-screen.ts';
+import { watchLeftScreen, type LeftScreen, type SavedScreen } from './left-screen.ts';
+export type { SavedScreen };
 import {
+  RPC_ERROR,
   SCROLLBACK_LINES,
   type CreateShellParams,
   type DaemonEvent,
@@ -22,7 +24,9 @@ import {
   type SessionInfo,
   type TerminalSize,
 } from './protocol.ts';
+import { RpcMethodError } from './rpc.ts';
 import type { TerminalBackend, TerminalExit } from './terminal-backend.ts';
+import { createSizeVotes, type SizeVotes } from './terminal-sizing.ts';
 
 /**
  * Longest piece of a snapshot sent in one event, in UTF-16 code units. JSON escapes each control character in six
@@ -64,6 +68,11 @@ export interface SessionSubscriber {
   backlog(): number;
   /** Calls `callback` once the subscriber has taken everything sent to it. */
   whenDrained(callback: () => void): void;
+  /**
+   * How this connection's resizes count (see `SessionHost.resize`): `always`, as a local client's do (the default);
+   * `afterTyping`, only once it has typed into the session; or `never`, refused, for a client that may only watch.
+   */
+  resizes?: 'always' | 'afterTyping' | 'never';
 }
 
 /** How a live shell session is doing: see `SessionHost.shellState`. */
@@ -160,6 +169,8 @@ interface LiveSession {
   model: xtermHeadless.Terminal;
   serializer: xtermSerialize.SerializeAddon;
   attachments: Map<SessionSubscriber, Attachment>;
+  /** Who of the clients viewing it sets its size: the one that used it last. */
+  sizeVotes: SizeVotes<SessionSubscriber>;
   exited: Promise<SessionInfo>;
   /** Set while a save of its screen is due. */
   saveTimer?: NodeJS.Timeout;
@@ -196,8 +207,15 @@ export interface SessionHost {
   detach(sessionId: string, subscriber: SessionSubscriber): void;
   /** Detaches the subscriber from every session, e.g. when its connection closes. */
   detachAll(subscriber: SessionSubscriber): void;
-  write(sessionId: string, data: string): void;
-  resize(sessionId: string, size: TerminalSize): void;
+  /** Writes to the session's terminal. Written `by` a client, it makes that client the terminal's latest user. */
+  write(sessionId: string, data: string, by?: SessionSubscriber): void;
+  /**
+   * Resizes the session's terminal, as asked `by` a client. The size it takes is the one its latest user last asked for
+   * (`createSizeVotes`). How a client's resize counts is its `resizes`: a local client's makes it the latest user, an
+   * `afterTyping` one's only once it has typed into the session, and a `never` one's is refused. A client's say ends as
+   * it detaches.
+   */
+  resize(sessionId: string, size: TerminalSize, by: SessionSubscriber): void;
   /**
    * Ends the session (SIGHUP, then SIGKILL after a grace period) and resolves once it has exited. A session that is
    * already exiting resolves the same way. `why` says what had the daemon end it, for the log line of its exit.
@@ -258,11 +276,6 @@ interface SessionRow {
   ended_at: string | null;
   exit_code: number | null;
   stopped_by_restart: number;
-}
-
-/** A saved screen: what `serialize` gave, and the size it was laid out at. */
-export interface SavedScreen extends TerminalSize {
-  data: string;
 }
 
 /**
@@ -404,6 +417,23 @@ export function createSessionHost(options: SessionHostOptions): SessionHost {
     subscriber.send({ type: 'session.exited', sessionId, session });
   };
 
+  function setSize(session: LiveSession, { cols, rows }: TerminalSize): void {
+    backend.resize(session.info.id, cols, rows);
+    session.model.resize(cols, rows);
+    session.info = { ...session.info, cols, rows };
+  }
+
+  /** Sizes the terminal as its viewers' votes say, if that is a change: an unneeded resize still reflows a TUI. */
+  function sizeToVotes(session: LiveSession): void {
+    const size = session.sizeVotes.size();
+    if (size !== undefined && (size.cols !== session.info.cols || size.rows !== session.info.rows)) setSize(session, size);
+  }
+
+  /** Only a client that had a say can change the size by leaving: one that never voted leaves the terminal be. */
+  function leave(session: LiveSession, subscriber: SessionSubscriber): void {
+    if (session.sizeVotes.left(subscriber)) sizeToVotes(session);
+  }
+
   const live = (sessionId: string): LiveSession => {
     const session = sessions.get(sessionId);
     if (session === undefined) throw new Error(`no live session ${sessionId}`);
@@ -516,6 +546,7 @@ export function createSessionHost(options: SessionHostOptions): SessionHost {
       model,
       serializer,
       attachments: new Map(),
+      sizeVotes: createSizeVotes(),
       exited: new Promise((resolve) => (resolveExited = resolve)),
     };
     // Claude Code's TUI takes what it drew with it as it exits: its last screen is the one it left. (Codex is not
@@ -633,23 +664,35 @@ export function createSessionHost(options: SessionHostOptions): SessionHost {
     },
 
     detach(sessionId, subscriber) {
-      sessions.get(sessionId)?.attachments.delete(subscriber);
+      const session = sessions.get(sessionId);
+      if (session === undefined) return;
+      session.attachments.delete(subscriber);
+      leave(session, subscriber);
     },
 
     detachAll(subscriber) {
-      for (const session of sessions.values()) session.attachments.delete(subscriber);
+      for (const session of sessions.values()) {
+        session.attachments.delete(subscriber);
+        leave(session, subscriber);
+      }
     },
 
-    write(sessionId, data) {
-      live(sessionId);
+    write(sessionId, data, by) {
+      const session = live(sessionId);
+      // The terminal takes its typist's size before their keys reach it, so what they typed is read at that size.
+      if (by !== undefined) {
+        session.sizeVotes.typed(by);
+        sizeToVotes(session);
+      }
       backend.write(sessionId, data);
     },
 
-    resize(sessionId, { cols, rows }) {
+    resize(sessionId, size, by) {
       const session = live(sessionId);
-      backend.resize(sessionId, cols, rows);
-      session.model.resize(cols, rows);
-      session.info = { ...session.info, cols, rows };
+      const resizes = by.resizes ?? 'always';
+      if (resizes === 'never') throw new RpcMethodError(RPC_ERROR.invalidRequest, "this client can only watch the terminal, not size it");
+      session.sizeVotes.resized(by, size, { counts: resizes === 'always' });
+      sizeToVotes(session);
     },
 
     kill(sessionId, why) {

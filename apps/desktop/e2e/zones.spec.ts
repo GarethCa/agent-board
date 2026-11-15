@@ -42,10 +42,53 @@ async function addZone(window: Page): Promise<void> {
   await browseForZone(window);
 }
 
-/** Escape, once no tooltip is up: it closes the topmost layer, and a tooltip left by the pointer's last stop would take the key. */
+/**
+ * Escape, once no tooltip or hover card is up: it closes the topmost layer, and one left by the pointer's last stop
+ * would take the key. Both are Radix layers, so either takes Escape before the menu or popover under it.
+ */
 async function escapeLayer(window: Page): Promise<void> {
-  await expect(window.locator('.ui-tooltip')).toHaveCount(0);
+  await expect(window.locator('.ui-tooltip, .ui-hover-card')).toHaveCount(0);
   await window.keyboard.press('Escape');
+}
+
+/** Names an element for the Escape dump: its tag, role, test id and label. */
+const NAME_ELEMENT = `(el) => el === null || el === undefined ? null : { tag: el.tagName.toLowerCase(), role: el.getAttribute('role'), testid: el.getAttribute('data-testid'), label: el.getAttribute('aria-label'), cls: String(el.className).slice(0, 60) }`;
+
+/**
+ * Escape that must close `layer`, for the flake where it sometimes does not. If `layer` is still open a
+ * moment after the press, attaches `escape-dump.json` to the test before the failure: what had the focus, every open
+ * Radix layer, and each Escape keydown the window saw (its target, and whether anything had already prevented it by
+ * the capture phase and by the bubble phase, the last place a handler could have taken it).
+ */
+async function escapeClosing(window: Page, layer: Locator): Promise<void> {
+  await window.evaluate(`(() => {
+    const seen = (window.__escapes = []);
+    const name = ${NAME_ELEMENT};
+    const record = (phase) => (event) => {
+      if (event.key !== 'Escape') return;
+      if (phase === 'capture') seen.push({ target: name(event.target), prevented: { capture: event.defaultPrevented } });
+      else seen[seen.length - 1].prevented.bubble = event.defaultPrevented;
+    };
+    window.addEventListener('keydown', record('capture'), true);
+    window.addEventListener('keydown', record('bubble'));
+  })()`);
+  await escapeLayer(window);
+  try {
+    await expect(layer).toBeHidden({ timeout: 3000 });
+  } catch (failure) {
+    // The dump is evidence only: if it cannot be taken (the page is gone), the original failure is the one to show.
+    try {
+      const dump = await window.evaluate(`(() => {
+        const name = ${NAME_ELEMENT};
+        const open = [...document.querySelectorAll('[data-radix-popper-content-wrapper], [role=dialog], [data-state=open]')].map(name);
+        return { activeElement: name(document.activeElement), openLayers: open, escapes: window.__escapes };
+      })()`);
+      await test.info().attach('escape-dump.json', { body: JSON.stringify(dump, null, 2), contentType: 'application/json' });
+    } catch (dumpFailure) {
+      await test.info().attach('escape-dump-error.txt', { body: String(dumpFailure), contentType: 'text/plain' }).catch(() => undefined);
+    }
+    throw failure;
+  }
 }
 
 const zoneNamed = (window: Page, name: string): Locator =>
@@ -86,8 +129,7 @@ test('adds repo and folder zones from the folder picker, rejects a folder that i
     await popover.getByRole('button', { name: 'Choose a folder…' }).click();
     await expect(popover.getByRole('alert')).toHaveText(`${gone} is not a folder`);
     await popover.hover({ position: { x: 4, y: 4 } });
-    await escapeLayer(window);
-    await expect(popover).toBeHidden();
+    await escapeClosing(window, popover);
     // Counted in the daemon, not on screen: the board draws only the zones in view, and the view has just moved to
     // show the last one added.
     expect(await storedZones(dataDir)).toHaveLength(2);
@@ -141,6 +183,65 @@ test('adds repo and folder zones from the folder picker, rejects a folder that i
     await app.close();
     await removeDataDir(dataDir);
     rmSync(scratch, { recursive: true, force: true });
+  }
+});
+
+test('Add zone opened from the board menu keeps the focus, so the first Escape closes it', async () => {
+  const dataDir = tempDataDir();
+  const app = await launchApp(dataDir);
+  try {
+    const window = await app.firstWindow();
+    await connectedDaemonPid(window);
+    await window.getByRole('button', { name: 'Board menu' }).click();
+    await window.getByRole('button', { name: 'Add a zone' }).click();
+    const popover = window.getByRole('dialog', { name: 'Add zone' });
+    await expect(popover).toBeVisible();
+    // The menu, closed, gives the focus back to its button a task later, unless it handed it on: let that task run.
+    await window.evaluate(() => new Promise((done) => setTimeout(done, 50)));
+    // Back on the menu's button, the focus would wake its tooltip over Add zone, and the tooltip would take the Escape.
+    await expect(popover.getByRole('searchbox', { name: 'Search repos, teams, projects and folders' })).toBeFocused();
+    await expect(window.locator('.ui-tooltip')).toHaveCount(0);
+    await window.keyboard.press('Escape');
+    await expect(popover).toBeHidden();
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+  }
+});
+
+test('Add zone opened from a crew dialog keeps the focus, so the first Escape closes it, and gives the focus back to the opener when it closes', async () => {
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, {}, [], { design: 'simplified' });
+  try {
+    await connectedDaemonPid(window);
+    // The New ticket sheet opens from a menu on the toolbar, so its opener is that menu's button.
+    const opener = window.getByRole('toolbar', { name: 'Create' }).getByRole('button', { name: 'More to start' });
+    await opener.click();
+    await window.getByRole('menuitem', { name: /New ticket/ }).click();
+    // A board with no zone: the sheet offers Add zone.
+    await window.getByRole('dialog', { name: 'New ticket', exact: true }).getByRole('button', { name: 'Add a zone' }).click();
+    const popover = window.getByRole('dialog', { name: 'Add zone' });
+    await expect(popover).toBeVisible();
+    // The sheet, closed, gives the focus back to its opener a task later: let that task run.
+    await window.evaluate(() => new Promise((done) => setTimeout(done, 50)));
+    await expect(popover.getByRole('searchbox', { name: 'Search repos, teams, projects and folders' })).toBeFocused();
+    await expect(window.locator('.ui-tooltip')).toHaveCount(0);
+    await window.keyboard.press('Escape');
+    await expect(popover).toBeHidden();
+    // Add zone has no trigger of its own: the focus goes back to what opened the sheet, not to the page.
+    await expect(opener).toBeFocused();
+
+    // The opener the sheet handed on is given back once: a later Add zone, from the board menu, does not get it again.
+    await window.getByRole('button', { name: 'Board menu' }).click();
+    await window.getByRole('button', { name: 'Add a zone' }).click();
+    await expect(popover).toBeVisible();
+    await window.keyboard.press('Escape');
+    await expect(popover).toBeHidden();
+    await window.evaluate(() => new Promise((done) => setTimeout(done, 50)));
+    await expect(opener).not.toBeFocused();
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
   }
 });
 

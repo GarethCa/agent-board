@@ -856,6 +856,7 @@
   --size-crew-prompt: 560px; /* a crew's prompt box */
   --size-crew-face: 18px; /* a member's face in a row that names a crew */
   --size-spotlight-faces: calc(var(--size-crew-face) * 3 + var(--space-0-5) * 3 + var(--space-5)); /* ⌘K's crew rows: three faces and a +N */
+  --size-menu-crew-faces: calc(var(--size-crew-face) * 4 + var(--space-0-5) * 4 + var(--space-5)); /* a menu row's crew: four faces and a +N */
   --sheet-top: 14vh; /* New agent's top edge, fixed so its Agent | Crew switch stays put */
   --size-prefab-bubble: 44px; /* a member's bubble in the diagram */
   --size-prefab-bubble-small: 28px; /* the same, at the inspector's head */

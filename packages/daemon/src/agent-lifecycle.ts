@@ -3,7 +3,7 @@ import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { CODEX_BYPASS_FLAG, reviewFile, type LaunchSpec } from './agent-spawns.ts';
-import type { AgentHost, AgentHostOptions, AgentRow, BranchReviewRow, ZoneRow } from './agents.ts';
+import type { AgentHost, AgentHostOptions, AgentRow, BranchReviewRow, ZoneRow } from './agent-types.ts';
 import { hasClaudeTranscript } from './claude-transcript.ts';
 import { guardCodexConfig, type CodexConfigGuard } from './codex-config-guard.ts';
 import type { createDeliveries } from './deliveries.ts';

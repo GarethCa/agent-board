@@ -26,7 +26,7 @@ import type { RunStart } from './schedules.ts';
 import { documentFormat, documentTitle } from './document-names.ts';
 import { lineDiff, toldDiff } from './text-diff.ts';
 import { isInside, realPath, whyNotWritable, writeWhole } from './user-files.ts';
-import type { AgentHost } from './agents.ts';
+import type { AgentHost } from './agent-types.ts';
 
 type DocumentMethods = Pick<DaemonMethods, 'board.showDoc' | 'doc.read' | 'doc.save' | 'doc.comment'>;
 

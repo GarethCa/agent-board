@@ -3,7 +3,7 @@ import { Check } from 'lucide-react';
 import { ZONE_COLORS, type Agent, type ExternalSession, type GateRun, type LibraryPrefab, type ReviewRound, type Shell, type Zone } from '@agent-board/daemon/protocol';
 import { keyText } from '../keys/registry';
 import { runGateShortcut } from '../session/window-keys';
-import { agentMenu, agentTileMenu, menuBarAgentEntries, stateTileMenu, bindEntries, chipMenu, externalMenu, menuIds, projectContextMenu, projectMenu, shellMenu, tidyMenu, zoneMenu, zoneTabEntries, type AgentMenuInput, type AgentTileMenuInput, type ModelEntry, type ProjectContextMenuInput, type ZoneMenuInput, type ShellMenuInput, type TileBoardActions } from './menu-model';
+import { agentMenu, agentTileMenu, menuBarAgentEntries, stateTileMenu, bindEntries, chipMenu, externalMenu, menuIds, newAgentMenu, projectContextMenu, projectMenu, shellMenu, tidyMenu, zoneMenu, zoneTabEntries, type ZoneBindingActions, type AgentMenuInput, type AgentTileMenuInput, type ModelEntry, type ProjectContextMenuInput, type ZoneMenuInput, type ShellMenuInput, type TileBoardActions } from './menu-model';
 import { galleryAgent } from './TileGallery';
 import type { MenuBarRow } from '../../../shared/menu-bar';
 import { menuBarRows, runRow } from '../keys/menu-bar';
@@ -14,10 +14,7 @@ const AT = '2026-10-22T12:00:00.000Z';
 const library = vi.hoisted(() => ({ current: [] as readonly unknown[] }));
 vi.mock('../crews/prefab-store', async (original) => ({
   ...(await original<object>()),
-  crewGroups: () => {
-    const prefabs = library.current as LibraryPrefab[];
-    return [prefabs.filter((prefab) => !prefab.builtIn), prefabs.filter((prefab) => prefab.builtIn)].filter((group) => group.length > 0);
-  },
+  currentPrefabs: () => library.current as LibraryPrefab[],
 }));
 
 function spies<T>(): T & { calls: [string, unknown[]][] } {
@@ -416,6 +413,7 @@ describe("a zone's ⋯ menu", () => {
     expect(menuIds(crew.entries)).toEqual(['new-ticket', 'crew-Docs pass', 'crew-Solo agent', 'crew-library']);
     // A line after a new ticket, between yours and the built-ins, and before the library.
     expect(crew.entries.filter((entry) => entry === 'separator')).toHaveLength(3);
+    expect(crew.entries.filter((entry) => entry !== 'separator' && 'heading' in entry)).toEqual([{ heading: 'Your prefabs' }, { heading: 'Built in' }]);
     (row(crew.entries, 'crew-Docs pass') as { onSelect(): void }).onSelect();
     (row(crew.entries, 'crew-library') as { onSelect(): void }).onSelect();
     expect(actions.calls).toEqual([
@@ -518,6 +516,36 @@ describe("a zone's tab menus", () => {
   it("lists a group's ways to be bound, in the tab's Bind… and its folded row alike", () => {
     expect(menuIds(bindEntries(group, spies()))).toEqual(['repo', 'project', 'tracker']);
     expect(menuIds([zoneTabEntries(group, undefined, spies()).bind!])).toEqual(['tab-bind', 'tab-bind/repo', 'tab-bind/project', 'tab-bind/tracker']);
+  });
+
+  it("offers a blank agent first beside + agent, then the library's prefabs, yours first, and the library itself", () => {
+    library.current = [
+      { name: 'Ticket', icon: 'ticket', builtIn: true, members: [] },
+      { name: 'Builder', icon: 'agent', builtIn: false, members: [] },
+      { name: 'Reviewer', icon: 'review', builtIn: false, members: [] },
+    ] as unknown as LibraryPrefab[];
+    const actions = spies<ZoneBindingActions & { newAgent(zone: Zone): void }>();
+    const entries = newAgentMenu(repoZone, undefined, actions);
+    library.current = [];
+    expect(menuIds(entries)).toEqual(['new-agent', 'crew-Builder', 'crew-Reviewer', 'crew-Ticket', 'crew-library']);
+    expect(row(entries, 'new-agent')).toMatchObject({ label: 'Blank agent' });
+    expect(entries.filter((entry) => typeof entry === 'object' && 'heading' in entry)).toEqual([{ heading: 'Your prefabs' }, { heading: 'Built in' }]);
+    for (const id of ['new-agent', 'crew-Reviewer', 'crew-Ticket', 'crew-library']) (row(entries, id) as { onSelect(): void }).onSelect();
+    expect(actions.calls).toEqual([
+      ['newAgent', [repoZone]],
+      ['startCrew', ['Reviewer', repoZone]],
+      ['startCrew', ['Ticket', repoZone]],
+      ['crewLibrary', [repoZone]],
+    ]);
+  });
+
+  it('greys the blank agent and every prefab, saying why, where the zone can start no agent', () => {
+    library.current = [{ name: 'Solo agent', icon: 'agent', builtIn: true, members: [] }] as unknown as LibraryPrefab[];
+    const entries = newAgentMenu(repoZone, 'Still cloning', spies());
+    library.current = [];
+    expect(row(entries, 'new-agent')).toMatchObject({ disabled: true, hint: 'Still cloning' });
+    expect(row(entries, 'crew-Solo agent')).toMatchObject({ disabled: true, hint: 'Still cloning' });
+    expect(row(entries, 'crew-library')).not.toHaveProperty('disabled');
   });
 });
 
@@ -2325,8 +2353,14 @@ describe("a project's menus, under the Simplified design", () => {
   });
 
   it("says why it can't start an agent, and Delete… is last and red", () => {
+    library.current = [{ name: 'Solo agent', icon: 'agent', builtIn: true, members: [] }] as unknown as LibraryPrefab[];
     const entries = projectContextMenu(projectInput(repoZone, { noAgents: 'Still cloning' }));
+    library.current = [];
     expect(row(entries, 'new-agent')).toMatchObject({ disabled: true, hint: 'Still cloning' });
+    // Its crews say the same; the library still opens.
+    const crew = row(entries, 'crew') as { entries: ModelEntry[] };
+    expect(row(crew.entries, 'crew-Solo agent')).toMatchObject({ disabled: true, hint: 'Still cloning' });
+    expect(row(crew.entries, 'crew-library')).not.toHaveProperty('disabled');
     expect(entries.at(-1)).toMatchObject({ id: 'delete', label: 'Delete project…', danger: true });
   });
 });

@@ -4,7 +4,7 @@ import { agents, launch, listFinishedTurns, sessionWindow, spawnAgent, tile, TUR
 import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone, type LaunchOptions } from '../launch.ts';
 import { RENDER_ARGS, RENDER_ENV, VIEWPORT, ignorePointer, pinFonts, pinRandomText, settle } from '../render.ts';
 import { scratch } from '../scratch.ts';
-import { openSettings, settingsSection } from '../settings-helpers.ts';
+import { openSettings } from '../settings-helpers.ts';
 import { SHOT, needsBaselines, pinChatTimes, THEMES } from './shared.ts';
 
 test.use({ viewport: null });
@@ -305,7 +305,7 @@ for (const { theme, suffix } of THEMES) {
 for (const { theme, suffix } of THEMES) {
   const appearance: Record<string, string> = theme === 'dark' ? { AGENT_BOARD_APPEARANCE: 'dark' } : {};
   const shot = `agent-shelves-live${suffix}`;
-  test(`an agent's shelves as Classic's Shelves sidebar draws it, ${theme}`, async () => {
+  test(`an agent's shelves as Classic draws them, ${theme}`, async () => {
     needsBaselines(shot);
     const { dir, repo, env } = scratch('waiting');
     const dataDir = tempDataDir();
@@ -318,10 +318,6 @@ for (const { theme, suffix } of THEMES) {
       await browseForZone(window);
       await spawnAgent(window, 'monorepo', 'Pick a database');
       await expect(tile(window)).toHaveAttribute('data-state', 'waiting', { timeout: TURN_MS });
-      // Picked in Settings, which shows the shelves too.
-      const settings = await openSettings(window, 'agents.sidebar');
-      await settingsSection(settings, 'Sidebar').getByRole('group', { name: 'Agent sidebar' }).getByRole('button', { name: 'Shelves' }).click();
-      await settings.close();
       await tile(window).dblclick();
       const shelves = sessionWindow(window).getByTestId('agent-shelves');
       await expect(shelves.getByTestId('page-now')).toContainText('Postgres or SQLite');

@@ -1,12 +1,8 @@
 import type {} from './import-meta-glob.ts';
 import type { DatabaseSync } from 'node:sqlite';
-import { backUp, checkNewerDatabase, checkRecordedMigrations, recordMigration } from './schema-rollback.ts';
+import { backUp, checkNewerDatabase, checkRecordedMigrations, recordMigration, type Migration } from './schema-rollback.ts';
 
-export interface Migration {
-  version: number;
-  name: string;
-  sql: string;
-}
+export type { Migration };
 
 /**
  * The schema, from `migrations/NNNN_name.sql`. Forward-only: never edit a shipped file (a test holds each to its

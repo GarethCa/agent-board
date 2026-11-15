@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -10,7 +10,7 @@ import { startTestDaemon, tempDataDir } from './helpers.ts';
 
 describe('agent-board daemon', () => {
   let home: string;
-  // The daemon writes the hook shim under ~/.agent-board: never the real one.
+  // A dev or test daemon keeps its launchers in its data dir; were one to write ~/.agent-board, it must not be the real one.
   beforeEach(() => {
     home = tempDataDir();
     vi.stubEnv('HOME', home);
@@ -28,8 +28,10 @@ describe('agent-board daemon', () => {
     const client = await vi.waitFor(() => connectDaemon(daemonPaths(dataDir).socket));
     await expect(client.call('daemon.health')).resolves.toMatchObject({ pid: process.pid });
     client.close();
-    // Codex's hooks run this app's CLI through the shim, the way this process was started.
-    const shim = readFileSync(join(home, '.agent-board', 'bin', 'agent-board-hook'), 'utf8');
+    // Codex's hooks run this app's CLI through the shim, the way this process was started. This isn't the installed
+    // app, so the shim is in the data dir and the home folder is left alone.
+    const shim = readFileSync(join(dataDir, 'bin', 'agent-board-hook'), 'utf8');
+    expect(existsSync(join(home, '.agent-board'))).toBe(false);
     expect(shim).toContain(`'${process.execPath}' '${process.argv[1]}' hook "$@"`);
 
     await expect(exit).resolves.toBe(0);
@@ -73,8 +75,8 @@ describe('agent-board daemon', () => {
 
   it('exits 2 with usage on bad arguments', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
-    await expect(runAgentBoardCli(['serve'])).resolves.toBe(2);
-    expect(error).toHaveBeenCalledWith('agent-board: no command serve. `agent-board --help` lists them.');
+    await expect(runAgentBoardCli(['frobnicate'])).resolves.toBe(2);
+    expect(error).toHaveBeenCalledWith('agent-board: no command frobnicate. `agent-board --help` lists them.');
     await expect(runAgentBoardCli(['hook', 'claude'])).resolves.toBe(2);
     await expect(runAgentBoardCli(['hook'])).resolves.toBe(2);
     await expect(runAgentBoardCli(['daemon'])).resolves.toBe(2);

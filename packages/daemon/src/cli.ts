@@ -1,12 +1,12 @@
 import { homedir } from 'node:os';
 import { parseArgs } from 'node:util';
-import { logLine } from './log-line.ts';
 import { BOARD_COMMANDS, runBoardCommand } from './board-cli.ts';
 import { daemonLaunchEnv, runsUnderDaemon } from './daemon-launch.ts';
 import { runHookCommand } from './hook-forwarder.ts';
 import { daemonPaths } from './paths.ts';
 import { describeBuild, runningSessions, type BuildInfo } from './protocol.ts';
 import { restartDaemon, type RestartDaemonResult } from './restart.ts';
+import { runDaemon } from './run-daemon.ts';
 import { spawnDetachedDaemon } from './spawn.ts';
 import { stopDaemon } from './stop.ts';
 
@@ -27,6 +27,8 @@ export const EXIT_SESSIONS_LIVE = 3;
 export interface AgentBoardCliOptions {
   /** The build this executable is, which a daemon it starts reports. */
   build?: BuildInfo;
+  /** Whether a daemon this runs honours the environment's test overrides (`DaemonOptions.testOverrides`). */
+  testOverrides?: boolean;
   /** How `restart-daemon` starts this build's daemon on a data dir: detached, as this executable, by default. */
   startDaemon?: (dataDir: string) => void | Promise<void>;
 }
@@ -84,34 +86,13 @@ export async function runAgentBoardCli(argv: string[], options: AgentBoardCliOpt
     return 2;
   }
 
-  // Loaded only to run the daemon: the board commands start often, and need none of it.
-  const { startDaemon } = await import('./daemon.ts');
-  const { DaemonAlreadyRunningError } = await import('./lock.ts');
-  const { cliBanner } = await import('./cli-banner.ts');
-  let daemon;
-  try {
-    daemon = await startDaemon({
-      dataDir,
-      build: options.build,
-      idleTimeoutMs,
-      permissionHoldMs,
-      hookForwarder: { command: process.execPath, args: process.argv.slice(1, 2) },
-    });
-  } catch (error) {
-    if (error instanceof DaemonAlreadyRunningError) {
-      console.log(logLine(`${error.message}; leaving it running`));
-      return 0;
-    }
-    console.error(logLine(`could not start: ${(error as Error).message}`));
-    return 1;
-  }
-  console.log(cliBanner({ version: describeBuild(options.build ?? null), ...daemon.startedWith }));
-  const stop = () => void daemon.stop();
-  const signals = ['SIGTERM', 'SIGINT', 'SIGHUP'] as const;
-  for (const signal of signals) process.once(signal, stop);
-  await daemon.closed;
-  for (const signal of signals) process.off(signal, stop);
-  return 0;
+  return runDaemon({
+    dataDir,
+    build: options.build,
+    testOverrides: options.testOverrides,
+    idleTimeoutMs,
+    permissionHoldMs,
+  });
 }
 
 async function runStopCommand(args: string[]): Promise<number> {

@@ -7,8 +7,8 @@
 
 import { isClosed, tileSizeKey } from './board-layout.ts';
 import type { Clock } from './clock.ts';
-import { spineViewKey, type DaemonCall } from './orchestrator-layout.ts';
-import { startedByHand, type Agent, type BoardItem, type DaemonEvent, type DaemonMethods, type FlowEdge, type Shell, type Zone } from './protocol.ts';
+import { spineViewKey } from './orchestrator-layout.ts';
+import { startedByHand, type Agent, type BoardItem, type DaemonCall, type DaemonEvent, type DaemonMethods, type FlowEdge, type Shell, type Zone } from './protocol.ts';
 import type { RpcHandlers } from './rpc.ts';
 import { STAGE_BOARD_KIND } from './stage-board.ts';
 import type { ZoneTable } from './zones.ts';

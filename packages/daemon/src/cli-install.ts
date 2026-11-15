@@ -1,13 +1,16 @@
 import { lstatSync, mkdirSync, readlinkSync, renameSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
+import { refuseUsersHomeUnlessInstalled, usersOwnHome } from './live-home.ts';
 
 /**
  * Links `binDir/agent-board` to the CLI launcher at `cliPath` (ADR-0010), as VS Code's "Install 'code' command" does:
  * no sudo, and the link follows the launcher the daemon keeps up to date. Replaces a link already there, but never a
- * file of someone else's. Returns the link's path.
+ * file of someone else's. Returns the link's path. Only the installed app (`installedApp`) links into the user's own
+ * home (`usersHome`): a dev or test build's launcher may soon be gone.
  */
-export function installCli(cliPath: string, binDir: string): string {
+export function installCli(cliPath: string, binDir: string, { installedApp, usersHome = usersOwnHome() }: { installedApp: boolean; usersHome?: string }): string {
   const link = join(binDir, 'agent-board');
+  refuseUsersHomeUnlessInstalled([link], installedApp, usersHome);
   mkdirSync(binDir, { recursive: true });
   let existing;
   try {

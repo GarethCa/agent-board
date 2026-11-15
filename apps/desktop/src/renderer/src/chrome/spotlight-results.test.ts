@@ -299,8 +299,8 @@ describe('spotlightGroups and settings', () => {
     expect(names(settingRows('terminal card', true))).toEqual([]);
   });
 
-  it("lists the agent sidebar's choice under Classic, and not under the Simplified design", () => {
-    expect(names(settingRows('agent sidebar'))).toContain('Agent sidebar');
+  it('lists no agent sidebar choice under either design', () => {
+    expect(names(settingRows('agent sidebar'))).not.toContain('Agent sidebar');
     expect(names(settingRows('agent sidebar', true))).not.toContain('Agent sidebar');
   });
 

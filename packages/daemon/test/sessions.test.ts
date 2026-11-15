@@ -144,6 +144,27 @@ describe('shell sessions', () => {
     expect(await client.call('session.list')).toMatchObject([{ cols: 101, rows: 33 }]);
   });
 
+  it('sizes a terminal two clients view to the one that typed last, and to the other once it detaches', async () => {
+    const { daemon, client, recorder } = await daemonWithClient();
+    const other = await connectTestClient(daemon);
+    const session = await client.call('session.createShell', SIZE);
+    await client.call('session.attach', { sessionId: session.id });
+    await other.call('session.attach', { sessionId: session.id });
+    await client.call('session.resize', { sessionId: session.id, cols: 101, rows: 33 });
+    await other.call('session.resize', { sessionId: session.id, cols: 60, rows: 20 });
+
+    await client.call('session.write', { sessionId: session.id, data: 'stty size; echo typed-$((1 + 1))\r' });
+    await recorder.waitForText(session.id, 'typed-2');
+    expect(recorder.screenText(session.id)).toContain('33 101');
+
+    await other.call('session.write', { sessionId: session.id, data: 'stty size; echo typed-$((2 + 1))\r' });
+    await recorder.waitForText(session.id, 'typed-3');
+    expect(await client.call('session.list')).toMatchObject([{ cols: 60, rows: 20 }]);
+
+    await other.call('session.detach', { sessionId: session.id });
+    expect(await client.call('session.list')).toMatchObject([{ cols: 101, rows: 33 }]);
+  });
+
   it('lays out an emoji as two cells in its snapshot, as the TUIs draw it', async () => {
     const { daemon, client, recorder } = await daemonWithClient();
     const session = await client.call('session.createShell', SIZE);

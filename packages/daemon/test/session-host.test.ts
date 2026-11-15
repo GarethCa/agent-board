@@ -21,7 +21,7 @@ function fakeBackend() {
   const backend: TerminalBackend = {
     spawn: ({ id }) => ({ id, pid: 4242 }),
     write: () => {},
-    resize: () => {},
+    resize: (id, cols, rows) => void calls.push(`resize ${id} ${cols}x${rows}`),
     kill: (id, signal = 'SIGHUP') => void calls.push(`kill ${id} ${signal}`),
     pause: (id) => void calls.push(`pause ${id}`),
     resume: (id) => void calls.push(`resume ${id}`),
@@ -58,7 +58,7 @@ function host(options: Partial<SessionHostOptions> & { db?: DatabaseSync } = {})
 }
 
 /** A subscriber whose backlog the test sets, and whose drain it triggers. */
-function fakeSubscriber() {
+function fakeSubscriber(resizes?: SessionSubscriber['resizes']) {
   const events: DaemonEvent[] = [];
   let backlog = 0;
   let drained: (() => void) | undefined;
@@ -66,6 +66,7 @@ function fakeSubscriber() {
     send: (event) => void events.push(event),
     backlog: () => backlog,
     whenDrained: (callback) => void (drained = callback),
+    ...(resizes === undefined ? {} : { resizes }),
   };
   return {
     subscriber,
@@ -301,6 +302,111 @@ describe("a shell's last folder", () => {
 
     expect(asked).toEqual([4242]);
     expect(db.prepare('SELECT last_cwd FROM sessions WHERE id = ?').get(session.id)).toEqual({ last_cwd: '/tmp/somewhere' });
+  });
+});
+
+describe('terminal sizing with several viewers', () => {
+  const DESK = { cols: 200, rows: 50 };
+  const POPOUT = { cols: 120, rows: 40 };
+  const PHONE = { cols: 40, rows: 20 };
+  const resizes = (calls: string[]) => calls.filter((call) => call.startsWith('resize'));
+
+  function twoViewers(second?: SessionSubscriber['resizes']) {
+    const { sessions, session, fake } = host();
+    const desk = fakeSubscriber().subscriber;
+    const other = fakeSubscriber(second).subscriber;
+    sessions.attach(session.id, desk);
+    sessions.attach(session.id, other);
+    const size = () => sessions.list().find((info) => info.id === session.id)!;
+    return { sessions, session, fake, desk, other, size };
+  }
+
+  it('sizes the terminal to the local window that resized it last', () => {
+    const { sessions, session, desk, other, size } = twoViewers();
+
+    sessions.resize(session.id, DESK, desk);
+    sessions.resize(session.id, POPOUT, other);
+
+    expect(size()).toMatchObject(POPOUT);
+  });
+
+  it('gives the size back to the window that types, at the size it last asked for', () => {
+    const { sessions, session, desk, other, size } = twoViewers();
+    sessions.resize(session.id, DESK, desk);
+    sessions.resize(session.id, POPOUT, other);
+
+    sessions.write(session.id, 'x', desk);
+
+    expect(size()).toMatchObject(DESK);
+  });
+
+  it('hands the size to the next most recent window when the last one detaches, or its connection closes', () => {
+    const { sessions, session, desk, other, size } = twoViewers();
+    sessions.resize(session.id, DESK, desk);
+    sessions.resize(session.id, POPOUT, other);
+
+    sessions.detach(session.id, other);
+    expect(size()).toMatchObject(DESK);
+
+    sessions.resize(session.id, POPOUT, other);
+    sessions.detachAll(other);
+    expect(size()).toMatchObject(DESK);
+  });
+
+  it('keeps the size it has when the last viewer leaves', () => {
+    const { sessions, session, desk, other, size } = twoViewers();
+    sessions.resize(session.id, DESK, desk);
+
+    sessions.detachAll(desk);
+    sessions.detachAll(other);
+
+    expect(size()).toMatchObject(DESK);
+  });
+
+  it("refuses the resize of a client that may only watch, and never resizes for it", () => {
+    const { sessions, session, fake, desk, other, size } = twoViewers('never');
+    sessions.resize(session.id, DESK, desk);
+    const before = resizes(fake.calls);
+
+    expect(() => sessions.resize(session.id, PHONE, other)).toThrow(/only watch/);
+    sessions.detachAll(other);
+
+    expect(size()).toMatchObject(DESK);
+    expect(resizes(fake.calls)).toEqual(before);
+  });
+
+  it("counts the resize of a client that sizes after typing only once it has typed into the session", () => {
+    const { sessions, session, desk, other, size } = twoViewers('afterTyping');
+    sessions.resize(session.id, DESK, desk);
+
+    sessions.resize(session.id, PHONE, other);
+    expect(size()).toMatchObject(DESK);
+
+    sessions.write(session.id, 'x', other);
+    expect(size()).toMatchObject(PHONE);
+
+    sessions.write(session.id, 'y', desk);
+    expect(size()).toMatchObject(DESK);
+  });
+
+  it("doesn't resize the terminal to the size it already has", () => {
+    const { sessions, session, fake, desk, other } = twoViewers();
+    sessions.resize(session.id, DESK, desk);
+    sessions.resize(session.id, DESK, other);
+    sessions.write(session.id, 'x', desk);
+
+    expect(resizes(fake.calls)).toEqual([`resize ${session.id} 200x50`]);
+  });
+
+  it('leaves the size be when a connection that never voted closes', () => {
+    const { sessions, session, fake, desk, other } = twoViewers();
+    sessions.resize(session.id, DESK, desk);
+    const before = resizes(fake.calls);
+
+    sessions.detachAll(other);
+    sessions.detachAll(fakeSubscriber().subscriber);
+
+    expect(resizes(fake.calls)).toEqual(before);
   });
 });
 

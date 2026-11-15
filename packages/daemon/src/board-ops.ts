@@ -1582,6 +1582,7 @@ const SENT_LINES: Record<SendDelivery, string> = {
   waking: "Waking it with the message, typed once it's up:",
   'queued-in-turn': 'A turn started as it was typed: queued for after that turn, not yet seen taken up, at',
   'queued-after-turn': 'Queued until its turn ends, then sent as a turn of its own:',
+  'queued-while-typing': 'Queued, not sent: the user is typing at its prompt. Sent as a message of its own once they stop:',
   cleared: 'Pressed Ctrl-U on what was typed at its prompt:',
 };
 
@@ -1605,7 +1606,7 @@ export async function sendToAgent(
     text: `${first} ${fresh.line}${reads}`,
     json: {
       ...agentJson(fresh.refs, fresh.agent, session.caller),
-      queued: delivery === 'queued-until-up' || delivery === 'queued-after-turn',
+      queued: delivery === 'queued-until-up' || delivery === 'queued-after-turn' || delivery === 'queued-while-typing',
       delivery,
       ...(typed === undefined ? {} : { typed }),
     },
@@ -1769,6 +1770,7 @@ const TEMPLATE_SENT: Record<NonNullable<GivenRole['template']>, string> = {
   waking: ", and woke it with the role's template",
   'queued-in-turn': ", and queued the role's template for after its turn",
   'queued-after-turn': ", and queued the role's template until its turn ends",
+  'queued-while-typing': ", and queued the role's template until the user stops typing at its prompt",
 };
 
 /** `continue`: resumes a rate-limited agent's turn on usage credits, as its harness offers. */

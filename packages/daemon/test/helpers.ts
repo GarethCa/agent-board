@@ -143,10 +143,12 @@ export function writeShellRc(home: string, text: string): void {
   writeFileSync(join(home, LOGIN_SHELL.rc), text);
 }
 
-/** Starts a daemon in `dataDir` (a fresh temp dir by default), with credentials in memory, and stops it when the test ends. */
-export async function startTestDaemon(options: Partial<DaemonOptions> = {}): Promise<Daemon> {
-  const daemon = await startDaemon({
-    dataDir: options.dataDir ?? tempDataDir(),
+/**
+ * What keeps a test's daemon off the developer's own machine: their shell, home folder, harnesses, hooks and
+ * keychain. Every option but the data dir, for a test that starts the daemon its own way.
+ */
+function testDaemonOptions(): Omit<DaemonOptions, 'dataDir'> {
+  return {
     log: () => {},
     // Never the user's own shell and its rc files, nor their keychain.
     shell: testShell(),
@@ -164,6 +166,14 @@ export async function startTestDaemon(options: Partial<DaemonOptions> = {}): Pro
     credentials: createMemoryCredentialStore(),
     // Never asks gh for pull requests unless a test wants it to, with a fake gh.
     pullRequestPollMs: 0,
+  };
+}
+
+/** Starts a daemon in `dataDir` (a fresh temp dir by default), with credentials in memory, and stops it when the test ends. */
+export async function startTestDaemon(options: Partial<DaemonOptions> = {}): Promise<Daemon> {
+  const daemon = await startDaemon({
+    dataDir: options.dataDir ?? tempDataDir(),
+    ...testDaemonOptions(),
     ...options,
   });
   onTestFinished(() => daemon.stop());

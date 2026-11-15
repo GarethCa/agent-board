@@ -15,7 +15,6 @@ import { SessionName } from './SessionName';
 import { SimplifiedHeader } from './SimplifiedHeader';
 import { useSimplified } from '../design';
 import { showsShelves } from './agent-sidebar';
-import { useAgentSidebar } from './use-agent-sidebar';
 import { useChatRunsShow, useViewSettingsLoaded } from '../board/view-settings';
 import { chatControlsPlace } from './chat-runs-show';
 import { useSidebarCollapsed } from './use-sidebar-collapsed';
@@ -88,7 +87,7 @@ interface SessionWindowProps {
  * strip has a Terminal/Chat switch: the chat view reads its conversation from its transcript instead.
  */
 export function SessionWindow(props: SessionWindowProps) {
-  // Not drawn before the saved settings are read: a Classic user who picked Full would see the shelves first.
+  // Not drawn before the saved settings are read: it would draw with the defaults first, then change.
   return useViewSettingsLoaded() ? <SessionWindowShown {...props} /> : null;
 }
 
@@ -96,9 +95,9 @@ function SessionWindowShown({ content, title, placement, onClose, onDelete, onMi
   const agent = content.kind === 'session' ? content.agent : undefined;
   const shell = content.kind === 'shell' ? content.shell : undefined;
   const [attach, setAttach] = useState<AttachState>('attaching');
-  // Classic's details strip opens collapsed to its rail in each window; an agent's shelves (the Simplified design's, or
-  // Classic's with its Shelves sidebar) open, or collapsed to their rail, as they last were in any window (⌘I).
-  const shelves = showsShelves(useAgentSidebar(), content);
+  // The details strip (a shell's, a session with no agent's) opens collapsed to its rail in each window; an agent's
+  // shelves open, or collapsed to their rail, as they last were in any window (⌘I).
+  const shelves = showsShelves(content);
   const root = useRef<HTMLDivElement>(null);
   const [detailsCollapsed, setDetailsCollapsed] = useSidebarCollapsed(shelves, root);
   const shows = useNeedsYouShows();

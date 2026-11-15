@@ -38,8 +38,6 @@ export const VIEW_KEYS = {
   tethers: 'tethers',
   /** How agent notes look: document cards or terminal cards. */
   agentNoteLook: 'agentNoteLook',
-  /** Which sidebar an agent's window shows under Classic: the shelves or the full details strip. */
-  agentSidebar: 'agentSidebar',
   /** Whether terminals draw with the GPU (xterm's WebGL renderer), falling back to the DOM renderer: on unless turned off. */
   gpuTerminals: 'gpuTerminals',
   /** Whether an open pane's terminal stays alive while it is off screen: off unless turned on. */
@@ -62,14 +60,55 @@ export const VIEW_KEYS = {
   overviewSeenAt: 'overview.seenAt',
 } as const;
 
+/** Saves one view state key, a little after the last change: see `viewSaver`. */
+export interface ViewSaver {
+  (value: unknown): void;
+  /** Sends the value waiting, if one is, at once; settles once it, and any save already on its way, have. */
+  flush(): Promise<void>;
+}
+
+/** The flushes of the savers in this process with a save waiting or on its way. */
+const unsaved = new Set<() => Promise<void>>();
+
 /**
  * A saver for one view state key: each call replaces the value waiting to be saved, which is saved once `delayMs`
- * passes without another. Saving is best-effort: a failure leaves the last saved value.
+ * passes without another, or at once when it is flushed (`flushViewSaves`, as the app quits). Saving is best-effort: a
+ * failure leaves the last saved value.
  */
-export function viewSaver(set: (value: unknown) => Promise<unknown>, delayMs: number): (value: unknown) => void {
+export function viewSaver(set: (value: unknown) => Promise<unknown>, delayMs: number): ViewSaver {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  return (value) => {
+  let waiting: { value: unknown } | undefined;
+  let onItsWay: Promise<void> | undefined;
+  const send = (): Promise<void> => {
     clearTimeout(timer);
-    timer = setTimeout(() => void set(value).catch(() => {}), delayMs);
+    if (waiting !== undefined) {
+      const { value } = waiting;
+      waiting = undefined;
+      const sent: Promise<void> = set(value).then(
+        () => {},
+        () => {},
+      );
+      onItsWay = sent;
+      void sent.then(() => {
+        if (onItsWay !== sent) return;
+        onItsWay = undefined;
+        if (waiting === undefined) unsaved.delete(send);
+      });
+    }
+    return onItsWay ?? Promise.resolve();
   };
+  return Object.assign(
+    (value: unknown) => {
+      waiting = { value };
+      unsaved.add(send);
+      clearTimeout(timer);
+      timer = setTimeout(() => void send(), delayMs);
+    },
+    { flush: send },
+  );
+}
+
+/** Sends every save waiting in this process at once (`ViewSaver.flush`); settles once they all have. */
+export async function flushViewSaves(): Promise<void> {
+  await Promise.all([...unsaved].map((flush) => flush()));
 }

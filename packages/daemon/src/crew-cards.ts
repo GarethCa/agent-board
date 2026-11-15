@@ -9,9 +9,8 @@ import type { Size } from './board-layout.ts';
 import { readsItem } from './item-scope.ts';
 import { isObject } from './json.ts';
 import { keyedQueue } from './keyed-queue.ts';
-import type { DaemonCall } from './orchestrator-layout.ts';
 import { invalidParams } from './params.ts';
-import { crewCardSize, type Agent, type BoardItem, type BoardPlace, type Crew, type CrewCardData } from './protocol.ts';
+import { crewCardSize, type Agent, type BoardItem, type BoardPlace, type Crew, type CrewCardData, type DaemonCall } from './protocol.ts';
 
 export interface CrewCardsOptions extends BoardCallerSources {
   db: DatabaseSync;

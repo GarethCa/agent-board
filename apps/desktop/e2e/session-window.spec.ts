@@ -1,6 +1,6 @@
 import { expect, type Locator, type Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
-import { launch, screen, sessionItems, sessionWindow, SHELL_ENV, showDetails, spawnAgent, tile, tileAction, windowKey, useFullSidebar } from './agent-helpers.ts';
+import { launch, screen, sessionItems, sessionWindow, SHELL_ENV, spawnAgent, tile, tileAction, windowKey } from './agent-helpers.ts';
 import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone, newShell } from './launch.ts';
 import { viewSettled } from './board-helpers.ts';
 import { clickClosing } from './windows.ts';
@@ -127,16 +127,18 @@ for (const harness of ['Claude', 'Codex'] as const) {
     // Slow turns, so there is time to interrupt one; and no idle_prompt, which would move an idle agent on to waiting.
     const { app, window } = await launch(dataDir, { ...env, FAKE_HARNESS_STEP_DELAY_MS: '800', FAKE_HARNESS_IDLE_NOTIFY_MS: '600000' });
     try {
-      await useFullSidebar(window);
       await pickFolderNext(app, repo);
       await browseForZone(window);
       await spawnAgent(window, 'monorepo', 'Run the tests', { harness });
       await expect(tile(window)).toHaveCount(1);
       await tile(window).dblclick();
-      await showDetails(sessionWindow(window));
-      const controls = sessionWindow(window).getByRole('navigation', { name: 'Session controls' });
+      // The window's controls are in its header, beside the shelves: one state button, and the rest under ⋯.
+      const controls = sessionWindow(window).locator('.session-window-head').getByTestId('shelf-controls');
+      const more = async (label: RegExp) => {
+        await controls.getByRole('button', { name: 'More controls' }).click();
+        return window.getByRole('menuitem', { name: label });
+      };
       // Only controls that work: nothing says "Not built yet", and no Connections placeholder.
-      for (const later of ['Hand off', 'Fork']) await expect(controls.getByRole('button', { name: later })).toHaveCount(0);
       await expect(sessionWindow(window)).not.toContainText('Not built yet');
       await expect(sessionWindow(window)).not.toContainText('Flows between agents come with M2');
 
@@ -147,10 +149,20 @@ for (const harness of ['Claude', 'Codex'] as const) {
       await controls.getByRole('button', { name: 'Interrupt' }).click();
       await expect(screen(window)).toContainText('Interrupted');
       await expect(tile(window)).toHaveAttribute('data-state', 'idle');
-      await expect(controls.getByRole('button', { name: 'Interrupt' })).toBeDisabled();
       await expect(screen(window)).not.toContainText('All tests pass.');
-      // Between turns, it may be paused.
+      // Between turns, its state button is Pause.
+      await expect(controls.getByRole('button', { name: 'Interrupt' })).toHaveCount(0);
       await expect(controls.getByRole('button', { name: 'Pause' })).toBeEnabled();
+
+      // ⋯ holds only controls that work: no Hand off or Fork. Close pane shows only while a shell split into the tab has the focus.
+      await expect(await more(/^Split horizontally/)).toBeEnabled();
+      for (const later of [/^Hand off/, /^Fork/, /^Close pane/]) await expect(window.getByRole('menuitem', { name: later })).toHaveCount(0);
+      await window.getByRole('menuitem', { name: /^Split horizontally/ }).click();
+      const shellPane = sessionWindow(window).locator('[data-testid="shell-pane"]:not([data-agent])');
+      await expect(shellPane).toHaveCount(1);
+      await shellPane.click();
+      await (await more(/^Close pane/)).click();
+      await expect(shellPane).toHaveCount(0);
 
       // The composer sends the next message, and another while the agent works on that one, which it takes next.
       const view = sessionWindow(window).getByRole('group', { name: 'View' });
@@ -170,7 +182,7 @@ for (const harness of ['Claude', 'Codex'] as const) {
       await expect(screen(window)).toContainText('Done: and then this.', { timeout: 30_000 });
 
       // Stop ends its session as done; its worktree stays, and its pane drops into a shell there.
-      await controls.getByRole('button', { name: 'Stop' }).click();
+      await (await more(/^Stop/)).click();
       await expect(tile(window)).toHaveAttribute('data-state', 'done');
       await expect(window.getByTestId('session-window-status')).toHaveText('ended · shell');
       await expect(sessionWindow(window).getByTestId('agent-exit-banner')).toContainText(`${harness.toLowerCase()} exited`);
@@ -181,7 +193,8 @@ for (const harness of ['Claude', 'Codex'] as const) {
       await expect(composer).toBeDisabled();
       await expect(composer).toHaveAttribute('placeholder', 'The agent has ended');
       await view.getByRole('button', { name: 'Terminal' }).click();
-      await expect(controls.getByRole('button', { name: 'Stop' })).toBeDisabled();
+      await expect(await more(/^Stop/)).toBeDisabled();
+      await window.keyboard.press('Escape');
 
       // Deleting the agent closes its window, popped out or not.
       const [popped] = await Promise.all([
@@ -280,10 +293,12 @@ test('splitting stops when a pane would be left too small to use, and says why',
     const panes = sessionWindow(window).getByTestId('window-pane');
     // Split until it refuses: each press adds a pane, or says why it can't.
     const status = sessionWindow(window).getByTestId('session-window-status');
-    for (let i = 0; i < 10 && !/no room to split/.test((await status.textContent()) ?? ''); i++) {
+    // The row is drawn only once there is something to say: don't wait for it.
+    const said = async () => (await status.allTextContents()).join(' ');
+    for (let i = 0; i < 10 && !/no room to split/.test(await said()); i++) {
       const before = await panes.count();
       await window.keyboard.press(windowKey('d'));
-      await expect.poll(async () => (await panes.count()) > before || /no room to split/.test((await status.textContent()) ?? '')).toBe(true);
+      await expect.poll(async () => (await panes.count()) > before || /no room to split/.test(await said())).toBe(true);
     }
     await expect(status).toContainText('no room to split');
     expect(await panes.count()).toBeGreaterThan(1);

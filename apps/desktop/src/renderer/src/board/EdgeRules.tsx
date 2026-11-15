@@ -31,7 +31,8 @@ import type {
 import { errorMessage } from '../../../shared/errors';
 import { Button, FlowPill, IconButton, Input, Menu, SectionLabel, Segmented } from '../ui';
 import type { FlowEdgeActions } from './FlowEdge';
-import { conditionName, edgeLabel, heldLabel, historyLine, madeByText, rulesSummary } from './flow-edges';
+import { conditionName, edgeLabel, historyLine, madeByText, rulesSummary } from './flow-edges';
+import { heldLabel } from './edge-labels';
 import { whenLabel } from './schedule';
 
 interface EdgeRulesProps {

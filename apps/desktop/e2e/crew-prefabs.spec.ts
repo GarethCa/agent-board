@@ -316,3 +316,39 @@ test('a crew starts in the right zone from every entry point, through one prompt
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('a zone’s ▾ beside + agent offers a blank agent first, then the library, and a crew picked there starts in the zone', async () => {
+  const { dir, repo, env } = scratch('waiting');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, { ...env, ...SHELL_ENV });
+  try {
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    const [zone] = await zones(window);
+    const web = zoneNamed(window, 'monorepo');
+    const box = promptBox(window);
+
+    // A blank agent first: it opens the New agent sheet, as + agent does.
+    await web.getByRole('button', { name: 'Blank agent or prefab' }).click();
+    await expect(window.getByRole('menuitem').first()).toHaveText('Blank agent');
+    await window.getByRole('menuitem', { name: 'Blank agent' }).click();
+    const sheet = window.getByRole('dialog', { name: 'New agent' });
+    await expect(sheet.getByLabel('Task')).toBeVisible();
+    await window.keyboard.press('Escape');
+    await expect(sheet).toBeHidden();
+
+    // A prefab from the library opens its prompt box for this zone, and its crew starts there.
+    await web.getByRole('button', { name: 'Blank agent or prefab' }).click();
+    await window.getByRole('menuitem', { name: /Implementer \+ reviewer/ }).click();
+    await expect(box.getByRole('heading')).toHaveText('Implementer + reviewer in monorepo');
+    await box.getByRole('textbox', { name: 'Prompt' }).fill('Add a header');
+    await box.getByRole('button', { name: /Start crew/ }).click();
+    await expect(box).toBeHidden();
+    await expect.poll(async () => (await agents(window)).filter((agent) => agent.description === 'Add a header').map((agent) => agent.zoneId)).toEqual([zone!.id]);
+    await expect(crewCard(window, 'Add a header').getByTestId('crew-card-row')).toHaveCount(2);
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

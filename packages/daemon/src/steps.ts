@@ -8,7 +8,6 @@ import { boardCaller, connectionAgent, isOwnLiveSession, type BoardCallerSources
 import { notReadBecause, readsItem } from './item-scope.ts';
 import { isObject } from './json.ts';
 import { keyedQueue } from './keyed-queue.ts';
-import type { DaemonCall } from './orchestrator-layout.ts';
 import { invalidParams, optionalBooleanParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
 import {
   BOARD_ERROR,
@@ -35,6 +34,7 @@ import {
   type StepsChange,
   type StepsData,
   type StepsWho,
+  type DaemonCall,
 } from './protocol.ts';
 import { RpcMethodError, type RpcHandlers } from './rpc.ts';
 import { answerWords, stepsProblem } from './steps-format.ts';

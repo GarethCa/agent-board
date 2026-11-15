@@ -88,17 +88,6 @@ export async function showTerminalView(page: Page): Promise<void> {
 
 export const sessionWindow = (page: Page) => page.getByTestId('session-window');
 
-/**
- * Puts the Agent sidebar setting on Full, the details strip: Classic's windows and expanded tiles open on the shelves
- * unless it is picked, so a spec about the strip picks it once the app is up, as Settings › Agents › Sidebar does.
- */
-export async function useFullSidebar(page: Page): Promise<void> {
-  await page.evaluate(() => window.agentBoard.view.set('agentSidebar', 'full'));
-  // The window that sets a view key doesn't hear its own change: reload it, so it reads the saved setting.
-  await page.reload();
-  await connectedDaemonPid(page);
-}
-
 /** Opens the details strip of a session window or expanded tile, which start collapsed to the icon rail. */
 export async function showDetails(scope: Locator): Promise<void> {
   await scope.getByRole('button', { name: 'Show details' }).click();
@@ -425,4 +414,14 @@ export async function closeAgent(page: Page, sessionId: string): Promise<void> {
  */
 export async function normalNewZones(page: Page): Promise<void> {
   await page.evaluate(() => window.agentBoard.flowEdges.setSettings({ arrangeSpacing: 'normal' }));
+}
+
+/**
+ * Stops every animation event before anything on the page hears it, as on a busy machine where an overlay closes
+ * before the page has told it its fade started.
+ */
+export async function stopAnimationEvents(window: Page): Promise<void> {
+  await window.evaluate(() => {
+    for (const type of ['animationstart', 'animationend', 'animationcancel']) document.addEventListener(type, (event) => event.stopImmediatePropagation(), true);
+  });
 }

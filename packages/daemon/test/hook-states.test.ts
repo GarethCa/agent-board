@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { createFakeClock } from './fake-clock.ts';
-import { createHookStates, type HookStateRow } from '../src/hook-states.ts';
+import { createHookStates, DRAFT_HOLD_MS, type HookStateRow } from '../src/hook-states.ts';
 import { createPermissionHolds, type PermissionHolds } from '../src/permissions.ts';
 import type { SessionState } from '../src/protocol.ts';
 import { createSubagentStore } from '../src/subagents.ts';
@@ -657,6 +657,81 @@ describe('where a prompt stands, for pressing Enter on what was typed there', ()
     expect(states.promptNow(now())).toBe('typing');
     hook({ hook_event_name: 'UserPromptSubmit', prompt: 'half a thought' });
     expect(states.promptNow(now())).toBe('working');
+  });
+
+  it('holds back what others send for a while after the last key at a draft, as the board may have it wrong', () => {
+    const { states, row: now, clock } = setup(row('a'));
+    expect(states.draftHeldFor('a')).toBeUndefined();
+    states.typed('a', 'half a', now());
+    clock.advance(DRAFT_HOLD_MS - 1_000);
+    expect(states.whyNotReady(now(), true, false)).toBe('you were typing in its terminal');
+    // Any key there, an arrow too, starts the wait again.
+    states.typed('a', '\x1b[D', now());
+    expect(states.draftHeldFor('a')).toBe(DRAFT_HOLD_MS);
+    clock.advance(DRAFT_HOLD_MS);
+    expect(states.draftHeldFor('a')).toBe(0);
+    expect(states.whyNotReady(now(), true, false)).toBeUndefined();
+    // Still a draft for all else: a run, a flag or a hand-off waits for the user's Enter or Ctrl-U, as it always has.
+    expect(states.whyNotReady(now())).toBe('you were typing in its terminal');
+    expect(states.promptNow(now())).toBe('typing');
+  });
+
+  it('has no draft once the user deletes what they typed, key by key', () => {
+    const { states, row: now } = setup(row('a'));
+    states.typed('a', 'hi', now());
+    states.typed('a', '\x7f\x7f', now());
+    expect(states.promptNow(now())).toBe('at-prompt');
+    expect(states.whyNotReady(now())).toBeUndefined();
+  });
+
+  it('takes keys answering a permission prompt, a question or a rate limit for no draft at its prompt', () => {
+    const { states, hook, row: now } = setup(row('a'));
+    hook({ hook_event_name: 'UserPromptSubmit', prompt: 'go' });
+    void hook({ hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'rm -rf dist' } });
+    expect(now().state).toBe('needs-permission');
+    states.typed('a', '2', now());
+    hook({ hook_event_name: 'Stop', last_assistant_message: 'Ok.' });
+    expect(states.promptNow(now())).toBe('at-prompt');
+    expect(states.whyNotReady(now())).toBeUndefined();
+
+    const asking = setup(row('b', { state: 'thinking' }));
+    asking.hook({ hook_event_name: 'Notification', notification_type: 'agent_needs_input', message: 'Which branch?' });
+    asking.states.typed('b', '1', asking.row());
+    expect(asking.states.isDrafting('b')).toBe(false);
+
+    const limited = setup(row('c', { state: 'thinking' }));
+    limited.hook({ hook_event_name: 'StopFailure', error: 'rate_limit', last_assistant_message: 'API Error: 429' });
+    limited.states.typed('c', '1', limited.row());
+    expect(limited.states.isDrafting('c')).toBe(false);
+  });
+
+  it('takes a message the user queued mid-turn back as their draft when Escape interrupts the turn', () => {
+    const { states, hook, row: now } = setup(row('a'));
+    hook({ hook_event_name: 'UserPromptSubmit', prompt: 'go' });
+    states.typed('a', 'and then tests\r', now());
+    expect(states.isDrafting('a')).toBe(false);
+    states.typed('a', '\x1b', now());
+    expect(states.promptNow(now())).toBe('typing');
+    hook({ hook_event_name: 'UserPromptSubmit', prompt: 'and then tests' });
+    expect(states.isDrafting('a')).toBe(false);
+    // Escape with nothing queued puts nothing back.
+    states.typed('a', '\x1b', now());
+    expect(states.isDrafting('a')).toBe(false);
+  });
+
+  it('takes it back too when the user typed it key by key, as a terminal sends it', () => {
+    const { states, hook, row: now } = setup(row('a'));
+    hook({ hook_event_name: 'UserPromptSubmit', prompt: 'go' });
+    for (const key of 'and then') states.typed('a', key, now());
+    expect(states.promptNow(now())).toBe('typing');
+    states.typed('a', '\r', now());
+    expect(states.isDrafting('a')).toBe(false);
+    states.typed('a', '\x1b', now());
+    expect(states.isDrafting('a')).toBe(true);
+    // So another agent's send waits (deliveries' `userTyping` reads this hold), at the prompt the interrupt leaves.
+    expect(states.draftHeldFor('a')).toBeGreaterThan(0);
+    hook({ hook_event_name: 'Stop' });
+    expect(states.whyNotReady(now(), true, false)).toBe('you were typing in its terminal');
   });
 
   it("tells a stale hook of an interrupted turn from news of a new one", () => {

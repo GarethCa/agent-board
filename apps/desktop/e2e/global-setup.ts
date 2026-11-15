@@ -1,4 +1,4 @@
-import { compileCacheGlobalSetup, gitGuardGlobalSetup, harnessGuardGlobalSetup, scrubBoardEnv } from '@agent-board/fake-harness';
+import { compileCacheGlobalSetup, gitGuardGlobalSetup, harnessGuardGlobalSetup, runEveryTeardown, scrubBoardEnv, shimGuardGlobalSetup } from '@agent-board/fake-harness';
 import { createFakeGitHub } from '@agent-board/tracker/testing';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
@@ -19,6 +19,8 @@ export default function globalSetup(): () => Promise<void> {
   const teardownGuard = harnessGuardGlobalSetup();
   // git in a spec must not see a GIT_DIR from the run's own environment, and this checkout's core config must come out as it went in.
   const teardownGit = gitGuardGlobalSetup();
+  // Nor may an app under test point the user's live ~/.agent-board/bin launchers at this checkout's build.
+  const teardownShims = shimGuardGlobalSetup();
   const dataDir = tempDataDir();
   process.env.AGENT_BOARD_DATA_DIR = dataDir;
   // No app under test reaches the real Linear or the user's keychain: tests that need them pass a fixture server and
@@ -36,8 +38,13 @@ export default function globalSetup(): () => Promise<void> {
     const left = daemonsServing(registeredDataDirs(dataDir));
     await terminate(left);
     await removeDataDir(dataDir);
-    teardownGuard();
-    teardownGit();
-    if (left.length > 0) throw new Error(`e2e daemons outlived their run: ${left.join(', ')}`);
+    runEveryTeardown([
+      teardownGuard,
+      teardownGit,
+      teardownShims,
+      () => {
+        if (left.length > 0) throw new Error(`e2e daemons outlived their run: ${left.join(', ')}`);
+      },
+    ]);
   };
 }

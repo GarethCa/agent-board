@@ -9,6 +9,9 @@ import { connectTestClient, recordEvents, sendLogLines, startTestDaemon, TEST_CL
 
 const SIZE = { cols: 120, rows: 40 };
 
+/** How long after the user's last key at an agent's terminal a send waits, shortened for the tests. */
+const USER_IDLE_MS = 400;
+
 /**
  * A daemon whose agents play the fake harnesses' `orchestrate` scenario in one zone. Each
  * fake takes its first typed line as typed, then loses the `loseEnters` Enters after the next one, as a TUI still
@@ -20,6 +23,7 @@ async function sendDaemon(loseEnters = 3, log: (message: string) => void = () =>
     worktreesDir: tempDataDir(),
     agentEnv: fakeHarnessEnv({ scenario: 'orchestrate', home: tempDataDir(), idleNotifyMs: 200, loseEnters, loseEntersAfter: 1 }),
     submitConfirmMs: 100,
+    userIdleMs: USER_IDLE_MS,
   });
   const client = await connectTestClient(daemon);
   const recorder = recordEvents(client);
@@ -184,6 +188,48 @@ describe('a send whose Enter never starts a turn', () => {
       code: RPC_ERROR.invalidParams,
     });
 
+  });
+});
+
+describe('a send while the user is typing at the prompt', () => {
+  /** The worker as the board lists it now. */
+  const listed = async (setup: Setup, sessionId: string) => (await setup.client.call('agent.list')).find((a) => a.sessionId === sessionId)!;
+
+  it('is queued, never typed into their draft, and goes as a message of its own after the one they send', async () => {
+    const setup = await sendDaemon(0);
+    const { lead, token, connection, worker, ref } = await leadAndWorker(setup);
+    await connection.call('orchestrator.wait', { token, sessionIds: [worker.sessionId] });
+    await setup.client.call('session.write', { sessionId: worker.sessionId, data: 'weird issue' });
+
+    const sent = await board(setup, token, 'send', [ref, '--', 'Rename the file']);
+    expect(sent).toMatchObject({ code: 0, out: expect.stringMatching(/^Queued, not sent: the user is typing at its prompt\. Sent as a message of its own once they stop: /) });
+    expect(await listed(setup, worker.sessionId)).toMatchObject({ messagesWaiting: 1, unsent: null });
+    // Long after their last key, their draft is still theirs: nothing is typed onto it.
+    await new Promise((resolve) => setTimeout(resolve, USER_IDLE_MS * 2));
+    expect(setup.recorder.screenText(worker.sessionId)).not.toContain('Rename the file');
+
+    await setup.client.call('session.write', { sessionId: worker.sessionId, data: ' here\r' });
+    await untilAgent(setup.recorder, worker.sessionId, (seen) => seen.lastMessage === 'Done: weird issue here.');
+    await untilAgent(setup.recorder, worker.sessionId, (seen) => seen.lastMessage === `Done: ${sentBy(lead, 'Rename the file')}.`);
+    expect(await listed(setup, worker.sessionId)).toMatchObject({ messagesWaiting: 0, unsent: null });
+  });
+
+  it('waits for the user to stop typing, though they cleared their line, then goes', async () => {
+    const setup = await sendDaemon(0);
+    const { lead, token, connection, worker } = await leadAndWorker(setup);
+    await connection.call('orchestrator.wait', { token, sessionIds: [worker.sessionId] });
+    await setup.client.call('session.write', { sessionId: worker.sessionId, data: 'never mind\x15' });
+
+    expect(await connection.call('orchestrator.send', { token, sessionId: worker.sessionId, text: 'Rename the file' })).toMatchObject({ delivery: 'queued-while-typing' });
+    await untilAgent(setup.recorder, worker.sessionId, (seen) => seen.lastMessage === `Done: ${sentBy(lead, 'Rename the file')}.`);
+  });
+
+  it('goes at once to an empty prompt the user has not typed at lately', async () => {
+    const setup = await sendDaemon(0);
+    const { token, connection, worker } = await leadAndWorker(setup);
+    await connection.call('orchestrator.wait', { token, sessionIds: [worker.sessionId] });
+
+    expect(await connection.call('orchestrator.send', { token, sessionId: worker.sessionId, text: 'Rename the file' })).toMatchObject({ delivery: 'started' });
   });
 });
 

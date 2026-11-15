@@ -828,12 +828,17 @@
 }
 
 /*
- * A menu has no closing animation: closed, it leaves the page at once. Radix keeps a closing menu mounted while it
- * thinks an exit animation runs, which it guesses from the animation's name; a menu closed before its fade has been
- * seen to start would wait for it, still mounted, and a click opening it again would reopen that old menu, whose
- * outside-click check takes the click on its own button as a click outside and closes it.
+ * A menu, a popover, a tooltip and a hover card have no closing animation: closed, each leaves the page at once.
+ * Radix keeps a closing overlay mounted while it thinks an exit animation runs, which it guesses from the animation's
+ * name; one closed before its fade has been seen to start would wait for it, still mounted, and a click opening it
+ * again would reopen that old overlay, whose outside-click check takes the click on its own button as a click outside
+ * and closes it. A dialog needs no rule: it is not placed by Radix's popper, so its own animation is the one Radix
+ * sees from the start.
  */
-.ui-menu[data-state='closed'] {
+.ui-menu[data-state='closed'],
+.ui-popover[data-state='closed'],
+.ui-tooltip[data-state='closed'],
+.ui-hover-card[data-state='closed'] {
   animation: none;
 }
 

@@ -94,7 +94,7 @@ export const HybridTile = memo(function HybridTile({ id, tile, selected = false 
   const simplified = useSimplified();
   if (tile.start !== undefined) return <StartTile id={id} start={tile.start} />;
   if (tile.agent !== undefined && tile.helpers !== undefined) {
-    return <TicketTile id={id} selected={selected} chat={tile.agent} helpers={tile.helpers} from={tile.from} implementer={tile.implementer} />;
+    return <TicketTile id={id} selected={selected} chat={tile.agent} helpers={tile.helpers} from={tile.from} crew={tile.crew} implementer={tile.implementer} />;
   }
   if (tile.agent !== undefined && simplified) {
     return <CalmTile id={id} selected={selected} agent={tile.agent} repo={tile.repo} from={tile.from} crew={tile.crew} crewFlags={tile.crewFlags} implementer={tile.implementer} />;

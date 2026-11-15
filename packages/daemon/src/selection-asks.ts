@@ -31,10 +31,10 @@ import {
   type SuggestedEdit,
   type SuggestedEnd,
   type SuggestedShape,
+  type DaemonCall,
 } from './protocol.ts';
 import { cutText } from './text-cut.ts';
 import type { FolderPlace } from './agent-spawns.ts';
-import type { DaemonCall } from './orchestrator-layout.ts';
 import type { RpcHandlers } from './rpc.ts';
 
 type SelectionAskMethods = Pick<DaemonMethods, 'selection.ask'>;

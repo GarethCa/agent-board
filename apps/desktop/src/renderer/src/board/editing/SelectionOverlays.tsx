@@ -2,7 +2,7 @@ import { memo, type CSSProperties } from 'react';
 import { Sparkles } from 'lucide-react';
 import { useStore, useStoreApi, ViewportPortal, type ReactFlowState } from '@xyflow/react';
 import type { BoardItemKind } from '@agent-board/daemon/protocol';
-import { boundsOnBoard, isItemNode, ITEM_NODE_PREFIX } from '../items/items';
+import { boundsOnBoard, isItemNode, isKnownItemKind, ITEM_NODE_PREFIX } from '../items/items';
 import { SelectionRotateHandle } from '../items/Rotatable';
 import { AGENT_NODE_PREFIX, EXTERNAL_NODE_PREFIX, SHELL_NODE_PREFIX } from '../tiles';
 import type { Rect } from '../../geometry';
@@ -12,7 +12,7 @@ import { keyText } from '../../keys/registry';
 import { Kbd } from '../../ui';
 
 /** What the selection box calls each kind of object, one and many. */
-const NAMES: Record<BoardItemKind | 'zone' | 'agent' | 'shell' | 'external', [string, string]> = {
+const NAMES: Record<BoardItemKind | 'item' | 'zone' | 'agent' | 'shell' | 'external', [string, string]> = {
   sticky: ['note', 'notes'],
   text: ['text', 'texts'],
   shape: ['shape', 'shapes'],
@@ -33,12 +33,17 @@ const NAMES: Record<BoardItemKind | 'zone' | 'agent' | 'shell' | 'external', [st
   agent: ['agent', 'agents'],
   shell: ['shell', 'shells'],
   external: ['session', 'sessions'],
+  // An item of a kind this app doesn't know.
+  item: ['item', 'items'],
 };
 
 /** The kind of object a node is, by its id and type. */
-function kindOf(id: string, type: string | undefined): keyof typeof NAMES | undefined {
+export function kindOf(id: string, type: string | undefined): keyof typeof NAMES | undefined {
   if (type === 'zone') return 'zone';
-  if (id.startsWith(ITEM_NODE_PREFIX)) return type?.slice(ITEM_NODE_PREFIX.length) as BoardItemKind;
+  if (id.startsWith(ITEM_NODE_PREFIX)) {
+    const kind = type?.slice(ITEM_NODE_PREFIX.length) ?? '';
+    return isKnownItemKind(kind) ? kind : 'item';
+  }
   if (id.startsWith(AGENT_NODE_PREFIX)) return 'agent';
   if (id.startsWith(SHELL_NODE_PREFIX)) return 'shell';
   if (id.startsWith(EXTERNAL_NODE_PREFIX)) return 'external';
@@ -46,7 +51,7 @@ function kindOf(id: string, type: string | undefined): keyof typeof NAMES | unde
 }
 
 /** "4 selected · 3 notes, 1 agent". */
-function selectionLabel(kinds: readonly (keyof typeof NAMES)[]): string {
+export function selectionLabel(kinds: readonly (keyof typeof NAMES)[]): string {
   const counts = new Map<keyof typeof NAMES, number>();
   for (const kind of kinds) counts.set(kind, (counts.get(kind) ?? 0) + 1);
   const parts = [...counts].map(([kind, count]) => `${count} ${NAMES[kind][count === 1 ? 0 : 1]}`);

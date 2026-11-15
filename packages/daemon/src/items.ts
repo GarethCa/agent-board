@@ -284,6 +284,8 @@ function isHttpsUrl(text: string): boolean {
 
 /** `data` as stored for an item of `kind`, once it passes the kind's check and the size cap; throws if it doesn't. */
 export function checkedData(kind: BoardItemKind, data: Record<string, unknown>): string {
+  // A kind this daemon doesn't know (a newer app's) can be moved and deleted, but its data can't be checked, so not changed.
+  if (!Object.hasOwn(KIND_DATA, kind)) throw invalidParams(`this version can't change the data of a ${String(kind)} item`);
   KIND_DATA[kind](data);
   const encoded = JSON.stringify(data);
   if (Buffer.byteLength(encoded) > MAX_ITEM_DATA_BYTES) {

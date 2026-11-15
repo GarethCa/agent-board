@@ -47,7 +47,7 @@ import type { BoardConnection } from './board.ts';
 import { notReadBecause } from './item-scope.ts';
 import { checkedData } from './items.ts';
 import { keyedQueue } from './keyed-queue.ts';
-import type { ActivityEntry, Orchestrator, OrchestratorAccess } from './orchestrators.ts';
+import type { ActivityEntry, Orchestrator, OrchestratorAccess } from './orchestrator-types.ts';
 import { finiteNumberParam, invalidParams, oneOf, optionalBooleanParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
 import {
   AGENT_STATES,
@@ -90,7 +90,7 @@ import {
   type BoardItem,
   type BoardPlace,
   type Connector,
-  type DaemonMethod,
+  type DaemonCall,
   type DaemonMethods,
   type ExternalSession,
   type LayoutMoved,
@@ -157,9 +157,6 @@ export type LayoutMethods = Pick<
   | 'orchestrator.removeConnector'
   | 'zone.followRule'
 >;
-
-/** Calls one of the daemon's own methods, as the app would. */
-export type DaemonCall = <M extends DaemonMethod>(method: M, params: DaemonMethods[M]['params']) => Promise<DaemonMethods[M]['result']>;
 
 export interface LayoutHandlerOptions {
   db: DatabaseSync;

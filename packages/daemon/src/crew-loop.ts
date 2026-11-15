@@ -12,7 +12,7 @@ import type { SpawnUsed } from './agent-spawns.ts';
 import type { BoardConnection } from './board.ts';
 import { TURN_STATES } from './crew-events.ts';
 import { parsePrefab, prefabFile } from './crew-prefabs.ts';
-import type { ActivityEntry, OrchestratorAccess } from './orchestrators.ts';
+import type { ActivityEntry, OrchestratorAccess } from './orchestrator-types.ts';
 import { invalidParams, optionalStringParam, paramsObject, stringParam } from './params.ts';
 import {
   BOARD_ERROR,

@@ -50,7 +50,7 @@ import { cutText } from './text-cut.ts';
 import { lineDiff } from './text-diff.ts';
 import { flagLeadOf } from './ticket-tiles.ts';
 import { isInside, realPath, whyNotWritable, writeWhole } from './user-files.ts';
-import type { AgentHost } from './agents.ts';
+import type { AgentHost } from './agent-types.ts';
 
 type AskMethods = Pick<DaemonMethods, 'board.ask' | 'board.presentPlan' | 'ask.answer' | 'ask.send' | 'ask.toCard' | 'plan.list' | 'plan.decide' | 'plan.edit'>;
 

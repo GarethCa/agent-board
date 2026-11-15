@@ -11,6 +11,7 @@ import { errorMessage } from '../../../shared/errors';
 import { SessionDetails } from './SessionDetails';
 import { DetailsHandle } from './DetailsHandle';
 import { LiveShelves, ShelfControls } from './LiveShelves';
+import { showsShelves } from './agent-sidebar';
 import { ChatView } from './ChatView';
 import { openingView, useConversationAs } from './conversation-as';
 import { Composer } from './Composer';
@@ -24,6 +25,7 @@ import { useChatTheme } from './chat-theme';
 import { ChatControls } from './ChatControls';
 import { useChatRunsShow } from '../board/view-settings';
 import { ShellPanes } from './ShellPanes';
+import { stripShown } from './strip-shown';
 import { TerminalPane, type AttachState, type PaneStatus } from './TerminalPane';
 import { composerBlock } from './composer-block';
 import { canRestart, endedShellLabel, exitText, RestartAgent } from './RestartAgent';
@@ -80,7 +82,7 @@ interface SessionBodyProps {
   terminalToggle?: RefObject<(() => void) | null>;
   /**
    * Whether an agent's details are its shelves, on the left and collapsed to their rail, rather than the details
-   * strip: in an agent's session window under the Simplified design, or Classic's when its sidebar is Shelves.
+   * strip: in an agent's session window and its expanded tile, under either design. Left out, it follows `showsShelves`.
    */
   shelves?: boolean;
   /** Where in the header the shelves' window controls go (null until the header is drawn): Classic's window and the expanded tile have one. */
@@ -115,7 +117,7 @@ export function SessionBody({
   shown = true,
   viewSlot,
   terminalToggle,
-  shelves = false,
+  shelves = showsShelves(content),
   controlsSlot,
   chatControlsSlot,
   compactControls = false,
@@ -297,6 +299,8 @@ export function SessionBody({
       : null;
   // A split window's panes have strips of their own; the switch ends the one holding the agent's own tab.
   const split = panes !== undefined && panes.panes.length > 1;
+  const strip = stripShown(split, Boolean(astray), problem !== undefined, pane, agent !== undefined && !tabShellFocused && !otherFocused);
+  const showsStatus = strip.paneStatus && (content.kind !== 'tabs' || otherFocused);
   const here = agent ? 'in this worktree' : 'in this folder';
   /** A surface's tab: an agent's own dot is its attachment unless a shell split beside it failed; a shell's, its shells'. */
   const stripTabOf = (surface: WindowSurface): StripTab => {
@@ -344,7 +348,6 @@ export function SessionBody({
       {content.kind !== 'tabs' && !shelves && view === undefined && (
       <SessionDetails
         sessionId={controlSession}
-        agent={agent}
         shell={panes?.focusedPane.active.kind === 'tab' ? panes.focusedPane.active.tab.shell : undefined}
         focusedPane={tabFocus}
         onFocusPane={panes?.focus}
@@ -353,10 +356,6 @@ export function SessionBody({
         onProblem={setProblem}
         collapsed={detailsCollapsed}
         onCollapsed={onDetailsCollapsed}
-        onOpenLink={openLink}
-        onOpenPullRequest={panes && openPullRequest}
-        onOpenSurface={panes && ((surface) => panes.open(surface))}
-        onOpenWeb={panes?.openWeb}
       />
       )}
       {content.kind !== 'tabs' && !shelves && view === undefined && <DetailsHandle collapsed={detailsCollapsed} onCollapsed={onDetailsCollapsed} />}
@@ -376,31 +375,46 @@ export function SessionBody({
         </>
       )}
       {/* Where the header offers a slot (Classic's window, and the expanded tile) it holds the window's controls while the shelves are its sidebar. */}
-      {shelvesAgent && controlsSlot && createPortal(<ShelfControls agent={shelvesAgent} live={live} compact={compactControls} onSplit={panes?.splitFromDetails} onProblem={setProblem} />, controlsSlot)}
+      {shelvesAgent && controlsSlot && createPortal(
+          <ShelfControls
+            agent={shelvesAgent}
+            live={live}
+            compact={compactControls}
+            onSplit={panes?.splitFromDetails}
+            shell={panes?.focusedPane.active.kind === 'tab' ? panes.focusedPane.active.tab.shell : undefined}
+            focusedPane={tabFocus}
+            onFocusPane={panes?.focus}
+            onProblem={setProblem}
+          />,
+          controlsSlot,
+        )}
       <div className="session-window-main" data-surface="window">
-        <div className="session-window-strip">
-          {panes ? (
-            panes.panes.length === 1 && (
-              <PaneStrip panes={panes} pane={panes.panes[0]!} stripTab={stripTabOf} here={here} panelId={tabPanel} focused={false} />
-            )
-          ) : (
-            <span className="session-window-pane">
-              <span className="session-window-pane-dot" data-state={pane.state} aria-hidden />
-              shell
+        {/* A split window's panes have strips of their own, each tab with its state: this row is only for what is amiss. */}
+        {strip.row && (
+          <div className="session-window-strip">
+            {panes ? (
+              panes.panes.length === 1 && (
+                <PaneStrip panes={panes} pane={panes.panes[0]!} stripTab={stripTabOf} here={here} panelId={tabPanel} focused={false} />
+              )
+            ) : (
+              <span className="session-window-pane">
+                <span className="session-window-pane-dot" data-state={pane.state} aria-hidden />
+                shell
+              </span>
+            )}
+            {astray && (
+              <Tag tone="warning" className="session-window-astray" data-testid="session-window-astray">
+                {astray}
+              </Tag>
+            )}
+            <span className="session-window-status" data-testid="session-window-status" data-error={pane.state === 'exited' || problem !== undefined}>
+              {/* A tab window has no session of its own to tell of: only another's shown in it, and what went wrong. */}
+              {showsStatus ? statusText(pane, tabShellFocused || otherFocused ? undefined : agent) : null}
+              {problem && `${showsStatus ? ' · ' : ''}${problem}`}
             </span>
-          )}
-          {astray && (
-            <Tag tone="warning" className="session-window-astray" data-testid="session-window-astray">
-              {astray}
-            </Tag>
-          )}
-          <span className="session-window-status" data-testid="session-window-status" data-error={pane.state === 'exited' || problem !== undefined}>
-            {/* A tab window has no session of its own to tell of: only another's shown in it, and what went wrong. */}
-            {content.kind !== 'tabs' || otherFocused ? statusText(pane, tabShellFocused || otherFocused ? undefined : agent) : null}
-            {problem && `${content.kind !== 'tabs' || otherFocused ? ' · ' : ''}${problem}`}
-          </span>
-          {!split && viewSwitch}
-        </div>
+            {!split && viewSwitch}
+          </div>
+        )}
         {notice}
         {agent && !(simplified && chat && paneDecision(agent, deferredIds)?.kind === 'permission' && agent.permissions.every((prompt) => prompt.heldUntil !== null)) && <BlockedBanner agent={agent} chat={chat} onShowTerminal={onShowTerminal} />}
         {agent && canRestart(agent) && (

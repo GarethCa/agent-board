@@ -24,7 +24,6 @@ import {
   Spline,
   LayoutDashboard,
   LayoutGrid,
-  LibraryBig,
   ListTodo,
   Pencil,
   Pin,
@@ -34,14 +33,13 @@ import {
   Sparkles,
   SquareDashedMousePointer,
   Trash2,
-  Users,
   Workflow,
 } from 'lucide-react';
-import { CrewFaces } from '../../crews/icons';
-import { crewGroups } from '../../crews/prefab-store';
+import { crewMenu } from '../menu-model';
+import { currentPrefabs } from '../../crews/prefab-store';
 import { binding, isActive, keyText } from '../../keys/registry';
 import type { MenuEntry } from '../../ui';
-import { ITEM_KINDS } from '../items/kinds';
+import { itemKind } from '../items/kinds';
 import type { Alignment, Reorder } from './arrange';
 import type { SelectionSummary } from './use-editing';
 import { endOfNode } from '../connectors/endpoints';
@@ -104,7 +102,7 @@ export function selectionEntries(selection: SelectionSummary, selectedConnectors
   const laidOut = selection.movable.length < selection.nodes.length ? 'Tiles on shelves or in clusters keep their places there' : undefined;
   const alignTo = (label: string, how: Alignment, icon: ReactNode): MenuEntry => ({ label, icon, onSelect: () => actions.align(how) });
   const colours = [...selection.kinds].flatMap((kind): MenuEntry[] => {
-    const colors = ITEM_KINDS[kind].colors;
+    const colors = itemKind(kind).colors;
     if (colors === undefined) return [];
     const shown = new Set(selection.items.filter((node) => node.data.item.kind === kind).map((node) => colors.of(node.data.item.data)));
     return [
@@ -197,17 +195,7 @@ export function boardEntries(actions: ContextActions): MenuEntry[] {
     { label: 'Add a memory', icon: <Brain />, shortcut: keyText('make.memory'), hint: 'Notes and decisions you and agents keep for each other', onSelect: actions.addMemory },
     { label: 'Add a queue', icon: <Ticket />, shortcut: keyText('make.queue'), hint: 'Jobs in order, for agents to take one at a time', onSelect: actions.addQueue },
     { label: 'Add a to-do list', icon: <SquareCheckBig />, hint: 'Things for you to do; agents add them with remind', onSelect: actions.addTodo },
-    {
-      label: 'New crew',
-      icon: <Users />,
-      entries: [
-        ...crewGroups().flatMap((group): MenuEntry[] => [
-          ...group.map((prefab): MenuEntry => ({ label: prefab.name, icon: <CrewFaces members={prefab.members} />, onSelect: () => actions.startCrew(prefab.name) })),
-          'separator',
-        ]),
-        { label: 'Library…', icon: <LibraryBig />, onSelect: actions.crewLibrary },
-      ],
-    },
+    crewMenu(currentPrefabs(), (prefab) => (prefab === null ? actions.crewLibrary() : actions.startCrew(prefab))),
     { label: 'Select all', icon: <SquareDashedMousePointer />, shortcut: keyText('edit.selectAll'), onSelect: actions.selectAll },
     { label: actions.grid ? 'Stop snapping to the grid' : 'Snap to the grid', icon: <Grid3x3 />, onSelect: actions.toggleGrid },
     { label: 'Tidy loose tiles', icon: <LayoutGrid />, hint: 'In a grid where they are, in reading order', onSelect: actions.tidyLoose },

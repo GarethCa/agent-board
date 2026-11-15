@@ -114,7 +114,7 @@ describe('workCategory: the board guesses', () => {
       label: null,
       source: 'board',
       setBy: null,
-      why: 'PR #231 open, no reviewer yet',
+      why: 'PR #231 open, no review requested',
       waitingOn: null,
       since: null,
     });
@@ -122,6 +122,29 @@ describe('workCategory: the board guesses', () => {
 
   it('Waiting on others, labelled CI, while its open PR\'s checks run', () => {
     expect(read({ pullRequests: [pr('open', 'pending')] })).toMatchObject({ category: 'waiting-on-others', label: 'CI', why: 'PR #231 checks running' });
+  });
+
+  it('In review, waiting on who GitHub asked, while its open PR has a review requested', () => {
+    const requested = { ...pr('open'), reviewRequests: ['octocat', 'core-team'] };
+    expect(read({ pullRequests: [requested] })).toMatchObject({
+      category: 'in-review',
+      source: 'board',
+      why: 'PR #231 review requested of octocat',
+      waitingOn: { who: 'octocat', ref: null },
+    });
+  });
+
+  it('keeps Ready for review for an open PR with no review requested, and CI first while checks run', () => {
+    expect(read({ pullRequests: [{ ...pr('open'), reviewRequests: [] }] }).category).toBe('ready-for-review');
+    expect(read({ pullRequests: [{ ...pr('open', 'pending'), reviewRequests: ['octocat'] }] }).label).toBe('CI');
+    expect(read({ pullRequests: [{ ...pr('open', 'failing'), reviewRequests: ['octocat'] }] }).category).toBe('blocked');
+    expect(read({ pullRequests: [{ ...pr('draft'), reviewRequests: ['octocat'] }] }).category).toBe('working');
+  });
+
+  it('says why an open PR with no request waits: a decision GitHub has, or none requested', () => {
+    expect(read({ pullRequests: [{ ...pr('open'), reviewDecision: 'APPROVED' }] })).toMatchObject({ category: 'ready-for-review', why: 'PR #231 approved' });
+    expect(read({ pullRequests: [{ ...pr('open'), reviewDecision: 'CHANGES_REQUESTED' }] }).why).toBe('PR #231 changes requested');
+    expect(read({ pullRequests: [pr('open')] }).why).toBe('PR #231 open, no review requested');
   });
 
   it('In review while a reviewer of its work runs, waiting on that reviewer', () => {

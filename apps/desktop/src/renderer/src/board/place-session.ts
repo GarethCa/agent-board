@@ -2,7 +2,7 @@
 import type { IssueCardData, Zone, ZoneLayout } from '@agent-board/daemon/protocol';
 import { placeOnBoard } from './items/items';
 import { AGENT_TILE_SIZE } from '@agent-board/daemon/board-layout';
-import { whyNoAgents } from './ZoneNode';
+import { whyNoAgents } from './zone-contexts';
 
 /** The grid a dropped tile's corner snaps to, px. */
 const DROP_GRID = 20;

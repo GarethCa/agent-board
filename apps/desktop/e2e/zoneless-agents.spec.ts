@@ -6,7 +6,7 @@ import type { Agent, Zone } from '@agent-board/daemon/protocol';
 import { createTempKeychain } from '@agent-board/tracker/testing';
 import { rmSync } from 'node:fs';
 import { withDaemon } from './board-helpers.ts';
-import { agents, launch, pickInChip, sessionWindow, LINEAR_API_KEY, serveLinearFixtures, SHELL_ENV, tile, zoneNamed, zones } from './agent-helpers.ts';
+import { agents, launch, pickInChip, stopAnimationEvents, sessionWindow, LINEAR_API_KEY, serveLinearFixtures, SHELL_ENV, tile, zoneNamed, zones } from './agent-helpers.ts';
 import { test, addEmptyZone, browseForZone, openAddZone, pickFolderNext, placeWithTool, removeDataDir, tempDataDir } from './launch.ts';
 import { scratch } from './scratch.ts';
 import { startMenuTrail } from './menu-trail.ts';
@@ -339,9 +339,7 @@ test('a menu closed before its fade has been seen to start leaves the page at on
     const repoButton = form.getByRole('group', { name: 'Repo' }).getByRole('button', { name: /^Repo:/ });
     // On a busy machine a menu can close before the page has told it its fade started. Here no animation event
     // reaches anything, so every menu is in that state.
-    await window.evaluate(() => {
-      for (const type of ['animationstart', 'animationend', 'animationcancel']) document.addEventListener(type, (event) => event.stopImmediatePropagation(), true);
-    });
+    await stopAnimationEvents(window);
     await repoButton.click();
     await expect(window.getByRole('menu')).toBeVisible();
     await window.keyboard.press('Escape');

@@ -26,7 +26,7 @@ afterEach(() => {
 
 describe('the board view settings', () => {
   it('start as the board has always opened', () => {
-    expect(DEFAULT_VIEW_SETTINGS).toEqual({ clickOpens: 'window', connections: 'all', tethers: false, agentNoteLook: 'document', agentSidebar: 'shelves', gpuTerminals: true, keepTerminals: false, tileShows: QUIET_TILE, chatRunsShow: 'always', ticketTilesOpenAs: 'terminal' });
+    expect(DEFAULT_VIEW_SETTINGS).toEqual({ clickOpens: 'window', connections: 'all', tethers: false, agentNoteLook: 'document', gpuTerminals: true, keepTerminals: false, tileShows: QUIET_TILE, chatRunsShow: 'always', ticketTilesOpenAs: 'terminal' });
   });
 
   it('change at once and are saved in the view state under their keys', () => {
@@ -60,8 +60,15 @@ describe('the board view settings', () => {
   });
 
   it('read back what was saved, a value it does not know as the default', () => {
-    restoreViewSettings({ clickOpens: 'expand', agentNoteLook: 'nonsense', agentSidebar: 'simple', tethers: 'yes' });
-    expect(viewSettings()).toMatchObject({ clickOpens: 'expand', agentNoteLook: 'document', agentSidebar: 'shelves', tethers: false });
+    restoreViewSettings({ clickOpens: 'expand', agentNoteLook: 'nonsense', tethers: 'yes' });
+    expect(viewSettings()).toMatchObject({ clickOpens: 'expand', agentNoteLook: 'document', tethers: false });
+  });
+
+  it('ignore an agent sidebar saved before the shelves were the only one: Full, or Simple, reads as nothing', () => {
+    restoreViewSettings({ agentSidebar: 'full' } as never);
+    expect(viewSettings()).toEqual(DEFAULT_VIEW_SETTINGS);
+    restoreViewSettings({ agentSidebar: 'simple' } as never);
+    expect(viewSettings()).toEqual(DEFAULT_VIEW_SETTINGS);
   });
 
   it('ignore a crew look saved before crews showed only on focus', () => {
@@ -78,8 +85,8 @@ describe('the board view settings', () => {
     expect(viewSettings().gpuTerminals).toBe(false);
     change('clickOpens', 'expand');
     expect(viewSettings().clickOpens).toBe('expand');
-    change('agentSidebar', 'shelves');
-    expect(viewSettings().agentSidebar).toBe('shelves');
+    change('agentSidebar', 'full');
+    expect(viewSettings()).not.toHaveProperty('agentSidebar');
     change('viewport', { x: 1 });
     expect(viewSettings()).toMatchObject({ clickOpens: 'expand', tethers: true });
   });

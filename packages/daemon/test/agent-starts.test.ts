@@ -5,12 +5,12 @@ import { describe, expect, it } from 'vitest';
 import { fakeHarnessEnv, type FakeHarnessEnvOptions } from '@agent-board/fake-harness';
 import { createFakeTracker } from '@agent-board/tracker/testing';
 import type { DaemonClient } from '../src/client.ts';
-import {
-  type AgentStart,
-  type AgentStartingEvent,
-  type AgentUpdatedEvent,
-  type DaemonEvent,
-  type HookEvent,
+import type {
+  AgentStart,
+  AgentStartingEvent,
+  AgentUpdatedEvent,
+  DaemonEvent,
+  HookEvent,
 } from '../src/protocol.ts';
 import { connectTestClient, git, recordEvents, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
 

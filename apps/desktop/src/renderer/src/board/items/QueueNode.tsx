@@ -1,5 +1,5 @@
 import { memo, useCallback, useContext, useMemo, useState } from 'react';
-import { type NodeProps } from '@xyflow/react';
+import type { NodeProps } from '@xyflow/react';
 import { Bot, Inbox, Ticket } from 'lucide-react';
 import { jobsFrom } from '@agent-board/daemon/memory-lines';
 import { QUEUE_CARD_SIZE, LIST_CARD_FOLDED_SIZE, LIST_CARD_MIN_SIZE, type QueueAudience, type QueueChange, type QueueJob } from '@agent-board/daemon/protocol';

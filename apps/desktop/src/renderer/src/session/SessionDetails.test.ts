@@ -1,39 +1,25 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import type { Agent } from '@agent-board/daemon/protocol';
+import type { ExternalSession } from '@agent-board/daemon/protocol';
 import { ToastProvider, TooltipProvider } from '../ui';
 import { SessionDetails, type SessionDetailsProps } from './SessionDetails';
 
-const agent = {
-  state: 'running',
-  endedAt: null,
-  issue: null,
-  lastMessage: null,
-  compactingSince: null,
-  branch: 'agent/x',
-  model: null,
-  effort: null,
-  effortPending: null,
-  role: null,
-  reviews: null,
+const external = {
+  id: 'claude:a',
+  harness: 'claude',
+  sessionId: 'a',
+  name: 'outside',
+  cwd: '/tmp/wt',
   worktree: '/tmp/wt',
-  pullRequests: [],
-  pushedPullRequests: [],
-  records: [],
-  recordedPullRequests: [],
-  guessedDoc: null,
-  page: null,
-  docs: [],
+  branch: 'feature/x',
+  description: null,
+  status: null,
   subagents: [],
-  permissions: [],
-  ask: null,
-  plan: null,
-  schedule: null,
-} as unknown as Agent;
+} as unknown as ExternalSession;
 
 const render = (collapsed: boolean) => {
-  const props: SessionDetailsProps = { sessionId: 'a', agent, live: true, collapsed, onCollapsed: () => {}, onFocusPane: () => {}, onProblem: () => {}, onOpenLink: () => {} };
+  const props: SessionDetailsProps = { sessionId: undefined, external, live: false, collapsed, onCollapsed: () => {}, onProblem: () => {} };
   return renderToStaticMarkup(createElement(ToastProvider, null, createElement(TooltipProvider, null, createElement(SessionDetails, props))));
 };
 
@@ -45,8 +31,13 @@ describe('the details strip', () => {
   it('draws the rail’s section icons before its headings, aria-hidden', () => {
     const rail = iconsIn(render(true));
     const strip = iconsIn(render(false));
-    for (const icon of ['circle-dot', 'folder-git-2', 'git-pull-request', 'users-round', 'file-stack', 'book-open', 'pin', 'bot', 'calendar-clock']) expect(rail).toContain(icon);
+    for (const icon of ['file-text', 'folder-git-2', 'bot']) expect(rail).toContain(icon);
     for (const icon of rail) expect(strip).toContain(icon);
     expect(render(false)).not.toMatch(/<svg(?![^>]*aria-hidden="true")/);
+  });
+
+  it('shows no agent’s sections: an agent’s window has its shelves', () => {
+    const strip = render(false);
+    for (const icon of ['circle-dot', 'git-pull-request', 'users-round', 'pin', 'calendar-clock']) expect(iconsIn(strip)).not.toContain(icon);
   });
 });

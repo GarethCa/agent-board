@@ -5,8 +5,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import type { BoardConnection } from './board.ts';
-import type { ActivityEntry, OrchestratorAccess } from './orchestrators.ts';
+import type { ActivityEntry, BoardConnection, OrchestratorAccess } from './orchestrator-types.ts';
 import { invalidParams, optionalStringParam, paramsObject, stringParam } from './params.ts';
 import {
   AGENT_ROLES,

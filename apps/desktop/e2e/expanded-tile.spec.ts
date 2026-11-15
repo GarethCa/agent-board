@@ -2,7 +2,7 @@ import { expect, type Locator, type Page } from '@playwright/test';
 import { SPACING_GAPS } from '@agent-board/daemon/board-layout';
 import { rmSync } from 'node:fs';
 import { drag, run, settledBox, viewSettled } from './board-helpers.ts';
-import { agents, launch, sessionWindow, setClickOpens, SHELL_ENV, showDetails, spawnAgent, tile, tileAction, TURN_MS, zones, useFullSidebar } from './agent-helpers.ts';
+import { agents, launch, sessionWindow, setClickOpens, SHELL_ENV, spawnAgent, tile, tileAction, TURN_MS, zones } from './agent-helpers.ts';
 import { test, pickFolderNext, removeDataDir, runDesign, tempDataDir, browseForZone, newShell, placeWithTool, addEmptyZone } from './launch.ts';
 import { scratch } from './scratch.ts';
 import { clickClosing } from './windows.ts';
@@ -168,7 +168,6 @@ test('a Claude agent tile expands in place with its details and live terminal, m
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env);
   try {
-    await useFullSidebar(window);
     await setClickOpens(window, 'Expand in place');
     await addRepoZone(window, app, repo);
     await spawnAgent(window, 'monorepo', 'Pick a database');
@@ -177,31 +176,20 @@ test('a Claude agent tile expands in place with its details and live terminal, m
     // A compact tile attaches no terminal.
     await expect(terminals(window)).toHaveCount(0);
 
-    // A click expands it in place: its details on the left, its live terminal beside them.
+    // A click expands it in place: its shelves on the left, its live terminal beside them.
     await tile(window).dblclick();
     await expect(expandedTile(window)).toBeVisible();
     await expect(tile(window)).toHaveCount(0);
     const branch = await branchOf(window);
     await expect(expandedTile(window).getByRole('heading', { name: 'Pick a database' })).toBeVisible();
-    // Its shelves say the branch (under Simplified, once technical details show), so its header does only without them.
-    if (!simplified) await expect(expandedTile(window).locator('.session-window-head')).toContainText(branch);
-    if (simplified) {
-      // Its sidebar is its shelves, as in its window: open on its page, with its state button and ⋯ in the tile's header.
-      await expect(expandedTile(window).getByTestId('agent-shelves')).toBeVisible();
-      await expect(expandedTile(window).getByRole('complementary', { name: 'Session details' })).toHaveCount(0);
-      await expandedTile(window).locator('.expanded-tile-head').getByTestId('shelf-controls').getByRole('button', { name: 'More controls' }).click();
-      await expect(window.getByRole('menuitem', { name: /^Stop/ })).toBeEnabled();
-      await window.keyboard.press('Escape');
-    } else {
-      // Opens collapsed to its icon rail; the rail's Show details opens it.
-      await expect(expandedTile(window).getByRole('complementary', { name: 'Session details' })).toHaveCount(0);
-      await showDetails(expandedTile(window));
-      const details = expandedTile(window).getByRole('complementary', { name: 'Session details' });
-      await expect(details).toContainText('Worktree and branch');
-      await expect(details).toContainText('PR and checks');
-      await expect(details.getByTestId('details-last-message')).toContainText('Which database should I use');
-      await expect(expandedTile(window).getByRole('navigation', { name: 'Session controls' }).getByRole('button', { name: 'Stop' })).toBeEnabled();
-    }
+    // Its sidebar is its shelves, as in its window: open on its page, with its state button and ⋯ in the tile's header.
+    // Under Classic their footer says the branch (under Simplified, once technical details show).
+    await expect(expandedTile(window).getByTestId('agent-shelves')).toBeVisible();
+    if (!simplified) await expect(expandedTile(window).getByTestId('shelves-footer')).toContainText(branch);
+    await expect(expandedTile(window).getByRole('complementary', { name: 'Session details' })).toHaveCount(0);
+    await expandedTile(window).locator('.expanded-tile-head').getByTestId('shelf-controls').getByRole('button', { name: 'More controls' }).click();
+    await expect(window.getByRole('menuitem', { name: /^Stop/ })).toBeEnabled();
+    await window.keyboard.press('Escape');
     await expect(expandedScreen(window)).toContainText('Which database should I use');
     // It waits for a click before taking the keyboard, so Esc still reaches the board.
     expect(await window.evaluate(() => document.activeElement?.closest('.xterm') === null)).toBe(true);
@@ -523,6 +511,9 @@ test('an expanded tile pushes its neighbours clear, and they go back to exactly 
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, SHELL_ENV);
   try {
+    // A window wide and tall enough that the opened tile, kept clear of the minimap and zoom bar, leaves every
+    // neighbour on screen: the board draws only the tiles in view, and these steps read them where they are drawn.
+    await window.setViewportSize({ width: 1600, height: 1000 });
     await setClickOpens(window, 'Expand in place');
     // A tile with neighbours close on its left, on its right and below it.
     const spots = [

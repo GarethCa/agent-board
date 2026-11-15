@@ -102,6 +102,14 @@ function crewParts(crew: readonly TileNodeType[], strangers: readonly Rect[]): T
   return parts.filter((_, index) => find(index) === index).map((part) => part.nodes);
 }
 
+/**
+ * The orchestrators among the selected tiles, by session id: their crews stay focused (framed, lit, the rest dimmed)
+ * while they are selected, dragged or not. A ticket's chat that started helpers is one, as any lead.
+ */
+export function selectedOrchestrators(nodes: readonly BoardNode[]): string[] {
+  return nodes.flatMap((node) => (node.selected === true && isSessionTile(node) && node.data.crew !== undefined && node.data.agent !== undefined ? [node.data.agent.sessionId] : []));
+}
+
 /** The tiles crew frames are drawn round: none in a zone on status shelves, whose crew is in its stacks and keeps its chips. */
 export function frameableTiles(nodes: readonly BoardNode[]): TileNodeType[] {
   const shelved = new Set(nodes.flatMap((node) => (isZone(node) && node.data.zone.layoutMode === 'shelves' ? [node.id] : [])));

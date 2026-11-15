@@ -101,10 +101,11 @@ const NEEDS_HELP_WHY: Record<Exclude<NeedsYouKind, 'turn'>, string> = {
  * inbox lists is not (every agent at its prompt would be), nor a crew member's question, which its orchestrator takes.
  * An ended session reads by how it ended, which the agent can no longer change. Otherwise the agent's own stands, and
  * without one the board guesses: Working while it runs, paused or is scheduled; Blocked at its usage limit; In review
- * while a reviewer of its work runs; Waiting on others ("CI") while its open PR's checks run; Blocked while they fail;
- * Ready for review for an open PR; Working for a draft; Done for a merged PR or work it said is finished; then a crew
- * member is Working with its orchestrator, and any other agent whose turn ended asking nothing is Done. A crew member
- * reads by its PR and reviewer as any agent: its PR waits on review whoever does it.
+ * while a reviewer of its work runs; Waiting on others ("CI") while its open PR's checks run; Blocked while they
+ * fail; In review while its open PR has a review requested of someone; Ready for review for any other open PR; Working
+ * for a draft; Done for a merged PR or work it said is finished; then a crew member is Working with its orchestrator,
+ * and any other agent whose turn ended asking nothing is Done. A crew member reads by its PR and reviewer as any agent:
+ * its PR waits on review whoever does it.
  */
 export function workCategory(agent: WorkCategoryFacts, { shows, reviewers = [] }: WorkCategoryContext): WorkCategoryReading {
   const help = needsHelp(agent, shows);
@@ -128,7 +129,14 @@ export function workCategory(agent: WorkCategoryFacts, { shows, reviewers = [] }
   const open = agent.pullRequests.find((pr) => pr.state === 'open');
   if (open !== undefined && open.checks === 'pending') return { ...guess('waiting-on-others', `PR #${open.number} checks running`), label: 'CI' };
   if (open !== undefined && open.checks === 'failing') return guess('blocked', `PR #${open.number} checks failing`);
-  if (open !== undefined) return guess('ready-for-review', `PR #${open.number} open, no reviewer yet`);
+  const requested = open?.reviewRequests?.[0];
+  if (open !== undefined && requested !== undefined) {
+    return { ...guess('in-review', `PR #${open.number} review requested of ${requested}`), waitingOn: { who: requested, ref: null } };
+  }
+  if (open !== undefined) {
+    const decided = open.reviewDecision === 'APPROVED' ? 'approved' : open.reviewDecision === 'CHANGES_REQUESTED' ? 'changes requested' : null;
+    return guess('ready-for-review', decided === null ? `PR #${open.number} open, no review requested` : `PR #${open.number} ${decided}`);
+  }
   const draft = agent.pullRequests.find((pr) => pr.state === 'draft');
   if (draft !== undefined && !ended) return guess('working', `PR #${draft.number} draft`);
   const newest = agent.pullRequests[0];

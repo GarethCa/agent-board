@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent } from '@agent-board/daemon/protocol';
-import { crewAgents, crewTracker, directoryTracker } from './crew-agents';
+import { crewAgents, directoryTracker, shelvesTracker, type AgentChange } from './crew-agents';
 
 const agent = (sessionId: string, spawnedBy: string | null = null) => ({ sessionId, spawnedBy }) as Agent;
 
-describe('the agents a details strip needs', () => {
+describe('the agents a crew is', () => {
   const all = [agent('lead'), agent('a', 'lead'), agent('b', 'other'), agent('c', 'lead'), agent('rec', null)];
 
   it('are those it started, and those it recorded starting, in the board order', () => {
@@ -16,16 +16,16 @@ describe('the agents a details strip needs', () => {
   });
 });
 
-describe('a crew tracker, which a details strip renders from', () => {
+describe('a crew tracker, which the shelves render from', () => {
   const lead = 'lead';
   const base = [agent('lead'), agent('a', lead), agent('b', 'other')];
 
   it('is undefined until the agents are listed', () => {
-    expect(crewTracker(lead).snapshot()).toBeUndefined();
+    expect(shelvesTracker(lead, null).snapshot()).toBeUndefined();
   });
 
   it('gives a new array when a crew member changes, and the same one for any other agent', () => {
-    const tracker = crewTracker(lead);
+    const tracker = shelvesTracker(lead, null);
     tracker.load(base);
     const first = tracker.snapshot()!;
     tracker.hear({ put: { ...agent('b', 'other'), name: 'changed' } as Agent });
@@ -39,7 +39,7 @@ describe('a crew tracker, which a details strip renders from', () => {
   });
 
   it('adds a new crew member, and drops one that is removed', () => {
-    const tracker = crewTracker(lead);
+    const tracker = shelvesTracker(lead, null);
     tracker.load(base);
     tracker.hear({ put: agent('c', lead) });
     expect(tracker.snapshot()!.map((each) => each.sessionId)).toEqual(['a', 'c']);
@@ -48,7 +48,7 @@ describe('a crew tracker, which a details strip renders from', () => {
   });
 
   it('plays the changes heard before the list over it', () => {
-    const tracker = crewTracker(lead);
+    const tracker = shelvesTracker(lead, null);
     tracker.hear({ put: agent('late', lead) });
     tracker.hear({ removed: 'a' });
     tracker.load(base);
@@ -56,7 +56,7 @@ describe('a crew tracker, which a details strip renders from', () => {
   });
 
   it('counts an agent a crew record names, once the keys are set', () => {
-    const tracker = crewTracker(lead);
+    const tracker = shelvesTracker(lead, null);
     tracker.load(base);
     const first = tracker.snapshot()!;
     tracker.setKeys(['b']);
@@ -111,5 +111,74 @@ describe("a window's agent directory", () => {
     tracker.hear({ put: running });
     tracker.watch(['other']);
     expect(tracker.snapshot()!.find((each) => each.sessionId === 'other')).toBe(running);
+  });
+});
+
+describe("the agents an agent's shelves need", () => {
+  const named = (sessionId: string, fields: Partial<Agent> = {}) => ({ sessionId, name: sessionId, master: false, spawnedBy: null, state: 'idle', ...fields }) as Agent;
+  const base = [named('boss'), named('own', { spawnedBy: 'boss' }), named('kid', { spawnedBy: 'own' }), named('other', { spawnedBy: 'boss' })];
+
+  it('are its crew and the agent that started it', () => {
+    const tracker = shelvesTracker('own', 'boss');
+    tracker.load(base);
+    expect(tracker.snapshot()!.map((each) => each.sessionId)).toEqual(['boss', 'kid']);
+  });
+
+  it('are its crew alone when no agent started it', () => {
+    const tracker = shelvesTracker('own', null);
+    tracker.load(base);
+    expect(tracker.snapshot()!.map((each) => each.sessionId)).toEqual(['kid']);
+  });
+
+  it('keep the same array while the agent that started it changes but its name or role', () => {
+    const tracker = shelvesTracker('own', 'boss');
+    tracker.load(base);
+    const first = tracker.snapshot()!;
+    tracker.hear({ put: named('boss', { state: 'running' }) });
+    expect(tracker.snapshot()).toBe(first);
+    tracker.hear({ put: named('boss', { name: 'Renamed' }) });
+    expect(tracker.snapshot()!.find((each) => each.sessionId === 'boss')!.name).toBe('Renamed');
+    const renamed = tracker.snapshot();
+    tracker.hear({ put: named('boss', { name: 'Renamed', master: true }) });
+    expect(tracker.snapshot()).not.toBe(renamed);
+  });
+
+  it('give the starter its live object when it is crew as well', () => {
+    const tracker = shelvesTracker('own', 'boss');
+    tracker.setKeys(['boss']);
+    tracker.load(base);
+    const running = named('boss', { state: 'running' });
+    tracker.hear({ put: running });
+    expect(tracker.snapshot()!.filter((each) => each.sessionId === 'boss')).toEqual([running]);
+  });
+
+  it('render a sidebar for its own crew only, where every agent would render it for each change', () => {
+    // A 40-agent board: one orchestrator with crews of its own, and 200 changes spread over every agent.
+    const board = [named('boss'), named('own', { spawnedBy: 'boss' })];
+    for (let i = 0; i < 3; i++) board.push(named(`kid${i}`, { spawnedBy: 'own' }));
+    for (let i = 0; i < 35; i++) board.push(named(`a${i}`, { spawnedBy: 'boss' }));
+    const changes: AgentChange[] = Array.from({ length: 200 }, (_, i) => ({ put: { ...board[i % board.length]!, state: i % 2 === 0 ? 'running' : 'idle' } as Agent }));
+    const renders = (first: unknown, snapshotAfter: (change: AgentChange) => unknown) => {
+      let count = 0;
+      let last = first;
+      for (const change of changes) {
+        const next = snapshotAfter(change);
+        if (next !== last) count++;
+        last = next;
+      }
+      return count;
+    };
+    // Before: the sidebar's state was the whole list, a new array on every change: an assumed baseline, not measured.
+    let all = board;
+    const before = renders(all, (change) => (all = all.map((each) => ('put' in change && each.sessionId === change.put.sessionId ? change.put : each))));
+    const tracker = shelvesTracker('own', 'boss');
+    tracker.load(board);
+    const after = renders(tracker.snapshot(), (change) => {
+      tracker.hear(change);
+      return tracker.snapshot();
+    });
+    expect(before).toBe(200);
+    // Its three crew members change 15 times each; the starter's state changes don't count.
+    expect(after).toBe(15);
   });
 });

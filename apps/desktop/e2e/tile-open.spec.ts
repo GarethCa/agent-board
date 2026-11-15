@@ -1,6 +1,6 @@
 import { expect } from '@playwright/test';
 import { rmSync } from 'node:fs';
-import { launch, sessionWindow, setClickOpens, zoneNamed, SHELL_ENV, showDetails, spawnAgent, tile, useFullSidebar } from './agent-helpers.ts';
+import { launch, sessionWindow, setClickOpens, zoneNamed, SHELL_ENV, spawnAgent, tile } from './agent-helpers.ts';
 import { test, addEmptyZone, browseForZone, pickFolderNext, removeDataDir, tempDataDir } from './launch.ts';
 import { scratch } from './scratch.ts';
 
@@ -11,7 +11,6 @@ test('a click selects a tile and a double-click opens it, as the setting says; a
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, { ...env, ...SHELL_ENV });
   try {
-    await useFullSidebar(window);
     await pickFolderNext(app, repo);
     await browseForZone(window);
     await spawnAgent(window, 'monorepo', 'Open me');
@@ -96,8 +95,7 @@ test('a click selects a tile and a double-click opens it, as the setting says; a
     await expect(sessionWindow(window)).toBeHidden();
     await expandedTile(window).getByRole('button', { name: 'Maximise' }).click();
     await expect(sessionWindow(window)).toBeVisible();
-    await showDetails(sessionWindow(window));
-    await sessionWindow(window).getByText('Details').first().click();
+    await sessionWindow(window).getByTestId('session-window-status').click();
     await window.keyboard.press('Enter');
     await expect(sessionWindow(window)).toHaveCount(1);
     await expect(expandedTile(window)).toHaveCount(0);

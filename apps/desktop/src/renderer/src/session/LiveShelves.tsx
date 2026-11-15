@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import type { Agent, PullRequest, SplitDirection } from '@agent-board/daemon/protocol';
+import type { Agent, PullRequest, Shell, SplitDirection } from '@agent-board/daemon/protocol';
 import type { Surface } from '@agent-board/daemon/window-layout';
 import { MoreHorizontal } from 'lucide-react';
 import { useGateRun } from '../gate/GatesProvider';
@@ -11,6 +11,7 @@ import { useAction } from '../use-action';
 import { Button, IconButton, Menu, type MenuEntry } from '../ui';
 import { errorMessage } from '../../../shared/errors';
 import { AgentShelves } from './AgentShelves';
+import { closePane } from './close-pane';
 import { leadControl, sessionControls, type ControlId } from './controls';
 import { CONTROL_ICONS, PANE_ICONS } from './details-icons';
 import { useDetailsWidth } from './DetailsHandle';
@@ -19,7 +20,9 @@ import { useRecordDeletes } from './RecordList';
 import { controlAction, useHomeDir } from './SessionDetails';
 import { requestTab } from './tab-request';
 import { gateSurfaceOf } from './tabs';
-import { useLiveAgents } from './use-live-board';
+import { useShelvesAgents } from './use-live-board';
+
+const NO_AGENTS: readonly Agent[] = [];
 
 interface LiveShelvesProps {
   agent: Agent;
@@ -35,12 +38,12 @@ interface LiveShelvesProps {
 }
 
 /**
- * An agent's sidebar in its window, at its leading edge: the Simplified design's, and Classic's when its Agent sidebar
- * setting is Shelves. Its shelves (AgentShelves.tsx), kept current from the board: its crew, its folder now, its gate and
- * its clock. Classic's Full sidebar is its details strip (SessionDetails.tsx).
+ * An agent's sidebar in its window, at its leading edge, under both designs.
+ * Its shelves (AgentShelves.tsx), kept current from the board: its crew (and who started it, read through
+ * `useShelvesAgents`, so it renders for no other agent's change), its folder now, its gate and its clock.
  */
 export function LiveShelves({ agent, collapsed, onCollapsed, onProblem, onOpenLink, onOpenPullRequest, onOpenSurface, onOpenWeb }: LiveShelvesProps) {
-  const { agents = [] } = useLiveAgents();
+  const agents = useShelvesAgents(agent) ?? NO_AGENTS;
   const shows = useNeedsYouShows();
   const technical = useTechnicalDetails();
   const folder = useLiveFolder(agent.shellSessionId ?? agent.sessionId) ?? agent.cwd;
@@ -86,10 +89,30 @@ export function LiveShelves({ agent, collapsed, onCollapsed, onProblem, onOpenLi
 
 /**
  * Under Classic, the window controls the shelves leave out, in its header: one state button (Wake while it is paused,
- * else Interrupt while it is mid-turn, else Pause) and ⋯ for the rest, Stop and splitting the tab. The header keeps its
- * Run gate and Delete; the Simplified header has its own state action and ⋯.
+ * else Interrupt while it is mid-turn, else Pause) and ⋯ for the rest, Stop, splitting the tab and, while a shell split
+ * into the tab has the focus, closing that pane. The header keeps its Run gate and Delete; the Simplified header has its
+ * own state action and ⋯.
  */
-export function ShelfControls({ agent, live, compact = false, onSplit, onProblem }: { agent: Agent; live: boolean; compact?: boolean; onSplit?(direction: SplitDirection): void; onProblem(problem: string | undefined): void }) {
+export function ShelfControls({
+  agent,
+  live,
+  compact = false,
+  onSplit,
+  shell,
+  focusedPane,
+  onFocusPane,
+  onProblem,
+}: {
+  agent: Agent;
+  live: boolean;
+  compact?: boolean;
+  onSplit?(direction: SplitDirection): void;
+  /** The tab's panes, and the one with the focus: a shell pane there, not the agent's own, can be closed. */
+  shell?: Shell;
+  focusedPane?: string;
+  onFocusPane?(sessionId: string): void;
+  onProblem(problem: string | undefined): void;
+}) {
   const { busy, error, run } = useAction();
   useEffect(() => onProblem(error), [error, onProblem]);
   const controls = sessionControls({ agent, live });
@@ -106,6 +129,9 @@ export function ShelfControls({ agent, live, compact = false, onSplit, onProblem
           { label: 'Split vertically', icon: PANE_ICONS.splitVertically, hint: 'A shell below the focused pane', onSelect: () => onSplit('vertical') },
         ]
       : []),
+    ...(shell !== undefined && focusedPane !== undefined && focusedPane !== agent.sessionId
+      ? [{ label: 'Close pane', icon: PANE_ICONS.closePane, hint: 'Close the focused pane, ending its shell', disabled: busy, onSelect: () => run(() => closePane(shell, focusedPane, onFocusPane)) }]
+      : []),
   ];
   return (
     <span className="shelf-controls" data-testid="shelf-controls">
@@ -118,7 +144,7 @@ export function ShelfControls({ agent, live, compact = false, onSplit, onProblem
           </Button>
         ))}
       <Menu align="end" entries={entries}>
-        <IconButton icon={<MoreHorizontal />} size="sm" aria-label="More controls" tooltip="More: Stop, Split" />
+        <IconButton icon={<MoreHorizontal />} size="sm" aria-label="More controls" tooltip="More: Stop, Split, Close pane" />
       </Menu>
     </span>
   );

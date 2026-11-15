@@ -6,7 +6,7 @@ import { isItemNode } from './items/items';
 import { AGENT_TILE_SIZE, packTiles, PERCH_ROOM, zoneGrid, type ZoneGrid } from '@agent-board/daemon/board-layout';
 import { holdsTiles, isSessionTile, isZone, layoutOf, sizeOfNode, type BoardNode } from './tiles';
 import { isDefaultSize } from './tile-size';
-import type { ZoneResize } from './ZoneNode';
+import type { ZoneResize } from './zone-contexts';
 
 /** How many halvings find how far a refused resize could have gone. */
 const LIMIT_STEPS = 12;

@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import { type Fold, type FoldedSlot } from '../../board-colors';
+import type { Fold, FoldedSlot } from '../../board-colors';
 import { token } from '../../theme';
 
 const subscribe = (notify: () => void) => {

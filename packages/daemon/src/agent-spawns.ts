@@ -5,7 +5,8 @@ import { basename, isAbsolute, join, relative } from 'node:path';
 import { issuePrompt, shortIssueId } from '@agent-board/tracker';
 import type { AgentRecordStore } from './agent-records.ts';
 import { createAgentStarts, type AgentStarts, type NewStart, type StartProgress } from './agent-starts.ts';
-import type { AgentHost, AgentHostOptions, AgentRow, BranchReviewRow, ZoneRow } from './agents.ts';
+import type { FolderPlace, SpawnUsed, AgentHost, AgentHostOptions, AgentRow, BranchReviewRow, ZoneRow } from './agent-types.ts';
+export type { FolderPlace, SpawnUsed };
 import { BOARD_SESSION_ENV, BOARD_SOCKET_ENV, BOARD_TOKEN_ENV, BOARD_ZONE_ENV } from './board-env.ts';
 import { CLAUDE_HOOK_EVENTS } from './claude-state.ts';
 import { carryClaudeTranscript } from './claude-transcript.ts';
@@ -197,19 +198,6 @@ export interface LaunchSpec {
   size: TerminalSize;
   /** It may change nothing: Claude starts in plan mode, Codex in its read-only sandbox. */
   readOnly?: boolean;
-}
-
-/**
- * Where an agent starts instead of a worktree of its own: a folder it doesn't own (an Ask Claude agent's, with no repo,
- * or the user's checkout to read), which deleting it leaves alone. `repoRoot` is the repo it is in, or the folder
- * itself outside git; with `readOnly` it may change nothing there.
- */
-export interface FolderPlace {
-  cwd: string;
-  repoRoot: string;
-  readOnly: boolean;
-  /** It is the Captain (ADR-0019): only `master.start` says so. */
-  master?: boolean;
 }
 
 /**
@@ -1279,16 +1267,6 @@ function wrapInvalid(error: Error): never {
 }
 
 /** The review a reviewer left in its worktree: the newest `.agent-board/review*.md`, or undefined for none. */
-/**
- * What a spawn reports back, the template it used, and, for a running crew's reviewer, what the crew gives it: the
- * crew's round and this member's last review, which its template's `{{round}}` and `{{prev_review}}` are filled with in
- * place of the branch's own count of reviews (a crew with two reviewers starts two a round).
- */
-export interface SpawnUsed {
-  template: string | null;
-  crewReview?: { round: number; previous: string | null };
-}
-
 export function reviewFile(worktree: string): string | undefined {
   const dir = join(worktree, '.agent-board');
   try {

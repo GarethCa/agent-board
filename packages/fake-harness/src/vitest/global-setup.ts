@@ -1,6 +1,6 @@
 /**
  * Vitest globalSetup: no `AGENT_BOARD_*` from an enclosing board, a throwaway app-data dir, tripwires first on PATH for
- * every worker, and git kept off this checkout's repo; fail the run if either guard was hit. Also reaps this worktree's stale
+ * every worker, git kept off this checkout's repo, and the user's live launchers left alone; fail the run if a guard was hit. Also reaps this worktree's stale
  * runs and stops this one if whatever started it goes (reap.ts).
  */
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -10,6 +10,8 @@ import { scrubBoardEnv } from '../board-guard.ts';
 import { compileCacheGlobalSetup } from '../compile-cache.ts';
 import { gitGuardGlobalSetup } from '../git-guard.ts';
 import { harnessGuardGlobalSetup } from '../guard.ts';
+import { shimGuardGlobalSetup } from '../shim-guard.ts';
+import { runEveryTeardown } from '../teardowns.ts';
 import { reapStaleRuns, registerRun, stopWhenOrphaned } from './reap.ts';
 
 export default async function globalSetup(): Promise<() => void> {
@@ -23,16 +25,13 @@ export default async function globalSetup(): Promise<() => void> {
   process.env.AGENT_BOARD_DATA_DIR = dataDir;
   const teardownHarness = harnessGuardGlobalSetup();
   const teardownGit = gitGuardGlobalSetup();
+  const teardownShims = shimGuardGlobalSetup();
   const teardown = (): void => {
     try {
-      teardownGit();
+      runEveryTeardown([teardownShims, teardownGit, teardownHarness]);
     } finally {
-      try {
-        teardownHarness();
-      } finally {
-        rmSync(dataDir, { recursive: true, force: true });
-        unregister();
-      }
+      rmSync(dataDir, { recursive: true, force: true });
+      unregister();
     }
   };
   const stopWatching = stopWhenOrphaned(teardown);

@@ -4,7 +4,7 @@
 import type { ConnectorSide, FlowEdge, FlowEdgeShape, UpdateFlowEdgeParams } from '@agent-board/daemon/protocol';
 import type { Rect } from '../geometry';
 import { autoSides } from './connectors/endpoints';
-import { deliveredLabel, heldLabel, waitsFor } from './flow-edges';
+import { deliveredLabel, heldLabel, waitsFor } from './edge-labels';
 
 /**
  * The edges between two agents, drawn as one: from the `from` end of the edge made first to its `to` end. With edges

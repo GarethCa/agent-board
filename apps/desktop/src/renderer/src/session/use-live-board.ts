@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Agent, Shell } from '@agent-board/daemon/protocol';
 import { errorMessage } from '../../../shared/errors';
-import { crewTracker, directoryTracker, type AgentTracker } from './crew-agents';
+import { crewKeys, directoryTracker, shelvesTracker, type AgentTracker } from './crew-agents';
 
 /** A change to a live list: one item added or replaced, or one removed by its id. */
 type ListChange<T> = { put: T } | { removed: string };
@@ -141,15 +141,16 @@ function useAgentSelection<T extends AgentTracker>(make: () => T, applyTo: (trac
 }
 
 /**
- * The agents `parentId` started or recorded starting (`recordedKeys`), kept live; undefined until listed. It renders
- * again only when one of those changes, not for any other agent's.
+ * The agents an agent's shelves read, kept live; undefined until listed: its crew (those it started, and those its crew
+ * records name), and the agent that started it, for "started by". It renders again only when a crew member changes, or
+ * the starter's name or role does, not for any other agent's change.
  */
-export function useCrewAgents(parentId: string, recordedKeys: readonly string[]): Agent[] | undefined {
-  const keysId = recordedKeys.join('\n');
+export function useShelvesAgents(agent: Pick<Agent, 'sessionId' | 'spawnedBy' | 'records'>): Agent[] | undefined {
+  const keysId = crewKeys(agent).join('\n');
   return useAgentSelection(
-    () => crewTracker(parentId),
+    () => shelvesTracker(agent.sessionId, agent.spawnedBy),
     (tracker) => tracker.setKeys(keysId === '' ? [] : keysId.split('\n')),
-    [parentId],
+    [agent.sessionId, agent.spawnedBy],
     keysId,
   ).agents;
 }

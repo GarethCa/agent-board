@@ -19,7 +19,7 @@ import pkg from '../package.json' with { type: 'json' };
 import { paneIds, type PaneLayout, type SplitDirection } from './pane-layout.ts';
 import type { Placement, Surface, WindowLayout } from './window-layout.ts';
 import type { GateCleanup, GateRun } from './gate-rules.ts';
-import type { AgentFace, AgentPose, AgentProp, CharacterSet } from './character.ts';
+import type { AgentFace, AgentPose, AgentProp, CharacterSet } from './character-set.ts';
 
 export type { PaneLayout, SplitDirection };
 export type { GateCleanup, GateRun, GateRunStatus } from './gate-rules.ts';
@@ -2211,7 +2211,8 @@ export interface Agent {
   queuedUntilUp: number;
   /**
    * How many messages other agents sent the live orchestrator mid-turn wait for a turn of its to end, to be typed one
-   * after another, each a turn of its own (`queued-after-turn`).
+   * after another, each a turn of its own (`queued-after-turn`); and those sent while the user was typing at its prompt,
+   * waiting for them to stop (`queued-while-typing`).
    */
   messagesWaiting: number;
   /**
@@ -4011,11 +4012,13 @@ export type OrchestratorSpawned = Agent & {
  * (`queued-until-up`); the paused agent woken with it, to be typed once its session is up (`waking`); or typed as a
  * turn started meanwhile, its one Enter queueing it for after that turn, not yet seen taken up (`queued-in-turn`); or,
  * to an orchestrator mid-turn, kept by the daemon until its turn ends and then typed, after any sent before it
- * (`queued-after-turn`, `Agent.messagesWaiting`). With `submit`, the unsent message at its prompt: its turn started (`started`). With `clear`, the keys that clear it
+ * (`queued-after-turn`, `Agent.messagesWaiting`); or, as the user is typing at its prompt (a draft of theirs there, or a key
+ * pressed in its terminal in the last few seconds), kept in the same way until they have sent or cleared it and stopped
+ * typing, then typed as a message of its own, never run into theirs (`queued-while-typing`). With `submit`, the unsent message at its prompt: its turn started (`started`). With `clear`, the keys that clear it
  * were typed (`cleared`). One whose turn never started is never any of these: the send is refused, saying so, and it
  * stays the agent's unsent message.
  */
-export type SendDelivery = 'started' | 'queued-until-up' | 'waking' | 'queued-in-turn' | 'queued-after-turn' | 'cleared';
+export type SendDelivery = 'started' | 'queued-until-up' | 'waking' | 'queued-in-turn' | 'queued-after-turn' | 'queued-while-typing' | 'cleared';
 
 /**
  * What `orchestrator.send` answers: the agent, and how the send went. `typed` is the message as the receiver reads it,
@@ -6498,6 +6501,9 @@ export const TRACKER_ERROR = {
 
 export type DaemonMethod = keyof DaemonMethods;
 
+/** Calls one of the daemon's own methods, as the app would. */
+export type DaemonCall = <M extends DaemonMethod>(method: M, params: DaemonMethods[M]['params']) => Promise<DaemonMethods[M]['result']>;
+
 /** A harness hook call that passed token auth, attributed to its session. */
 export interface HookEvent {
   type: 'hook';
@@ -6802,9 +6808,20 @@ export type DaemonEvent =
 
 export const EVENT_METHOD = 'event';
 
-/** An event as the line the daemon pushes to a client. */
-export function eventLine(event: DaemonEvent): string {
-  return `${JSON.stringify({ jsonrpc: '2.0', method: EVENT_METHOD, params: event })}\n`;
+/**
+ * Where a broadcast event falls in the daemon's run: `seq` counts up from 1, and `epoch` is a random id made when the
+ * daemon starts, so a client never takes a new daemon's numbers as following on from the old one's. Events sent to one
+ * client only (a terminal's snapshot and output) carry neither.
+ */
+export interface EventStamp {
+  seq: number;
+  epoch: string;
+}
+
+/** An event as the line the daemon pushes to a client: with its stamp beside `params` when it was broadcast. */
+export function eventLine(event: DaemonEvent, stamp?: EventStamp): string {
+  const message = stamp === undefined ? { jsonrpc: '2.0', method: EVENT_METHOD, params: event } : { jsonrpc: '2.0', method: EVENT_METHOD, params: event, seq: stamp.seq, epoch: stamp.epoch };
+  return `${JSON.stringify(message)}\n`;
 }
 
 export const RPC_ERROR = {

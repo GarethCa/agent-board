@@ -56,9 +56,14 @@ for (const view of ['card', 'opened card', 'terminal'] as const) {
       await expect(ticket).toHaveAttribute('data-session-id', chat.sessionId, { timeout: TURN_MS });
       if (view !== 'card') await expect(ticket).toHaveAttribute('data-ticket-open', view === 'terminal' ? 'terminal' : 'card', { timeout: TURN_MS });
       if (view === 'opened card') {
-        // Opened in place it runs under the minimap: zoomed out, its footer clears it.
-        await window.getByRole('button', { name: 'Fit View' }).click();
-        await window.getByRole('button', { name: 'Zoom Out' }).click();
+        // Opened in place, the view follows it clear of the minimap: its footer, where the one ask goes, shows.
+        const minimap = (await window.locator('.board-minimap').boundingBox())!;
+        await expect
+          .poll(async () => {
+            const box = (await ticket.boundingBox())!;
+            return box.x + box.width <= minimap.x || box.y + box.height <= minimap.y;
+          }, { timeout: TURN_MS })
+          .toBe(true);
       }
 
       github.setState({ ...FAKE_GITHUB_STATE, pullRequests: [pullRequest(chat.branch)] });

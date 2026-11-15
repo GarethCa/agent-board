@@ -19,8 +19,8 @@ import {
 import { EMPTY_STAGE_BOARD_SIZE } from '@agent-board/daemon/stage-board';
 import { fillToken, foldColors, foldFills, shapeColors, slotName, slotPaint, slotToken, stickyPaint } from '../../board-colors';
 import { foldedNow } from './use-folded-slots';
-import { ITEM_KIND_LABELS } from './kind-labels';
-import { itemNodeType, type ItemNodeType, type ItemNodeTypeName } from './items';
+import { ITEM_KIND_LABELS, itemKindLabel } from './kind-labels';
+import { isKnownItemKind, itemNodeType, UNKNOWN_ITEM_NODE_TYPE, type ItemNodeType, type ItemNodeTypeName } from './items';
 import { AgentNoteNode } from './AgentNoteNode';
 import { clockData } from '../clocks';
 import { ClockNode } from './ClockNode';
@@ -42,6 +42,7 @@ import { TextNode } from './TextNode';
 import { newTodoData } from './todo-view';
 import { TodoNode } from './TodoNode';
 import { StagesNode } from './StagesNode';
+import { UnknownItemNode } from './UnknownItemNode';
 
 /** What the board needs to know about a kind of board item. A new kind plugs in here. */
 export interface ItemKind {
@@ -233,7 +234,17 @@ export const ITEM_KINDS: Record<BoardItemKind, ItemKind> = {
   },
 };
 
-/** Each kind's node component, keyed by its node type, for React Flow's `nodeTypes`. */
-export const ITEM_NODE_TYPES = Object.fromEntries(
-  Object.entries(ITEM_KINDS).map(([kind, { node }]) => [itemNodeType(kind as BoardItemKind), node]),
-) as Record<ItemNodeTypeName, ItemKind['node']>;
+/**
+ * What the board knows of `kind`, for every kind an item can have. A kind this app doesn't know (a newer app's, after a
+ * downgrade) is a placeholder that names it: no colours, nothing to type into, never made from the board's menus.
+ */
+export function itemKind(kind: string): ItemKind {
+  if (isKnownItemKind(kind)) return ITEM_KINDS[kind];
+  return { label: itemKindLabel(kind), node: UnknownItemNode, size: LINK_CARD_SIZE, editOnCreate: false, minimapColor: () => 'var(--raised)' };
+}
+
+/** Each kind's node component, keyed by its node type, for React Flow's `nodeTypes`; and the placeholder's. */
+export const ITEM_NODE_TYPES = Object.fromEntries([
+  ...Object.entries(ITEM_KINDS).map(([kind, { node }]) => [itemNodeType(kind as BoardItemKind), node] as const),
+  [UNKNOWN_ITEM_NODE_TYPE, UnknownItemNode],
+]) as Record<ItemNodeTypeName, ItemKind['node']>;

@@ -11,7 +11,6 @@ import { useSimplified } from '../design';
 import { storedValue } from '../stored-value';
 import { Readout, useToast } from '../ui';
 import { useLiveLists } from '../windows/use-live-lists';
-import { AgentSidebarSetting } from './AgentSidebarSetting';
 import { AppearanceSetting } from './AppearanceSetting';
 import { BoardBackgroundSetting } from './BoardBackgroundSetting';
 import { ArrangeSpacingSetting } from './ArrangeSpacingSetting';
@@ -141,8 +140,6 @@ function sectionBody(home: SettingsHome, onError: OnError): ReactNode {
       return <ArrangeSpacingSetting onError={onError} />;
     case 'agents.chat':
       return <AgentsChatSettings />;
-    case 'agents.sidebar':
-      return <AgentSidebarSetting />;
     case 'agents.reasoning':
       return <EffortSetting onError={onError} />;
     case 'agents.context':

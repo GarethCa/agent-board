@@ -42,6 +42,28 @@ export const nodesStill = (window: Page): Promise<void> =>
   );
 
 /**
+ * Waits until the cards matching `selector` hold their colours: no finite animation or transition running on the board,
+ * and their computed background and border unchanged between two reads. A card can paint a pale first frame and ease to
+ * its colour, and a shot taken then differs. Fails if fewer than two match, so a renamed selector can't empty the wait.
+ */
+export async function coloursSettled(window: Page, selector: string): Promise<void> {
+  await expect
+    .poll(() =>
+      window
+        .locator('.board')
+        .evaluate((board) => board.getAnimations({ subtree: true }).filter((each) => each.effect?.getTiming().iterations !== Infinity).length),
+    )
+    .toBe(0);
+  await untilStill(() =>
+    window.evaluate((css) => {
+      const cards = [...document.querySelectorAll<HTMLElement>(css)];
+      if (cards.length < 2) throw new Error(`only ${cards.length} match ${css}`);
+      return cards.map((el) => `${getComputedStyle(el).backgroundColor} ${getComputedStyle(el).borderColor}`).join('|');
+    }, selector),
+  );
+}
+
+/**
  * The theme packs shot, a few standing for all of them (tokens.test.ts holds every pack to the same rules): a dark one,
  * a warm light one and the colour-blind-safe one.
  */

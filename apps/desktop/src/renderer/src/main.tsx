@@ -45,6 +45,7 @@ import { followEscapeHatch } from './keys/escape-hatch';
 import { startMenuBar } from './keys/menu-bar-bridge';
 import { ToastProvider, TooltipProvider } from './ui';
 import { ParkThought } from './keys/ParkThought';
+import { flushViewSaves } from '../../shared/view-saver';
 
 const root = document.getElementById('root');
 if (!root) throw new Error('missing #root element');
@@ -89,6 +90,11 @@ followViewSettings();
 
 // The menu bar's items press this window's keys, and it shows the menus of what is selected here (keys/menu-bar-bridge.ts).
 startMenuBar();
+
+// The view saves this window is waiting to make (its session windows, the board's viewport) are sent at once as the app
+// quits, main waiting for them, so the next launch opens the board as it was left; and as the window itself goes.
+window.agentBoard.view.onFlush(flushViewSaves);
+window.addEventListener('pagehide', () => void flushViewSaves());
 
 // How the window is framed, for the styles that leave room for macOS's traffic lights and draw the drag regions round
 // them. In full screen the lights hide, and what sat beside them moves into the corner.

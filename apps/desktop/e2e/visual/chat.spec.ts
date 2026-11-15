@@ -1,7 +1,7 @@
 import { expect, type ElectronApplication, type Page } from '@playwright/test';
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { agents, launch, listFinishedTurns, sessionWindow, showDetails, spawnAgent, tile, tileAction, TURN_MS, useFullSidebar } from '../agent-helpers.ts';
+import { agents, launch, listFinishedTurns, sessionWindow, spawnAgent, tile, tileAction, TURN_MS } from '../agent-helpers.ts';
 import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone } from '../launch.ts';
 import { RENDER_ARGS, RENDER_ENV, VIEWPORT, ignorePointer, pinFonts, pinRandomText, settle } from '../render.ts';
 import { scratch } from '../scratch.ts';
@@ -267,44 +267,6 @@ test("the dark theme: a review doc in its implementer's session window, then its
     await settle(window);
     await expect.soft(win).toHaveScreenshot('dark-review-tab-row-narrow.png', SHOT);
     await restorePointer();
-  } finally {
-    await app.close();
-    await removeDataDir(dataDir);
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("an agent's sidebar: the document it showed, and a file, a link and a note it pinned", async () => {
-  needsBaselines('sidebar-pins');
-  const { dir, repo, env } = scratch('ask-plan');
-  const dataDir = tempDataDir();
-  const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
-  try {
-    await showTileParts(window, ['chips']);
-    await useFullSidebar(window);
-    await window.setViewportSize(VIEWPORT);
-    await pinFonts(window);
-    await pickFolderNext(app, repo);
-    await browseForZone(window);
-    await spawnAgent(window, 'monorepo', 'Pins: notes/report.md');
-    await expect(tile(window)).toHaveAttribute('data-state', 'waiting', { timeout: TURN_MS });
-    await tile(window).getByTestId('tile-docs').click();
-    await showDetails(sessionWindow(window));
-    const details = sessionWindow(window).getByRole('complementary', { name: 'Session details' });
-    await expect(details.getByTestId('details-pin')).toHaveCount(4);
-    // The sections above folded, so Documents and Pins show whole.
-    for (const label of ['Controls', 'Folder (live)', 'Issue', 'Last message', 'Worktree and branch', 'PR and checks', 'Gate', 'Crew', 'Hand-off docs']) {
-      await details.getByRole('region', { name: label }).locator('.ui-section-head').click();
-    }
-    // Scrolled to its end, with no overlay scrollbar, which shows a while after a scroll.
-    await window.addStyleTag({ content: '.session-details-sections { scrollbar-width: none; }' });
-    await details.locator('.session-details-sections').evaluate((sections) => sections.scrollTo(0, sections.scrollHeight));
-    await pinRandomText(window);
-    await ignorePointer(window);
-    await settle(window);
-    // Each time it was shown or pinned is the clock's.
-    const when = details.locator('[data-testid="details-document"] .ui-row-meta, [data-testid="details-pin"]:not(:last-child) .ui-row-meta');
-    await expect.soft(details).toHaveScreenshot('sidebar-pins.png', { ...SHOT, mask: [when] });
   } finally {
     await app.close();
     await removeDataDir(dataDir);

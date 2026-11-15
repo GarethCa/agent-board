@@ -44,7 +44,7 @@ import { dockFrom } from '../shared/dock';
 import { technicalFromQuery } from '../shared/technical';
 import { ipcErrorMessage } from '../shared/errors';
 import { captureFrameFrom } from '../shared/capture';
-import { ACCEPT_AFTER_MS } from '../shared/accept';
+import { acceptAfterFrom } from '../shared/accept';
 import { ipcCalls, readOnlyIpc } from './ipc';
 
 // A capture window only reads the board (shared/capture.ts).
@@ -70,6 +70,15 @@ function onMenuRequest(poke: string, take: string, listener: () => void): () => 
   takeRequest();
   return unsubscribe;
 }
+
+/** What sends the page's saves waiting to be made (`view.onFlush`), if it has said. */
+let flushSaves: (() => Promise<void>) | undefined;
+// Answered by every window, one with nothing to send too, so main doesn't wait on it as the app quits.
+ipcRenderer.on(VIEW_IPC.flush, (_event, id: unknown) => {
+  void new Promise<void>((resolve) => resolve(flushSaves?.()))
+    .catch(() => {})
+    .then(() => ipcRenderer.send(VIEW_IPC.flushed, id));
+});
 
 const api: AgentBoardApi = {
   daemonHealth: () => invoke(DAEMON_IPC.health),
@@ -387,6 +396,12 @@ const api: AgentBoardApi = {
     get: (key) => invoke(VIEW_IPC.get, key),
     set: (key, value) => invoke(VIEW_IPC.set, key, value),
     onChanged: (listener) => subscribe(VIEW_IPC.changed, (change: { key: string; value: unknown }) => listener(change.key, change.value)),
+    onFlush: (flush) => {
+      flushSaves = flush;
+      return () => {
+        if (flushSaves === flush) flushSaves = undefined;
+      };
+    },
     measured: (report) => invoke(VIEW_IPC.measured, report),
   },
   appearance: {
@@ -458,7 +473,7 @@ const api: AgentBoardApi = {
       return unsubscribe;
     },
     chrome: windowChrome(process.platform),
-    acceptAfterMs: Number(process.env.AGENT_BOARD_ACCEPT_AFTER_MS) || ACCEPT_AFTER_MS,
+    acceptAfterMs: acceptAfterFrom(process.argv),
     isFullScreen: () => invoke(WINDOW_IPC.isFullScreen),
     onFullScreenChanged: (listener) => subscribe(WINDOW_IPC.fullScreen, listener),
   },

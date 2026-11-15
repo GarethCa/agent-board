@@ -18,7 +18,8 @@
   },
   "scripts": {
     "build": "pnpm -r build",
-    "lint": "eslint .",
+    "lint": "eslint . && pnpm cycles",
+    "cycles": "madge --circular --no-spinner apps/desktop/src packages/*/src scripts",
     "typecheck": "tsc -p tsconfig.json && pnpm -r typecheck",
     "test": "vitest run",
     "test:e2e": "pnpm -r test:e2e",
@@ -42,6 +43,7 @@
     "eslint": "^10.13.0",
     "globals": "^17.13.0",
     "knip": "5.88.1",
+    "madge": "^8.0.0",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.72.0",
     "vitest": "^5.0.5"

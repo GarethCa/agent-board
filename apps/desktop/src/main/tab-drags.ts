@@ -1,5 +1,5 @@
 import { BrowserWindow, ipcMain, screen, type Rectangle, type WebContents } from 'electron';
-import { headless } from './background';
+import { isHeadless } from './background';
 import { sendToAllWindows } from './broadcast';
 import type { WindowOwner } from '@agent-board/daemon/protocol';
 import { TAB_DRAG_IPC, type ScreenPoint, type TabDrag, type TabMove } from '../preload/api';
@@ -68,7 +68,7 @@ export function registerTabDragIpc(options: TabDragIpcOptions): void {
     // Only the windows there to drop on: not a hidden or minimised one, nor one full screen in a Space of its own while
     // another has the keyboard. Headless, every window is hidden, and painted offscreen where it would be.
     const windows = BrowserWindow.getAllWindows().filter(
-      (window) => !window.isDestroyed() && (headless || window.isVisible()) && !window.isMinimized() && !(window.isFullScreen() && !window.isFocused()),
+      (window) => !window.isDestroyed() && (isHeadless() || window.isVisible()) && !window.isMinimized() && !(window.isFullScreen() && !window.isFocused()),
     );
     // Let go over a window that didn't take it (its title bar, say) is a drag given up.
     if (!outsideWindows(point, windows.map((window) => window.getBounds()))) return;

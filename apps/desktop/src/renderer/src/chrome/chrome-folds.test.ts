@@ -34,4 +34,11 @@ describe('the top row’s folds', () => {
     expect(toolbarShift({ leftEnd: 352, rightStart: 655, toolbar: 393, centre: 460 })).toBeUndefined();
     expect(toolbarShift({ leftEnd: 252, rightStart: 655, toolbar: 387, centre: 460 })).toBe(252 + 8 - (460 - 193.5));
   });
+
+  it('keeps a wider least gap where it is asked to, as Classic asks for its islands’ inset', () => {
+    // Fits with 8 px either side, but not with 14: Classic folds its drawing tools instead of letting the islands meet.
+    expect(toolbarShift({ leftEnd: 261, rightStart: 806, toolbar: 529, centre: 550 })).toBe(261 + 8 - (550 - 264.5));
+    expect(toolbarShift({ leftEnd: 261, rightStart: 806, toolbar: 529, centre: 550 }, 14)).toBeUndefined();
+    expect(toolbarShift({ leftEnd: 261, rightStart: 806, toolbar: 435, centre: 550 }, 14)).toBe(0);
+  });
 });

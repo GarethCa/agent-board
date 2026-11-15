@@ -8,7 +8,6 @@ import { boardCaller, connectionAgent, isOwnLiveSession, type BoardCallerSources
 import { readsItem } from './item-scope.ts';
 import { isObject } from './json.ts';
 import { keyedQueue } from './keyed-queue.ts';
-import type { DaemonCall } from './orchestrator-layout.ts';
 import { invalidParams, paramsObject, stringParam } from './params.ts';
 import {
   BOARD_ERROR,
@@ -25,6 +24,7 @@ import {
   type TodoChange,
   type TodoData,
   type TodoLine,
+  type DaemonCall,
 } from './protocol.ts';
 import { RpcMethodError, type RpcHandlers } from './rpc.ts';
 import type { AgentHost } from './agents.ts';

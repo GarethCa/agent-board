@@ -14,6 +14,10 @@ export interface PullRequest {
   url: string;
   state: PullRequestState;
   checks: ChecksState;
+  /** Who GitHub is still waiting on for a review: user logins and team slugs. Absent when not asked for. */
+  reviewRequests?: string[];
+  /** GitHub's review decision (`APPROVED`, `CHANGES_REQUESTED`, `REVIEW_REQUIRED`), or null when it has none. */
+  reviewDecision?: string | null;
 }
 
 interface GhPullRequest {
@@ -23,6 +27,26 @@ interface GhPullRequest {
   state: 'OPEN' | 'CLOSED' | 'MERGED';
   isDraft: boolean;
   statusCheckRollup: Record<string, unknown>[] | null;
+  reviewRequests?: { login?: string; slug?: string; name?: string }[] | null;
+  reviewDecision?: string | null;
+}
+
+const PULL_REQUEST_FIELDS = 'number,title,url,state,isDraft,statusCheckRollup,reviewRequests,reviewDecision';
+
+/** A pull request as the tile shows it, from what gh reports. */
+function toPullRequest(pr: GhPullRequest): PullRequest {
+  return {
+    number: pr.number,
+    title: pr.title,
+    url: pr.url,
+    state: pullRequestState(pr),
+    checks: checksState(pr.statusCheckRollup ?? []),
+    reviewRequests: (pr.reviewRequests ?? []).flatMap((request) => {
+      const who = [request.login, request.slug, request.name].find(Boolean);
+      return who === undefined ? [] : [who];
+    }),
+    reviewDecision: pr.reviewDecision || null,
+  };
 }
 
 /** At most this many pull requests per `gh pr list`. */
@@ -54,13 +78,13 @@ export async function viewPullRequest(ref: PullRequestRef, options: GhOptions & 
   let found: GhPullRequest;
   try {
     found = JSON.parse(
-      await runGh(['pr', 'view', String(ref.number), '--repo', ref.repo, '--json', 'number,title,url,state,isDraft,statusCheckRollup'], options),
+      await runGh(['pr', 'view', String(ref.number), '--repo', ref.repo, '--json', PULL_REQUEST_FIELDS], options),
     ) as GhPullRequest;
   } catch (error) {
     if (error instanceof GhError && NO_SUCH_PULL_REQUEST.test(error.stderr)) return undefined;
     throw error;
   }
-  return { number: found.number, title: found.title, url: found.url, state: pullRequestState(found), checks: checksState(found.statusCheckRollup ?? []) };
+  return toPullRequest(found);
 }
 
 /** At most this many branches an agent pushed to are asked about. */
@@ -97,19 +121,13 @@ async function pullRequestList(filter: string[], options: PullRequestOptions): P
       ...['--state', 'all', '--limit', String(MAX_PULL_REQUESTS)],
     ];
     found = JSON.parse(
-      await runGh([...args, '--json', 'number,title,url,state,isDraft,statusCheckRollup'], options),
+      await runGh([...args, '--json', PULL_REQUEST_FIELDS], options),
     ) as GhPullRequest[];
   } catch (error) {
     if (error instanceof GhError && NOT_ON_GITHUB.test(error.stderr)) return [];
     throw error;
   }
-  return found.map((pr) => ({
-    number: pr.number,
-    title: pr.title,
-    url: pr.url,
-    state: pullRequestState(pr),
-    checks: checksState(pr.statusCheckRollup ?? []),
-  }));
+  return found.map(toPullRequest);
 }
 
 /** A pull request's state as gh gives it, with a draft told apart. */

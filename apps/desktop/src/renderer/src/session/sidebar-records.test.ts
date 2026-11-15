@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent, AgentRecord, PullRequest, Subagent } from '@agent-board/daemon/protocol';
-import { crewSection, docSection, documentSection, pinSection, pullRequestSection, sectionCount, subagentSection } from './sidebar-records';
+import { crewSection, docSection, documentSection, pinSection, pullRequestSection, subagentSection } from './sidebar-records';
 
 const AT = '2026-10-23T10:12:00.000Z';
 
@@ -58,7 +58,6 @@ describe("an agent's PR section", () => {
       { key: 'acme/web#241', gone: false },
     ]);
     expect(hidden).toEqual([]);
-    expect(sectionCount(rows)).toBe('1');
   });
 
   it('takes state and checks for a recorded pull request on another branch from what gh found of it by number', () => {
@@ -130,14 +129,10 @@ describe("an agent's Hand-off docs section", () => {
   });
 });
 
-describe('section counts', () => {
-  it('says how many rows, and how many are guessed', () => {
-    const { rows } = pullRequestSection(agent({ records: [prRecord(241)], pullRequests: [pr(239), pr(241)] }));
-    expect(sectionCount(rows)).toBe('2 · 1 guessed');
-    expect(sectionCount(rows.slice(0, 1))).toBe('1');
+describe("an agent's subagents", () => {
+  it('guesses every one, from hooks', () => {
     const subagent: Subagent = { id: 's1', type: 'general-purpose', state: 'running', startedAt: AT, endedAt: null, result: null };
-    expect(sectionCount(subagentSection(agent({ subagents: [subagent] })).rows)).toBe('1 · guessed');
-    expect(sectionCount([])).toBe('None');
+    expect(subagentSection(agent({ subagents: [subagent] })).rows).toEqual([{ key: 's1', item: subagent, source: 'guessed' }]);
   });
 });
 

@@ -25,8 +25,8 @@ import {
   ZoneBindingContext,
   ZoneResizeContext,
   ZoneTrackerContext,
-  type ZoneNodeType,
-} from './ZoneNode';
+} from './zone-contexts';
+import type { ZoneNodeType } from './ZoneNode';
 
 /** Puts a new sticky note on the board where the screen point `at` is. */
 export const NewNoteContext = createContext<(at: { x: number; y: number }) => void>(() => {});

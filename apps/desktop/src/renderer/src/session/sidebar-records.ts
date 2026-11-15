@@ -187,11 +187,3 @@ export function subagentSection(agent: Pick<Agent, 'subagents'>): SidebarSection
   return { rows: agent.subagents.map((subagent) => ({ key: subagent.id, item: subagent, source: 'guessed' })), hidden: [] };
 }
 
-/** A section heading's count: how many rows, and how many of them are guessed; `None` for none. */
-export function sectionCount(all: readonly SidebarRow<unknown>[]): string {
-  const rows = all.filter((row) => row.source === 'guessed' || row.gone !== true);
-  if (rows.length === 0) return 'None';
-  const guessed = rows.filter((row) => row.source === 'guessed').length;
-  if (guessed === 0) return String(rows.length);
-  return guessed === rows.length ? `${rows.length} · guessed` : `${rows.length} · ${guessed} guessed`;
-}
