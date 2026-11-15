@@ -67,6 +67,16 @@ export function BoardMenu({ menu, onMenu, status, zones, agents, shells, onJump,
   }, [at, asked]);
 
   const close = () => onMenu({ open: false });
+  /**
+   * Set as a row closes the menu to open something that takes the focus itself and is not modal, as Add zone does.
+   * Closed, the menu gives the focus back to its button a task later; that would take it out of Add zone, and wake the
+   * button's tooltip over Add zone, where it would take the first Escape.
+   */
+  const handedOn = useRef(false);
+  const closeHandingOn = () => {
+    handedOn.current = true;
+    close();
+  };
   const wanted = filter.trim().toLowerCase();
   const shownZones = zones?.filter((zone) => zone.name.toLowerCase().includes(wanted));
   // A search opens Zones while it has matches; that is for the search only, so a click on the heading then does nothing.
@@ -123,7 +133,7 @@ export function BoardMenu({ menu, onMenu, status, zones, agents, shells, onJump,
               variant="ghost"
               icon={<Plus />}
               onClick={() => {
-                close();
+                closeHandingOn();
                 onAddZone();
               }}
             >
@@ -195,7 +205,17 @@ export function BoardMenu({ menu, onMenu, status, zones, agents, shells, onJump,
 
   return (
     <Island className="board-menu island-top-left" data-testid="board-menu" data-tour="board-menu" data-drag-region>
-      <Popover open={menu.open} onOpenChange={(open) => onMenu({ open })} aria-label="Board menu" content={panel} className="board-menu-popover">
+      <Popover
+        open={menu.open}
+        onOpenChange={(open) => onMenu({ open })}
+        aria-label="Board menu"
+        content={panel}
+        className="board-menu-popover"
+        onCloseAutoFocus={(event) => {
+          if (handedOn.current) event.preventDefault();
+          handedOn.current = false;
+        }}
+      >
         <ToolButton size="sm" icon={<MenuIcon />} label="Board menu" hint={`Zones, agents and settings  ${keyText('move.boardMenu')}`} />
       </Popover>
       <BrandMark className="board-menu-logo" />

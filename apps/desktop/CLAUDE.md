@@ -22,6 +22,8 @@ Take the setting "Compact agents' context at" as an example:
 
 A new call touches all four. Find the area's existing call and copy it.
 
+Every channel answers only the app's own windows, with no check in the handler: `app-only-ipc.ts`, main's first import, puts `ipc-guard.ts` on `ipcMain` before anything registers, and `app-windows.ts` holds the windows `openWindow` makes. Broadcasts (`broadcast.ts`) reach only those windows too, never a web tab or a plan view. Register on `ipcMain`, never on a web contents' or frame's own `.ipc`, which would answer past the guard (lint refuses it). Electron's own shared-texture handler on `ipcMain` is the one channel the guard can't wrap.
+
 ## The renderer by folder
 
 | Folder | What is in it |

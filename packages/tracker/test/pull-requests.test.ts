@@ -70,12 +70,21 @@ describe('listPullRequests', () => {
     const found = await listPullRequests(branch, { gh: github.gh, cwd: repoWithRemotes({}), repo: 'acme/app' });
 
     expect(found).toEqual([
-      { number: 41, title: 'PR 41', url: 'https://github.com/acme/app/pull/41', state: 'draft', checks: 'pending' },
-      { number: 40, title: 'PR 40', url: 'https://github.com/acme/app/pull/40', state: 'closed', checks: 'failing' },
-      { number: 39, title: 'PR 39', url: 'https://github.com/acme/app/pull/39', state: 'merged', checks: 'passing' },
+      { number: 41, title: 'PR 41', url: 'https://github.com/acme/app/pull/41', state: 'draft', checks: 'pending', reviewRequests: [], reviewDecision: null },
+      { number: 40, title: 'PR 40', url: 'https://github.com/acme/app/pull/40', state: 'closed', checks: 'failing', reviewRequests: [], reviewDecision: null },
+      { number: 39, title: 'PR 39', url: 'https://github.com/acme/app/pull/39', state: 'merged', checks: 'passing', reviewRequests: [], reviewDecision: null },
     ]);
     const [call] = github.calls();
     expect(call?.args.slice(0, 8)).toEqual(['pr', 'list', '--repo', 'acme/app', '--head', branch, '--state', 'all']);
+  });
+
+  it('carries who a review is requested of, and the review decision', async () => {
+    const github = fakeWith([
+      pr({ number: 42, reviewRequests: [{ login: 'octocat' }, { login: '', slug: 'core-team' }], reviewDecision: 'REVIEW_REQUIRED' }),
+    ]);
+    const [found] = await listPullRequests(branch, { gh: github.gh, cwd: repoWithRemotes({}), repo: 'acme/app' });
+    expect(found).toMatchObject({ number: 42, reviewRequests: ['octocat', 'core-team'], reviewDecision: 'REVIEW_REQUIRED' });
+    expect(github.calls()[0]?.args.join(' ')).toContain('reviewRequests,reviewDecision');
   });
 
   it("without a repo, asks in the repo gh infers from the directory's GitHub remotes, upstream first", async () => {
@@ -127,7 +136,7 @@ describe('findPushedPullRequests', () => {
     const options = { gh: github.gh, cwd: repoWithRemotes({}), repo: 'acme/app' };
 
     expect(await findPushedPullRequests({ pushedTo: ['fix-the-login'], commit: sha }, options)).toEqual([
-      { number: 174, title: 'PR 174', url: 'https://github.com/acme/app/pull/174', state: 'open', checks: 'none' },
+      { number: 174, title: 'PR 174', url: 'https://github.com/acme/app/pull/174', state: 'open', checks: 'none', reviewRequests: [], reviewDecision: null },
     ]);
     github.setState({ ...github.state(), pullRequests: [pr({ number: 174, headRefName: 'fix-the-login', state: 'MERGED' })] });
     expect((await findPushedPullRequests({ pushedTo: ['fix-the-login'], commit: sha }, options))[0]?.state).toBe('merged');

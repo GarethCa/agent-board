@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Node } from '@xyflow/react';
 import type { BoardItem } from '@agent-board/daemon/protocol';
-import { boundsOnBoard, itemNode, placeOnBoard, restoredData, withItem, withItemChange, withoutItem } from './items';
+import { boundsOnBoard, itemNode, placeOnBoard, restoredData, restoredUpdate, UNKNOWN_ITEM_NODE_TYPE, withItem, withItemChange, withoutItem } from './items';
 
 const zones = [
   { id: 'a', x: 0, y: 0, width: 500, height: 400 },
@@ -31,6 +31,21 @@ describe('itemNode', () => {
     expect(itemNode(item({ kind: 'shape' })).zIndex).toBeLessThan(1);
     expect(itemNode(item({ kind: 'sticky' })).zIndex).toBeGreaterThan(1);
     expect(itemNode(item({ kind: 'text' })).zIndex).toBeGreaterThan(1);
+  });
+});
+
+describe('an item of a kind this app does not know', () => {
+  // As a newer app may leave one on the board.
+  const stranger = () => item({ kind: 'mod' as BoardItem['kind'], data: { owner: 'some.mod', payload: { a: [1, 2] } } });
+
+  it('is drawn by the placeholder node, with its item untouched', () => {
+    expect(itemNode(stranger())).toMatchObject({ id: 'item:i1', type: UNKNOWN_ITEM_NODE_TYPE, data: { item: stranger() } });
+    expect(itemNode(stranger()).zIndex).toBeGreaterThan(1);
+  });
+
+  it('is put back by undo without its data, which this app may not change', () => {
+    expect(restoredUpdate(stranger())).toEqual({ id: 'i1', zoneId: null, x: 10, y: 20, width: 100, height: 80, z: 1, rotation: 0 });
+    expect(restoredUpdate(item())).toEqual({ id: 'i1', zoneId: null, x: 10, y: 20, width: 100, height: 80, z: 1, rotation: 0, data: restoredData(item()) });
   });
 });
 

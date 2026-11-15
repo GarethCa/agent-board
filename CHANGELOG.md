@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.6.27 (2026-11-15)
+
+- A send waits while the user is typing at the agent's prompt
+- Simplified's toolbar test lists New crew, and its tile shots show the zone's + agent ▾
+- The gate's scanner list names crew-dim.test.ts, which reads app.css
+- \+ agent's ▾ lists a blank agent, your prefabs and the built-ins; Simplified's ▾ gains New crew
+- A ticket tile in a focused crew stays lit, not dimmed
+- Remove the state bar above the tabs of a split session window
+- Only the installed app writes the live ~/.agent-board/bin launchers
+- Add zone opened from a crew dialog keeps the focus, and gives it back on close
+- Re-shoot the Settings window shots after the Sidebar section went
+- Edge rules pan clears the measured covered view
+- Retire the Full agent sidebar: every agent window has the shelves
+- Daemon type cycles: DaemonCall and orchestrator types move out
+- The board menu leaves the focus in Add zone, so its button's tooltip no longer takes the first Escape
+- Main's IPC handlers and broadcasts answer only the app's own windows
+- Re-shoot the four Captain panel shots after the Draw fold
+- No runtime import cycles, and pnpm lint fails on a new one
+- Classic's drawing tools fold into Draw instead of the top islands touching
+- zones.spec waits out a hover card as well as a tooltip before Escape (partial guard)
+- Bringing a tile into view keeps it clear of the side panels and the minimap, from ⌘K too
+- Board windows get only clipboard writes, the socket is 0600 from birth, and packaged builds ignore test overrides
+- The ask-claude answer shot waits for the settled card colours
+- Ticket tiles B6: whole-path e2e on a ticket's board; send the view saves before a quit
+- An expanded tile's sidebar re-renders only for its own crew
+- The overview test expects the reason text an open PR now gets
+- Opening a tile in place centres it as before, and pans clear of the minimap without zooming out
+- An item of a kind this app doesn't know draws as a placeholder instead of crashing the board
+- An open PR with a requested review reads as In review
+- An opened ticket card keeps its footer clear of the minimap; Read in the opened card gallery
+- A closed popover, tooltip or hover card leaves the page at once, so a quick reopen no longer closes it again
+
 ## v0.6.26 (2026-11-15)
 
 - Ticket tiles B3: ⌘K, the minimap and Needs you across levels

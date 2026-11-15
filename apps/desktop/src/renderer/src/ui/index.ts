@@ -1,6 +1,6 @@
 /** The design system's primitives (docs/adr/0008-design-system.md). Their look is ui.css, on tokens.css. */
 export { Button, Chip, IconButton, Spinner, type ButtonProps, type ChipProps, type ButtonVariant, type IconButtonProps } from './Button';
-export { Dialog } from './Dialog';
+export { Dialog, takeHeldOpener } from './Dialog';
 export { EditableName, MENU_FOCUS_RETURN_MS, RenameButton, useRenaming, type Renaming } from './EditableName';
 export { useSlowClickRename } from './slow-click';
 export { EmptyState } from './EmptyState';

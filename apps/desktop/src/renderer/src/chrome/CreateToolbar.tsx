@@ -1,10 +1,13 @@
 import { Brain, ChevronDown, Hand, ListTodo, MousePointer2, PenLine, Plus, Shapes, SquareCheckBig, SquareDashed, SquareDashedMousePointer, SquareTerminal, StickyNote, Ticket, Type } from 'lucide-react';
-import { useRef, useState, type PointerEvent } from 'react';
+import { useLayoutEffect, useRef, useState, type PointerEvent, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
+import { DRAW_FOLD } from './chrome-folds';
 import { GHOST_LABELS, TOOL_DRAG_MIN, ToolGhost, type ArmedTool } from '../board/ToolOverlay';
 import { noteShapeUsed, useRecentShapes } from '../board/items/shapes/recents';
 import { ShapeIcon } from '../board/items/shapes/ShapeArt';
+import { crewMenu } from '../board/menu-model';
 import { ShapePicker } from '../board/items/shapes/ShapePicker';
+import { usePrefabs } from '../crews/prefab-store';
 import { useSimplified } from '../design';
 import { keyText } from '../keys/registry';
 import { AnchoredPopover, Button, Island, IslandSeparator, Kbd, Menu, Popover, ToolButton, type MenuEntry } from '../ui';
@@ -32,6 +35,8 @@ export interface CreateToolbarProps {
   onTodo(): void;
   /** Opens the New ticket sheet: one ticket tile, from a ticket prefab. */
   onTicket?(): void;
+  /** Opens the prompt box of a crew from the prefab named, or the crew library for null. */
+  onCrew?(prefab: string | null): void;
   /** The size on screen of the ghost tile the Agent and Shell tools carry, at the board's zoom. */
   ghostSize: { width: number; height: number };
   /** The Agent or Shell tool dragged straight off the toolbar and let go at `at`, on the screen. */
@@ -41,17 +46,43 @@ export interface CreateToolbarProps {
 /** The tools that can be dragged off the toolbar onto the board. */
 export type DraggedTool = 'agent' | 'shell';
 
+/** Simplified's ▾ beside New agent: New agent, a crew from the library (kept current), a terminal, and a ticket. */
+function StartMenu({ tool, onTool, onTicket, onCrew }: Pick<CreateToolbarProps, 'tool' | 'onTool' | 'onTicket' | 'onCrew'>) {
+  const prefabs = usePrefabs();
+  return (
+    <Menu
+      entries={[
+        { label: 'New agent', icon: <Plus />, shortcut: keyText('make.agent'), onSelect: () => onTool('agent') },
+        ...(onCrew === undefined ? [] : [crewMenu(prefabs, onCrew)]),
+        { label: 'New terminal', icon: <SquareTerminal />, shortcut: keyText('make.shell'), onSelect: () => onTool('shell') },
+        ...(onTicket === undefined ? [] : [{ label: 'New ticket…', icon: <Ticket />, onSelect: onTicket }]),
+      ]}
+      align="end"
+    >
+      <Button variant="primary" className="create-toolbar-agent-more" icon={<ChevronDown />} aria-label="More to start" aria-pressed={tool === 'shell'} />
+    </Menu>
+  );
+}
+
 /**
  * The creation toolbar, the top-centre island (chrome C, WbTools): how a drag acts, then what to put on the board, then
  * the sessions to start. The Zone tool (Z) drags out where a new zone goes, then asks what it is for (P1). The
  * Agent (A) and Shell (`) tools carry a ghost tile to where the new session goes, in a zone or loose.
  *
+ * Where the top row is too narrow for Classic's toolbar to clear the islands either side, its drawing tools (Sticky
+ * note, Text, Shape, Zone and More to add) fold into the Draw menu, so each is still a click or a Tab away. Both are
+ * drawn and the stylesheet shows one, by the board's `data-folds`, so the fold's width is measured at once; the shape
+ * picker and the tour follow the one shown.
+ *
  * Under the Simplified design it holds fewer buttons: Select, Box select and Hand as in Classic, a Draw menu with the
- * drawing tools, and New agent, whose menu adds the Shell tool as a new terminal. Every tool keeps its key.
+ * drawing tools, and New agent, whose menu adds a crew from the library and the Shell tool as a new terminal. Every tool keeps its key.
  */
-export function CreateToolbar({ mode, onMode, tool, onTool, onSticky, onSteps, onMemory, onQueue, onTodo, onTicket, ghostSize, onDropTool }: CreateToolbarProps) {
+export function CreateToolbar({ mode, onMode, tool, onTool, onSticky, onSteps, onMemory, onQueue, onTodo, onTicket, onCrew, ghostSize, onDropTool }: CreateToolbarProps) {
   const drag = useToolDrag(onDropTool);
   const simplified = useSimplified();
+  // Where the top row is too narrow, Classic's drawing tools fold into the Draw menu (chrome-folds.ts, chrome.css).
+  const island = useRef<HTMLDivElement>(null);
+  const folded = useBoardFold(island, DRAW_FOLD);
   // A click arms the tool, for a click on the board; a drag off the button puts the tile where it is let go.
   const toggle = (armed: ArmedTool) => drag.consumeClick() || onTool(tool === armed ? undefined : armed);
   const ghost =
@@ -89,34 +120,30 @@ export function CreateToolbar({ mode, onMode, tool, onTool, onSticky, onSteps, o
         <IslandSeparator />
         <div className="create-toolbar-split">
           {newAgent}
-          <Menu
-            entries={[
-              { label: 'New agent', icon: <Plus />, shortcut: keyText('make.agent'), onSelect: () => onTool('agent') },
-              { label: 'New terminal', icon: <SquareTerminal />, shortcut: keyText('make.shell'), onSelect: () => onTool('shell') },
-              ...(onTicket === undefined ? [] : [{ label: 'New ticket…', icon: <Ticket />, onSelect: onTicket }]),
-            ]}
-            align="end"
-          >
-            <Button variant="primary" className="create-toolbar-agent-more" icon={<ChevronDown />} aria-label="More to start" aria-pressed={tool === 'shell'} />
-          </Menu>
+          <StartMenu tool={tool} onTool={onTool} onTicket={onTicket} onCrew={onCrew} />
         </div>
         {ghost}
       </Island>
     );
   }
   return (
-    <Island className="create-toolbar island-top-centre" role="toolbar" aria-label="Create">
+    <Island ref={island} className="create-toolbar island-top-centre" role="toolbar" aria-label="Create">
       {pointerTools}
       <IslandSeparator />
-      <ToolButton label="Sticky note" icon={<StickyNote />} shortcut={keyText('make.note')} hint="Add a sticky note, or double-click the board" onClick={onSticky} />
-      <ToolButton label="Text" icon={<Type />} shortcut={keyText('make.text')} hint="Add text, then click the board" pressed={tool === 'text'} onClick={() => toggle('text')} />
-      <ShapeTool armed={tool === 'shape'} onTool={onTool} />
-      <div className="create-toolbar-add">
-        <ToolButton label="Zone" icon={<SquareDashedMousePointer />} shortcut={keyText('make.zone')} hint="Add a zone: drag out where it goes" pressed={tool === 'zone'} onClick={() => toggle('zone')} data-tour="add-zone" />
-        <Menu entries={keepEntries({ onSteps, onMemory, onQueue, onTodo })} align="end">
-          <ToolButton label="More to add" className="create-toolbar-add-more" icon={<ChevronDown />} hint="Add steps, a memory, a queue or a to-do list" />
-        </Menu>
-      </div>
+      <span className="create-toolbar-drawing">
+        <ToolButton label="Sticky note" icon={<StickyNote />} shortcut={keyText('make.note')} hint="Add a sticky note, or double-click the board" onClick={onSticky} />
+        <ToolButton label="Text" icon={<Type />} shortcut={keyText('make.text')} hint="Add text, then click the board" pressed={tool === 'text'} onClick={() => toggle('text')} />
+        <ShapeTool armed={tool === 'shape' && !folded} onTool={onTool} />
+        <div className="create-toolbar-add">
+          <ToolButton label="Zone" icon={<SquareDashedMousePointer />} shortcut={keyText('make.zone')} hint="Add a zone: drag out where it goes" pressed={tool === 'zone'} onClick={() => toggle('zone')} data-tour={folded ? undefined : 'add-zone'} />
+          <Menu entries={keepEntries({ onSteps, onMemory, onQueue, onTodo })} align="end">
+            <ToolButton label="More to add" className="create-toolbar-add-more" icon={<ChevronDown />} hint="Add steps, a memory, a queue or a to-do list" />
+          </Menu>
+        </div>
+      </span>
+      <span className="create-toolbar-drawing-folded">
+        <DrawMenu tool={tool} onTool={onTool} onSticky={onSticky} onSteps={onSteps} onMemory={onMemory} onQueue={onQueue} onTodo={onTodo} shown={folded} />
+      </span>
       <IslandSeparator />
       {newAgent}
       <Button
@@ -144,16 +171,33 @@ function keepEntries({ onSteps, onMemory, onQueue, onTodo }: Pick<CreateToolbarP
   ];
 }
 
-/** The tools the Simplified design's Draw menu arms, so its button shows pressed while one is. */
+/** Whether the board this element is on has the fold `token` in its `data-folds` now, kept up to date as it changes. */
+function useBoardFold(element: RefObject<HTMLElement | null>, token: string): boolean {
+  const [folded, setFolded] = useState(false);
+  useLayoutEffect(() => {
+    const board = element.current?.closest<HTMLElement>('.board');
+    if (board === null || board === undefined) return;
+    const update = () => setFolded((board.dataset.folds ?? '').split(' ').includes(token));
+    update();
+    const observer = new MutationObserver(update);
+    observer.observe(board, { attributes: true, attributeFilter: ['data-folds'] });
+    return () => observer.disconnect();
+  }, [element, token]);
+  return folded;
+}
+
+/** The tools the Draw menu arms, so its button shows pressed while one is. */
 const DRAW_TOOLS: ReadonlySet<ArmedTool> = new Set(['text', 'shape', 'zone']);
 
 /**
- * The Simplified design's Draw menu: a sticky note, Text, Shape and Zone, then Steps, Memory and Queue, each with its key. Picking
- * Shape, or pressing S, opens the shape picker under the button, as the Shape tool's own button does under Classic. A
- * pick arms its tool, even one already armed: a menu row is no toggle.
+ * The Draw menu, the Simplified design's and Classic's where its drawing tools fold: a sticky note, Text, Shape and Zone,
+ * then Steps, Memory, Queue and a to-do list, each with its key if it has one. Picking Shape, or pressing S, opens the
+ * shape picker under the button, as the Shape tool's own button does under Classic. A pick arms its tool, even one
+ * already armed: a menu row is no toggle. Classic draws it hidden until its tools fold (`shown`); till then the picker
+ * and the tour stay with the tools.
  */
-function DrawMenu({ tool, onTool, onSticky, onSteps, onMemory, onQueue, onTodo }: Pick<CreateToolbarProps, 'tool' | 'onTool' | 'onSticky' | 'onSteps' | 'onMemory' | 'onQueue' | 'onTodo'>) {
-  const shapes = useShapePicker(tool === 'shape', onTool);
+function DrawMenu({ tool, onTool, onSticky, onSteps, onMemory, onQueue, onTodo, shown = true }: Pick<CreateToolbarProps, 'tool' | 'onTool' | 'onSticky' | 'onSteps' | 'onMemory' | 'onQueue' | 'onTodo'> & { shown?: boolean }) {
+  const shapes = useShapePicker(tool === 'shape' && shown, onTool);
   const entries: MenuEntry[] = [
     { label: 'Sticky note', icon: <StickyNote />, shortcut: keyText('make.note'), onSelect: onSticky },
     { label: 'Text', icon: <Type />, shortcut: keyText('make.text'), onSelect: () => onTool('text') },
@@ -171,8 +215,8 @@ function DrawMenu({ tool, onTool, onSticky, onSteps, onMemory, onQueue, onTodo }
       anchor={
         <span className="create-toolbar-draw">
           <Menu entries={entries}>
-            <Button variant="ghost" icon={<PenLine />} trailingIcon={<ChevronDown aria-hidden />} aria-pressed={pressed} data-tour="add-zone">
-              Draw
+            <Button variant="ghost" icon={<PenLine />} trailingIcon={<ChevronDown aria-hidden />} aria-label="Draw" aria-pressed={pressed} data-tour={shown ? 'add-zone' : undefined}>
+              <span className="create-toolbar-draw-word">Draw</span>
             </Button>
           </Menu>
         </span>

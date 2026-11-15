@@ -10,8 +10,6 @@ import {
   flowEdgeIdsOf,
   flowEdges,
   handoffEnds,
-  deliveredLabel,
-  heldLabel,
   historyLine,
   isFlowEdge,
   liveHandoffs,
@@ -22,6 +20,7 @@ import {
   withChanges,
   withChangesUndone,
 } from './flow-edges';
+import { deliveredLabel, heldLabel } from './edge-labels';
 
 const edge = (id: string, from: string, to: string, overrides: Partial<FlowEdge> = {}): FlowEdge => ({
   id,
@@ -214,15 +213,27 @@ describe('historyLine', () => {
 
 describe('panClear', () => {
   it('pans the board left just enough for both ends to clear the panel', () => {
-    expect(panClear({ left: 400, right: 1300 }, 1100, 24)).toBe(224);
+    expect(panClear({ left: 400, right: 1300 }, 1280, 180, 24)).toBe(224);
   });
 
   it("doesn't pan when they are clear already", () => {
-    expect(panClear({ left: 100, right: 900 }, 1100, 24)).toBe(0);
+    expect(panClear({ left: 100, right: 900 }, 1280, 180, 24)).toBe(0);
   });
 
   it('never pans the left end out of view: as far as it can', () => {
-    expect(panClear({ left: 100, right: 1300 }, 1100, 24)).toBe(76);
+    expect(panClear({ left: 100, right: 1300 }, 1280, 180, 24)).toBe(76);
+  });
+
+  it('pans a pair at 418..570 left of Edge rules at 240 in a 1000 px board, the pane over its right (cover 760)', () => {
+    expect(panClear({ left: 418, right: 570 }, 1000, 760, 28)).toBe(358);
+    // The cover the right panel alone gives (360) leaves them where they are, under the rules.
+    expect(panClear({ left: 418, right: 570 }, 1000, 360, 28)).toBe(0);
+  });
+
+  it('clears the measured cover, wider than the panel alone (the Captain pane open beside Edge rules)', () => {
+    // Edge rules alone would reach 380 in; with the pane open the measured cover is 740.
+    expect(panClear({ left: 400, right: 800 }, 1280, 380, 24)).toBe(0);
+    expect(panClear({ left: 400, right: 800 }, 1280, 740, 24)).toBe(284);
   });
 });
 

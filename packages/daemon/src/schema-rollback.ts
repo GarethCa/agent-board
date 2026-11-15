@@ -5,8 +5,13 @@ import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import type { Migration } from './migrate.ts';
 import { shellQuote } from './shell-words.ts';
+
+export interface Migration {
+  version: number;
+  name: string;
+  sql: string;
+}
 
 /** How many backups are kept beside the database: the most recent, by when they were made. */
 const KEPT_BACKUPS = 3;

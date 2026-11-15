@@ -232,6 +232,8 @@ const CHANNELS: string[] = [
   'tracker:scopes',
   'tracker:status',
   'view:changed',
+  'view:flush',
+  'view:flushed',
   'view:get',
   'view:measured',
   'view:set',

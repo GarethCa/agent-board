@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { answerInput, draftAfterInput, pastePieces, promptRows, submittedText, submitsDraft } from '../src/terminal-input.ts';
+import { answerInput, draftAfter, draftAfterInput, endsInEnter, pastePieces, pressesKeys, promptRows, submittedText, submitsDraft } from '../src/terminal-input.ts';
 
 describe('submitsDraft', () => {
   it('is Enter on a draft: one the user had, or text typed before it in the same write', () => {
@@ -14,6 +14,11 @@ describe('submitsDraft', () => {
     expect(submitsDraft(true, '\x15\r')).toBe(false);
     expect(submitsDraft(true, '\x03')).toBe(false);
     expect(submitsDraft(false, '\x1b[B\r')).toBe(false);
+    expect(submitsDraft(false, '\x1b[200~one\rtwo\r\x1b[201~')).toBe(false);
+  });
+
+  it('is Enter on a line recalled from history', () => {
+    expect(submitsDraft(false, '\x1b[A\r')).toBe(true);
   });
 });
 
@@ -24,8 +29,18 @@ describe('draftAfterInput', () => {
     expect(draftAfterInput(false, '\x1b[200~pasted\x1b[201~')).toBe(true);
   });
 
-  it('ignores focus and mouse reports, arrow keys and other control keys', () => {
-    for (const data of ['\x1b[I', '\x1b[O', '\x1b[<0;12;5M', '\x1b[M !!', '\x1b[A', '\x1bOP', '\x1b', '\x7f', '\t']) {
+  it('starts a draft on a line recalled from history with Up, which Down at an empty prompt does not', () => {
+    for (const data of ['\x1b[A', '\x1bOA', '\x1b[1;5A']) expect(draftAfterInput(false, data), JSON.stringify(data)).toBe(true);
+    expect(draftAfterInput(false, '\x1b[B')).toBe(false);
+  });
+
+  it('keeps a paste ending in a line break a draft: the break is the paste\'s, not Enter', () => {
+    expect(draftAfterInput(false, '\x1b[200~one\rtwo\r\x1b[201~')).toBe(true);
+    expect(draftAfterInput(true, '\x1b[200~one\r\x1b[201~')).toBe(true);
+  });
+
+  it('ignores focus and mouse reports, and other keys at an empty prompt; keeps a draft through them', () => {
+    for (const data of ['\x1b[I', '\x1b[O', '\x1b[<0;12;5M', '\x1b[M !!', '\x1b[B', '\x1b[D', '\x1bOP', '\x1b', '\x7f', '\t']) {
       expect(draftAfterInput(false, data), JSON.stringify(data)).toBe(false);
       expect(draftAfterInput(true, data), JSON.stringify(data)).toBe(true);
     }
@@ -37,6 +52,48 @@ describe('draftAfterInput', () => {
     expect(draftAfterInput(true, '\x03')).toBe(false);
     expect(draftAfterInput(true, '\x15')).toBe(false);
     expect(draftAfterInput(false, 'one\rtwo')).toBe(true);
+  });
+});
+
+describe('draftAfter', () => {
+  it('counts what is typed, so deleting each character with Backspace ends the draft', () => {
+    const typed = draftAfter(undefined, 'hi');
+    expect(typed).toEqual({ length: 2 });
+    expect(draftAfter(typed, '\x7f')).toEqual({ length: 1 });
+    expect(draftAfter(typed, '\x7f\x7f')).toBeUndefined();
+    expect(draftAfter(typed, '\x1b[200~ there\x1b[201~')).toEqual({ length: 8 });
+  });
+
+  it('holds a draft it can no longer count until Enter, Ctrl-C or Ctrl-U: the cursor moved, a word deleted, a line recalled', () => {
+    for (const data of ['\x1b[D', '\x01', '\x17', '\x1b\x7f', '\t', '\x1b[3~']) {
+      const unsure = draftAfter({ length: 2 }, data);
+      expect(unsure, JSON.stringify(data)).toEqual({ length: undefined });
+      expect(draftAfter(unsure, '\x7f\x7f\x7f')).toEqual({ length: undefined });
+      expect(draftAfter(unsure, '\x15')).toBeUndefined();
+    }
+    expect(draftAfter(undefined, '\x1b[A\x7f')).toEqual({ length: undefined });
+  });
+
+  it('starts one on a yank or an image pasted at the prompt', () => {
+    expect(draftAfter(undefined, '\x19')).toEqual({ length: undefined });
+    expect(draftAfter(undefined, '\x16')).toEqual({ length: undefined });
+  });
+});
+
+describe('pressesKeys', () => {
+  it('is any key the user presses: text, Enter, Backspace, Ctrl-U, an arrow or function key, Escape', () => {
+    for (const data of ['a', '\r', '\x7f', '\x15', '\x1b[A', '\x1b[D', '\x1bOP', '\x1b']) expect(pressesKeys(data), JSON.stringify(data)).toBe(true);
+  });
+
+  it('is not what the terminal sends of itself: focus and mouse reports', () => {
+    for (const data of ['\x1b[I', '\x1b[O', '\x1b[<0;10;5M', '\x1b[M !!', '']) expect(pressesKeys(data), JSON.stringify(data)).toBe(false);
+  });
+});
+
+describe('endsInEnter', () => {
+  it('is a write whose last key is Enter, whatever the terminal reports after it', () => {
+    for (const data of ['\r', 'Say hi\r', '\r\x1b[O']) expect(endsInEnter(data)).toBe(true);
+    for (const data of ['Say hi', '\rnext', '\x15', '', '\x1b[200~one\r\x1b[201~']) expect(endsInEnter(data)).toBe(false);
   });
 });
 

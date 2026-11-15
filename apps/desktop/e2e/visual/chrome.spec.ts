@@ -2,7 +2,7 @@ import { expect } from '@playwright/test';
 import { createFakeGitHub, FAKE_GITHUB_STATE, type FakeGitHubPullRequest } from '@agent-board/tracker/testing';
 import { execFileSync } from 'node:child_process';
 import { rmSync } from 'node:fs';
-import { agents, launch, listFinishedTurns, LONG_MODEL, narrowBy, pickInChip, screen, sessionWindow, setClickOpens, spawnAgent, startBadgedAgent, startCrowdedAgent, tile, TURN_MS, windowKey, zoneNamed, useFullSidebar } from '../agent-helpers.ts';
+import { agents, launch, listFinishedTurns, LONG_MODEL, narrowBy, pickInChip, screen, sessionWindow, setClickOpens, spawnAgent, startBadgedAgent, startCrowdedAgent, tile, TURN_MS, windowKey, zoneNamed } from '../agent-helpers.ts';
 import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone, newShell } from '../launch.ts';
 import { RENDER_ARGS, RENDER_ENV, VIEWPORT, ignorePointer, pinFonts, pinRandomText, settle } from '../render.ts';
 import { scratch } from '../scratch.ts';
@@ -66,7 +66,7 @@ test('the Workbench theme: the empty board, a busy board, its menu and inbox, a 
     // Gone before the board menu is opened again, or the inbox, still leaving, covers the button.
     await expect(window.getByTestId('needs-you-inbox')).toBeHidden();
 
-    // A tile expanded in place: its details collapsed to the icon rail on the left, its terminal beside them, the tile beside it pushed clear.
+    // A tile expanded in place: its shelves collapsed to their rail on the left, its terminal beside them, the tile beside it pushed clear.
     await setClickOpens(window, 'Expand in place');
     const viewport = () => window.locator('.react-flow__viewport').evaluate((element) => (element as HTMLElement).style.transform);
     const unmoved = await viewport();
@@ -202,7 +202,6 @@ test('a finished agent says it finished, with what it is for under its name', as
   const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
   await listFinishedTurns(window);
   try {
-    await useFullSidebar(window);
     await window.setViewportSize(VIEWPORT);
     await pinFonts(window);
     await pickFolderNext(app, repo);
@@ -213,7 +212,8 @@ test('a finished agent says it finished, with what it is for under its name', as
     await expect(tile(window)).toHaveAttribute('data-state', 'waiting', { timeout: TURN_MS });
     await tile(window).getByRole('button', { name: 'Expand' }).click();
     const expanded = window.getByTestId('expanded-tile');
-    await expanded.getByRole('navigation', { name: 'Session controls' }).getByRole('button', { name: 'Stop' }).click();
+    await expanded.locator('.expanded-tile-head').getByTestId('shelf-controls').getByRole('button', { name: 'More controls' }).click();
+    await window.getByRole('menuitem', { name: /^Stop/ }).click();
     await expanded.getByRole('button', { name: 'Collapse', exact: true }).click();
     // What it is for stays under its name; its line says it finished.
     await expect(tile(window).getByTestId('tile-about')).toHaveText('Look around');
@@ -277,6 +277,8 @@ test("a shell tile's session window with tabs, split into two panes each with it
     await window.keyboard.press(`${process.platform === 'darwin' ? 'Meta' : 'Control+Shift'}+d`);
     await expect(sessionWindow(window).getByTestId('window-pane')).toHaveCount(2);
     await expect(sessionWindow(window).locator('.xterm-rows')).toHaveCount(3);
+    // Each pane's tab shows its state: no bar above the tabs says it again.
+    await expect(sessionWindow(window).locator('.session-window-strip')).toHaveCount(0);
     await pinRandomText(window);
     await ignorePointer(window);
     await settle(window);

@@ -557,7 +557,7 @@ delete a record, not edit it.
   pin: {
     usage: 'agent-board pin <path|url> [--label <text>] [--for orchestrator] | pin --note <text> --label <text>',
     text: `Pins something you want the user to see on your sidebar, beside your terminal in your session
-window, as a Pinned block of your page or in the Full sidebar's Pins: the preview you started,
+window, as a Pinned block of your page: the preview you started,
 a screenshot, a log, a login to try.
 
   pin <path>            A file. A Markdown or HTML one opens in a Doc tab; any other is shown

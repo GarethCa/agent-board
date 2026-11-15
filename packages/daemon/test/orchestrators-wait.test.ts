@@ -5,11 +5,13 @@ import { migrate } from '../src/migrate.ts';
 import { createOrchestratorHost } from '../src/orchestrators.ts';
 import type { Agent, AgentState, DaemonEvent } from '../src/protocol.ts';
 
+type HostAgents = Parameters<typeof createOrchestratorHost>[0]['agents'];
+
 /**
  * An orchestrator host over agents kept in a map, so a test says exactly which updates arrive and when: what a wait
- * makes of them can't depend on how fast a fake harness runs.
+ * makes of them can't depend on how fast a fake harness runs. `stubs` stand in for the agents' own calls.
  */
-function host(agents = new Map<string, Agent>()) {
+function host(agents = new Map<string, Agent>(), stubs: Partial<HostAgents> = {}) {
   const db = new DatabaseSync(':memory:');
   migrate(db);
   /** Agents that went waiting from idle, their turn ended: at their prompt. */
@@ -78,6 +80,7 @@ function host(agents = new Map<string, Agent>()) {
       },
       dropNotices: () => 0,
       deliverAfterTurn: () => {},
+      userTyping: () => false,
       resume: () => Promise.reject(new Error('not here')),
       stop: () => Promise.reject(new Error('not here')),
       pause: () => Promise.reject(new Error('not here')),
@@ -87,6 +90,7 @@ function host(agents = new Map<string, Agent>()) {
       setStatus: () => {
         throw new Error('not here');
       },
+      ...stubs,
     },
     zones: () => [],
     flowEdges: {
@@ -157,6 +161,18 @@ describe('waiting for the turn an orchestrator caused', () => {
     update('running');
     update('idle');
     expect(await waited).toMatchObject({ timedOut: false, agents: [{ state: 'idle' }] });
+  });
+
+  it('keeps a send the user began typing over as it waited its turn to be typed: queued while they type, never sent', async () => {
+    const kept: string[] = [];
+    const { handlers } = host(undefined, {
+      answer: () => Promise.resolve({ userTyping: true }),
+      queueAfterTurn: (sessionId, item) => void kept.push(`${sessionId}: ${item.text}`),
+    });
+    const sent = await handlers['orchestrator.send']({ token: 'me-token', sessionId: 'worker', text: 'continue' }, {});
+    expect(sent).toMatchObject({ delivery: 'queued-while-typing' });
+    expect(kept).toHaveLength(1);
+    expect(kept[0]).toMatch(/^worker: .*continue/s);
   });
 
   it('ends a wait once its connection has closed', async () => {

@@ -2,7 +2,7 @@ import { expect, type ElectronApplication, type Page } from '@playwright/test';
 import { createFakeGitHub, FAKE_GITHUB_STATE, type FakeGitHubPullRequest } from '@agent-board/tracker/testing';
 import { execFileSync } from 'node:child_process';
 import { rmSync } from 'node:fs';
-import { agents, launch, sessionWindow, showDetails, spawnAgent, tile, useFullSidebar } from './agent-helpers.ts';
+import { agents, launch, sessionWindow, spawnAgent, tile } from './agent-helpers.ts';
 import { browseForZone, pickFolderNext, removeDataDir, runDesign, tempDataDir, test, tabText } from './launch.ts';
 import { scratch } from './scratch.ts';
 import { showTileParts } from './settings-helpers.ts';
@@ -38,7 +38,6 @@ test("an agent's PR chip opens a PR tab: its description, checks, files and comm
   let { app, window } = await launch(dataDir, appEnv);
   try {
     await showTileParts(window, ['chips']);
-    await useFullSidebar(window);
     await pickFolderNext(app, repo);
     await browseForZone(window);
     await spawnAgent(window, 'monorepo', 'Fix the login redirect');
@@ -130,12 +129,9 @@ test("an agent's PR chip opens a PR tab: its description, checks, files and comm
     // The tile hears of it at once.
     if (classic) await expect(chip).toHaveAttribute('data-state', 'merged');
 
-    // Its row in the window's details shows the tab already open, not a second one.
+    // Its card in the shelves' Made shows the tab already open, not a second one.
     await tabNamed(window, tabText('claude')).getByRole('tab').click();
-    if (classic) await showDetails(sessionWindow(window));
-    else {
-      await sessionWindow(window).getByTestId('agent-shelves').getByRole('tab', { name: /^Made/ }).click();
-    }
+    await sessionWindow(window).getByTestId('agent-shelves').getByRole('tab', { name: /^Made/ }).click();
     await sessionWindow(window).getByRole('button', { name: /#41 Send users home after login/ }).click();
     await expect(tabNamed(window, tabText('PR #41'))).toHaveCount(1);
     await expect(tabNamed(window, tabText('PR #41'))).toHaveAttribute('data-active', 'true');

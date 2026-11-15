@@ -13,7 +13,7 @@ import {
   type ZoneLayout,
 } from '@agent-board/daemon/protocol';
 import { errorMessage } from '../../../shared/errors';
-import { AnchoredPopover, Button, Checkbox, ErrorText, Hint, Input, Kbd, Select, SwatchRadio, Tabs } from '../ui';
+import { AnchoredPopover, takeHeldOpener, Button, Checkbox, ErrorText, Hint, Input, Kbd, Select, SwatchRadio, Tabs } from '../ui';
 import type { ZoneSource } from '../chrome/zones';
 import { tildify } from '../session/live-folder';
 import { useHomeDir } from '../session/SessionDetails';
@@ -275,6 +275,13 @@ export function AddZonePopover({ layout, source: initialSource, placement, outli
       onOpenChange={(open) => open || onCancel()}
       aria-label="Add zone"
       className="add-zone"
+      onCloseAutoFocus={(event) => {
+        // It has no trigger: the focus goes back to the control of the dialog that handed over to it, if there was one.
+        const back = event.target instanceof Element ? takeHeldOpener(event.target) : null;
+        if (back === null) return;
+        event.preventDefault();
+        back.focus({ preventScroll: true });
+      }}
       side={placement.side}
       sideOffset={placement.sideOffset}
     >

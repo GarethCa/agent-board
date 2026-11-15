@@ -13,11 +13,11 @@ The daemon owns the board: the SQLite database, the agents' terminals, the hooks
 
 | Subsystem | Files |
 |---|---|
-| Start, stop, the socket | `daemon.ts`, `daemon-launch.ts`, `restart.ts`, `stop.ts`, `lock.ts`, `spawn.ts`, `rpc.ts`, `params.ts`, `client.ts`, `paths.ts`, `migrate.ts` (SQL in `migrations/`), `schema-rollback.ts` (backups before migrating, and an older daemon on a newer database) |
+| Start, stop, the socket | `daemon.ts`, `event-ring.ts` (every broadcast event numbered, the recent ones kept for devices that drop), `run-daemon.ts` (a daemon in the foreground, as `agent-board daemon` runs it), `daemon-launch.ts`, `restart.ts`, `stop.ts`, `lock.ts`, `spawn.ts`, `rpc.ts`, `params.ts`, `client.ts`, `paths.ts`, `migrate.ts` (SQL in `migrations/`), `schema-rollback.ts` (backups before migrating, and an older daemon on a newer database) |
 | Agents | `agents.ts`, `agent-spawns.ts` (the harness command line and env), `agent-starts.ts`, `agent-lifecycle.ts`, `worktrees.ts`, `harness-path.ts`, `login-path.ts`, `board-env.ts` |
 | Agent state from hooks | `hook-ingress.ts`, `hook-forwarder.ts`, `hook-states.ts`, `harness-state.ts`, `claude-state.ts`, `codex-state.ts`, `human-status.ts`, `turn-status.ts`, `quiet-turns.ts`, `subagents.ts` |
 | Reading the harness's screen | `startup-screen.ts`, `codex-screen.ts`, `rate-limit-screen.ts`, `codex-config-guard.ts` |
-| Terminals and shells | `sessions.ts`, `left-screen.ts` (the screen a full-screen harness leaves as it exits), `terminal-backend.ts`, `node-pty-backend.ts`, `terminal-input.ts`, `shells.ts`, `shell-integration.ts`, `pane-layout.ts`, `window-layout.ts`, `foreground.ts`, `background-commands.ts` |
+| Terminals and shells | `sessions.ts`, `terminal-sizing.ts` (who of a terminal's viewers sets its size), `left-screen.ts` (the screen a full-screen harness leaves as it exits), `terminal-backend.ts`, `node-pty-backend.ts`, `terminal-input.ts`, `shells.ts`, `shell-integration.ts`, `pane-layout.ts`, `window-layout.ts`, `foreground.ts`, `background-commands.ts` |
 | Messages between agents | `deliveries.ts`, `sender-marker.ts`, `reply-paths.ts`, `handoff-text.ts`, `flow-edges.ts`, `flow-conditions.ts`, `flow-payloads.ts`, `flow-approvals.ts` |
 | Transcripts and chat | `transcripts.ts`, `transcript-adapters.ts`, `claude-transcript.ts`, `external-sessions.ts`, `external-hooks.ts`, `resume-external.ts` |
 | Board items | `items.ts`, `connectors.ts`, `agent-notes.ts`, `documents.ts`, `memory-queue.ts`, `steps.ts`, `clocks.ts`, `schedules.ts`, `cron.ts`, `link-cards.ts`, `link-metadata.ts`, `image-store.ts`, `image-sweeper.ts`, `mermaid.ts`, `diagram.ts` |
@@ -25,7 +25,7 @@ The daemon owns the board: the SQLite database, the agents' terminals, the hooks
 | Orchestrators and crews | `orchestrators.ts`, `orchestrator-layout.ts`, `master.ts`, `crew-*.ts` (among them `crew-loop.ts`, a running crew's loop, and `crew-prefabs.ts`, a saved crew shape and its `.crew.json`), `prefab-library.ts`, `role-templates.ts` |
 | What agents call (CLI and MCP) | `board-cli.ts`, `board-ops.ts`, `board-mcp.ts`, `board-mcp-http.ts`, `board.ts` (the `board.*` RPC methods and who may call them), `*-ops.ts` (among them `layout-ops.ts` for `move`, `arrange`, `zone` and `note`, and `memory-ops.ts` for `memory` and `queue`; also steps and clock), `asks.ts`, `selection-asks.ts`, `agent-page.ts`, `agent-records.ts`, `character.ts` |
 | Reviews, gates, pull requests | `reviews.ts`, `review-doc.ts`, `gates.ts`, `gate-rules.ts`, `gate-output.ts`, `gate-actions.ts`, `pull-requests.ts`, `agent-pull-requests.ts`, `pull-request-tabs.ts`, `push-targets.ts`, `trackers.ts`, `ticket-watches.ts` (what a ticket's watches report of its pull request) |
-| Settings and the rest | `protocol.ts` (the shared types, above), `settings.ts`, `setup-checks.ts`, `permissions.ts`, `usage.ts`, `time-zone.ts`, `cli.ts`, `cli-install.ts` |
+| Settings and the rest | `protocol.ts` (the shared types, above), `settings.ts`, `setup-checks.ts`, `permissions.ts`, `usage.ts`, `time-zone.ts`, `cli.ts`, `cli-install.ts`, `live-home.ts` (what only the installed app may change in the user's home) |
 
 ## Adding an RPC method
 

@@ -1,5 +1,5 @@
 import { memo, useCallback, useContext, useEffect, useState } from 'react';
-import { type NodeProps } from '@xyflow/react';
+import type { NodeProps } from '@xyflow/react';
 import { MEMORY_CARD_SIZE, LIST_CARD_FOLDED_SIZE, LIST_CARD_MIN_SIZE, type MemoryChange, type MemoryEntry } from '@agent-board/daemon/protocol';
 import { useToast } from '../../ui';
 import { pressed } from '../../keys/registry';

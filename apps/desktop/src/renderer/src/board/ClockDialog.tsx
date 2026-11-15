@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { type Agent, type AgentState, type ClockData, type ClockResult, type ClockRun, type ClockStatus } from '@agent-board/daemon/protocol';
+import type { Agent, AgentState, ClockData, ClockResult, ClockRun, ClockStatus } from '@agent-board/daemon/protocol';
 import { Button, Checkbox, Dialog, ErrorText, Field, Fieldset, Hint, Input, Segmented, Select, StatusPill, Switch, Textarea } from '../ui';
 import { useAction } from '../use-action';
 import { FreshAgentFields } from './FreshAgentFields';

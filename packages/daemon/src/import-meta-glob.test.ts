@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { expect, it } from 'vitest';
 
 /**
@@ -17,7 +17,11 @@ it('writes every import.meta.glob call as `import.meta.glob(` so Vitest does not
     }
   };
   for (const group of ['packages', 'apps']) {
-    for (const pkg of readdirSync(new URL(`${group}/`, root))) walk(new URL(`${group}/${pkg}/src/`, root));
+    for (const pkg of readdirSync(new URL(`${group}/`, root))) {
+      // Not every package has TypeScript sources (a Swift package keeps its own layout).
+      const src = new URL(`${group}/${pkg}/src/`, root);
+      if (existsSync(src)) walk(src);
+    }
   }
   expect(sources.length).toBeGreaterThan(50);
   const hidden = sources.filter((url) =>

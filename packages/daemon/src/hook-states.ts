@@ -5,7 +5,7 @@ import { promptCounts, stateWithPrompts, type HookReply, type PermissionHolds } 
 import { STILL_WORKING, WAITING_FOR_YOU, type AgentState, type Harness, type SessionState, type Subagent } from './protocol.ts';
 import { subagentsAfterHook, type SubagentStore } from './subagents.ts';
 import type { PromptNow } from './deliveries.ts';
-import { draftAfterInput, oneLine } from './terminal-input.ts';
+import { type Draft, draftAfter, oneLine, pressesEscape, submitsDraft } from './terminal-input.ts';
 import { cutText } from './text-cut.ts';
 
 /**
@@ -27,6 +27,13 @@ const STARTING_OUTPUT_GRACE_MS = 5_000;
 /** The longest an agent shows `starting`, hook or not. */
 const STARTING_MAX_MS = 60_000;
 
+/**
+ * How long after the user's last key a draft at an agent's prompt holds back what others send it. A draft can be one
+ * the board guessed wrong (the line was edited in ways it can't follow, or cleared by something it never saw): past
+ * this, what waits on it is typed.
+ */
+export const DRAFT_HOLD_MS = 5 * 60_000;
+
 /** What turning hooks into an agent's state reads of its row. */
 export interface HookStateRow {
   session_id: string;
@@ -46,6 +53,8 @@ interface HookStateOptions<Row extends HookStateRow> {
   clock?: Clock;
   /** How long a session may stay `starting` without a hook before it is given up on: `STARTING_MAX_MS` by default. */
   startingMaxMs?: number;
+  /** How long a draft holds back what others send the agent: `DRAFT_HOLD_MS` by default. */
+  draftHoldMs?: number;
   /** Whether a command the agent left running in the background still runs. */
   onCommand?(sessionId: string): boolean;
   /** Whether a first prompt waits to be typed at the agent once its session is up, not given on its command line. */
@@ -112,8 +121,13 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
    * turn before it. That stays kept for hand-offs; only what is shown of the agent leaves it out (`endedOnNoMessage`).
    */
   const noMessage = new Set<string>();
-  /** Agents with a draft the user typed at their prompt (`draftAfterInput`) and hasn't submitted. */
-  const drafting = new Set<string>();
+  /** Agents with a draft the user typed at their prompt (`draftAfter`) and hasn't submitted, and when they last pressed a key there. */
+  const drafts = new Map<string, Draft & { at: number }>();
+  /**
+   * Agents the user submitted a draft to mid-turn, until their next prompt: the harness holds it for after the turn,
+   * and Escape, interrupting the turn, puts it back at the prompt as their draft.
+   */
+  const queuedByUser = new Set<string>();
   /**
    * Agents whose latest permission request has been settled (answered in the terminal or the turn moved on): a
    * `permission_prompt` notification then is the late echo of that prompt, not a new one.
@@ -121,6 +135,15 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
   const permissionSettled = new Set<string>();
   const clock = options.clock ?? systemClock;
   const startingMaxMs = options.startingMaxMs ?? STARTING_MAX_MS;
+  const draftHoldMs = options.draftHoldMs ?? DRAFT_HOLD_MS;
+  /**
+   * How much longer the user's draft at the agent's prompt holds back what others send it: none left once
+   * `draftHoldMs` has passed since their last key there; undefined with no draft there.
+   */
+  const draftHeldFor = (sessionId: string) => {
+    const draft = drafts.get(sessionId);
+    return draft === undefined ? undefined : Math.max(0, draft.at + draftHoldMs - clock.now());
+  };
   /**
    * Agents started with a first prompt, whose session has sent no hook yet: their first turn hasn't begun. Each leaves
    * on its first hook, or without one: on output once `STARTING_OUTPUT_GRACE_MS` have passed (the session is up and
@@ -199,6 +222,33 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
     (evenAsking || !asking(row.session_id)) &&
     (row.state === 'idle' || (row.state === 'waiting' && waitsAtPrompt.has(row.session_id)));
 
+  /** Where the live agent's prompt stands, whatever the user has typed there: `promptNow`, but never `typing`. */
+  const promptUnderDraft = (row: Row): Exclude<PromptNow, 'typing'> => {
+    const pending = permissions.prompts(row.session_id).length > 0;
+    const failed = row.ended_at === null && !pending && (row.state === 'failed' || (row.state === 'waiting' && idleAfterFailure.has(row.session_id)));
+    if (atPrompt(row, true) || failed) return 'at-prompt';
+    const working = row.ended_at === null && !pending && (row.state === 'running' || row.state === 'thinking');
+    return working ? 'working' : 'moved-on';
+  };
+
+  /**
+   * Where the live agent's prompt stands after something was typed at it: the user typing there too, still at it as
+   * a hand-off finds it (`whyNotReady` with `evenAsking`), or after a failed turn (which leaves it there, waiting
+   * once its idle prompt fires); working through a turn with nothing of its own up; or moved on.
+   */
+  const promptNow = (row: Row): PromptNow => (drafts.has(row.session_id) ? 'typing' : promptUnderDraft(row));
+
+  /**
+   * Whether the live agent has something up over its prompt that keys answer: a permission prompt, a question or
+   * dialog of its own, or a rate limit's menu.
+   */
+  const overPrompt = (row: Row) =>
+    row.ended_at === null &&
+    (permissions.prompts(row.session_id).length > 0 ||
+      row.state === 'needs-permission' ||
+      row.state === 'rate-limited' ||
+      (row.state === 'waiting' && !waitsAtPrompt.has(row.session_id) && !idleAfterFailure.has(row.session_id)));
+
   return {
     /** The agent was started with a first prompt: it shows `starting` until its session's first hook. */
     promptQueued(sessionId: string) {
@@ -222,7 +272,9 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
     isAtPrompt: (row: Row) => atPrompt(row),
 
     /** Whether the user has a draft at the agent's prompt they typed and haven't submitted (`draftAfterInput`). */
-    isDrafting: (sessionId: string) => drafting.has(sessionId),
+    isDrafting: (sessionId: string) => drafts.has(sessionId),
+
+    draftHeldFor,
 
     /** Whether the agent's session has yet to send its first hook, with a first prompt queued. */
     isStarting: (sessionId: string) => starting.has(sessionId),
@@ -266,9 +318,10 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
 
     /**
      * Why a scheduled run can't start in the live agent now, or undefined if it can. With `evenAsking`, as for a hand-off,
-     * a last message asking you something doesn't stop it: what's typed is the agent's next input either way.
+     * a last message asking you something doesn't stop it: what's typed is the agent's next input either way. A draft
+     * at its prompt stops it; without `lapsedDrafts`, as for a message others sent, only one still held (`draftHeldFor`).
      */
-    whyNotReady(row: Row, evenAsking = false): string | undefined {
+    whyNotReady(row: Row, evenAsking = false, lapsedDrafts = true): string | undefined {
       const sessionId = row.session_id;
       const askingYou = !evenAsking && asking(sessionId);
       if (row.state === 'rate-limited') return 'it was rate-limited';
@@ -279,23 +332,11 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
         return waiting ? WAITING_FOR_YOU : STILL_WORKING;
       }
       if (askingYou) return WAITING_FOR_YOU;
-      if (drafting.has(sessionId)) return 'you were typing in its terminal';
+      if (drafts.has(sessionId) && (lapsedDrafts || (draftHeldFor(sessionId) ?? 0) > 0)) return 'you were typing in its terminal';
       return undefined;
     },
 
-    /**
-     * Where the live agent's prompt stands after something was typed at it: the user typing there too, still at it as
-     * a hand-off finds it (`whyNotReady` with `evenAsking`), or after a failed turn (which leaves it there, waiting
-     * once its idle prompt fires); working through a turn with nothing of its own up; or moved on.
-     */
-    promptNow(row: Row): PromptNow {
-      if (drafting.has(row.session_id)) return 'typing';
-      const pending = permissions.prompts(row.session_id).length > 0;
-      const failed = row.ended_at === null && !pending && (row.state === 'failed' || (row.state === 'waiting' && idleAfterFailure.has(row.session_id)));
-      if (atPrompt(row, true) || failed) return 'at-prompt';
-      const working = row.ended_at === null && !pending && (row.state === 'running' || row.state === 'thinking');
-      return working ? 'working' : 'moved-on';
-    },
+    promptNow,
 
     /** Whether `payload` is a hook from the agent's interrupted turn, landing after the interrupt: no news of a new one. */
     isStale: (sessionId: string, payload: Record<string, unknown>) => interrupted.has(sessionId) && isStaleAfterInterrupt(payload),
@@ -319,7 +360,8 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
       if (payload.hook_event_name === 'UserPromptSubmit') {
         interrupted.delete(sessionId);
         noMessage.delete(sessionId);
-        drafting.delete(sessionId);
+        drafts.delete(sessionId);
+        queuedByUser.delete(sessionId);
       } else if (interrupted.has(sessionId) && isStaleAfterInterrupt(payload)) return undefined;
       const settled = permissions.afterHook(sessionId, payload);
       // Claude asks in its terminal while the agent's own request is held; a subagent's dialog may wait on its hook first.
@@ -392,10 +434,20 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
       return reply;
     },
 
-    /** Notes what the user typed at the agent's prompt: a draft, until it is submitted or cleared. */
-    typed(sessionId: string, data: string) {
-      if (draftAfterInput(drafting.has(sessionId), data)) drafting.add(sessionId);
-      else drafting.delete(sessionId);
+    /**
+     * Notes what the user typed at the agent's prompt: a draft, until it is submitted or cleared. Given its `row`, keys
+     * answering something up over its prompt (a permission prompt, a question, a rate limit's menu) type nothing there.
+     */
+    typed(sessionId: string, data: string, row?: Row) {
+      if (row !== undefined && overPrompt(row)) return;
+      const draft = drafts.get(sessionId);
+      // Mid-turn the user types a draft too, key by key, before the Enter that queues it.
+      if (row !== undefined && promptUnderDraft(row) === 'working' && submitsDraft(draft !== undefined, data)) queuedByUser.add(sessionId);
+      const restored = queuedByUser.has(sessionId) && pressesEscape(data);
+      if (restored) queuedByUser.delete(sessionId);
+      const next = restored ? { length: undefined } : draftAfter(draft, data);
+      if (next === undefined) drafts.delete(sessionId);
+      else drafts.set(sessionId, { ...next, at: clock.now() });
     },
 
     /** The agent's turn was interrupted: hooks still landing from its work are stale until its next prompt. */
@@ -417,7 +469,8 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
     relaunched(sessionId: string) {
       startFailed.delete(sessionId);
       lastMessages.delete(sessionId);
-      drafting.delete(sessionId);
+      drafts.delete(sessionId);
+      queuedByUser.delete(sessionId);
     },
 
     /** The agent's process exited. Its tile still shows what it last said. */
@@ -429,7 +482,8 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
       permissionSettled.delete(sessionId);
       interrupted.delete(sessionId);
       waitsAtPrompt.delete(sessionId);
-      drafting.delete(sessionId);
+      drafts.delete(sessionId);
+      queuedByUser.delete(sessionId);
       compacting.delete(sessionId);
     },
 
@@ -442,7 +496,8 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
       idleAfterFailure.delete(sessionId);
       noMessage.delete(sessionId);
       waitsAtPrompt.delete(sessionId);
-      drafting.delete(sessionId);
+      drafts.delete(sessionId);
+      queuedByUser.delete(sessionId);
       lastMessages.delete(sessionId);
     },
   };

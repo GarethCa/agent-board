@@ -2,40 +2,132 @@
 // control characters as much as text, so the patterns here match them on purpose.
 /* eslint-disable no-control-regex */
 
+/** The marks round a bracketed paste. */
+const PASTE_START = '\x1b[200~';
+const PASTE_END = '\x1b[201~';
+
 /**
- * Escape sequences a terminal sends that aren't typing: focus and mouse reports, arrow and function keys. An X10 mouse
- * report carries three raw bytes after `ESC [ M`.
+ * What a terminal sends of itself, not a key: focus reports, and mouse reports, X10 (`ESC [ M` and three raw bytes) or
+ * SGR (`ESC [ <`).
  */
-const ESCAPE_SEQUENCE = /\x1b\[M[\s\S]{3}|\x1b\[[0-?]*[ -/]*[@-~]|\x1bO[\s\S]|\x1b[\s\S]?/g;
+const REPORT = /^(?:\x1b\[M[\s\S]{3}|\x1b\[[IO]|\x1b\[<[0-?]*[ -/]*[@-~])/;
+
+/**
+ * The escape sequence a key sends: arrows, Home, Delete and function keys (CSI, or SS3 in application mode), a key with
+ * Alt (Escape before it), or Escape alone.
+ */
+const KEY_SEQUENCE = /^(?:\x1b\[[0-?]*[ -/]*[@-~]|\x1bO[\s\S]|\x1b[\s\S]?)/;
+
+/** Up, with or without a modifier: at a prompt it puts an earlier line from its history there. */
+const RECALL = /^\x1b(?:\[(?:1;\d+)?|O)A$/;
 
 /** Keys that end the line being typed: Enter submits it, Ctrl-C and Ctrl-U clear it. */
-const LINE_ENDED = /[\r\x03\x15]/;
+const LINE_ENDED = /^[\r\x03\x15]$/;
 
-/** A character that is typed text, not a control key. */
-const TYPED = /[^\x00-\x1f\x7f]/;
+/** Ctrl-Y yanks text cut earlier back to the prompt, and Ctrl-V pastes an image there. */
+const PUTS_AT_PROMPT = /^[\x19\x16]$/;
 
-/**
- * Whether the user has a draft at the prompt after `data` is written to the terminal, given whether they had one
- * before: typed or pasted text starts one, and Enter, Ctrl-C or Ctrl-U ends it. Deleting the text key by key leaves it
- * counted as a draft until one of those.
- */
-export function draftAfterInput(drafting: boolean, data: string): boolean {
-  const lines = data.replace(ESCAPE_SEQUENCE, '').split(LINE_ENDED);
-  if (TYPED.test(lines.at(-1)!)) return true;
-  return lines.length > 1 ? false : drafting;
+/** One key in what a client writes to a terminal, or one paste, or a report of the terminal's own. */
+type Key = { kind: 'text' | 'paste'; text: string } | { kind: 'control' | 'sequence'; key: string } | { kind: 'report' };
+
+/** The keys in `data`, in order: a line break inside a paste is the paste's, never Enter. */
+function keysOf(data: string): Key[] {
+  const keys: Key[] = [];
+  let rest = data;
+  while (rest !== '') {
+    if (rest.startsWith(PASTE_START)) {
+      const end = rest.indexOf(PASTE_END, PASTE_START.length);
+      keys.push({ kind: 'paste', text: rest.slice(PASTE_START.length, end === -1 ? undefined : end) });
+      rest = end === -1 ? '' : rest.slice(end + PASTE_END.length);
+      continue;
+    }
+    const report = REPORT.exec(rest);
+    const sequence = report ?? KEY_SEQUENCE.exec(rest);
+    if (sequence !== null) {
+      keys.push(report === null ? { kind: 'sequence', key: sequence[0] } : { kind: 'report' });
+      rest = rest.slice(sequence[0].length);
+      continue;
+    }
+    const character = String.fromCodePoint(rest.codePointAt(0)!);
+    keys.push(/^[\x00-\x1f\x7f]$/.test(character) ? { kind: 'control', key: character } : { kind: 'text', text: character });
+    rest = rest.slice(character.length);
+  }
+  return keys;
 }
 
 /**
- * Whether `data` written at the prompt presses Enter on a draft: one the user had before it (`drafting`), or text it
- * types before that Enter. Ctrl-C and Ctrl-U clear a draft first, as in `draftAfterInput`.
+ * The user's line at a prompt, as far as their keys tell: how many characters it holds, or `undefined` once the board
+ * can't tell (a line recalled, the cursor moved, a word deleted), when it is held a draft until Enter, Ctrl-C or Ctrl-U.
+ */
+export interface Draft {
+  length: number | undefined;
+}
+
+/** A draft whose length the board can't tell. */
+const UNSURE: Draft = { length: undefined };
+
+const grown = (draft: Draft | undefined, by: number): Draft =>
+  draft === undefined ? { length: by } : { length: draft.length === undefined ? undefined : draft.length + by };
+
+/** The draft at a prompt after `key`, given the one before it. */
+function draftAfterKey(draft: Draft | undefined, key: Key): Draft | undefined {
+  switch (key.kind) {
+    case 'report':
+      return draft;
+    case 'text':
+      return grown(draft, 1);
+    case 'paste':
+      return key.text === '' ? draft : grown(draft, [...key.text].length);
+    case 'sequence':
+      // Any other moves the cursor or edits the line: what is left there, the board can't tell.
+      return RECALL.test(key.key) || draft !== undefined ? UNSURE : undefined;
+    case 'control':
+      if (LINE_ENDED.test(key.key)) return undefined;
+      if (key.key === '\x7f' || key.key === '\b') {
+        if (draft?.length === undefined) return draft;
+        return draft.length > 1 ? { length: draft.length - 1 } : undefined;
+      }
+      if (PUTS_AT_PROMPT.test(key.key)) return UNSURE;
+      return draft === undefined ? undefined : UNSURE;
+  }
+}
+
+/**
+ * The user's draft at the prompt after `data` is written to the terminal, given the one before it: typed or pasted
+ * text, or a line recalled from history (Up), starts one; Enter, Ctrl-C or Ctrl-U ends it, and so does deleting each
+ * character typed with Backspace, unless the cursor moved or the line was edited otherwise first.
+ */
+export const draftAfter = (draft: Draft | undefined, data: string): Draft | undefined => keysOf(data).reduce(draftAfterKey, draft);
+
+/**
+ * Whether the user has a draft at the prompt after `data` is written to the terminal, given whether they had one
+ * before (`draftAfter`, its length unknown): so only Enter, Ctrl-C or Ctrl-U ends one.
+ */
+export const draftAfterInput = (drafting: boolean, data: string): boolean => draftAfter(drafting ? UNSURE : undefined, data) !== undefined;
+
+/** Whether `data` written to a terminal presses a key: anything but the focus and mouse reports a terminal sends of itself. */
+export const pressesKeys = (data: string): boolean => keysOf(data).some((key) => key.kind !== 'report');
+
+/** Whether `data` presses Escape: mid-turn, it interrupts the turn. */
+export const pressesEscape = (data: string): boolean => keysOf(data).some((key) => key.kind === 'sequence' && /^\x1b\x1b?$/.test(key.key));
+
+/** Whether the last key `data` presses is Enter: a line break a paste ends with is no Enter. */
+export function endsInEnter(data: string): boolean {
+  const last = keysOf(data)
+    .filter((key) => key.kind !== 'report')
+    .at(-1);
+  return last?.kind === 'control' && last.key === '\r';
+}
+
+/**
+ * Whether `data` written at the prompt presses Enter on a draft: one the user had before it (`drafting`), or one it
+ * starts before that Enter (`draftAfter`). Ctrl-C and Ctrl-U clear a draft first.
  */
 export function submitsDraft(drafting: boolean, data: string): boolean {
-  let draft = drafting;
-  for (const key of data.replace(ESCAPE_SEQUENCE, '')) {
-    if (key === '\r') {
-      if (draft) return true;
-    } else if (LINE_ENDED.test(key)) draft = false;
-    else if (TYPED.test(key)) draft = true;
+  let draft: Draft | undefined = drafting ? UNSURE : undefined;
+  for (const key of keysOf(data)) {
+    if (key.kind === 'control' && key.key === '\r' && draft !== undefined) return true;
+    draft = draftAfterKey(draft, key);
   }
   return false;
 }
@@ -52,10 +144,6 @@ const UNSENDABLE = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/g;
  * transcript as its last 700 or so. A paste of any length arrives whole.
  */
 const LONGEST_TYPED_LINE_BYTES = 512;
-
-/** The marks round a bracketed paste. */
-const PASTE_START = '\x1b[200~';
-const PASTE_END = '\x1b[201~';
 
 /**
  * What to write at an agent's prompt for a message, before the return that submits it: one short line typed as it is,

@@ -158,13 +158,15 @@ test('at a device pixel ratio of 2 rows coloured to the full width reach the rig
       const inPng = (x: number, y: number) => ({ x: (x - origin.x) * scale, y: (y - origin.y) * scale });
       const right = box.left + layout.width * zoom - 2 / scale;
       const bottom = box.top + layout.height * zoom - 2 / scale;
+      // Zoomed in, the pane can start left of the window: sample from the left of the part on screen.
+      const left = Math.max(box.left, 0) + 40;
       const { colours } = await pixelsOf(app, png, [
-        inPng(box.left + 40, box.top + rowHeight / 2),
+        inPng(left, box.top + rowHeight / 2),
         inPng(right, box.top + rowHeight / 2),
-        inPng(box.left + 40, box.top + rowHeight * 1.5),
+        inPng(left, box.top + rowHeight * 1.5),
         inPng(right, box.top + rowHeight * 1.5),
-        inPng(box.left + 40, box.top + rowHeight * 8),
-        inPng(box.left + 40, bottom),
+        inPng(left, box.top + rowHeight * 8),
+        inPng(left, bottom),
         // Away from the corners, where the pane's resize handle and the board's controls lie over it.
         inPng(box.left + (layout.width * zoom) / 2, bottom),
       ]);

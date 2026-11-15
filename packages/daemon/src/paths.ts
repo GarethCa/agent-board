@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { lstatSync, mkdirSync } from 'node:fs';
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, renameSync, rmSync } from 'node:fs';
+import type { Server } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -52,6 +53,50 @@ function socketPath(dataDir: string, id: string): string {
     throw new Error(`no socket path short enough for data dir ${dataDir}; set TMPDIR to a shorter directory`);
   }
   return short;
+}
+
+/**
+ * Creates the data dir, ours alone: `mkdirSync`'s mode applies only to a folder it makes, so one that already exists
+ * (made by hand, or by an older build) is set to 0700 too. A folder this user can't change the mode of (one another
+ * user owns, or a filesystem with no modes) is logged and left: the socket in it is 0600 regardless.
+ */
+export function prepareDataDir(paths: DaemonPaths, log: (message: string) => void): void {
+  mkdirSync(paths.dataDir, { recursive: true, mode: 0o700 });
+  if (process.platform === 'win32') return;
+  try {
+    chmodSync(paths.dataDir, 0o700);
+  } catch (error) {
+    log(`could not make the data dir ${paths.dataDir} private (0700): ${(error as Error).message}`);
+  }
+}
+
+/**
+ * Listens on the socket, replacing a stale socket file (safe: the caller holds the data dir's lock). The socket is
+ * 0600 from the moment it is at `socketPath`: it is bound in a fresh 0700 folder beside it, made 0600 there and then
+ * renamed into place, so no one else can connect in between and nothing process-wide (such as the umask) changes. The
+ * folder's name is short enough that the bound path is no longer than `socketPath`, which already fits the limit.
+ */
+export async function listenOnSocket(server: Server, socketPath: string): Promise<void> {
+  if (process.platform === 'win32') return listen(server, socketPath);
+  const privateDir = mkdtempSync(join(dirname(socketPath), '.s'));
+  const bound = join(privateDir, 's');
+  try {
+    await listen(server, bound);
+    chmodSync(bound, 0o600);
+    renameSync(bound, socketPath);
+  } finally {
+    rmSync(privateDir, { recursive: true, force: true });
+  }
+}
+
+function listen(server: Server, path: string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(path, () => {
+      server.off('error', reject);
+      resolve();
+    });
+  });
 }
 
 /**

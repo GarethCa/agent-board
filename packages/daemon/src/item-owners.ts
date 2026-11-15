@@ -6,10 +6,9 @@ import { agentNoteAuthor } from './agent-notes.ts';
 import type { AgentHost } from './agents.ts';
 import type { BoardConnection } from './board.ts';
 import type { DocumentHost } from './documents.ts';
-import type { DaemonCall } from './orchestrator-layout.ts';
-import type { ActivityEntry, OrchestratorAccess } from './orchestrators.ts';
+import type { ActivityEntry, OrchestratorAccess } from './orchestrator-types.ts';
 import { invalidParams, paramsObject, stringParam } from './params.ts';
-import { BOARD_ERROR, type AgentNoteAuthor, type BoardItem, type DaemonMethods } from './protocol.ts';
+import { BOARD_ERROR, type AgentNoteAuthor, type BoardItem, type DaemonMethods, type DaemonCall } from './protocol.ts';
 import { RpcMethodError, type RpcHandlers } from './rpc.ts';
 import { cutText } from './text-cut.ts';
 

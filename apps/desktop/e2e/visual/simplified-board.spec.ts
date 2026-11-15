@@ -251,6 +251,8 @@ for (const { theme, suffix } of THEMES) {
       await restorePointer();
       await window.keyboard.press(windowKey('d'));
       await expect(open.getByTestId('window-pane')).toHaveCount(2);
+      // Each pane's tab shows its state: no bar above the tabs says it again.
+      await expect(open.locator('.session-window-strip')).toHaveCount(0);
       await pinRandomText(window);
       restorePointer = await ignorePointer(window);
       await settle(window);

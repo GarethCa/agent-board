@@ -126,7 +126,7 @@ for (const technical of [false, true]) {
     const { app, window } = await launch(dataDir, SHELL_ENV, [], { design: 'simplified', technical });
     try {
       await toolbar(window).getByRole('button', { name: 'More to start' }).click();
-      await expect(window.getByRole('menuitem')).toHaveText([/New agent/, /New terminal/, /New ticket/]);
+      await expect(window.getByRole('menuitem')).toHaveText([/New agent/, /New crew/, /New terminal/, /New ticket/]);
       await window.keyboard.press('Escape');
       await expect(window.getByRole('menu')).toHaveCount(0);
 

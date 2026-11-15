@@ -7,8 +7,8 @@ import type { FlowEdgeChange } from '../../../preload/api';
 import type { Rect } from '../geometry';
 import { railsOf, railToken, tokenSlots, type Rail, type RailToken, type TokenSlot } from './rails';
 import { upperFirst } from '../upper-first';
-import { whenLabel } from './schedule';
 import { tileNodeId } from './tiles';
+import { heldLabel, waitsFor } from './edge-labels';
 
 export const FLOW_EDGE_TYPE = 'flow';
 const FLOW_EDGE_PREFIX = 'flow:';
@@ -177,32 +177,6 @@ export function conditionName(condition: FlowCondition): string {
   }
 }
 
-/** What a condition waits for, as a held edge says it. */
-export function waitsFor(condition: FlowCondition): string {
-  switch (condition.kind) {
-    case 'gate-green':
-      return 'gate green';
-    case 'pr-checks':
-      return 'CI green';
-    case 'issue-label':
-      return `label ${condition.label}`;
-    case 'script':
-      return 'script passes';
-  }
-}
-
-/**
- * What a held edge's mark says it waits for (FlowRules: "held until CI green"), or why it is held before its
- * conditions have been checked again since a restart; undefined when it holds nothing.
- */
-export function heldLabel(edge: Pick<FlowEdge, 'held' | 'conditions' | 'checks'>): string | undefined {
-  if (edge.held === null) return undefined;
-  const failed = edge.checks.find((check) => check?.passed === false);
-  if (failed?.needsApproval === true) return 'held until you approve';
-  const condition = failed === undefined ? undefined : edge.conditions[edge.checks.indexOf(failed)];
-  return condition === undefined ? `held: ${edge.held.reason}` : `held until ${waitsFor(condition)}`;
-}
-
 /**
  * The bold line that opens each section of the Edge rules: when the edge sends, what it sends, and what it waits
  * for (what a hand-off it holds waits for, if it holds one).
@@ -225,12 +199,6 @@ export function rulesSummary(
           ? 'Nothing to wait for'
           : `Waits until ${edge.conditions.map(waitsFor).join(' and ')}`,
   };
-}
-
-/** When the edge last delivered, for the chip under its label (`delivered 14:02`); nothing before then, or after a skip. */
-export function deliveredLabel(edge: Pick<FlowEdge, 'lastDelivery'>, now: Date): string | undefined {
-  if (edge.lastDelivery?.delivered !== true) return undefined;
-  return `delivered ${whenLabel(new Date(edge.lastDelivery.at), now)}`;
 }
 
 /** Who made the edge, if an agent did: an orchestrator wiring it, or a named hand-off's one-off. */
@@ -273,11 +241,12 @@ export function historyLine(event: FlowEdgeEvent, to: string): string {
 
 /**
  * How far to pan the board left, in screen pixels, so an edge's ends (the screen span of its two tiles) clear the
- * Edge rules panel, whose left side is at `panelLeft`, by `margin` ("tiles shift left"): 0 when they
- * do already, and never so far that their left goes out of view.
+ * panels covering the board's right, by `margin` ("tiles shift left"): 0 when they do already, and never so far that
+ * their left goes out of view. `span` is in the board's own pixels, `boardWidth` its width and `coveredRight` how far in
+ * from its right edge the panels reach (`coveredView(...).right`, measured, not summed from tokens).
  */
-export function panClear(span: { left: number; right: number }, panelLeft: number, margin: number): number {
-  const over = span.right + margin - panelLeft;
+export function panClear(span: { left: number; right: number }, boardWidth: number, coveredRight: number, margin: number): number {
+  const over = span.right + margin - (boardWidth - coveredRight);
   if (over <= 0) return 0;
   return Math.max(0, Math.min(over, span.left - margin));
 }

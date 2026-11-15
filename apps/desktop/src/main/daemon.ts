@@ -2,13 +2,14 @@
 import { runAgentBoardCli } from '@agent-board/daemon';
 import type { BuildInfo } from '@agent-board/daemon/protocol';
 import { BUILD } from './build';
+import { daemonEntryOverrides } from './test-overrides';
 
 // e2e tests start a daemon that claims another build, as one left running across an upgrade would.
-const fakeBuild = process.env.AGENT_BOARD_FAKE_DAEMON_BUILD;
+const { testOverrides, fakeBuild } = daemonEntryOverrides(process.execPath);
 const build: BuildInfo = fakeBuild ? JSON.parse(fakeBuild) : BUILD;
 
 // Not awaited at the top level: the CLI loads chunks lazily (the daemon, the MCP server), and those import from this
 // entry, which would never finish evaluating while it awaited them.
-void runAgentBoardCli(process.argv.slice(2), { build }).then((code) => {
+void runAgentBoardCli(process.argv.slice(2), { build, testOverrides }).then((code) => {
   process.exitCode = code;
 });

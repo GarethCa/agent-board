@@ -1839,14 +1839,6 @@
   display: none;
 }
 
-/*
- * Below 960 px Classic's New agent and Shell drop their words (their names and tooltips say what they are), so the
- * toolbar clears the Needs-you island's left edge, as it did before More to add.
- */
-:root:not([data-design='simplified']) .board[data-folds~='960'] .create-toolbar-word {
-  display: none;
-}
-
 :root:not([data-design='simplified']) .board[data-folds~='1100']:not(:has(> .master-panel)) .master-button.ui-button {
   display: none;
 }
@@ -1880,7 +1872,6 @@
 }
 
 @media (max-width: 959px) {
-  :root:not([data-design='simplified']) .create-toolbar-word,
   :root[data-design='simplified'] .board:not(:has(> .master-panel)) .master-button.ui-button {
     display: none;
   }
@@ -1888,8 +1879,29 @@
 
 /*
  * Where the toolbar still can't sit clear of the islands either side, the row gives way in turn (chrome-folds.ts): the
- * board's name (its mark stays, and the name is still read out), then Find (⌘K still opens it), then New agent's word.
+ * board's name (its mark stays, and the name is still read out), then Classic's drawing tools fold into one Draw menu
+ * (each tool keeps its key) and Draw drops its word, then Find (⌘K still opens it), then New agent's and Shell's words
+ * (their names and tooltips say what they are), then Classic's Needs-you words (its dot still shows attention, and its
+ * name and tooltip say them).
  */
+.create-toolbar-drawing {
+  display: contents;
+}
+
+.create-toolbar-drawing-folded,
+.board[data-folds~='draw'] .create-toolbar-drawing {
+  display: none;
+}
+
+.board[data-folds~='draw'] .create-toolbar-drawing-folded {
+  display: contents;
+}
+
+:root:not([data-design='simplified']) .board[data-folds~='draw-word'] .create-toolbar-draw-word,
+:root:not([data-design='simplified']) .board[data-folds~='needs-word'] .needs-you-words {
+  display: none;
+}
+
 .board[data-folds~='title'] .board-menu-title {
   position: absolute;
   width: 1px;

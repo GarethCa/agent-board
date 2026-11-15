@@ -4665,13 +4665,6 @@ kbd {
   padding: var(--space-2-5) 0;
 }
 
-.details-rail-separator {
-  width: var(--space-5);
-  height: 1px;
-  margin: var(--space-1) 0;
-  background: var(--border);
-}
-
 .details-rail-fill {
   flex: 1;
 }
@@ -4706,18 +4699,6 @@ kbd {
   white-space: pre-wrap;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 6;
-}
-
-.details-issue {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-1-75);
-}
-
-.details-issue-title {
-  font-size: var(--font-size-sm-plus);
-  font-weight: var(--weight-semibold);
-  line-height: var(--leading-snug);
 }
 
 .details-list {
@@ -9319,6 +9300,11 @@ button.chat-chip[aria-expanded='true'] {
   font-weight: var(--weight-semibold);
   line-height: var(--leading-snug);
   overflow-wrap: anywhere;
+}
+
+/* An item of a kind this version doesn't know: the link card's plain look, but not a link. */
+.unknown-item {
+  cursor: default;
 }
 
 /* Text items and shapes */
@@ -17666,6 +17652,11 @@ button.steps-link-open:focus-visible {
 .crew-faces-more {
   color: var(--muted);
   font-size: var(--font-size-2xs);
+}
+
+/* A menu's crew rows: one slot as wide as the most faces a row shows and its +N, so every name starts at one x. */
+.ui-menu-item .crew-faces {
+  width: var(--size-menu-crew-faces);
 }
 
 /* A running crew's card on the board (`CrewCardView`): its left rule says where its crew is. */

@@ -79,6 +79,10 @@ export interface FakeGitHubPullRequest {
    * one too.
    */
   commits?: string[];
+  /** Who a review is requested of, as `gh pr list --json reviewRequests` gives it: none unless set. */
+  reviewRequests?: { login?: string; slug?: string }[];
+  /** GitHub's review decision: none unless set. */
+  reviewDecision?: string;
   /** Its description: empty unless set. */
   body?: string;
   /** Its author's login: `hubot` unless set (the fake's user is `octocat`). */

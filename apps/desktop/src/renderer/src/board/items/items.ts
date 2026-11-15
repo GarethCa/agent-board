@@ -1,9 +1,10 @@
 import { createContext, useContext } from 'react';
 import type { Node } from '@xyflow/react';
-import type {
-  BoardItem,
-  BoardItemKind,
-  UpdateItemParams,
+import {
+  BOARD_ITEM_KINDS,
+  type BoardItem,
+  type BoardItemKind,
+  type UpdateItemParams,
 } from '@agent-board/daemon/protocol';
 import type { ItemChange } from '../../../../preload/api';
 import { centreOf, contains, rotatedBounds, type Rect } from '../../geometry';
@@ -12,9 +13,18 @@ import type { StageBoardView } from '../stage-boards';
 
 export const ITEM_NODE_PREFIX = 'item:';
 
-/** The React Flow node type of an item of `kind`: its kind under `item:`, apart from the board's own node types. */
-export type ItemNodeTypeName = `${typeof ITEM_NODE_PREFIX}${BoardItemKind}`;
+/** The node type that draws an item of a kind this app doesn't know (a newer app's) as a placeholder. */
+export const UNKNOWN_ITEM_NODE_TYPE = `${ITEM_NODE_PREFIX}unknown-kind` as const;
+
+/**
+ * The React Flow node type of an item of `kind`: its kind under `item:`, apart from the board's own node types; or the
+ * placeholder's.
+ */
+export type ItemNodeTypeName = `${typeof ITEM_NODE_PREFIX}${BoardItemKind}` | typeof UNKNOWN_ITEM_NODE_TYPE;
 export const itemNodeType = (kind: BoardItemKind): ItemNodeTypeName => `${ITEM_NODE_PREFIX}${kind}`;
+
+/** Whether this app knows `kind`. The daemon lists every item it has, a newer app's kinds too. */
+export const isKnownItemKind = (kind: string): kind is BoardItemKind => (BOARD_ITEM_KINDS as readonly string[]).includes(kind);
 
 /** The clocks a Spine zone's "+N" chip stands for: how many, and when each runs, in the order they were set aside. */
 export interface MoreClocks {
@@ -41,7 +51,7 @@ export const isItemNode = (node: Node): node is ItemNodeType => node.id.startsWi
 export function itemNode(item: BoardItem): ItemNodeType {
   return {
     id: `${ITEM_NODE_PREFIX}${item.id}`,
-    type: itemNodeType(item.kind),
+    type: isKnownItemKind(item.kind) ? itemNodeType(item.kind) : UNKNOWN_ITEM_NODE_TYPE,
     ...(item.zoneId === null ? {} : { parentId: item.zoneId }),
     position: { x: item.x, y: item.y },
     width: item.width,
@@ -181,4 +191,14 @@ export function restoredData(item: BoardItem): Record<string, unknown> {
   if (item.kind === 'todo') return { folded: item.data.folded === true };
   if (item.kind === 'crew') return { crewId: item.data.crewId, tiles: item.data.tiles === true };
   return item.data;
+}
+
+/**
+ * The update that puts `item` back as it was, for undo and redo. An item of a kind this app doesn't know goes back
+ * without its data, which it can't change: the daemon refuses that, and the data is as it was anyway.
+ */
+export function restoredUpdate(item: BoardItem): UpdateItemParams {
+  const { id, zoneId, x, y, width, height, z, rotation } = item;
+  const place = { id, zoneId, x, y, width, height, z, rotation };
+  return isKnownItemKind(item.kind) ? { ...place, data: restoredData(item) } : place;
 }

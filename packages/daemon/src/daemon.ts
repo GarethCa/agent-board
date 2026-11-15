@@ -1,7 +1,7 @@
-import { chmodSync, existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
-import { createServer, type Server, type Socket } from 'node:net';
+import { existsSync, rmSync, statSync } from 'node:fs';
+import { createServer, type Socket } from 'node:net';
 import { homedir } from 'node:os';
-import { delimiter, dirname, join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { logLine } from './log-line.ts';
 import {
@@ -18,17 +18,19 @@ import {
 import { pullRequestRecord } from './agent-records.ts';
 import { agentHandlers, createAgentHost } from './agents.ts';
 import { systemClock, type Clock } from './clock.ts';
+import { createEventRing, type RingEntry } from './event-ring.ts';
 import { externalHookFiles, externalHooksHandlers } from './external-hooks.ts';
 import { createExternalSessionHost, externalHandlers, type ExternalSessionHost } from './external-sessions.ts';
 import { externalResumeHandlers } from './resume-external.ts';
 import { removeExternalHookFile, writeCliShim, writeExternalHookFile, writeHookShim, type CliLauncher } from './hook-forwarder.ts';
+import { defaultHookShimPath, isScratchBuild } from './live-home.ts';
 import { boardHandlers, guardBoardCallers, type BoardConnection } from './board.ts';
 import { BOARD_SOCKET_ENV, BOARD_TOKEN_ENV } from './board-env.ts';
 import { boardMcpHandlers } from './board-mcp.ts';
 import { openBoardSession } from './board-ops.ts';
 import { createCaptureHost } from './zone-captures.ts';
 import { createLayoutMeasures } from './layout-measures.ts';
-import { layoutHandlers, spotBesideAgent, type DaemonCall } from './orchestrator-layout.ts';
+import { layoutHandlers, spotBesideAgent } from './orchestrator-layout.ts';
 import { createTodoHost } from './todos.ts';
 import { agentNoteAuthor } from './agent-notes.ts';
 import { createOrchestratorHost, type OrchestratorHost } from './orchestrators.ts';
@@ -54,7 +56,8 @@ import { acquireDaemonLock } from './lock.ts';
 import { createHarnessPaths } from './harness-path.ts';
 import { adoptLoginShellPath } from './login-path.ts';
 import { migrate, schemaVersion as readSchemaVersion } from './migrate.ts';
-import { daemonPaths, prepareSocketDir } from './paths.ts';
+import { readTestOverrides } from './test-overrides.ts';
+import { daemonPaths, listenOnSocket, prepareDataDir, prepareSocketDir } from './paths.ts';
 import {
   AGENT_ERROR,
   DAEMON_VERSION,
@@ -70,6 +73,7 @@ import {
   type ClosedKept,
   type DaemonEvent,
   type DaemonHealth,
+  type DaemonCall,
   type DaemonMethods,
   type DocumentCardData,
   type PlanCardData,
@@ -126,6 +130,11 @@ export interface DaemonOptions {
   dataDir: string;
   /** The build this daemon runs, reported by `daemon.health` so an app can tell it is from another build. */
   build?: BuildInfo;
+  /**
+   * Whether the environment's test overrides (`test-overrides.ts`) are honoured: by default, as for tests and a daemon
+   * run from source. A packaged app's daemon turns them off unless `$AGENT_BOARD_TEST=1`.
+   */
+  testOverrides?: boolean;
   /** How long the daemon waits with no clients and no live sessions before it exits. */
   idleTimeoutMs?: number;
   /** How often it checks whether it is idle. */
@@ -194,7 +203,8 @@ export interface DaemonOptions {
   cli?: CliLauncher;
   /**
    * The stable launcher Codex's hook command names (ADR-0004): `$AGENT_BOARD_HOOK_SHIM`, else
-   * `~/.agent-board/bin/agent-board-hook`.
+   * `~/.agent-board/bin/agent-board-hook` for the installed app (`testOverrides: false`) and `<dataDir>/bin/agent-board-hook`
+   * for any other run.
    */
   hookShimPath?: string;
   /**
@@ -244,6 +254,8 @@ export interface DaemonOptions {
    * `$AGENT_BOARD_SUBMIT_CONFIRM_MS` (for tests), else `DEFAULT_SUBMIT_CONFIRM_MS`.
    */
   submitConfirmMs?: number;
+  /** How long after the user's last key in an agent's terminal nothing is typed there for the board: `USER_IDLE_MS`. */
+  userIdleMs?: number;
   /**
    * How often hand-offs held by an edge's conditions, and deliveries it queued, are tried again:
    * `$AGENT_BOARD_FLOW_RECHECK_MS` (for tests), else `DEFAULT_FLOW_RECHECK_MS`; 0 never by itself.
@@ -309,7 +321,8 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
   const idleCheckIntervalMs = options.idleCheckIntervalMs ?? Math.min(1_000, idleTimeoutMs);
   const dataDirGraceMs = options.dataDirGraceMs ?? DEFAULT_DATA_DIR_GRACE_MS;
   const paths = daemonPaths(options.dataDir);
-  mkdirSync(paths.dataDir, { recursive: true, mode: 0o700 });
+  const overrides = readTestOverrides(options.testOverrides ?? true);
+  prepareDataDir(paths, log);
   // Groups' own folders, where their agents with no repo run: made one by one, as each is first used.
   const groupsDir = join(paths.dataDir, 'groups');
 
@@ -331,6 +344,10 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     const streamOnly = new WeakSet<Socket>();
     /** What hears every event the daemon sends, beside its clients: the orchestrators' waits, once they are made. */
     const listeners: ((event: DaemonEvent) => void)[] = [];
+    /** Every broadcast event, numbered for this run, so a device that drops is sent exactly what it missed. */
+    const events = createEventRing();
+    /** Who else hears each broadcast, in seq order, once they are made. */
+    const toDevices: { send?: (entry: RingEntry) => void } = {};
     /** The kinds an agent reads only in its scope (ADR-0010): every other item is every connection's to hear. */
     const SCOPED_KINDS: ReadonlySet<BoardItem['kind']> = new Set(['steps', 'memory', 'queue', 'crew', 'todo']);
     /**
@@ -348,8 +365,10 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       return item !== undefined && late.visibleItems !== undefined && late.visibleItems([item], connection).length > 0;
     };
     const broadcast = (event: DaemonEvent, about?: BoardItem) => {
-      const line = eventLine(event);
-      for (const [client, connection] of clients) if (hears(client, connection, event, about)) client.write(line);
+      const entry = events.append(event);
+      for (const [client, connection] of clients) if (hears(client, connection, event, about)) client.write(entry.line);
+      // Before the listeners, which may broadcast in their turn: devices hear the events in the order they are numbered.
+      toDevices.send?.(entry);
       for (const listener of listeners) listener(event);
     };
 
@@ -358,16 +377,19 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     const lost = reconcileLostSessions(db);
     if (lost > 0) log(`marked ${lost} session(s) left by a previous daemon as ended`);
     const shell = options.shell ?? defaultShell();
-    const shellArgs = options.shellArgs ?? defaultShellArgs();
+    const shellArgs = options.shellArgs ?? defaultShellArgs(overrides.noLoginShell);
     const homeDir = options.homeDir ?? homedir();
     // Once, before anything is spawned: every CLI the daemon runs (git, gh, and the harnesses and shells of its
     // sessions) is found on its PATH, which is launchd's bare one when the app was opened from the Dock or Finder.
     const loginPath = await adoptLoginShellPath(shell, shellArgs);
     if (loginPath !== undefined) log(`using the login shell's PATH: ${process.env.PATH}`);
     else if (shellArgs.includes('-l')) log(`could not read ${shell}'s login PATH; keeping the daemon's own`);
-    const hookShimPath = options.hookShimPath ?? defaultHookShimPath();
     // The agent-board CLI sessions run (ADR-0010), beside the hook shim.
     const cli = options.cli ?? options.hookForwarder;
+    // Only the installed app, which honours no test overrides and wasn't run from a temp folder or a worktree, changes
+    // what the live board runs in the user's own home (live-home.ts).
+    const installedApp = options.testOverrides === false && (cli === undefined || !isScratchBuild(cli.command));
+    const hookShimPath = options.hookShimPath ?? overrides.hookShim ?? defaultHookShimPath({ installedApp, dataDir: paths.dataDir, home: homeDir });
     const cliPath = join(dirname(hookShimPath), 'agent-board');
     if (cli !== undefined) {
       try {
@@ -464,8 +486,8 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       },
     });
     const hookPort = ingress.port;
-    const gh = options.gh ?? (process.env.AGENT_BOARD_GH || 'gh');
-    const externalHookFile = options.externalHookFile ?? defaultExternalHookFile(hookShimPath);
+    const gh = options.gh ?? (overrides.gh || 'gh');
+    const externalHookFile = options.externalHookFile ?? overrides.externalHookFile ?? defaultExternalHookFile(hookShimPath);
     // Checked again before each Codex spawn, which fails if it can't be written; other agents don't need it.
     const ensureHookShim = () => {
       if (options.hookForwarder) writeHookShim(hookShimPath, options.hookForwarder, externalHookFile);
@@ -483,8 +505,8 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     const trackers = createTrackerHost({
       db,
       credentials:
-        options.credentials ?? createKeychainStore({ keychain: process.env.AGENT_BOARD_KEYCHAIN || undefined }),
-      providers: options.trackers ?? defaultTrackers(gh),
+        options.credentials ?? createKeychainStore({ keychain: overrides.keychain }),
+      providers: options.trackers ?? defaultTrackers(gh, overrides.linearApiUrl),
     });
     /** The tracker of the zone of the agent's own repo, wherever its tile sits. */
     const repoZoneTracker = (sessionId: string) => {
@@ -515,7 +537,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       pullRequests: createPullRequestLookup({ gh, log }),
       intervalMs:
         options.pullRequestPollMs ??
-        (Number(process.env.AGENT_BOARD_PULL_REQUEST_POLL_MS) || DEFAULT_PULL_REQUEST_POLL_MS),
+        (overrides.pullRequestPollMs ?? DEFAULT_PULL_REQUEST_POLL_MS),
       onChange: (sessionId) => {
         agents.announce(sessionId);
         flowEdges.recheck(sessionId);
@@ -567,7 +589,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       shellArgs,
       env: harnessEnv,
       homeDir,
-      knownDirs: options.harnessDirs ?? process.env.AGENT_BOARD_HARNESS_DIRS?.split(delimiter).filter(Boolean),
+      knownDirs: options.harnessDirs ?? overrides.harnessDirs,
       override: (harness) => settings.get()[`${harness}Path`],
     });
     for (const harness of ['claude', 'codex'] as const) void harnessPaths.refresh(harness);
@@ -595,7 +617,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         now: () => new Date(),
       }),
       heldPayloads: () => settings.get().heldPayloads,
-      recheckMs: options.flowRecheckMs ?? (Number(process.env.AGENT_BOARD_FLOW_RECHECK_MS) || DEFAULT_FLOW_RECHECK_MS),
+      recheckMs: options.flowRecheckMs ?? (overrides.flowRecheckMs ?? DEFAULT_FLOW_RECHECK_MS),
       broadcast,
       log,
     });
@@ -659,8 +681,9 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       dialogTakeMs: options.dialogTakeMs,
       backgroundPollMs: options.backgroundPollMs,
       startStepTimeoutMs: options.startStepTimeoutMs,
-      startLimitMs: options.startLimitMs ?? (Number(process.env.AGENT_BOARD_START_LIMIT_MS) || undefined),
-      submitConfirmMs: options.submitConfirmMs ?? (Number(process.env.AGENT_BOARD_SUBMIT_CONFIRM_MS) || undefined),
+      startLimitMs: options.startLimitMs ?? overrides.startLimitMs,
+      submitConfirmMs: options.submitConfirmMs ?? overrides.submitConfirmMs,
+      userIdleMs: options.userIdleMs,
       trackers,
       pullRequests: (sessionId) => pullRequests.get(sessionId),
       pushedPullRequests: (sessionId) => pullRequests.pushed(sessionId),
@@ -745,7 +768,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     });
 
     const images = createImageStore(paths.dataDir, { graceMs: options.imageSweepGraceMs });
-    const linkFixture = process.env.AGENT_BOARD_LINK_FETCH_HTML;
+    const linkFixture = overrides.linkFetchHtml;
     // Pages a user pasted are not trusted: by default they are fetched without reaching this machine or its network.
     const linkFetch = options.linkFetch ?? (linkFixture ? fixtureFetch(linkFixture) : createSafeFetch());
     const sweeper = createImageSweeper(db, images, log);
@@ -1086,9 +1109,10 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       ...items,
       // An agent lists only the steps cards in its scope, as the steps methods read them. Every board's items at once is
       // for the daemon's own hosts, which find a card by kind wherever it is: a client lists one board.
-      'item.list': async (params, context) => {
+      // At once, not async: a device's snapshot reads every list in one turn of the event loop.
+      'item.list': (params, context) => {
         if (params?.allBoards !== undefined && context !== DAEMON_ITSELF) throw invalidParams("allBoards is the daemon's own: list one board, or a ticket's");
-        return late.visibleItems!(await items['item.list'](params, context), context);
+        return late.visibleItems!(items['item.list'](params, context) as BoardItem[], context);
       },
       // A memory's or queue's count is its rows': an undo that sends a card's whole data back may carry an older one. A
       // crew card's data is its crew's, whoever makes or changes the card.
@@ -1239,6 +1263,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         files: options.externalHookFiles ?? externalHookFiles(process.env),
         shimPath: hookShimPath,
         ensureHookShim,
+        installedApp,
       }),
     };
 
@@ -1350,7 +1375,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         if (!feed(chunk)) socket.destroy();
       });
     });
-    await listen(server, paths.socket);
+    await listenOnSocket(server, paths.socket);
 
     let resolveClosed!: (exit: DaemonExit) => void;
     const closed = new Promise<DaemonExit>((resolve) => (resolveClosed = resolve));
@@ -1435,16 +1460,11 @@ function githubRepo(tracker: ZoneTracker | null): string | undefined {
   return tracker?.provider === 'github' ? tracker.scope : undefined;
 }
 
-function defaultHookShimPath(): string {
-  return process.env.AGENT_BOARD_HOOK_SHIM || join(homedir(), '.agent-board', 'bin', 'agent-board-hook');
-}
-
 function defaultExternalHookFile(hookShimPath: string): string {
-  return process.env.AGENT_BOARD_EXTERNAL_HOOK_FILE || join(dirname(dirname(hookShimPath)), 'external-hook.json');
+  return join(dirname(dirname(hookShimPath)), 'external-hook.json');
 }
 
-function defaultTrackers(gh: string): Partial<Record<TrackerProvider, TrackerFactory>> {
-  const apiUrl = process.env.AGENT_BOARD_LINEAR_API_URL || undefined;
+function defaultTrackers(gh: string, apiUrl: string | undefined): Partial<Record<TrackerProvider, TrackerFactory>> {
   return {
     linear: (credential) => {
       if (credential === undefined) throw new Error('Linear needs its API key');
@@ -1461,10 +1481,10 @@ function defaultShell(): string {
 
 /**
  * A login shell, so a daemon started from the Dock (with launchd's bare PATH) still gives the user their profile's
- * PATH. `AGENT_BOARD_LOGIN_SHELL=0` turns it off, so e2e tests don't depend on the developer's profile.
+ * PATH. `AGENT_BOARD_LOGIN_SHELL=0` (a test override) turns it off, so e2e tests don't depend on the developer's profile.
  */
-function defaultShellArgs(): string[] {
-  return process.platform === 'win32' || process.env.AGENT_BOARD_LOGIN_SHELL === '0' ? [] : ['-l'];
+function defaultShellArgs(noLoginShell = false): string[] {
+  return process.platform === 'win32' || noLoginShell ? [] : ['-l'];
 }
 
 type SessionMethods = Extract<keyof DaemonMethods, `session.${string}`>;
@@ -1500,16 +1520,16 @@ function sessionHandlers(
       sessions.detach(sessionId(params), subscriber);
       return null;
     },
-    'session.write': (params) => {
+    'session.write': (params, subscriber) => {
       const id = sessionId(params);
       const data = stringParam(paramsObject(params), 'data');
-      sessions.write(id, data);
+      sessions.write(id, data, subscriber);
       hooks.onInput(id, data);
       return null;
     },
-    'session.resize': (params) => {
+    'session.resize': (params, subscriber) => {
       const p = paramsObject(params);
-      sessions.resize(sessionId(p), { cols: dimensionParam(p, 'cols'), rows: dimensionParam(p, 'rows') });
+      sessions.resize(sessionId(p), { cols: dimensionParam(p, 'cols'), rows: dimensionParam(p, 'rows') }, subscriber);
       return null;
     },
     'session.kill': (params) => sessions.kill(sessionId(params), "the app's session.kill"),
@@ -1535,17 +1555,4 @@ function openDatabase(path: string, log: (message: string) => void): DatabaseSyn
     db.close();
     throw error;
   }
-}
-
-/** Listens on the socket, replacing a stale socket file (safe: the caller holds the data dir's lock). */
-async function listen(server: Server, socketPath: string): Promise<void> {
-  if (process.platform !== 'win32') rmSync(socketPath, { force: true });
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(socketPath, () => {
-      server.off('error', reject);
-      resolve();
-    });
-  });
-  if (process.platform !== 'win32') chmodSync(socketPath, 0o600);
 }

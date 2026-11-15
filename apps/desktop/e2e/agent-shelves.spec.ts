@@ -6,12 +6,10 @@ import { settledBox, viewTransform } from './board-helpers.ts';
 import { agents, launch, sessionWindow, setClickOpens, spawnAgent, tile, TURN_MS, windowKey } from './agent-helpers.ts';
 import { browseForZone, classicOnly, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
 import { scratch } from './scratch.ts';
-import { openSettings, settingsSection } from './settings-helpers.ts';
 
 // An agent's sidebar, its shelves: under the Simplified design at the window's leading edge, opening on the agent's page
 // (the board's Now until it writes one) with Made, Crew and Setup a tab away, resized on the handle after it and collapsed
-// to a rail (⌘I) whose icons open a shelf as a peek; under Classic, in place of the details strip while the Agent sidebar
-// setting is Shelves.
+// to a rail (⌘I) whose icons open a shelf as a peek; under Classic too, where shells keep the details strip.
 
 const shelves = (window: Page) => sessionWindow(window).getByTestId('agent-shelves');
 const rail = (window: Page) => sessionWindow(window).getByTestId('agent-shelves-rail');
@@ -280,7 +278,7 @@ test("Made's open pull request is a card whose x shows on hover, clear of its ti
   }
 });
 
-test("Classic opens agents on the shelves rather than the details strip, which resize on their handle, and Full brings the strip back, kept across a restart", async () => {
+test("Classic opens agents on the shelves rather than the details strip, which resize on their handle, and a saved Full reads as the shelves after a restart", async () => {
   classicOnly();
   const { dir, repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
@@ -291,7 +289,7 @@ test("Classic opens agents on the shelves rather than the details strip, which r
     await spawnAgent(window, 'monorepo', 'Pick a database');
     await tile(window).dblclick();
 
-    // Shelves by default, shown, with where it works in Setup, and the window's controls in the header: one state
+    // The shelves, shown, with where it works in Setup, and the window's controls in the header: one state
     // button, and Stop under ⋯. No details strip.
     await expect(shelves(window)).toBeVisible();
     await expect(sessionWindow(window).locator('.session-details')).toHaveCount(0);
@@ -326,20 +324,13 @@ test("Classic opens agents on the shelves rather than the details strip, which r
     await expect(shelves(window)).toBeVisible();
     await expect(where).toHaveCount(0);
 
-    // Full, picked in Settings while the window is open: the strip is back on its rail at once.
-    const settings = await openSettings(window, 'agents.sidebar');
-    const choice = settingsSection(settings, 'Sidebar').getByRole('group', { name: 'Agent sidebar' });
-    await choice.getByRole('button', { name: 'Full' }).click();
-    await expect(shelves(window)).toHaveCount(0);
-    await expect(sessionWindow(window).locator('.session-details-rail')).toBeVisible();
-    await expect(toggle(window)).toHaveCount(0);
-    await expect(controls).toHaveCount(0);
-
-    // It is kept across a restart: the window open as the app quit opens again with the strip.
+    // A sidebar saved by a version that offered the full details strip reads as the shelves: the window open as the
+    // app quit opens again with them, and no strip.
+    await window.evaluate(() => globalThis.window.agentBoard.view.set('agentSidebar', 'full'));
     await app.close();
     ({ app, window } = await launch(dataDir, env));
-    await expect(sessionWindow(window).locator('.session-details')).toBeVisible();
-    await expect(shelves(window)).toHaveCount(0);
+    await expect(shelves(window)).toBeVisible();
+    await expect(sessionWindow(window).locator('.session-details')).toHaveCount(0);
   } finally {
     await app.close();
     await removeDataDir(dataDir);
@@ -347,8 +338,7 @@ test("Classic opens agents on the shelves rather than the details strip, which r
   }
 });
 
-// An agent expanded in place on the board has the same sidebar as its window: the shelves, following the Agent sidebar
-// setting (always under Simplified), with their state button and ⋯ in the tile's header. The tile is a node of the board,
+// An agent expanded in place on the board has the same sidebar as its window: the shelves, under either design, with their state button and ⋯ in the tile's header. The tile is a node of the board,
 // so what is dragged or scrolled in it must not move the board.
 const expanded = (window: Page) => window.getByTestId('expanded-tile');
 const tileShelves = (window: Page) => expanded(window).getByTestId('agent-shelves');
@@ -464,7 +454,7 @@ test("an expanded tile shows the shelves under Simplified: icons only when narro
   }
 });
 
-test("Classic's expanded tile follows the Agent sidebar setting: the shelves by default, the strip under Full", async () => {
+test("Classic's expanded tile opens on the shelves too", async () => {
   classicOnly();
   const { dir, repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
@@ -476,7 +466,7 @@ test("Classic's expanded tile follows the Agent sidebar setting: the shelves by 
     await spawnAgent(window, 'monorepo', 'Pick a database');
     await tile(window).dblclick();
 
-    // Shelves by default, with the state button and ⋯ in the tile's header.
+    // The shelves, with the state button and ⋯ in the tile's header.
     await expect(tileShelves(window)).toBeVisible();
     await expect(expanded(window).locator('.session-details-rail, .session-details')).toHaveCount(0);
     await expect(expanded(window).locator('.expanded-tile-head').getByTestId('shelf-controls')).toBeVisible();
@@ -493,13 +483,6 @@ test("Classic's expanded tile follows the Agent sidebar setting: the shelves by 
     await window.keyboard.press(windowKey('i'));
     await expect(tileShelves(window)).toBeVisible();
 
-    // Full, picked in Settings while it is expanded: the strip is there at once.
-    const settings = await openSettings(window, 'agents.sidebar');
-    const choice = settingsSection(settings, 'Sidebar').getByRole('group', { name: 'Agent sidebar' });
-    await choice.getByRole('button', { name: 'Full' }).click();
-    await expect(tileShelves(window)).toHaveCount(0);
-    await expect(expanded(window).getByTestId('shelf-controls')).toHaveCount(0);
-    await expect(expanded(window).locator('.session-details-rail, .session-details')).toBeVisible();
   } finally {
     await app.close();
     await removeDataDir(dataDir);

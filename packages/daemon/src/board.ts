@@ -1,6 +1,8 @@
 import { pageFor } from './agent-page.ts';
 import { pinRefParams, recordFor, recordParams, unpinFor } from './agent-records.ts';
-import type { AgentHost } from './agents.ts';
+import type { AgentHost } from './agent-types.ts';
+import type { BoardConnection } from './orchestrator-types.ts';
+export type { BoardConnection };
 import { checkPayloadPath } from './flow-payloads.ts';
 import type { FlowEdgeHost } from './flow-edges.ts';
 import { paneIds } from './pane-layout.ts';
@@ -32,15 +34,6 @@ type BoardMethods = Pick<
   DaemonMethods,
   Exclude<Extract<keyof DaemonMethods, `board.${string}`>, 'board.ask' | 'board.presentPlan' | 'board.showDoc' | 'board.openPullRequest' | 'board.newSteps' | 'board.readSteps' | 'board.updateSteps' | MemoryQueueMethod | 'board.remind' | 'board.readTodos' | 'board.changeTodo'>
 >;
-
-/**
- * A connection, as the board methods see it: the session whose board token it presented, if it has, and a signal
- * that aborts once it closes (a wait it made stops then).
- */
-export interface BoardConnection {
-  boardSession?: string;
-  closed?: AbortSignal;
-}
 
 /**
  * `handlers` for connections that may have presented a board token (ADR-0010): once one has, every method outside

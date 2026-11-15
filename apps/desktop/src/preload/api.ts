@@ -1499,7 +1499,7 @@ export interface WindowsApi {
   onBoardRequested(listener: (request: BoardRequest) => void): () => void;
   /** How this window is framed. */
   chrome: WindowChrome;
-  /** How long Accept changes waits for Undo before it merges, in ms: 10 s, shorter only where a test sets `AGENT_BOARD_ACCEPT_AFTER_MS`. */
+  /** How long Accept changes waits for Undo before it merges, in ms: 10 s, shorter only where a test sets `AGENT_BOARD_ACCEPT_AFTER_MS` (`shared/accept.ts`). */
   acceptAfterMs: number;
   /** Whether this window is in full screen, where macOS hides its traffic lights. */
   isFullScreen(): Promise<boolean>;
@@ -1514,6 +1514,10 @@ export const VIEW_IPC = {
   measured: 'view:measured',
   /** Main to every window: a key was saved, with its value. */
   changed: 'view:changed',
+  /** Main to every window as the app quits, `(id)`: send the saves waiting now. */
+  flush: 'view:flush',
+  /** A window to main, `(id)`: the saves it was waiting to send have been made. */
+  flushed: 'view:flushed',
 } as const;
 
 /** How the app left the board (its viewport, its session windows), kept by the daemon so it outlives a restart. */
@@ -1524,6 +1528,11 @@ export interface ViewApi {
   set(key: string, value: unknown): Promise<void>;
   /** Calls `listener` when a key is saved, from any window, with the value saved. Returns the unsubscribe function. */
   onChanged(listener: (key: string, value: unknown) => void): () => void;
+  /**
+   * What sends this window's saves waiting to be made: main asks for them as the app quits, and quits once `flush` has
+   * settled (or after a short wait). One per window; returns the function that takes it back.
+   */
+  onFlush(flush: () => Promise<void>): () => void;
   /**
    * Says how this window draws the board now (`layout.measured`), replacing what was said before: kept in the daemon's
    * memory only, and said again by main when it reconnects.

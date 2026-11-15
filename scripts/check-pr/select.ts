@@ -30,6 +30,7 @@ export const SCANNERS: ReadonlyArray<{ tests: readonly string[]; globs: readonly
       'apps/desktop/src/renderer/src/demo/demo-mode.test.ts',
       'apps/desktop/src/renderer/src/board/board-background.test.ts',
       'apps/desktop/src/renderer/src/board/hybrid-tile-body.test.ts',
+      'apps/desktop/src/renderer/src/board/crew-dim.test.ts',
     ],
     // The `shared/` theme sources are a full gate today (`FULL_GATE_GLOBS`); the glob takes effect when that narrows.
     globs: ['apps/desktop/src/renderer/**/*.{css,ts,tsx}', 'apps/desktop/src/shared/{themes,theme-pack-tokens,design,colour}.ts'],

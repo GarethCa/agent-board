@@ -69,7 +69,7 @@ import {
   SendHorizontal,
 } from 'lucide-react';
 import { CrewFaces } from '../crews/icons';
-import { crewGroups } from '../crews/prefab-store';
+import { currentPrefabs, prefabGroupHeading, prefabGroups } from '../crews/prefab-store';
 import {
   AGENT_ROLES,
   ARRANGE_SPACINGS,
@@ -88,6 +88,7 @@ import {
   type ArrangeSpacing,
   type ExternalSession,
   type GateRun,
+  type LibraryPrefab,
   type ReviewRound,
   type Shell,
   type Zone,
@@ -1096,21 +1097,63 @@ const newAgentRow = ({ zone, noAgents, actions }: ProjectMenuInput, label: strin
   onSelect: () => actions.newAgent(zone),
 });
 
-/** A crew to start in the zone, from the library as last known, yours first; or the library itself. */
-const crewRow = (zone: Zone, actions: Pick<ZoneMenuActions, 'startCrew' | 'crewLibrary' | 'newTicket'>, label: string): ModelEntry => ({
+/** Where a New crew's rows go: `start` opens the prompt box of a crew from the prefab named, `library` the library itself. */
+interface CrewPicks {
+  start(prefab: string): void;
+  library(): void;
+}
+
+/**
+ * Every New crew's rows: a crew from each prefab, each group under its heading (yours first), then the library itself.
+ * `why`, if set, says why no crew can start here, on each prefab's row.
+ */
+const prefabEntries = (prefabs: readonly LibraryPrefab[], picks: CrewPicks, why?: string): ModelEntry[] => [
+  ...prefabGroups(prefabs).flatMap((group): ModelEntry[] => [
+    { heading: prefabGroupHeading(group) },
+    ...group.map((prefab): ModelEntry => ({
+      id: `crew-${prefab.name}`,
+      label: prefab.name,
+      icon: <CrewFaces members={prefab.members} />,
+      ...(why === undefined ? {} : { disabled: true, hint: why }),
+      onSelect: () => picks.start(prefab.name),
+    })),
+    'separator',
+  ]),
+  { id: 'crew-library', label: 'Library…', icon: <LibraryBig />, onSelect: picks.library },
+];
+
+/** New crew where no zone is picked yet: the prompt box that follows asks for one. `onCrew(null)` opens the library. */
+export const crewMenu = (prefabs: readonly LibraryPrefab[], onCrew: (prefab: string | null) => void): ModelEntry => ({
+  id: 'crew',
+  label: 'New crew',
+  icon: <Users />,
+  entries: prefabEntries(prefabs, { start: onCrew, library: () => onCrew(null) }),
+});
+
+/** `prefabEntries` for the library as last known, each crew to start in `zone`. */
+const zonePrefabEntries = (zone: Zone, actions: Pick<ZoneMenuActions, 'startCrew' | 'crewLibrary'>, why?: string): ModelEntry[] =>
+  prefabEntries(currentPrefabs(), { start: (prefab) => actions.startCrew(prefab, zone), library: () => actions.crewLibrary(zone) }, why);
+
+/** A crew to start in the zone, from the library (`zonePrefabEntries`); `why` says why the zone can start none. */
+const crewRow = (zone: Zone, actions: Pick<ZoneMenuActions, 'startCrew' | 'crewLibrary' | 'newTicket'>, label: string, why?: string): ModelEntry => ({
   id: 'crew',
   label,
   icon: <Users />,
-  entries: [
-    { id: 'new-ticket', label: 'New ticket…', icon: <Ticket />, onSelect: () => actions.newTicket(zone) },
-    'separator',
-    ...crewGroups().flatMap((group): ModelEntry[] => [
-      ...group.map((prefab): ModelEntry => ({ id: `crew-${prefab.name}`, label: prefab.name, icon: <CrewFaces members={prefab.members} />, onSelect: () => actions.startCrew(prefab.name, zone) })),
-      'separator',
-    ]),
-    { id: 'crew-library', label: 'Library…', icon: <LibraryBig />, onSelect: () => actions.crewLibrary(zone) },
-  ],
+  entries: [{ id: 'new-ticket', label: 'New ticket…', icon: <Ticket />, onSelect: () => actions.newTicket(zone) }, 'separator', ...zonePrefabEntries(zone, actions, why)],
 });
+
+/**
+ * The ▾ beside a zone's + agent: a blank agent first, as + agent itself starts one, then a crew from each prefab in the
+ * library as last known (yours first, each group under its heading), then the library itself. `noAgents` says why the
+ * zone can start none, on every row that would.
+ */
+export function newAgentMenu(zone: Zone, noAgents: string | undefined, actions: Pick<ZoneMenuActions, 'startCrew' | 'crewLibrary'> & { newAgent(zone: Zone): void }): ModelEntry[] {
+  return [
+    { id: 'new-agent', label: 'Blank agent', icon: <Plus />, ...(noAgents === undefined ? {} : { disabled: true, hint: noAgents }), onSelect: () => actions.newAgent(zone) },
+    'separator',
+    ...zonePrefabEntries(zone, actions, noAgents),
+  ];
+}
 
 const newShellRow = ({ zone, actions }: ProjectMenuInput, label: string): ModelEntry => ({
   id: 'new-shell',
@@ -1216,7 +1259,7 @@ export function projectMenu(input: ProjectMenuInput): ModelEntry[] {
   if (zone.clone !== null) return [newAgentRow(input, 'New agent'), newShellRow(input, 'New terminal'), 'separator', tidyUpRow(input), issues, folder];
   return [
     newAgentRow(input, 'New agent'),
-    crewRow(zone, input.actions, 'New crew'),
+    crewRow(zone, input.actions, 'New crew', input.noAgents),
     newShellRow(input, 'New terminal'),
     'separator',
     { id: 'rename', label: 'Rename', icon: <Pencil />, onSelect: rename },
@@ -1270,7 +1313,7 @@ export function projectContextMenu(input: ProjectContextMenuInput): ModelEntry[]
   if (zone.clone !== null) return [newShellRow(input, 'New terminal here'), note, 'separator', options];
   return [
     newAgentRow(input, 'New agent here'),
-    crewRow(zone, input.actions, 'New crew here'),
+    crewRow(zone, input.actions, 'New crew here', input.noAgents),
     newShellRow(input, 'New terminal here'),
     note,
     ...(zone.tracker === null ? [] : [addIssueRow(input)]),

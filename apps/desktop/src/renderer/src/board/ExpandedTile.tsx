@@ -14,7 +14,6 @@ import { showsShelves } from '../session/agent-sidebar';
 import { SessionBody, type WindowContent } from '../session/SessionBody';
 import { SessionDetails } from '../session/SessionDetails';
 import { SessionName } from '../session/SessionName';
-import { useAgentSidebar } from '../session/use-agent-sidebar';
 import { useViewSettingsLoaded } from './view-settings';
 import { useSidebarCollapsed } from '../session/use-sidebar-collapsed';
 import { panesLabel } from '../session/panes';
@@ -49,7 +48,7 @@ const EDGES: readonly ControlPosition[] = ['top', 'right', 'bottom', 'left'];
  * session has no terminal here, only its details. Its corners and edges resize it, what it would cover moving as it goes.
  */
 export function ExpandedTile(props: TileProps & { parent: ExpandedParent }) {
-  // Not drawn before the saved settings are read: a Classic user who picked Full would see the shelves first.
+  // Not drawn before the saved settings are read: it would draw with the defaults first, then change.
   return useViewSettingsLoaded() ? <ExpandedTileShown {...props} /> : null;
 }
 
@@ -67,10 +66,9 @@ function ExpandedTileShown({ id, tile, parent }: TileProps & { parent: ExpandedP
     : shell
       ? { kind: 'shell', shellId: shell.id, shell }
       : undefined;
-  // An agent's sidebar is its shelves while the Agent sidebar setting says so (always, under Simplified), as in its window,
-  // and then open or on the rail as it last was in any window or tile (⌘I). A shell or external session keeps the strip.
-  const sidebar = useAgentSidebar();
-  const shelves = content !== undefined && showsShelves(sidebar, content);
+  // An agent's sidebar is its shelves, as in its window, open or on the rail as it last was in any window or tile (⌘I).
+  // A shell or external session keeps the strip.
+  const shelves = content !== undefined && showsShelves(content);
   const root = useRef<HTMLElement>(null);
   // Esc from its header (⌘J has the focus there), or ⌘Esc from anywhere in it: collapsed, the focus on its tile.
   useLeaveKeys(root, () => collapse(id));
@@ -254,7 +252,6 @@ function ExternalBody({
         onProblem={ignore}
         collapsed={detailsCollapsed}
         onCollapsed={onDetailsCollapsed}
-        onOpenLink={ignore}
       />
       <DetailsHandle collapsed={detailsCollapsed} onCollapsed={onDetailsCollapsed} />
       <div className="session-window-main expanded-tile-elsewhere" data-surface="window">

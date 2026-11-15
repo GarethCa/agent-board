@@ -41,6 +41,7 @@ The overview reads each agent through `workCategory(agent, { shows, reviewers })
    - Blocked at its usage limit;
    - In review while a reviewer agent of its work runs;
    - Waiting on others, labelled "CI", while its open pull request's checks run, and Blocked while they fail;
+   - In review, waiting on the requested reviewer, while its open pull request has a review requested of someone on GitHub;
    - Ready for review for an open pull request;
    - Working for a draft pull request;
    - Done for a merged pull request, work it said is finished, or a session that ended;
@@ -56,9 +57,9 @@ A group and a word of the agent's own (two inputs) would let the agent put "With
 
 A permission prompt or a question stops the agent whatever it said its work was waiting on. The user has to act before anything moves, and the overview is where they look for that. What the agent set comes back once the ask is answered.
 
-## Why In review only from a reviewer agent
+## Why In review from a reviewer agent or a requested review
 
-A pull request's GitHub review requests are not read by the board yet. A reviewer agent the board started on the agent's branch is the one review it can see running. A review requested on GitHub can join the guess when the board reads it.
+Two things show a review is the wait: a reviewer agent the board started on the agent's branch that is running, and a review GitHub's pull request asks of someone (its `reviewRequests`). The reviewer agent wins, as it names the agent; a request on GitHub names the user or team asked. Failing checks (Blocked) and running checks (CI) come first, as they are what moves next.
 
 ## Considered options
 

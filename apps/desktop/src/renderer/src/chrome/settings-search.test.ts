@@ -36,11 +36,11 @@ describe('searchSettings', () => {
     expect(shown(searchSettings('terminal card', { simplified: true }))).toEqual([]);
   });
 
-  it("finds the agent sidebar's choice under Classic, and leaves it out under the Simplified design, which always has the shelves", () => {
-    expect(shown(searchSettings('sidebar', { simplified: false }))).toEqual(['Agents › Sidebar: Agent sidebar']);
-    expect(shown(searchSettings('inspector', { simplified: false }))).toEqual(['Agents › Sidebar: Agent sidebar']);
-    expect(shown(searchSettings('shelves', { simplified: false }))).toEqual(['Agents › Sidebar: Agent sidebar']);
-    expect(shown(searchSettings('sidebar', { simplified: true }))).toEqual([]);
+  it('finds no agent sidebar choice under either design: every agent window has the shelves', () => {
+    for (const simplified of [false, true]) {
+      expect(shown(searchSettings('shelves', { simplified }))).toEqual([]);
+      expect(shown(searchSettings('inspector', { simplified }))).toEqual([]);
+    }
   });
 
   it('leaves out the controls only the Simplified design draws, under Classic', () => {

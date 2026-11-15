@@ -21,8 +21,12 @@ export const ITEM_KIND_LABELS: Record<BoardItemKind, string> = {
   stages: 'stage board',
 };
 
+/** The kind's name as a sentence uses it; a kind this app doesn't know (a newer app's) by its own word: "mod item". */
+export const itemKindLabel = (kind: string): string =>
+  Object.hasOwn(ITEM_KIND_LABELS, kind) ? ITEM_KIND_LABELS[kind as BoardItemKind] : `${kind} item`;
+
 /** The kind's name as a row or a heading starts with it: "Sticky note". */
-export const itemKindTitle = (kind: BoardItemKind): string => {
-  const label = ITEM_KIND_LABELS[kind];
+export const itemKindTitle = (kind: string): string => {
+  const label = itemKindLabel(kind);
   return `${label.charAt(0).toUpperCase()}${label.slice(1)}`;
 };

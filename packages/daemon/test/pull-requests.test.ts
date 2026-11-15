@@ -87,6 +87,8 @@ describe("an agent's pull requests", () => {
         url: 'https://github.com/acme/app/pull/41',
         state: 'open',
         checks: 'pending',
+        reviewRequests: [],
+        reviewDecision: null,
       },
     ]);
 

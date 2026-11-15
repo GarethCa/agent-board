@@ -6,7 +6,6 @@ import {
   ReactFlowProvider,
   PanOnScrollMode,
   SelectionMode,
-  getViewportForBounds,
   useNodesState,
   useReactFlow,
   useStoreApi,
@@ -173,7 +172,7 @@ import { useSnapping } from './editing/use-snapping';
 import { tidySize, VIEW_FOLLOW_DELAY_MS } from './expanded';
 import { tileOpenAction } from './click-opens';
 import { focusTerminalIn, pulseTile } from './tile-attention';
-import { crewFrames, crewMoves, frameableTiles, landingRects, withCrewFollowing } from './crews';
+import { crewFrames, crewMoves, frameableTiles, landingRects, selectedOrchestrators, withCrewFollowing } from './crews';
 import { restoreViewSettings, setViewSetting, useViewSettings } from './view-settings';
 import { ConnectionCountsContext, edgeCounts, nextConnectionsView, revealedBy, shownEdges, typingInTile, withTethers } from './connections-view';
 import { railOf, withRailSelected } from './rails';
@@ -189,7 +188,7 @@ import {
   ItemActionsContext,
   placeOnBoard,
   SeveralSelectedContext,
-  restoredData,
+  restoredUpdate,
   withItem,
   withoutItem,
   type ItemActions,
@@ -202,7 +201,7 @@ import { SHAPES } from './items/shapes/catalogue';
 import { QuickInsert } from './items/shapes/QuickInsert';
 import { lastShape, noteShapeUsed } from './items/shapes/recents';
 import { newShapeData } from './items/text-style';
-import { ITEM_KINDS, ITEM_NODE_TYPES, type ItemKind } from './items/kinds';
+import { itemKind, ITEM_KINDS, ITEM_NODE_TYPES, type ItemKind } from './items/kinds';
 import { liveRotations, LiveRotationsContext, withRotation } from './items/Rotatable';
 import type { BoardRequest, ScreenPoint, WindowTarget } from '../../../preload/api';
 import { VIEW_KEYS, viewSaver } from '../../../shared/view-saver';
@@ -228,6 +227,7 @@ import { useRestartBanner } from './RestartBanner';
 import { useBoardData, type SavedView } from './use-board-data';
 import { agentTitle, shellTitle, useBoardWindows } from './use-board-windows';
 import { useExpandedTiles } from './use-expanded-tiles';
+import { boxedCorner, clearRooms, coveredView, fitView, followView, topChrome, UNCOVERED } from './view-follow';
 import { DEFAULT_REPRESENTATION, RepresentationProvider } from './representations';
 import { TileNode } from './TileNode';
 import { TileMenuBoardContext } from './agent-tile-menu';
@@ -267,10 +267,10 @@ import {
   NewShellContext,
   SaveZoneLayoutContext,
   whyNoAgents,
-  ZoneNode,
   ZoneResizeContext,
   ZoneTrackerContext,
-} from './ZoneNode';
+} from './zone-contexts';
+import { ZoneNode } from './ZoneNode';
 import { ZoneTrackerDialog } from './ZoneTrackerDialog';
 import { droppedOnto } from './displace';
 import { DRAG_THRESHOLD, useTileMoves } from './use-tile-moves';
@@ -328,8 +328,6 @@ function dropAt(point: { x: number; y: number }, zoneIds: ReadonlySet<string>): 
   return { type: 'nothing' };
 }
 
-/** How much room bringing something into view leaves round what it shows, as a fraction of the view (not a spacing token). */
-const FIT_MARGIN = 0.15;
 /** The zoom ⌘K flies the board in to, at least, to show a tile: its name and state read. */
 const READABLE_ZOOM = 1;
 
@@ -527,10 +525,8 @@ function BoardView() {
   const framedKey = savedFrames.flatMap((frame) => frame.members).join(' ');
   const crewView = useMemo<CrewView>(() => ({ framed: new Set(framedKey.split(' ').filter(Boolean)) }), [framedKey]);
   // The selected orchestrators keep their crews focused (framed, lit, the rest dimmed), dragged or not.
-  const selectedOrchestrators = nodes
-    .flatMap((node) => (node.selected === true && node.type === 'tile' && node.data.crew !== undefined && node.data.agent !== undefined ? [node.data.agent.sessionId] : []))
-    .join(' ');
-  useEffect(() => selectCrews(selectedOrchestrators.split(' ').filter(Boolean)), [selectedOrchestrators]);
+  const selectedCrews = selectedOrchestrators(nodes).join(' ');
+  useEffect(() => selectCrews(selectedCrews.split(' ').filter(Boolean)), [selectedCrews]);
   useEffect(() => () => selectCrews([]), []);
   const crewBlocks = useMemo(
     () => (crewsKey === '' ? [] : crewsKey.split('\n').map((members) => members.split(' ').map((id) => tileNodeId('agent', id)))),
@@ -583,18 +579,30 @@ function BoardView() {
   const [resumingExternal, setResumingExternal] = useState<{ session: ExternalSession; position?: { x: number; y: number } }>();
   const { flowToScreenPosition, getInternalNode, getNodes, getZoom, screenToFlowPosition, setViewport, updateNodeData } = useReactFlow<BoardNode>();
 
+  const container = useRef<HTMLDivElement>(null);
+  /**
+   * The parts of the view nothing is drawn over: clear of the side panels open over the board (the Captain's pane, Edge
+   * rules) and of the minimap and the zoom bar in its corner. Everything the board brings into view lands in one. With
+   * `boxed`, the corner chrome counts as one box (`boxedCorner`), as expanding a tile in place keeps clear of.
+   */
+  const clearView = useCallback(
+    (boxed = false) => {
+      const { width, height, domNode } = flowStore.getState();
+      const covered = domNode === null || container.current === null ? UNCOVERED : coveredView(domNode, container.current);
+      return clearRooms({ width, height }, boxed ? boxedCorner(covered) : covered);
+    },
+    [flowStore],
+  );
   /**
    * Brings a part of the board into view, zooming out if it must but never in. Not `fitView({ nodes })`: that waits for
    * the node to be measured, and a node off-screen is culled, so never measured, and the view jumps to the board's origin.
    */
   const bringIntoView = useCallback(
     (rect: Rect) => {
-      const { width, height, minZoom } = flowStore.getState();
-      void setViewport(getViewportForBounds(rect, width, height, minZoom, getZoom(), FIT_MARGIN), {
-        duration: motionDuration(tokenNumber('--motion-base')),
-      });
+      const { minZoom } = flowStore.getState();
+      void setViewport(fitView(rect, clearView(), minZoom, getZoom()), { duration: motionDuration(tokenNumber('--motion-base')) });
     },
-    [flowStore, setViewport, getZoom],
+    [flowStore, setViewport, getZoom, clearView],
   );
   /**
    * Flies the board to a part of it: centred, zoomed in to a size to read if the board is zoomed out past it, or out
@@ -602,12 +610,12 @@ function BoardView() {
    */
   const flyTo = useCallback(
     (rect: Rect) => {
-      const { width, height, minZoom } = flowStore.getState();
+      const { minZoom } = flowStore.getState();
       const duration = motionDuration(tokenNumber('--motion-base'));
-      void setViewport(getViewportForBounds(rect, width, height, minZoom, Math.max(getZoom(), READABLE_ZOOM), FIT_MARGIN), { duration });
+      void setViewport(fitView(rect, clearView(), minZoom, Math.max(getZoom(), READABLE_ZOOM)), { duration });
       return duration;
     },
-    [flowStore, setViewport, getZoom],
+    [flowStore, setViewport, getZoom, clearView],
   );
   /** The part of the board in view. */
   const viewRect = useCallback(() => {
@@ -615,15 +623,6 @@ function BoardView() {
     const [x, y, zoom] = transform;
     return { x: -x / zoom, y: -y / zoom, width: width / zoom, height: height / zoom };
   }, [flowStore]);
-  /** Whether a part of the board is wholly in the view now. */
-  const inView = useCallback(
-    (rect: Rect) => {
-      const view = viewRect();
-      return rect.x >= view.x && rect.y >= view.y && rect.x + rect.width <= view.x + view.width && rect.y + rect.height <= view.y + view.height;
-    },
-    [viewRect],
-  );
-  const container = useRef<HTMLDivElement>(null);
   /** Where the pointer last was over the board, in screen coordinates: where `N` puts a new note. */
   const pointer = useRef<{ x: number; y: number }>(undefined);
   /** The board's nodes as last rendered, for callbacks that run as a node goes, before React Flow has caught up. */
@@ -956,8 +955,14 @@ function BoardView() {
           const node = getInternalNode(nodeId);
           const entry = expandedRef.current.find((known) => known.id === nodeId);
           if (node === undefined || entry === undefined) return;
+          const { width, height, minZoom, transform, domNode } = flowStore.getState();
+          const [x, y, zoom] = transform;
           const rect = { ...node.internals.positionAbsolute, width: entry.width, height: entry.height };
-          if (!inView(rect)) bringIntoView(rect);
+          // Its footer holds its one ask: it opens clear of the minimap, the zoom bar and the side panels, not under them,
+          // nor under the toolbar.
+          const top = domNode === null || container.current === null ? 0 : topChrome(domNode, container.current);
+          const next = followView(rect, { x, y, zoom }, { width, height, minZoom }, clearView(true), top);
+          if (next !== undefined) void setViewport(next, { duration: motionDuration(tokenNumber('--motion-base')) });
         }, VIEW_FOLLOW_DELAY_MS);
       },
       // Its session window, maximised: an agent's or a shell tile's (an external session has none).
@@ -1175,7 +1180,7 @@ function BoardView() {
         }
       },
     }),
-    [openAgent, openShell, showWindow, poppedOut, popOut, deleteAgent, deleteShell, dismissExternal, askDelete, restartAgent, getNodes, getInternalNode, inView, bringIntoView, report, setNotice, history, nameOf, showZoneName, expand, bringTileToFront, collapse, setTicketView, sizeTile, setUnfolded, resizeExpandedTile, agentHeard, lifecycleOnce, dropStart, boardLevel.open],
+    [openAgent, openShell, showWindow, poppedOut, popOut, deleteAgent, deleteShell, dismissExternal, askDelete, restartAgent, getNodes, getInternalNode, flowStore, clearView, setViewport, report, setNotice, history, nameOf, showZoneName, expand, bringTileToFront, collapse, setTicketView, sizeTile, setUnfolded, resizeExpandedTile, agentHeard, lifecycleOnce, dropStart, boardLevel.open],
   );
 
   const restartBanner = useRestartBanner(agents, shells, tileActions);
@@ -1487,7 +1492,7 @@ function BoardView() {
   const itemLabel = useCallback(
     (id: string) => {
       const node = getNodes().find((known) => isItemNode(known) && known.data.item.id === id);
-      return node !== undefined && isItemNode(node) ? ITEM_KINDS[node.data.item.kind].label : 'item';
+      return node !== undefined && isItemNode(node) ? itemKind(node.data.item.kind).label : 'item';
     },
     [getNodes],
   );
@@ -1628,7 +1633,7 @@ function BoardView() {
           (made) => setNodes((current) => withItem(current, made)),
           (error: unknown) => {
             setNodes((current) => withoutItem(current, id));
-            report(`add the ${ITEM_KINDS[kind].label}`)(error);
+            report(`add the ${itemKind(kind).label}`)(error);
             throw error;
           },
         );
@@ -2327,9 +2332,8 @@ function BoardView() {
     for (const state of entries) {
       if (state?.type === 'item') {
         const { item } = state;
-        const { id, zoneId, x, y, width, height, z, rotation } = item;
-        // A data update merges: `restoredData` says what of the item's data goes back.
-        if (nodeIds.has(`${ITEM_NODE_PREFIX}${id}`)) itemActions.update({ id, zoneId, x, y, width, height, z, rotation, data: restoredData(item) });
+        // A data update merges: `restoredUpdate` says what of the item's data goes back.
+        if (nodeIds.has(`${ITEM_NODE_PREFIX}${item.id}`)) itemActions.update(restoredUpdate(item));
         else putItem(item);
       }
     }
@@ -3390,8 +3394,9 @@ function BoardView() {
   const shownFlowEdgeId = shownFlowEdge?.id;
   useEffect(() => {
     const edge = flowEdgesRef.current.find((known) => known.id === shownFlowEdgeId);
-    const board = flowStore.getState().domNode?.getBoundingClientRect();
-    if (edge === undefined || board === undefined) return;
+    const { domNode } = flowStore.getState();
+    if (edge === undefined || domNode === null || container.current === null) return;
+    const board = domNode.getBoundingClientRect();
     const ends = [edge.from, edge.to].map((id) => getInternalNode(tileNodeId('agent', id)));
     if (ends.some((node) => node === undefined)) return;
     const xs = ends.flatMap((node) => {
@@ -3399,8 +3404,7 @@ function BoardView() {
       return [flowToScreenPosition({ x, y }).x, flowToScreenPosition({ x: x + (node!.measured.width ?? 0), y }).x];
     });
     const inset = tokenNumber('--island-inset');
-    const panelLeft = board.right - inset - tokenNumber('--size-edge-rules');
-    const by = panClear({ left: Math.min(...xs) - board.left, right: Math.max(...xs) - board.left }, panelLeft - board.left, inset * 2);
+    const by = panClear({ left: Math.min(...xs) - board.left, right: Math.max(...xs) - board.left }, board.width, coveredView(domNode, container.current).right, inset * 2);
     if (by === 0) return;
     const [x, y, zoom] = flowStore.getState().transform;
     void setViewport({ x: x - by, y, zoom }, { duration: tokenNumber('--motion-base') });
@@ -3812,6 +3816,7 @@ function BoardView() {
             onArrangeBoard={arrangeBoard}
             onCrewLibrary={() => boardCommands.startCrew(null, null)}
             onTicket={() => setCrewFlow({ kind: 'ticket' })}
+            onCrew={(prefab) => boardCommands.startCrew(prefab, null)}
             onJump={(zone) => {
               // Where it is now: its node may have been moved or resized since the daemon sent it.
               const node = getNodes().filter(isZone).find((known) => known.id === zone.id);
@@ -4135,7 +4140,7 @@ function BoardView() {
 function minimapColor(node: Node): string {
   const boardNode = node as BoardNode;
   if (isZone(boardNode)) return boardNode.data.zone.color;
-  if (isItemNode(boardNode)) return ITEM_KINDS[boardNode.data.item.kind].minimapColor(boardNode.data.item.data);
+  if (isItemNode(boardNode)) return itemKind(boardNode.data.item.kind).minimapColor(boardNode.data.item.data);
   return 'var(--raised)';
 }
 

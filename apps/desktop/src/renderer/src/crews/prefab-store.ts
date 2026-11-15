@@ -50,8 +50,11 @@ export const currentPrefabs = (): readonly LibraryPrefab[] => library;
 /** Yours first, then the built-ins, each as the library lists them. */
 export const yoursFirst = (prefabs: readonly LibraryPrefab[]): LibraryPrefab[] => [...prefabs.filter((prefab) => !prefab.builtIn), ...prefabs.filter((prefab) => prefab.builtIn)];
 
-/** The library as a menu lists it, each group on its way, as last known: yours, then the built-ins, leaving out one that is empty. */
-export const crewGroups = (): LibraryPrefab[][] => [currentPrefabs().filter((prefab) => !prefab.builtIn), currentPrefabs().filter((prefab) => prefab.builtIn)].filter((group) => group.length > 0);
+/** Prefabs as a menu lists them, each group on its way: yours, then the built-ins, leaving out one that is empty. */
+export const prefabGroups = (prefabs: readonly LibraryPrefab[]): LibraryPrefab[][] => [prefabs.filter((prefab) => !prefab.builtIn), prefabs.filter((prefab) => prefab.builtIn)].filter((group) => group.length > 0);
+
+/** The heading over a group of `prefabGroups`. */
+export const prefabGroupHeading = (group: readonly LibraryPrefab[]): string => (group[0]?.builtIn === true ? 'Built in' : 'Your prefabs');
 
 const subscribe = (listener: () => void) => {
   follow();

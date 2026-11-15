@@ -6,6 +6,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { CLAUDE_HOOK_EVENTS } from './claude-state.ts';
 import { CODEX_HOOK_TIMEOUTS, shimCommand } from './hook-forwarder.ts';
+import { refuseUsersHomeUnlessInstalled, usersOwnHome } from './live-home.ts';
 import { isObject } from './json.ts';
 import { invalidParams, paramsObject } from './params.ts';
 import type { DaemonMethods, ExternalHooksStatus, Harness } from './protocol.ts';
@@ -195,6 +196,13 @@ export interface ExternalHooksOptions {
   shimPath: string;
   /** Makes sure the shim is there and runs this app; throws if it can't be written. */
   ensureHookShim(): void;
+  /**
+   * Whether this is the installed app. Any other build (a dev run, a test) changes no global hook file in the user's
+   * own home, which would point every hand-started session's hooks at a build that may soon be gone.
+   */
+  installedApp: boolean;
+  /** The user's own home, whatever `$HOME` says: `usersOwnHome()` by default. */
+  usersHome?: string;
 }
 
 const HARNESSES: readonly Harness[] = ['claude', 'codex'];
@@ -219,6 +227,7 @@ export function externalHooksHandlers<Context>(
       const enabled = paramsObject(params).enabled;
       if (typeof enabled !== 'boolean') throw invalidParams('enabled must be a boolean');
       try {
+        refuseUsersHomeUnlessInstalled(Object.values(hooks.files), hooks.installedApp, hooks.usersHome ?? usersOwnHome());
         if (enabled) {
           hooks.ensureHookShim();
           const done: Harness[] = [];

@@ -2,7 +2,7 @@ import { BrowserWindow, Notification } from 'electron';
 import type { DaemonLink } from '@agent-board/daemon/client';
 import { createAgentAlerts } from './alerts';
 import { createAppIcon } from './app-icon';
-import { backgroundMode } from './background';
+import { inBackgroundMode } from './background';
 import { answerBanner, bannerOf } from './banner';
 import { followAgents } from './follow-agents';
 import type { AppNotification } from './notifications-types';
@@ -64,9 +64,18 @@ function fakeNotifier(simplified: () => boolean): Notifier {
   };
 }
 
-/** The OS's notifications, drawn as the current design draws them (`simplified`), or with `AGENT_BOARD_FAKE_NOTIFICATIONS` set, as tests do, ones that are only recorded. */
-export function createNotifier(simplified: () => boolean): Notifier {
-  return process.env.AGENT_BOARD_FAKE_NOTIFICATIONS ? fakeNotifier(simplified) : osNotifier(simplified);
+/**
+ * The OS's notifications, drawn as the current design draws them (`simplified`), or with `AGENT_BOARD_FAKE_NOTIFICATIONS`
+ * set, as tests do, ones that are only recorded. That variable counts only when the run honours test overrides
+ * (`testOverrides`, from `honoursTestOverrides`).
+ */
+export function createNotifier(simplified: () => boolean, testOverrides: boolean): Notifier {
+  return isFake(testOverrides) ? fakeNotifier(simplified) : osNotifier(simplified);
+}
+
+/** Whether notifications go to the fake notifier rather than the OS. */
+export function isFake(testOverrides: boolean): boolean {
+  return testOverrides && Boolean(process.env.AGENT_BOARD_FAKE_NOTIFICATIONS);
 }
 
 /**
@@ -82,7 +91,7 @@ export function registerNotifications(
   simplified: () => boolean,
 ): () => void {
   // Not in e2e runs (background mode): a test's app would leave an icon in the developer's menu bar.
-  const appIcon = createAppIcon({ menuBar: !backgroundMode, onClick: openBoard });
+  const appIcon = createAppIcon({ menuBar: !inBackgroundMode(), onClick: openBoard });
   const alerts = createAgentAlerts({
     notify: (notification) =>
       notify(

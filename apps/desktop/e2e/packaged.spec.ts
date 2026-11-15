@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { linuxProgram, packagedExecutable } from './packaged-app.ts';
 import { test, BACKGROUND_ENV, connectedDaemonPid, removeDataDir, tempDataDir } from './launch.ts';
 
-test('the packaged app launches, starts its own daemon, runs a shell session in a PTY, and ignores demo mode', async () => {
+test('the packaged app launches, starts its own daemon, runs a shell session in a PTY, ignores demo mode, and denies browser permissions', async () => {
   // `PACKAGED_EXECUTABLE` points it at an installed copy instead, such as a .deb's `/opt/agent-board/agent-board`. It
   // has no `AGENT_BOARD_` prefix because the run's setup drops those (scrubBoardEnv).
   const executable = process.env.PACKAGED_EXECUTABLE ?? packagedExecutable(fileURLToPath(new URL('..', import.meta.url)));
@@ -35,6 +35,8 @@ test('the packaged app launches, starts its own daemon, runs a shell session in 
     expect(await window.evaluate(() => 'demo' in document.documentElement.dataset)).toBe(false);
     expect(await window.evaluate(() => self.__demo)).toBeUndefined();
     expect(await app.evaluate(() => 'agentBoardDemo' in globalThis)).toBe(false);
+    // The board's session grants no browser permission it doesn't need: the check handler answers permissions.query.
+    expect(await window.evaluate(() => navigator.permissions.query({ name: 'geolocation' }).then((status) => status.state))).toBe('denied');
 
     // The daemon is the packaged executable run as Node, and node-pty loads in it.
     // Linux's `ps` cuts the command name to 15 characters, so ask /proc there.

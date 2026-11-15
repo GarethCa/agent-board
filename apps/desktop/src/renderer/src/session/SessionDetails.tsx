@@ -1,45 +1,30 @@
 import { useEffect, useState } from 'react';
-import { neighbourOf, paneIds } from '@agent-board/daemon/pane-layout';
-import { INTERRUPT_KEY, roleLabel, shortIssueId, TRACKER_PROVIDERS, type Agent, type ExternalSession, type PullRequest, type Shell, type SplitDirection } from '@agent-board/daemon/protocol';
-import type { Surface } from '@agent-board/daemon/window-layout';
-import { ClipboardList, Copy, FileText, FolderOpen, Globe, PanelLeftClose, PanelLeftOpen, RotateCw, StickyNote } from 'lucide-react';
-import { clockBadge } from '../board/schedule';
-import { checksLabel } from '../board/tile-footer';
-import { agentSetupLine, branchLine } from '../board/AgentSetup';
-import { useNow } from '../inbox/use-now';
-import { shortWhen } from '../when';
+import { paneIds } from '@agent-board/daemon/pane-layout';
+import { INTERRUPT_KEY, type Agent, type ExternalSession, type Shell, type SplitDirection } from '@agent-board/daemon/protocol';
+import { Copy, FolderOpen, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { errorMessage } from '../../../shared/errors';
 import { keyText } from '../keys/registry';
 import { STATE_LABELS } from '../states';
-import { Button, Chip, ErrorText, Hint, IconButton, Kbd, PanelRow, Section, StatusPill } from '../ui';
-import { gateBadge, shortCommit } from '@agent-board/daemon/gate-rules';
-import { useGateRun } from '../gate/GatesProvider';
-import { gated } from '../gate/gate-view';
-import { requestTab } from './tab-request';
-import { docName, docSurfaceOf, documentSurfaceOf, gateSurfaceOf, planSurfaceOf } from './tabs';
-import { crewSection, docSection, documentSection, pinSection, pullRequestSection, sectionCount, subagentSection } from './sidebar-records';
-import { useCrewAgents } from './use-live-board';
-import { pinOpener, recordedWhen, RecordList, useRecordDeletes } from './RecordList';
-import { runGateShortcut } from './window-keys';
+import { Button, Hint, IconButton, Kbd, PanelRow, Section, StatusPill } from '../ui';
 import { useAction } from '../use-action';
+import { closePane } from './close-pane';
 import { sessionControls, type Control, type ControlId } from './controls';
 import { useDetailsWidth } from './DetailsHandle';
 import { CONTROL_ICONS, PANE_ICONS, SectionIcon, type SectionId } from './details-icons';
 import { paneLabel } from '../board/rename';
-import { insideWorktree, tildify, useLiveFolder } from './live-folder';
+import { tildify, useLiveFolder } from './live-folder';
 import { panesLabel } from './panes';
 
 export interface SessionDetailsProps {
   /** The session the controls act on; none while a shell tile is still being listed. */
   sessionId: string | undefined;
-  agent?: Agent;
   /** A session started outside the app: only what its hooks reported, and no controls (it has no terminal here). */
   external?: ExternalSession;
   shell?: Shell;
-  /** For the tab showing, an agent's or a shell tile's: the focused pane, and how to focus another (e.g. a new one). */
+  /** For the tab showing, a shell tile's: the focused pane, and how to focus another (e.g. a new one). */
   focusedPane?: string;
   onFocusPane?(sessionId: string): void;
-  /** Splits the tab's focused pane: an agent's own tab the daemon keeps only once it is split. */
+  /** Splits the tab's focused pane. */
   onSplit?(direction: SplitDirection): void;
   live: boolean;
   /** Says why a control failed, or clears that with undefined when the next one starts. Must be stable. */
@@ -47,25 +32,16 @@ export interface SessionDetailsProps {
   /** Whether it is collapsed to an icon rail, and how to change that (⌘I). */
   collapsed: boolean;
   onCollapsed(collapsed: boolean): void;
-  /** Opens a link in the OS browser: an issue, or a pull request with no PR tab to open. */
-  onOpenLink(url: string): void;
-  /** Opens one of the agent's pull requests in a PR tab. */
-  onOpenPullRequest?(pr: Pick<PullRequest, 'url'>): void;
-  /** Shows a surface as a tab of the window: a hand-off doc, a document, or an agent of its crew. */
-  onOpenSurface?(surface: Surface): void;
-  /** Shows a link in a web tab of the window: a pinned one. */
-  onOpenWeb?(url: string): void;
 }
 
 /**
- * The session window's details, on its LEFT (V and W): a strip of sections (controls, a shell's panes, the agent's
- * issue, worktree, pull requests, crew, hand-off docs, documents, pins, subagents and schedule) in the board menu's
- * section style, or the same collapsed to an icon rail, whose actions act and whose facts open the strip at their section.
+ * The details strip, on the LEFT of a session window that shows no agent's shelves (a shell's, a session not listed as
+ * an agent, one started outside the app): its controls, a shell's panes and live folder, or what an outside session's
+ * hooks reported, in the board menu's section style, or the same collapsed to an icon rail, whose actions act and whose
+ * facts open the strip at their section. An agent's window has its shelves instead.
  */
 export function SessionDetails(props: SessionDetailsProps) {
-  const { sessionId, agent, external, shell, focusedPane, onFocusPane, onSplit, live, onProblem, collapsed, onCollapsed, onOpenLink, onOpenPullRequest, onOpenSurface, onOpenWeb } = props;
-  // In an agent's window, the agent's own pane, unless a shell pane in one of its tabs has the keyboard.
-  const agentFocused = agent !== undefined && (focusedPane === undefined || focusedPane === agent.sessionId);
+  const { sessionId, external, shell, focusedPane, onFocusPane, onSplit, live, onProblem, collapsed, onCollapsed } = props;
   const width = useDetailsWidth();
   const { busy, error, run } = useAction();
   useEffect(() => onProblem(error), [error, onProblem]);
@@ -74,24 +50,17 @@ export function SessionDetails(props: SessionDetailsProps) {
 
   const act = (id: ControlId) => {
     if (sessionId === undefined) return;
-    run(controlAction(id, sessionId, agent));
+    run(controlAction(id, sessionId, undefined));
   };
-  const controls = external ? [] : sessionControls({ agent, live });
-  const closePane = () => {
+  const controls = external ? [] : sessionControls({ agent: undefined, live });
+  const closeFocusedPane = () => {
     if (shell === undefined || focusedPane === undefined) return;
-    const neighbour = neighbourOf(shell.layout, focusedPane);
-    run(async () => {
-      await window.agentBoard.shells.closePane(shell.id, focusedPane).catch((failure: unknown) => {
-        throw new Error(`could not close the pane: ${errorMessage(failure)}`);
-      });
-      if (neighbour !== undefined) onFocusPane?.(neighbour);
-    });
+    run(() => closePane(shell, focusedPane, onFocusPane));
   };
   const paneActions = onSplit !== undefined && [
     { label: 'Split horizontally', icon: PANE_ICONS.splitHorizontally, hint: 'Split inside the tab: a shell beside the focused pane', onClick: () => onSplit('horizontal') },
     { label: 'Split vertically', icon: PANE_ICONS.splitVertically, hint: 'Split inside the tab: a shell below the focused pane', onClick: () => onSplit('vertical') },
-    // The agent's own pane is closed by nothing: Stop and Delete end the agent.
-    ...(shell && !agentFocused ? [{ label: 'Close pane', icon: PANE_ICONS.closePane, hint: 'Close the focused pane, ending its shell', onClick: closePane }] : []),
+    ...(shell ? [{ label: 'Close pane', icon: PANE_ICONS.closePane, hint: 'Close the focused pane, ending its shell', onClick: closeFocusedPane }] : []),
   ];
   const open = (section: SectionId) => {
     setReveal(section);
@@ -119,21 +88,6 @@ export function SessionDetails(props: SessionDetailsProps) {
           paneActions.map((action) => (
             <IconButton key={action.label} icon={action.icon} aria-label={action.label} tooltip={action.hint} disabled={busy} onClick={action.onClick} />
           ))}
-        {agent && (
-          <>
-            <span className="details-rail-separator" aria-hidden />
-            {fact('issue', agent.issue ? `Issue ${agent.issue.id}` : 'Issue')}
-            {fact('worktree', 'Worktree and branch')}
-            {fact('pulls', pullsLabel(agent))}
-            {gated(agent) && fact('gate', 'Merge gate')}
-            {fact('crew', 'Crew')}
-            {fact('docs', 'Hand-off docs')}
-            {fact('documents', 'Documents')}
-            {fact('pins', 'Pins')}
-            {fact('subagents', subagentsLabel(agent))}
-            {fact('schedule', 'Schedule')}
-          </>
-        )}
         {external && (
           <>
             {fact('status', 'Status file')}
@@ -179,24 +133,11 @@ export function SessionDetails(props: SessionDetailsProps) {
           )}
         </nav>
         )}
-        {(shell || agent) && (
+        {shell && (
           <LiveFolder
-            // An ended agent's pane is the shell it dropped into, while that runs.
-            sessionId={agentFocused ? (agent.shellSessionId ?? sessionId) : focusedPane}
-            worktree={agent?.worktree}
-            fallback={agentFocused ? agent.cwd : focusedPane === undefined ? undefined : shell?.paneFolders[focusedPane]}
-            pane={!agentFocused && shell && paneIds(shell.layout).length > 1 && focusedPane !== undefined ? (paneLabel(shell, focusedPane) ?? shell.name) : undefined}
-            onProblem={onProblem}
-          />
-        )}
-        {agent && (
-          <AgentSections
-            agent={agent}
-            sectionProps={sectionProps}
-            onOpenLink={onOpenLink}
-            onOpenPullRequest={onOpenPullRequest ?? ((pr) => onOpenLink(pr.url))}
-            onOpenSurface={onOpenSurface}
-            onOpenWeb={onOpenWeb ?? onOpenLink}
+            sessionId={focusedPane}
+            fallback={focusedPane === undefined ? undefined : shell.paneFolders[focusedPane]}
+            pane={paneIds(shell.layout).length > 1 && focusedPane !== undefined ? (paneLabel(shell, focusedPane) ?? shell.name) : undefined}
             onProblem={onProblem}
           />
         )}
@@ -215,19 +156,14 @@ export function useHomeDir(): string | undefined {
   return home;
 }
 
-/**
- * The focused pane's folder now, following `cd` and the focus; for an agent beside its fixed worktree, with a
- * hint when it has left that. Copyable, and opens in the file manager.
- */
+/** The focused pane's folder now, following `cd` and the focus. Copyable, and opens in the file manager. */
 function LiveFolder({
   sessionId,
-  worktree,
   fallback,
   pane,
   onProblem,
 }: {
   sessionId: string | undefined;
-  worktree: string | undefined;
   /** What to show until the first lookup answers: where it started, or was last seen. */
   fallback: string | undefined;
   pane: string | undefined;
@@ -235,7 +171,6 @@ function LiveFolder({
 }) {
   const folder = useLiveFolder(sessionId) ?? fallback;
   const home = useHomeDir();
-  const outside = folder !== undefined && worktree !== undefined && !insideWorktree(folder, worktree);
   return (
     <Section label="Folder (live)" icon={<SectionIcon id="worktree" />} meta={pane}>
       {folder === undefined ? (
@@ -245,9 +180,6 @@ function LiveFolder({
           <p className="details-mono" data-testid="details-folder" title={folder}>
             {tildify(folder, home)}
           </p>
-          {outside && (
-            <Hint data-testid="details-outside-worktree">Outside its worktree</Hint>
-          )}
           <div className="details-folder-actions">
             <IconButton
               icon={<Copy />}
@@ -266,243 +198,6 @@ function LiveFolder({
           </div>
         </>
       )}
-    </Section>
-  );
-}
-
-function AgentSections({
-  agent,
-  sectionProps,
-  onOpenLink,
-  onOpenPullRequest,
-  onOpenSurface,
-  onOpenWeb,
-  onProblem,
-}: {
-  agent: Agent;
-  sectionProps(id: SectionId): { open?: boolean; onOpenChange?(open: boolean): void };
-  onOpenLink(url: string): void;
-  onOpenPullRequest(pr: Pick<PullRequest, 'url'>): void;
-  onOpenSurface: ((surface: Surface) => void) | undefined;
-  onOpenWeb(url: string): void;
-  onProblem(problem: string | undefined): void;
-}) {
-  const { issue, schedule } = agent;
-  const now = useNow(schedule !== null);
-  const badge = schedule && clockBadge(schedule, agent.endedAt !== null, new Date(now));
-  const crewAgentList = useCrewAgents(
-    agent.sessionId,
-    agent.records.filter((record) => record.kind === 'crew').map((record) => record.key),
-  );
-  const records = useRecordDeletes(agent.sessionId, onProblem);
-  const pulls = pullRequestSection(agent, records.fading);
-  const crew = crewSection(agent, crewAgentList ?? [], records.fading);
-  const docs = docSection(agent, records.fading);
-  const documents = documentSection(agent);
-  const pins = pinSection(agent, records.fading);
-  const openPin = pinOpener(agent.sessionId, {
-    openWeb: onOpenWeb,
-    openSurface: onOpenSurface,
-    revealFile: (path) => void window.agentBoard.sessions.revealFile(path).catch((error: unknown) => onProblem(`could not show the file: ${errorMessage(error)}`)),
-  });
-  const subagents = subagentSection(agent);
-  return (
-    <>
-      <Section label="Issue" icon={<SectionIcon id="issue" />} meta={issue === null ? 'None' : TRACKER_PROVIDERS[issue.provider].name} {...sectionProps('issue')}>
-        {issue === null ? (
-          <Hint>No linked issue. Link one from its tile&rsquo;s More menu.</Hint>
-        ) : (
-          <div className="details-issue">
-            <Chip tone="accent" mono title={`Open ${issue.id} in ${TRACKER_PROVIDERS[issue.provider].name}`} onClick={() => onOpenLink(issue.url)}>
-              {shortIssueId(issue)}
-            </Chip>
-            <span className="details-issue-title">{issue.title}</span>
-          </div>
-        )}
-      </Section>
-      <Section label="Last message" meta={agent.lastMessage ? undefined : 'None'}>
-        {agent.lastMessage ? (
-          <p className="details-message" data-testid="details-last-message">
-            {agent.lastMessage}
-          </p>
-        ) : (
-          <Hint>It hasn&rsquo;t said anything yet.</Hint>
-        )}
-      </Section>
-      <Section label="Worktree and branch" icon={<SectionIcon id="worktree" />} meta={worktreeName(agent.worktree)} {...sectionProps('worktree')}>
-        <p className="details-mono details-branch" title={branchLine(agent)}>
-          {branchLine(agent)}
-        </p>
-        {(agent.model !== null || agent.effort !== null || agent.role !== null) && <p className="details-soft">{agentSetupLine(agent)}</p>}
-        <p className="details-mono details-soft" title={agent.worktree}>
-          {agent.worktree}
-        </p>
-      </Section>
-      <Section label="PR and checks" icon={<SectionIcon id="pulls" />} meta={sectionCount(pulls.rows)} {...sectionProps('pulls')}>
-        <RecordList
-          section={pulls}
-          empty="No pull request from it yet."
-          records={records}
-          what={(row) => `#${row.item.number}`}
-          row={(each) => ({
-            name: `#${each.item.number}${each.item.title === null ? '' : ` ${each.item.title}`}`,
-            meta: [each.item.pr && `${each.item.pr.state} · ${checksLabel(each.item.pr)}`, recordedWhen(each)].filter(Boolean).join(' · '),
-            mark: <SectionIcon id="pulls" className="details-row-icon" />,
-            title: 'Open it in a PR tab',
-            onClick: () => onOpenPullRequest(each.item),
-          })}
-        />
-      </Section>
-      {gated(agent) && <GateSection agent={agent} sectionProps={sectionProps} />}
-      <Section label="Crew" icon={<SectionIcon id="crew" />} meta={sectionCount(crew.rows)} {...sectionProps('crew')}>
-        <RecordList
-          section={crew}
-          empty="It hasn’t started any agents."
-          records={records}
-          what={(row) => row.item.name}
-          row={({ item }) => ({
-            name: item.name,
-            meta: [roleLabel(item), item.endedAt === null ? STATE_LABELS[item.state].toLowerCase() : 'done'].filter(Boolean).join(' · '),
-            mark: <SectionIcon id="crew" className="details-row-icon" />,
-            end: <StatusPill state={item.endedAt === null ? item.state : 'done'} />,
-            title: 'Show it in a tab here',
-            onClick: onOpenSurface && (() => onOpenSurface({ kind: 'session', target: { kind: 'agent', id: item.sessionId } })),
-          })}
-        />
-      </Section>
-      <Section label="Hand-off docs" icon={<SectionIcon id="docs" />} meta={sectionCount(docs.rows)} {...sectionProps('docs')}>
-        <RecordList
-          section={docs}
-          empty="No hand-off docs yet."
-          records={records}
-          what={(row) => docName(row.item.path)}
-          row={(each) => ({
-            name: docName(each.item.path),
-            meta: [each.item.from === null ? 'its own' : `from ${each.item.from.name}, for this orchestrator`, recordedWhen(each)].filter(Boolean).join(' · '),
-            guess: 'its worktree’s handover',
-            mark: <SectionIcon id="docs" className="details-row-icon" />,
-            title: `${each.item.path}: opens in a Doc tab`,
-            onClick: onOpenSurface && (() => onOpenSurface(docSurfaceOf(agent.sessionId, each.item.path))),
-          })}
-        />
-      </Section>
-      <Section label="Documents" icon={<SectionIcon id="documents" />} meta={documents.length === 0 ? 'None' : String(documents.length)} {...sectionProps('documents')}>
-        {documents.length === 0 ? (
-          <Hint>It hasn&rsquo;t shown you a document.</Hint>
-        ) : (
-          <ul className="details-list">
-            {documents.map((row) => (
-              <li key={row.key} data-testid="details-document">
-                <PanelRow
-                  as={onOpenSurface ? 'button' : 'div'}
-                  title={row.kind === 'plan' ? 'Open its Plan tab' : `${row.document.path}: opens in its Document tab`}
-                  onClick={onOpenSurface && (() => onOpenSurface(row.kind === 'plan' ? planSurfaceOf(agent.sessionId) : documentSurfaceOf(row.document)))}
-                  mark={row.kind === 'plan' ? <ClipboardList className="details-row-icon" /> : <SectionIcon id="documents" className="details-row-icon" />}
-                  name={row.name}
-                  meta={[row.kind === 'plan' ? 'plan' : undefined, `v${row.version}`, `shown ${shortWhen(row.at)}`].filter(Boolean).join(' · ')}
-                />
-              </li>
-            ))}
-          </ul>
-        )}
-      </Section>
-      <Section label="Pins" icon={<SectionIcon id="pins" />} meta={sectionCount(pins.rows)} {...sectionProps('pins')}>
-        <RecordList
-          section={pins}
-          empty="Nothing pinned. An agent pins what it wants you to see."
-          records={records}
-          what={(row) => row.item.name}
-          row={(each) => {
-            const { target, from } = each.item;
-            const pinnedBy = from === null ? undefined : `from ${from.name}`;
-            return {
-              name: each.item.name,
-              meta:
-                target.kind === 'note' ? (
-                  <span className="details-pin-note">{target.text}</span>
-                ) : (
-                  [pinnedBy, recordedWhen(each)].filter(Boolean).join(' · ')
-                ),
-              mark: target.kind === 'note' ? <StickyNote className="details-row-icon" /> : target.kind === 'link' ? <Globe className="details-row-icon" /> : <FileText className="details-row-icon" />,
-              title: target.kind === 'note' ? target.text : target.kind === 'link' ? `${target.url}: opens in a web tab` : `${target.path}: ${each.item.opens === 'doc' ? 'opens in a Doc tab' : 'shows it in its folder'}`,
-              onClick: openPin(each.item),
-              testId: 'details-pin',
-            };
-          }}
-        />
-      </Section>
-      <Section label="Subagents" icon={<SectionIcon id="subagents" />} meta={sectionCount(subagents.rows)} {...sectionProps('subagents')}>
-        <RecordList
-          section={subagents}
-          empty="None"
-          records={records}
-          what={(row) => row.item.type}
-          row={({ item }) => ({
-            name: item.type,
-            guess: 'from hooks',
-            mark: <SectionIcon id="subagents" className="details-row-icon" />,
-            end: <StatusPill state={item.state} label={STATE_LABELS[item.state]} />,
-            title: item.result ?? undefined,
-            testId: 'session-subagent',
-          })}
-        />
-      </Section>
-      <Section label="Schedule" icon={<SectionIcon id="schedule" />} meta={badge === null ? 'None' : badge.label} defaultOpen={false} {...sectionProps('schedule')}>
-        {schedule === null ? (
-          <Hint>Runs only when you message it. Schedule it from its tile&rsquo;s More menu.</Hint>
-        ) : (
-          <>
-            <p className="details-mono">{schedule.cron}</p>
-            <Hint>{badge?.title}</Hint>
-          </>
-        )}
-      </Section>
-    </>
-  );
-}
-
-/**
- * The agent's merge gate: its last run in a word, on which commit, and Run gate, which shows the run in a
- * Gate tab in the focused pane, as the tile's badge and ⌘⇧G do.
- */
-function GateSection({ agent, sectionProps }: { agent: Agent; sectionProps(id: SectionId): { open?: boolean; onOpenChange?(open: boolean): void } }) {
-  const run = useGateRun(agent.sessionId);
-  const { busy, error, run: act } = useAction();
-  const openTab = () => requestTab(agent.sessionId, gateSurfaceOf(agent.sessionId));
-  return (
-    <Section label="Gate" icon={<SectionIcon id="gate" />} meta={run === undefined ? 'Not run' : gateBadge(run)} {...sectionProps('gate')}>
-      {run === undefined ? (
-        <Hint>Runs its zone&rsquo;s gate command in its worktree, only when you ask.</Hint>
-      ) : (
-        <PanelRow
-          as="button"
-          title="Open its Gate tab"
-          onClick={openTab}
-          mark={<SectionIcon id="gate" className="details-row-icon" />}
-          name={gateBadge(run)}
-          meta={`on ${shortCommit(run.commit)}`}
-          data-testid="details-gate"
-        />
-      )}
-      <div className="session-controls">
-        <Button
-          size="sm"
-          className="session-control"
-          icon={<RotateCw />}
-          disabled={busy || run?.status === 'running'}
-          title={`Run its zone's gate command in its worktree (${runGateShortcut()})`}
-          onClick={() =>
-            act(async () => {
-              openTab();
-              await window.agentBoard.gates.run(agent.sessionId);
-            })
-          }
-          data-testid="details-run-gate"
-        >
-          {run === undefined ? 'Run gate' : 'Run again'}
-        </Button>
-      </div>
-      {error !== undefined && <ErrorText>{error}</ErrorText>}
     </Section>
   );
 }
@@ -575,19 +270,10 @@ function ControlButton({ control, busy, onClick }: { control: Control; busy: boo
   );
 }
 
-/** The worktree's folder name, for its section's heading: the full path is under it. */
-const worktreeName = (worktree: string) => worktree.split('/').filter(Boolean).at(-1) ?? worktree;
-
 const paneCount = (layout: Shell['layout'] | undefined) => panesLabel(layout === undefined ? 1 : paneIds(layout).length);
 
-function pullsLabel(agent: Agent): string {
-  const failing = agent.pullRequests.filter((pr) => pr.checks === 'failing').length;
-  if (agent.pullRequests.length === 0) return 'Pull requests: none';
-  return `Pull requests: ${agent.pullRequests.length}${failing > 0 ? `, ${failing} failing` : ''}`;
-}
-
-function subagentsLabel(agent: Pick<Agent, 'subagents'>): string {
-  return agent.subagents.length === 0 ? 'Subagents: none' : `Subagents: ${agent.subagents.length}`;
+function subagentsLabel(session: Pick<ExternalSession, 'subagents'>): string {
+  return session.subagents.length === 0 ? 'Subagents: none' : `Subagents: ${session.subagents.length}`;
 }
 
 /**

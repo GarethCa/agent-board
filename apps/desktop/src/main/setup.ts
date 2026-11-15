@@ -6,7 +6,8 @@ import { installCli } from '@agent-board/daemon/cli-install';
 import type { SetupTool } from '@agent-board/daemon/protocol';
 import { MENU_BAR_IPC, MINIMISED_IPC, SETUP_IPC, type MinimisedWindow, type WindowTarget } from '../preload/api';
 import { revealWindow } from './background';
-import type { Notifier } from './notifications';
+import { isFake, type Notifier } from './notifications';
+import { honoursTestOverrides } from './test-overrides';
 import { menuTemplate, RELEASES_URL } from './app-menu';
 import type { FileSetting } from './file-setting';
 import type { Design } from '../shared/design';
@@ -22,14 +23,17 @@ export function registerSetupIpc(daemon: DaemonLink, notify: Notifier): void {
   ipcMain.handle(SETUP_IPC.check, (_event, tool: SetupTool) => daemon.call('setup.check', { tool }));
   ipcMain.handle(SETUP_IPC.testNotification, () => {
     // Tests' fake notifier stands in for the OS, so it is always "supported".
-    if (!process.env.AGENT_BOARD_FAKE_NOTIFICATIONS && !Notification.isSupported()) return { shown: false };
+    if (!isFake(honoursTestOverrides(app.isPackaged)) && !Notification.isSupported()) return { shown: false };
     notify({ title: 'Test notification', body: 'agent-board will tell you like this when an agent needs you.' }, () => {});
     return { shown: true };
   });
   ipcMain.handle(SETUP_IPC.installCli, async () => {
     const { cliPath } = await daemon.call('daemon.health');
     if (cliPath === null) throw new Error('the daemon has no agent-board command line to link');
-    return installCli(cliPath, join(homedir(), '.local', 'bin'));
+    // The daemon writes its launcher in ~/.agent-board/bin only when it counts as the installed app (live-home.ts), and
+    // in its own data dir otherwise: follow its decision, so a build run from a worktree or a temp folder links nothing.
+    const installedApp = !honoursTestOverrides(app.isPackaged) && cliPath === join(homedir(), '.agent-board', 'bin', 'agent-board');
+    return installCli(cliPath, join(homedir(), '.local', 'bin'), { installedApp });
   });
 }
 

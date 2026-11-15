@@ -7,7 +7,8 @@ import { chipLine } from './fold-zone';
 import { chipMenu } from './menu-model';
 import { ProjectSummaryContext } from './project-summary';
 import { StatusGlyph } from './StatusMark';
-import { ZoneBindingContext, type ZoneNodeType } from './ZoneNode';
+import { ZoneBindingContext } from './zone-contexts';
+import type { ZoneNodeType } from './ZoneNode';
 
 /** A zone header's Fold button, the same in both designs but for what each calls a zone. */
 export function FoldButton({ className, noun, onFold }: { className: string; noun: 'zone' | 'project'; onFold: () => void }) {

@@ -45,8 +45,6 @@ describe('the Settings window’s groups', () => {
       'characterMotion',
       'opensOn',
       'conversationAs',
-      // Added since, under Classic only: the Simplified design always has the simple sidebar.
-      'agentSidebar',
       // Added since, under Classic only: what an agent's tile shows at rest.
       'tileShows',
       // Added since: whether terminals draw with the GPU.
@@ -84,7 +82,6 @@ describe('the Settings window’s groups', () => {
     expect(home('characterMotion')).toBe('general.design');
     expect(home('todoLook')).toBe('general.design');
     expect(home('conversationAs')).toBe('agents.chat');
-    expect(home('agentSidebar')).toBe('agents.sidebar');
     expect(home('tethers')).toBe('board.connections');
   });
 

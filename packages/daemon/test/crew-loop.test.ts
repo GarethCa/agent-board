@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { SpawnUsed } from '../src/agent-spawns.ts';
 import { createCrewLoop, type CrewLoopOptions } from '../src/crew-loop.ts';
 import { migrate } from '../src/migrate.ts';
-import type { OrchestratorAccess } from '../src/orchestrators.ts';
+import type { OrchestratorAccess } from '../src/orchestrator-types.ts';
 import { MAX_CREW_CARD_TITLE, type Agent, type CrewPrefab, type PrefabMember, type SpawnAgentParams } from '../src/protocol.ts';
 import type { RunStart } from '../src/schedules.ts';
 

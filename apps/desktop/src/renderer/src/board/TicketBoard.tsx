@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
 import { ChevronLeft, ChevronRight, LayoutDashboard, MessageSquare, Ticket } from 'lucide-react';
-import { applyNodeChanges, PanOnScrollMode, ReactFlow, ReactFlowProvider, useNodesInitialized, useReactFlow, type Node, type NodeChange, type NodeProps, type NodeTypes } from '@xyflow/react';
+import { applyNodeChanges, PanOnScrollMode, ReactFlow, ReactFlowProvider, useNodesInitialized, useReactFlow, useStoreApi, type Node, type NodeChange, type NodeProps, type NodeTypes } from '@xyflow/react';
 import type { Agent, BoardItem, TicketBoardPlace } from '@agent-board/daemon/protocol';
 import { VIEW_KEYS } from '../../../shared/view-saver';
 import { useNeedsYouShows } from '../needs-you-setting';
@@ -13,7 +13,7 @@ import { Button, ContextMenu, Island } from '../ui';
 import { Composer } from '../session/Composer';
 import { BoardBackdrop } from './BoardBackdrop';
 import { patched } from './editing/use-history';
-import { ITEM_KINDS, ITEM_NODE_TYPES } from './items/kinds';
+import { itemKind, ITEM_KINDS, ITEM_NODE_TYPES } from './items/kinds';
 import { ItemActionsContext, isItemNode, withItem, withItemChange, withoutItem, type ItemActions, type ItemNodeType } from './items/items';
 import { withRotation } from './items/Rotatable';
 import { boardLevelFrom, MEMBER_PREFIX, MEMBER_SIZE, memberNodeId, memberPlaces, savedLevel, shownLevel, stillHeld, ticketMembers, type HeldPlace, type TicketBoardFocus } from './ticket-board';
@@ -24,6 +24,7 @@ import { TileActionsContext } from './tile';
 import { stopPropagation } from './tile-parts';
 import { pulseTile } from './tile-attention';
 import { motionDuration, tokenNumber } from '../theme';
+import { clearRooms, coveredView, fitView, UNCOVERED } from './view-follow';
 import { helperIcon, ticketFace, type HelperIcon, type TicketFace } from './ticket-tile';
 
 /**
@@ -102,7 +103,8 @@ export function TicketBoard(props: TicketBoardProps) {
 
 function TicketBoardShown({ chatId, agents, onLeave, onOpenAgent, onError, desk, focus, shownItems }: TicketBoardProps) {
   const shows = useNeedsYouShows();
-  const { screenToFlowPosition, fitView } = useReactFlow();
+  const { screenToFlowPosition, getInternalNode, setViewport } = useReactFlow();
+  const flowStore = useStoreApi();
   const members = useMemo(() => ticketMembers(chatId, agents), [chatId, agents]);
   const chat = members[0];
   const helpers = useMemo(() => members.slice(1), [members]);
@@ -185,9 +187,17 @@ function TicketBoardShown({ chatId, agents, onLeave, onOpenAgent, onError, desk,
     setMemberNodes((known) => (known.some(only) ? known.map((node) => ({ ...node, selected: node.id === focus.nodeId })) : known));
     setItems((known) => known && (known.some(only) ? known.map((node) => ({ ...node, selected: node.id === focus.nodeId })) : known));
     const duration = motionDuration(tokenNumber('--motion-base'));
-    void fitView({ nodes: [{ id: focus.nodeId }], maxZoom: 1, padding: FOCUS_MARGIN, duration });
+    // Clear of the side panels open over the board and of its minimap, as on the main board.
+    const node = getInternalNode(focus.nodeId);
+    const { width, height, minZoom, domNode } = flowStore.getState();
+    const { width: tileWidth, height: tileHeight } = node?.measured ?? {};
+    if (node !== undefined && tileWidth !== undefined && tileHeight !== undefined) {
+      const rect = { ...node.internals.positionAbsolute, width: tileWidth, height: tileHeight };
+      const rooms = clearRooms({ width, height }, domNode === null ? UNCOVERED : coveredView(domNode, domNode));
+      void setViewport(fitView(rect, rooms, minZoom, 1, FOCUS_MARGIN), { duration });
+    }
     pulseTile(focus.nodeId, duration);
-  }, [focus, focusHere, fitView]);
+  }, [focus, focusHere, getInternalNode, setViewport, flowStore]);
   const onNodesChange = useCallback((changes: NodeChange<TicketBoardNode>[]) => {
     const kept = changes.filter((change) => change.type !== 'remove' && change.type !== 'add' && change.type !== 'replace');
     const isMember = (change: NodeChange<TicketBoardNode>) => 'id' in change && change.id.startsWith(MEMBER_PREFIX);
@@ -201,7 +211,7 @@ function TicketBoardShown({ chatId, agents, onLeave, onOpenAgent, onError, desk,
         const known = itemsRef.current.find((node) => node.data.item.id === params.id);
         if (known === undefined) return;
         setItems((current) => current && withItem(current, patched(known.data.item, params)));
-        window.agentBoard.items.update(params).catch(onError(`save the ${ITEM_KINDS[known.data.item.kind].label}`));
+        window.agentBoard.items.update(params).catch(onError(`save the ${itemKind(known.data.item.kind).label}`));
       },
       remove(id) {
         setItems((current) => current && withoutItem(current, id));
@@ -370,7 +380,7 @@ function TicketBoardShown({ chatId, agents, onLeave, onOpenAgent, onError, desk,
 /** A node's colour on the ticket board's minimap: a note's own, a helper that needs you in the needs-you orange, else a tile's. */
 function minimapColor(node: Node): string {
   const shown = node as TicketBoardNode;
-  if (isItemNode(shown)) return ITEM_KINDS[shown.data.item.kind].minimapColor(shown.data.item.data);
+  if (isItemNode(shown)) return itemKind(shown.data.item.kind).minimapColor(shown.data.item.data);
   if (isMemberNode(shown) && shown.data.kind === 'helper' && shown.data.helper.state === 'you') return 'var(--state-waiting)';
   return 'var(--raised)';
 }

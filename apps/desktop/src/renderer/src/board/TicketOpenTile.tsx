@@ -155,6 +155,8 @@ function TicketOpenTileShown({ id, tile, parent, standIn }: TicketOpenTileProps)
               autoFocus={false}
               chatControlsSlot={null}
               compactControls
+              // The tile shows only the terminal or the chat: no shelves.
+              shelves={false}
               view={terminal ? 'terminal' : 'chat'}
             />
           )}

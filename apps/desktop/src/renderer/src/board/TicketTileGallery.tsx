@@ -280,3 +280,32 @@ export function TicketBoardGallery() {
     </div>
   );
 }
+
+/** A ticket's card opened in place with a new review: its footer offers Read, the one ask, as its card at rest does. */
+const OPENED_READ = chat('ticket-card-read', 'running', {
+  status: line('Builder is adding the retries.'),
+  pullRequests: watchedPr,
+  watch: watch({ reviews: tileOnly, checks: tileOnly }, { news: [news('reviews', 'sam requested changes', 'sam')], ask: 'new-review' }),
+});
+const OPENED_READ_HELPERS = crew('ticket-card-read', ['done', 'running', 'idle']);
+const OPENED_READ_VIEWS = { [`agent:${OPENED_READ.sessionId}`]: 'card' as const };
+
+/** A ticket's card opened in place, with a new review its one ask: Read in its footer. */
+export function TicketOpenReadGallery() {
+  return (
+    <ReactFlowProvider>
+      <TicketViewsContext value={OPENED_READ_VIEWS}>
+        <div className="tile-gallery" data-testid="ticket-open-read-gallery">
+          <div style={TICKET_TERMINAL_SIZE}>
+            <TicketOpenTile
+              id={`agent:${OPENED_READ.sessionId}`}
+              tile={{ label: OPENED_READ.name, harness: OPENED_READ.harness, agent: OPENED_READ, helpers: OPENED_READ_HELPERS, expanded: true }}
+              parent="board"
+              standIn={standIn}
+            />
+          </div>
+        </div>
+      </TicketViewsContext>
+    </ReactFlowProvider>
+  );
+}

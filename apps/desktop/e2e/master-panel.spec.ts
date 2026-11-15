@@ -1,5 +1,5 @@
 import { expect, type Locator, type Page } from '@playwright/test';
-import { agents, launch, listFinishedTurns, sessionWindow, showDetails, spawnAgent, tile, TURN_MS, useFullSidebar } from './agent-helpers.ts';
+import { agents, launch, listFinishedTurns, sessionWindow, spawnAgent, tile, TURN_MS } from './agent-helpers.ts';
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
 import { scratch } from './scratch.ts';
 import { crowdedPanel, intersecting, LONG, PATH, topRowMeets } from './master-helpers.ts';
@@ -171,21 +171,19 @@ test('the Captain’s panel pushes the board in: flush and full height, no tile 
   }
 });
 
-test('every agent’s details strip, which shares nothing with the Captain’s panel, never scrolls sideways either', async () => {
+test('every agent’s shelves, which share nothing with the Captain’s panel, never scrolls sideways either', async () => {
   const { repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env);
   try {
-    await useFullSidebar(window);
     await listFinishedTurns(window);
     await pickFolderNext(app, repo);
     await browseForZone(window);
     await spawnAgent(window, 'monorepo', `Pick a database in ${PATH}`, { name: LONG });
     await expect(tile(window).first()).toHaveAttribute('data-state', 'waiting', { timeout: TURN_MS });
     await tile(window).first().dblclick();
-    const strip = window.locator('.session-details');
+    const strip = sessionWindow(window).getByTestId('agent-shelves');
     await expect(strip).toBeVisible();
-    await showDetails(sessionWindow(window));
     const overflows = () =>
       strip.evaluate((root) => {
         const right = root.getBoundingClientRect().right;
@@ -234,6 +232,57 @@ test('dragged as wide as it goes, the Captain’s panel leaves the zones pill, t
     await drag(window, window.getByTestId('master-panel-handle'), -2000, 0);
     await expect.poll(() => widthOf(window)).toBeGreaterThanOrEqual(280);
     await row('the widest panel, with Edge rules open');
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+  }
+});
+
+test('with the Captain’s panel over the board, opening Edge rules pans both tiles of the edge left of the rules', async () => {
+  test.setTimeout(150_000);
+  const { repo, env } = scratch('waiting');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, env);
+  try {
+    await listFinishedTurns(window);
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await spawnAgent(window, 'monorepo', 'Pick a database');
+    await spawnAgent(window, 'monorepo', 'Tidy the tokens');
+    // Open the pane and zoom out while the window is wide: narrowed to 1000 px the pane lies over the board and over the zoom bar.
+    if ((await panelOf(window).count()) === 0) await window.getByTestId('master-button').click();
+    await expect(panelOf(window)).toBeVisible();
+    const [first, second] = (await agents(window)).filter((agent) => !agent.master).map((agent) => agent.sessionId);
+    const tilesOf = () => Promise.all([first, second].map((id) => window.locator(`.react-flow__node[data-id="agent:${id}"]`).boundingBox()));
+    const spanOf = async () => {
+      const boxes = (await tilesOf()).filter((box) => box !== null);
+      return Math.max(...boxes.map((box) => box.x + box.width)) - Math.min(...boxes.map((box) => box.x));
+    };
+    // Both tiles must fit left of the rules, which sit left of the pane. The rules are about 400 px across with their gap; the
+    // rest is the pan's margin each side and the board's offset. The pane keeps its width when the window narrows.
+    const NARROW = 1000;
+    const room = NARROW - (await widthOf(window)) - 400 - 80;
+    const viewport = window.locator('.react-flow__viewport');
+    for (let step = 0; step < 8 && (await spanOf()) > room; step += 1) {
+      const before = await viewport.getAttribute('style');
+      await window.getByRole('button', { name: 'Zoom out' }).click();
+      await expect(viewport).not.toHaveAttribute('style', before!);
+    }
+    expect(await spanOf()).toBeLessThanOrEqual(room);
+    await window.setViewportSize({ width: NARROW, height: 800 });
+    await expect(panelOf(window)).toHaveAttribute('data-mode', 'cover');
+    await window.evaluate(([from, to]) => globalThis.window.agentBoard.flowEdges.create({ from: from!, to: to! }), [first, second] as const);
+    await window.getByTestId('flow-edge').first().click({ force: true });
+    const rules = window.getByRole('complementary', { name: 'Edge rules' });
+    await expect(rules).toBeVisible();
+    // The pan is animated: once it settles, neither end of the edge reaches the rules' left side (the pane lies further right).
+    const rulesLeft = (await rules.boundingBox())!.x;
+    await expect
+      .poll(async () => {
+        const boxes = await tilesOf();
+        return boxes.every((box) => box !== null && box.x + box.width <= rulesLeft);
+      })
+      .toBe(true);
   } finally {
     await app.close();
     await removeDataDir(dataDir);

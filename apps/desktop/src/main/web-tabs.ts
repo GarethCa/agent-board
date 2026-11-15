@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, session as sessions, WebContentsView, type
 import type { PageInput } from './page-keys';
 import { isWebTabUrl, WEB_TAB_RULE } from '@agent-board/daemon/web-url';
 import { WEB_TAB_IPC, type FindResult, type WebTabBounds, type WebTabKey, type WebTabState } from '../preload/api';
-import { headless } from './background';
+import { isHeadless } from './background';
 import { openWebLink, openWebTabLink } from './links';
 import { addressRowHold } from './web-address-hold';
 import { takesKeyboard, webKey } from './web-keys';
@@ -343,7 +343,7 @@ export function registerWebTabIpc({
         // Nor dictionaries fetched for it from the web.
         spellcheck: false,
         // Tests paint every window offscreen (main/background.ts), and its pages with it.
-        offscreen: headless,
+        offscreen: isHeadless(),
       },
     });
     window.contentView.addChildView(view);

@@ -55,7 +55,7 @@ describe('the overview’s threads', () => {
       agent({ name: 'pay-806', state: 'idle', pullRequests: [pr(231, 'open')], lastMessage: 'PR #231 is up.\nChecks are green.' }),
     ]);
     expect(own).toMatchObject({ name: 'pay-790', category: 'waiting-on-others', chip: 'Waiting on others', source: 'agent', line: 'Scope doc drafted', waitingOn: { who: 'Security team', ref: 'scope sign-off' }, since: '2026-11-08T10:00:00.000Z' });
-    expect(guessed).toMatchObject({ category: 'ready-for-review', source: 'board', line: 'PR #231 is up.', why: 'PR #231 open, no reviewer yet', pr: '#231' });
+    expect(guessed).toMatchObject({ category: 'ready-for-review', source: 'board', line: 'PR #231 is up.', why: 'PR #231 open, no review requested', pr: '#231' });
   });
 
   it('leaves the line empty rather than use the board’s reason, which stays for the tooltip', () => {

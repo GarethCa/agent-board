@@ -10,6 +10,7 @@ import { agentTarget, boardCaller, sessionCaller, type ActivityLogger, type Boar
 import type { FlowEdgeHost } from './flow-edges.ts';
 import { runGit } from './git.ts';
 import { checkedBranchName, localBaseBranch } from './worktrees.ts';
+import type { ActivityEntry, Orchestrator, OrchestratorAccess } from './orchestrator-types.ts';
 import { chainUp } from './crew-chain.ts';
 import { createCrewEventLog, type LoggedEvent } from './crew-events.ts';
 import { refOf } from './crew-flags.ts';
@@ -159,16 +160,6 @@ const LOGGED_METHODS: Partial<Record<DaemonMethod, OrchestratorAction>> = {
 };
 
 /**
- * Who acts through an orchestrator method: an agent, or the user's side, a shell or the user with no token,
- * which reaches every agent.
- */
-export interface Orchestrator extends Pick<Agent, 'sessionId' | 'name' | 'zoneId' | 'repoRoot'> {
-  /** The orchestrator agent; null on the user's side, whose agents and edges are the user's own. */
-  agent: Agent | null;
-}
-
-/** The user with no token, as the log keeps it. */
-/**
  * The one agent whose branch `reviewer` reviews: in the same repo (two repos may share a branch name), on that branch,
  * and no reviewer itself. Undefined when none, or several, own it.
  */
@@ -181,6 +172,7 @@ export function reviewedAgent(all: readonly Agent[], reviewer: Agent): Agent | u
   return owners.length === 1 ? owners[0] : undefined;
 }
 
+/** The user with no token, as the log keeps it. */
 const THE_USER: Orchestrator = { sessionId: 'user', name: 'you', zoneId: null, repoRoot: '', agent: null };
 
 /**
@@ -203,7 +195,7 @@ export interface OrchestratorHostOptions extends BoardCallerSources {
   db: DatabaseSync;
   agents: Pick<
     AgentHost,
-    'get' | 'list' | 'announce' | 'handCrew' | 'removedOrchestrator' | 'fallbackOwner' | 'spawn' | 'answer' | 'interrupt' | 'setEffort' | 'setRole' | 'roleTemplate' | 'continueOnCredits' | 'resume' | 'stop' | 'pause' | 'finalMessage' | 'waitsAtPrompt' | 'setStatus' | 'clearFlag' | 'sendUnsent' | 'clearUnsent' | 'queueAfterTurn' | 'dropNotices' | 'deliverAfterTurn'
+    'get' | 'list' | 'announce' | 'handCrew' | 'removedOrchestrator' | 'fallbackOwner' | 'spawn' | 'answer' | 'interrupt' | 'setEffort' | 'setRole' | 'roleTemplate' | 'continueOnCredits' | 'resume' | 'stop' | 'pause' | 'finalMessage' | 'waitsAtPrompt' | 'setStatus' | 'clearFlag' | 'sendUnsent' | 'clearUnsent' | 'queueAfterTurn' | 'dropNotices' | 'deliverAfterTurn' | 'userTyping'
   >;
   zones: () => Zone[];
   flowEdges: Pick<FlowEdgeHost, 'create' | 'get' | 'link' | 'remove'>;
@@ -227,31 +219,6 @@ export interface OrchestratorHostOptions extends BoardCallerSources {
   crewReview?: (sessionId: string) => { round: number; previous: string | null } | undefined;
   broadcast(event: DaemonEvent): void;
   log(message: string): void;
-}
-
-/** What a log line says beyond who and what: what it acted on (an agent, or a tile, zone or note), and what was asked. */
-export interface ActivityEntry {
-  /** An agent's session id, or a tile's, zone's or note's id; its name as it is now. */
-  on?: { id: string; name: string };
-  detail: string;
-}
-
-/**
- * What the layout commands (`orchestrator-layout.ts`) act through: who calls, which agents it reaches, and the log,
- * as every orchestrator method has them.
- */
-export interface OrchestratorAccess {
-  /** Who calls `method`: as every orchestrator method finds it, refusing (and logging) a session that may not. */
-  caller(method: DaemonMethod, params: Record<string, unknown>, connection: BoardConnection): Orchestrator;
-  /** Runs `act` as `me` doing `action`, logging it done or refused with what `entry` holds by then. */
-  logged<T>(me: Orchestrator, action: OrchestratorAction, entry: ActivityEntry, act: () => Promise<T> | T): Promise<T>;
-  /** Whether `me` made what `madeBy` names, or an agent of its crew did; the user's side made everything. */
-  madeByCrew(me: Orchestrator, madeBy: string | null): boolean;
-  /**
-   * Whether `me` may take over what `madeBy` made, as a handover would: an agent (not the user's side) whose session has
-   * ended, or that is gone.
-   */
-  mayTakeOver(me: Orchestrator, madeBy: string | null): boolean;
 }
 
 export interface OrchestratorHost {
@@ -937,7 +904,11 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
             // this send is then refused (the agent can't be woken, or no turn starts on it): the refusal tells the sender.
             const fromAgent = sender?.sessionId;
             if (fromAgent !== undefined) agents.dropNotices(fromAgent, to.sessionId);
-            if (midTurn || to.messagesWaiting > 0) {
+            /**
+             * Keeps it until the agent's turn ends, or the user at its prompt has sent or cleared what they typed there
+             * and stopped typing: then typed as a message of its own, never run into theirs.
+             */
+            const keep = (delivery: 'queued-after-turn' | 'queued-while-typing'): OrchestratorSent => {
               agents.queueAfterTurn(to.sessionId, {
                 text: typed,
                 ...(fromAgent === undefined ? {} : { from: fromAgent }),
@@ -951,9 +922,12 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
                   else if (sender !== null && opens) replies.open(to.sessionId, sender.sessionId);
                 },
               });
-              logSend(`queued until its turn ends (${to.messagesWaiting + 1} waiting)`);
-              return { ...sentTo(to, sender, 'queued-after-turn'), typed };
-            }
+              const until = delivery === 'queued-after-turn' ? 'its turn ends' : 'the user stops typing at its prompt';
+              logSend(`queued until ${until} (${to.messagesWaiting + 1} waiting)`);
+              return { ...sentTo(to, sender, delivery), typed };
+            };
+            if (midTurn || to.messagesWaiting > 0) return keep('queued-after-turn');
+            if (agents.userTyping(to.sessionId)) return keep('queued-while-typing');
             awaitingTurn.add(to.sessionId);
             let answered: Answered;
             try {
@@ -961,6 +935,11 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
             } catch (error) {
               awaitingTurn.delete(to.sessionId);
               throw error;
+            }
+            // The user started typing there as it waited its turn to be typed.
+            if ('userTyping' in answered) {
+              awaitingTurn.delete(to.sessionId);
+              return keep('queued-while-typing');
             }
             if (answered.unsent !== undefined) {
               // Typed, but no turn started on it: never a success, and nothing to wait for.

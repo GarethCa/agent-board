@@ -1,7 +1,7 @@
 // Where a crew starts from, in both designs: New agent's Crew, the board's right-click menu and ⌘K's Crews group.
 import { expect, type Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
-import { launch, windowKey, zoneControl } from '../agent-helpers.ts';
+import { launch, windowKey, zoneControl, zoneNamed } from '../agent-helpers.ts';
 import { test, browseForZone, pickFolderNext, removeDataDir, tempDataDir } from '../launch.ts';
 import { RENDER_ARGS, RENDER_ENV, VIEWPORT, ignorePointer, pinFonts, pinRandomText, settle } from '../render.ts';
 import { scratch } from '../scratch.ts';
@@ -35,7 +35,7 @@ for (const { theme, suffix } of THEMES) {
   for (const design of ['classic', 'simplified'] as const) {
     const named = (shot: string) => `${shot}${design === 'simplified' ? '-simplified' : ''}${suffix}`;
     test(`where a crew starts from: New agent's Crew, right-click and ⌘K, ${design}, ${theme}`, async () => {
-      needsBaselines(named('crew-sheet'), named('crew-right-click'), named('crew-spotlight'));
+      needsBaselines(named('crew-sheet'), named('crew-right-click'), named('crew-spotlight'), named('new-agent-menu'));
       const { dir, repo, env } = scratch('waiting');
       const dataDir = tempDataDir();
       const appearance: Record<string, string> = theme === 'dark' ? { AGENT_BOARD_APPEARANCE: 'dark' } : {};
@@ -75,6 +75,20 @@ for (const { theme, suffix } of THEMES) {
         await expect(spotlight.getByTestId('spotlight-row').filter({ hasText: 'Five crew checks' })).toBeVisible();
         await settle(window);
         await expect.soft(spotlight).toHaveScreenshot(`${named('crew-spotlight')}.png`, SHOT);
+        await window.keyboard.press('Escape');
+        await expect(spotlight).toBeHidden();
+
+        // New agent's menu: a blank agent first, then your prefabs and the built-ins. Classic has it beside a zone's
+        // + agent; Simplified in the toolbar's ▾, under New crew.
+        if (design === 'classic') {
+          await zoneNamed(window, 'monorepo').getByRole('button', { name: 'Blank agent or prefab' }).click();
+        } else {
+          await window.getByRole('button', { name: 'More to start' }).click();
+          await window.getByRole('menuitem', { name: 'New crew' }).press('ArrowRight');
+        }
+        await expect(window.getByRole('menuitem', { name: /Five crew checks/ })).toBeVisible();
+        await settle(window);
+        await expect.soft(window.locator('body')).toHaveScreenshot(`${named('new-agent-menu')}.png`, SHOT);
       } finally {
         await app.close();
         await removeDataDir(dataDir);

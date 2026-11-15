@@ -68,6 +68,44 @@ async function twoAgents(app: ElectronApplication, window: Page, repo: string): 
   await expect(tile(window)).toHaveCount(2);
 }
 
+test('⌘K flies to a tile clear of the Captain’s pane where it covers the board, not under it', async () => {
+  const { repo, env } = scratch('output');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, env);
+  await listFinishedTurns(window);
+  try {
+    await twoAgents(app, window, repo);
+    // Away from the tile, so flying there has somewhere to go.
+    await window.getByRole('button', { name: 'Zoom Out' }).click();
+    await window.mouse.wheel(0, 600);
+    // A narrow window, where the pane lies over the board's right side (and its zoom bar) instead of pushing it in.
+    await window.setViewportSize({ width: 860, height: 760 });
+    await window.locator('.react-flow__pane').click({ position: { x: 40, y: 200 } });
+    await window.keyboard.press('ControlOrMeta+Shift+M');
+    const pane = window.getByTestId('master-panel');
+    await expect(pane).toHaveAttribute('data-mode', 'cover');
+
+    await window.locator('.react-flow__pane').click({ position: { x: 40, y: 200 } });
+    await window.keyboard.press(windowKey('k'));
+    await window.keyboard.type('databa');
+    await expect(spotlight(window).getByTestId('spotlight-row')).toHaveCount(1);
+    await window.keyboard.press('Enter');
+    await expect(window.locator('.react-flow__node.selected').getByTestId('agent-tile')).toContainText('Pick a database');
+
+    // It lands wholly on the board, left of the pane.
+    const paneLeft = (await pane.boundingBox())!.x;
+    const board = (await window.locator('.react-flow').boundingBox())!;
+    const landed = async () => {
+      const box = await agentTile(window, 'Pick a database').boundingBox();
+      return box !== null && box.x >= board.x && box.y >= board.y && box.x + box.width <= paneLeft && box.y + box.height <= board.y + board.height;
+    };
+    await expect.poll(landed).toBe(true);
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+  }
+});
+
 test('⌘K on the board finds an agent by part of its name and flies to its tile, leaving it selected; Esc puts the focus back', async () => {
   const { dir, repo, env } = scratch('output');
   const dataDir = tempDataDir();

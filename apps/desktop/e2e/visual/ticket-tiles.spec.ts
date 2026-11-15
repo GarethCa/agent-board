@@ -7,11 +7,11 @@ test.use({ viewport: null });
 
 // A ticket's tile at rest, needing the user, ready to merge and merged, in each design and theme: one shot of the four.
 const DESIGNS = [
-  { design: 'classic', prefix: 'ticket-tiles', opened: 'ticket-open', zoomed: 'ticket-board' },
-  { design: 'simplified', prefix: 'simplified-ticket-tiles', opened: 'simplified-ticket-open', zoomed: 'simplified-ticket-board' },
+  { design: 'classic', prefix: 'ticket-tiles', opened: 'ticket-open', zoomed: 'ticket-board', read: 'ticket-open-read' },
+  { design: 'simplified', prefix: 'simplified-ticket-tiles', opened: 'simplified-ticket-open', zoomed: 'simplified-ticket-board', read: 'simplified-ticket-open-read' },
 ] as const;
 
-for (const { design, prefix, opened, zoomed } of DESIGNS) {
+for (const { design, prefix, opened, zoomed, read } of DESIGNS) {
   for (const { theme, suffix } of THEMES) {
     test(`a ticket's tile: its ticket and title, one line, its helpers as icons and one ask, at rest, needing you, ready to merge and merged, ${design}, ${theme}`, async () => {
       needsBaselines(`${prefix}${suffix}`);
@@ -81,6 +81,26 @@ for (const { design, prefix, opened, zoomed } of DESIGNS) {
         await ignorePointer(window);
         await settle(window);
         await expect.soft(gallery).toHaveScreenshot(`${zoomed}${suffix}.png`, SHOT);
+      } finally {
+        await app.close();
+        await removeDataDir(dataDir);
+      }
+    });
+    test(`a ticket's card opened in place with a new review: Read, its one ask, in its footer, ${design}, ${theme}`, async () => {
+      needsBaselines(`${read}${suffix}`);
+      const dataDir = tempDataDir();
+      const { app, window } = await launchGallery(dataDir, theme, undefined, design === 'simplified' ? { design } : {});
+      try {
+        const gallery = window.getByTestId('ticket-open-read-gallery');
+        await gallery.scrollIntoViewIfNeeded();
+        await expect(gallery.getByTestId('expanded-tile')).toHaveAttribute('data-ticket-open', 'card');
+        await expect(gallery.getByTestId('tile-state-word')).toHaveText('New review');
+        await expect(gallery.getByTestId('tile-act')).toHaveText('Read');
+        await expect(gallery.locator('[data-testid="ticket-watch-icon"][data-kind="reviews"]')).toHaveAttribute('data-tone', 'new');
+        await pinFonts(window);
+        await ignorePointer(window);
+        await settle(window);
+        await expect.soft(gallery).toHaveScreenshot(`${read}${suffix}.png`, SHOT);
       } finally {
         await app.close();
         await removeDataDir(dataDir);

@@ -130,10 +130,10 @@ export function lockDownSession(session: Session): void {
   });
 }
 
-/** Denies the session every permission and device, and cancels every download. */
-export function denyEverything(session: Session): void {
-  session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
-  session.setPermissionCheckHandler(() => false);
+/** Denies the session every permission but those in `allowed`, and every device, and cancels every download. */
+export function denyEverything(session: Session, allowed: readonly string[] = []): void {
+  session.setPermissionRequestHandler((_contents, permission, callback) => callback(allowed.includes(permission)));
+  session.setPermissionCheckHandler((_contents, permission) => allowed.includes(permission));
   session.setDevicePermissionHandler(() => false);
   session.on('will-download', (event) => event.preventDefault());
   session.on('select-hid-device', (event, _details, callback) => {
