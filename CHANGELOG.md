@@ -2,8 +2,6 @@
 
 ## v0.6.28 (2026-11-16)
 
-- Lengthen the hand-off text so it folds at 360px in Manrope
-- List pull-request:search in the IPC channel tests
 - Porthole circle 32px, and Manrope as the app's default font
 - new --issue reads a team key from its tracker, never another zone's GitHub repo
 - A ticket tile is named for its issue or description, never its prompt; new --prefab takes --name and --branch
@@ -12,7 +10,6 @@
 - ⇧↵ in ⌘K opens any PR, agent or page beside what is open, with 120-column splits and reviewers paired with their PR
 - Porthole agent tile and Settings › Tile design
 - Go through turns the queue tile into one item at a time, in place of the overlay
-- The gate runs a server suite for daemon changes in place of e2e
 
 ## v0.6.27 (2026-11-15)
 
