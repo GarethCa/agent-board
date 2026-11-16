@@ -21,10 +21,12 @@ export {
   createPullRequest,
   deleteRemoteBranch,
   findPushedPullRequests,
+  listOpenPullRequests,
   listPullRequests,
   viewPullRequest,
   mergePullRequest,
   type ChecksState,
+  type OpenPullRequest,
   type PullRequest,
   type PullRequestState,
 } from './pull-requests.ts';

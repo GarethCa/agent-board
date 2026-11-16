@@ -1,6 +1,7 @@
 import { createContext, use, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Check, Info, X } from 'lucide-react';
 import { Button, IconButton } from './Button';
+import { Kbd } from './Label';
 
 export type ToastTone = 'info' | 'success' | 'error';
 
@@ -9,10 +10,14 @@ export interface ToastOptions {
   tone?: ToastTone;
   /** A toast with the id of one already showing replaces it, so a repeated failure shows once. */
   id?: string;
-  /** One action, such as Retry or Open. Taking it dismisses the toast. */
-  action?: { label: string; onClick(): void };
+  /** One action, such as Retry or Open, and the key that does it too, shown beside it. Taking it dismisses the toast. */
+  action?: { label: string; onClick(): void; shortcut?: string };
+  /** False for a toast with no ×: one that goes by itself, and its action, are enough. */
+  dismissible?: boolean;
   /** Stays until dismissed, as an error does, for a toast that says what mode the app is in. */
   persistent?: boolean;
+  /** How long it stays up, ms, for one with an action that needs longer than a confirmation's few seconds to reach. */
+  lingerMs?: number;
   /** Called when the person dismisses it (its × or its action), not when the code does. */
   onDismissed?(): void;
 }
@@ -51,7 +56,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       );
       clearTimeout(timers.current.get(id));
       timers.current.delete(id);
-      if (toast.tone !== 'error' && !toast.persistent) timers.current.set(id, setTimeout(() => dismiss(id), LINGER_MS));
+      if (toast.tone !== 'error' && !toast.persistent) timers.current.set(id, setTimeout(() => dismiss(id), toast.lingerMs ?? LINGER_MS));
       return id;
     },
     [dismiss],
@@ -105,6 +110,7 @@ export function ToastView({
   message,
   tone = 'info',
   action,
+  dismissible = true,
   onDismiss,
   preview,
 }: Omit<ToastOptions, 'id'> & {
@@ -131,7 +137,8 @@ export function ToastView({
             {action.label}
           </Button>
         )}
-        <IconButton icon={<X />} aria-label="Dismiss" size="sm" data-preview={preview} onClick={onDismiss} />
+        {action?.shortcut !== undefined && <Kbd>{action.shortcut}</Kbd>}
+        {dismissible && <IconButton icon={<X />} aria-label="Dismiss" size="sm" data-preview={preview} onClick={onDismiss} />}
       </span>
     </div>
   );

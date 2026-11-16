@@ -9,9 +9,9 @@ import { KIND_TAGS } from '../../inbox/kind-tags';
 export interface ItemKind {
   /** On its row's chip: "PR #214", "#12", "doc", "link", "note". */
   chip: string;
-  /** At the head of its focus card: "PULL REQUEST #214". */
+  /** At the head of the tile going through it: "PULL REQUEST #214". */
   head: string;
-  /** What opening it does, on its focus card's button. */
+  /** What opening it does, on its button there. */
   open: string;
 }
 
@@ -35,7 +35,7 @@ export const needsInScope = (entries: readonly NeedsYouEntry[], zoneId: string |
 export type LookItem = { kind: 'needs'; entry: NeedsYouEntry } | { kind: 'job'; job: QueueJob };
 
 /**
- * What the user's queue holds, in the order the focus view goes through it: agents' requests first (they block an
+ * What the user's queue holds, in the order its tile goes through it: agents' requests first (they block an
  * agent), oldest first, then its open items in the queue's order. Notes it holds are items too.
  */
 export function lookItems(jobs: readonly QueueJob[], needs: readonly NeedsYouEntry[]): LookItem[] {

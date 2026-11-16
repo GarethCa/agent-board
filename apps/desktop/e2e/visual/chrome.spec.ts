@@ -335,7 +335,7 @@ test('a session window resized up to the board\'s top edge clears the macOS traf
 
 /**
  * Zones in four colours with every fill opacity from none to the most, a zone's menu with its 16 colours and slider
- *, and the ▾ beside its Tidy: Tidy now and its spacing.
+ *, and the ▾ beside its Clean up: Clean up now and its spacing.
  */
 for (const { theme, suffix } of [
   { theme: 'light', suffix: '' },
@@ -384,10 +384,10 @@ for (const { theme, suffix } of [
       await window.keyboard.press('Escape');
       await expect(window.getByRole('menu')).toBeHidden();
 
-      // A zone wide enough for Tidy and its ▾ to stay on its tab.
+      // A zone wide enough for Clean up and its ▾ to stay on its tab.
       await window.evaluate(() => globalThis.window.agentBoard.zones.addUnbound({ name: 'Spacing', x: 0, y: 460, width: 720, height: 200 }));
       const spacious = zoneNamed(window, 'Spacing');
-      await spacious.getByRole('button', { name: 'Tidy and spacing' }).click();
+      await spacious.getByRole('button', { name: 'Clean up and spacing' }).click();
       await expect(window.getByRole('menuitemradio', { name: /Roomy/ })).toHaveAttribute('aria-checked', 'true');
       await expect(window.getByRole('menuitem', { name: /Roomy · Settings/ })).toBeVisible();
       restorePointer = await ignorePointer(window);

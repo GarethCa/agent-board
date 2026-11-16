@@ -7,6 +7,8 @@ import { isSessionTile, savedMove, subjectOf, type BoardNode } from './tiles';
 import { laidOutTile } from './shelves';
 import { nudgeMove } from './hand-moves';
 import { isTyping } from '../keys/typing';
+import { leavesArrowToGoingThrough } from './items/go-through';
+import { goingThroughNow } from './items/queue-board';
 
 /** How far a pointer must move before a press on a node drags it, rather than clicks it, px. */
 export const DRAG_THRESHOLD = 4;
@@ -164,6 +166,8 @@ export function useTileMoves({
       const tiles = nudgedTiles(shownRef.current, focused);
       const items = shownRef.current.filter((node) => isItemNode(node) && (node.selected === true || node.id === focused)) as ItemNodeType[];
       if (tiles.length === 0 && items.length === 0) return;
+      // A queue tile going through its things takes → as Next.
+      if (leavesArrowToGoingThrough(event.key, [...tiles, ...items].map((node) => node.id), goingThroughNow())) return;
       event.preventDefault();
       event.stopPropagation();
       const step = event.shiftKey ? NUDGE.shifted : NUDGE.step;

@@ -2,6 +2,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it, vi } from 'vitest';
 import { fakeHarnessEnv } from '@agent-board/fake-harness';
 import type { DaemonClient } from '../src/client.ts';
+import { agentNoteData } from '../src/agent-notes.ts';
+import { AGENT_TILE_SIZE, SPACING_GAPS } from '../src/board-layout.ts';
 import { migrate } from '../src/migrate.ts';
 import { daemonPaths } from '../src/paths.ts';
 import type { DaemonCall } from '../src/protocol.ts';
@@ -43,6 +45,20 @@ describe('what sets a zone off to be laid out by its rule again', () => {
     const crew = agent({ sessionId: 's2', spawnedBy: 's1' });
     expect(zonesChangedBy({ type: 'agent.updated', agent: crew }, inputs, spines)).toEqual(['z1']);
     expect(zonesChangedBy({ type: 'agent.updated', agent: { ...crew, position: { x: 400, y: 300, z: 1 } } }, inputs, spines)).toEqual([]);
+    // On a Done line, with its shell left on the tile: resumed, or busy again, it may have to come back.
+    const folded = new Set(['agent:s2']);
+    const shelled = { ...crew, position: { x: 400, y: 300, z: 1 }, shellSessionId: 'sh1', shellHarness: 'claude', endedAt: '2026-11-12T09:00:00Z', state: 'done' } as Agent;
+    expect(zonesChangedBy({ type: 'agent.updated', agent: shelled }, inputs, spines)).toEqual([]);
+    expect(zonesChangedBy({ type: 'agent.updated', agent: shelled }, inputs, spines, folded)).toEqual(['z1']);
+    expect(zonesChangedBy({ type: 'agent.updated', agent: { ...shelled, endedAt: null, state: 'idle' } }, inputs, spines, folded)).toEqual(['z1']);
+    expect(zonesChangedBy({ type: 'agent.updated', agent: { ...shelled, endedAt: null, state: 'running' } }, inputs, spines, folded)).toEqual(['z1']);
+    // Back at its prompt, then flagging the user from there: it needs them, so it may have to come back too.
+    expect(zonesChangedBy({ type: 'agent.updated', agent: { ...shelled, endedAt: null, state: 'idle' } }, inputs, spines, folded)).toEqual(['z1']);
+    const flag = { id: 1, reason: 'read this', at: '2026-11-15T10:00:00.000Z', to: 'user' as const, via: null };
+    expect(zonesChangedBy({ type: 'agent.updated', agent: { ...shelled, endedAt: null, state: 'idle', flag } }, inputs, spines, folded)).toEqual(['z1']);
+    // Busy off the Done line: nothing.
+    expect(zonesChangedBy({ type: 'agent.updated', agent: { ...shelled, endedAt: null, state: 'idle' } }, inputs, spines)).toEqual(['z1']);
+    expect(zonesChangedBy({ type: 'agent.updated', agent: { ...shelled, endedAt: null, state: 'running' } }, inputs, spines)).toEqual([]);
     // Off Spine, the user's agent's move sets nothing off either.
     expect(zonesChangedBy({ type: 'agent.updated', agent: agent({ position: { x: 90, y: 90, z: 1 } }) }, inputs)).toEqual(['z1']);
     expect(zonesChangedBy({ type: 'agent.updated', agent: agent({ position: { x: 10, y: 10, z: 1 } }) }, inputs)).toEqual([]);
@@ -309,6 +325,118 @@ describe('a zone with a rule, on the daemon', () => {
     expect(await placeOf(client, second.sessionId)).toMatchObject({ x: 300, y: 200 });
     await client.call('zone.followRule', { id: web.id, tiles: [`agent:${second.sessionId}`], reflow: true });
     expect(await placeOf(client, second.sessionId)).toMatchObject({ x: one!.x, y: one!.y });
+  });
+
+  it('cleans a Spine zone up: a note to the tail of its band, a finished ticket to the Done line; and puts it all back', async () => {
+    const { client, web, startedByAnAgent } = await ruleDaemon();
+    const impl = await client.call('agent.spawn', { zoneId: web.id, name: 'impl', ...SIZE });
+    const docs = await client.call('agent.spawn', { zoneId: web.id, name: 'docs', ...SIZE });
+    for (const { sessionId } of [impl, docs]) startedByAnAgent(sessionId);
+    await client.call('orchestrator.zoneLayout', { zoneId: web.id, mode: 'spine' });
+    const author = { sessionId: impl.sessionId, name: 'impl', harness: 'claude' as const, role: null };
+    const note = await client.call('item.create', { kind: 'agent-note', zoneId: web.id, x: 900, y: 420, width: 240, height: 100, data: { ...agentNoteData(author, 'The plan') } });
+    const sticky = await client.call('item.create', { kind: 'sticky', zoneId: web.id, x: 700, y: 40, width: 200, height: 200, data: { text: 'mine', color: '#fff3a3' } });
+    await client.call('agent.stop', { sessionId: docs.sessionId });
+    await vi.waitFor(async () => expect((await client.call('agent.list')).find((each) => each.sessionId === docs.sessionId)).toMatchObject({ state: 'done' }), { timeout: 5000 });
+    await new Promise((resolve) => setTimeout(resolve, RULE_SETTLE_MS * 2));
+    const one = (await placeOf(client, impl.sessionId))!;
+    const before = (await placeOf(client, docs.sessionId))!;
+
+    const cleaned = await client.call('zone.cleanUp', { id: web.id });
+    expect(cleaned).toMatchObject({ done: 1 });
+    expect(cleaned.moved).toBeGreaterThan(0);
+    const items = async () => new Map((await client.call('item.list')).map((item) => [item.id, item]));
+    const after = await items();
+    // The note stands at the tail of its agent's band, beside its tile; the sticky, the user's, stays where it was.
+    expect(after.get(note.id)).toMatchObject({ x: one.x + AGENT_TILE_SIZE.width + SPACING_GAPS.normal.tile, y: one.y, data: { gatheredTo: `agent:${impl.sessionId}` } });
+    expect(after.get(sticky.id)).toMatchObject({ x: 700, y: 40 });
+    const line = [...after.values()].find((item) => item.kind === 'done-line')!;
+    expect(line.data).toMatchObject({ tickets: [{ title: 'docs', members: [`agent:${docs.sessionId}`], notes: [] }] });
+    // The finished agent waits behind the Done line, under the bands.
+    expect(await placeOf(client, docs.sessionId)).toMatchObject({ x: line.x, y: line.y });
+    expect(line.y).toBeGreaterThan(one.y);
+    await expect(client.call('zone.cleanUp', { id: 'nope' })).rejects.toThrow(/no zone nope/);
+
+    await client.call('zone.undoCleanUp', { id: web.id, undo: cleaned.undo });
+    const undone = await items();
+    expect(undone.get(note.id)).toMatchObject({ x: 900, y: 420, data: { gatheredTo: null } });
+    expect([...undone.values()].some((item) => item.kind === 'done-line')).toBe(false);
+    expect(await placeOf(client, docs.sessionId)).toMatchObject({ x: before.x, y: before.y });
+  });
+
+  it('puts a ticket on the Done line back by itself once one of its agents runs again', async () => {
+    const { client, web, startedByAnAgent } = await ruleDaemon();
+    const impl = await client.call('agent.spawn', { zoneId: web.id, name: 'impl', ...SIZE });
+    const docs = await client.call('agent.spawn', { zoneId: web.id, name: 'docs', ...SIZE });
+    for (const { sessionId } of [impl, docs]) startedByAnAgent(sessionId);
+    await client.call('orchestrator.zoneLayout', { zoneId: web.id, mode: 'spine' });
+    await client.call('agent.stop', { sessionId: docs.sessionId });
+    await vi.waitFor(async () => expect((await client.call('agent.list')).find((each) => each.sessionId === docs.sessionId)).toMatchObject({ state: 'done' }), { timeout: 5000 });
+    await new Promise((resolve) => setTimeout(resolve, RULE_SETTLE_MS * 2));
+    await client.call('zone.cleanUp', { id: web.id });
+    const line = (await client.call('item.list')).find((item) => item.kind === 'done-line')!;
+    expect(await placeOf(client, docs.sessionId)).toMatchObject({ x: line.x, y: line.y });
+
+    await client.call('agent.resume', { sessionId: docs.sessionId });
+    // Live again, it isn't hidden: off the Done line, which goes with nothing left on it, and laid out with the rest.
+    await vi.waitFor(async () => expect((await client.call('item.list')).some((item) => item.kind === 'done-line')).toBe(false), { timeout: 5000 });
+    const one = (await placeOf(client, impl.sessionId))!;
+    await vi.waitFor(async () => expect((await placeOf(client, docs.sessionId))!.y).toBeGreaterThan(one.y), { timeout: 5000 });
+    expect(await placeOf(client, docs.sessionId)).toMatchObject({ x: one.x });
+  });
+
+  it('refuses to clean up a zone not laid out by Spine', async () => {
+    const { client, web } = await ruleDaemon();
+    await expect(client.call('zone.cleanUp', { id: web.id })).rejects.toThrow(/web isn't laid out by Spine/);
+  });
+
+  it('puts a ticket on the Done line back on the board', async () => {
+    const { client, web, startedByAnAgent } = await ruleDaemon();
+    const impl = await client.call('agent.spawn', { zoneId: web.id, name: 'impl', ...SIZE });
+    startedByAnAgent(impl.sessionId);
+    await client.call('orchestrator.zoneLayout', { zoneId: web.id, mode: 'spine' });
+    await client.call('agent.stop', { sessionId: impl.sessionId });
+    await vi.waitFor(async () => expect((await client.call('agent.list')).find((each) => each.sessionId === impl.sessionId)).toMatchObject({ state: 'done' }), { timeout: 5000 });
+    await new Promise((resolve) => setTimeout(resolve, RULE_SETTLE_MS * 2));
+    const laid = (await placeOf(client, impl.sessionId))!;
+    await client.call('zone.cleanUp', { id: web.id });
+    await client.call('zone.putBackDone', { id: web.id, key: `agent:${impl.sessionId}` });
+    expect((await client.call('item.list')).some((item) => item.kind === 'done-line')).toBe(false);
+    expect(await placeOf(client, impl.sessionId)).toMatchObject({ x: laid.x, y: laid.y });
+    await expect(client.call('zone.putBackDone', { id: web.id, key: 'agent:gone' })).rejects.toThrow(/Done line has no agent:gone/);
+
+    // Put back, it is kept out: the next Clean up leaves it on the board, until the user moves it to Done by hand.
+    expect(await client.call('zone.cleanUp', { id: web.id })).toMatchObject({ done: 0 });
+    expect((await client.call('item.list')).some((item) => item.kind === 'done-line')).toBe(false);
+    const moved = await client.call('zone.moveToDone', { id: web.id, sessionId: impl.sessionId });
+    expect(moved).toMatchObject({ done: 1 });
+    const line = (await client.call('item.list')).find((item) => item.kind === 'done-line');
+    expect(line?.data).toMatchObject({ tickets: [{ key: `agent:${impl.sessionId}`, members: [`agent:${impl.sessionId}`] }] });
+    await expect(client.call('zone.moveToDone', { id: web.id, sessionId: impl.sessionId })).rejects.toThrow(/isn't in a band of web/);
+  });
+
+  it("puts a ticket back at the foot of the shortest column, as a new one goes, and won't move a running one to Done", async () => {
+    const { client, web, startedByAnAgent } = await ruleDaemon();
+    const impl = await client.call('agent.spawn', { zoneId: web.id, name: 'impl', ...SIZE });
+    const docs = await client.call('agent.spawn', { zoneId: web.id, name: 'docs', ...SIZE });
+    for (const { sessionId } of [impl, docs]) startedByAnAgent(sessionId);
+    await client.call('orchestrator.zoneLayout', { zoneId: web.id, mode: 'spine' });
+    await client.call('agent.stop', { sessionId: impl.sessionId });
+    await vi.waitFor(async () => expect((await client.call('agent.list')).find((each) => each.sessionId === impl.sessionId)).toMatchObject({ state: 'done' }), { timeout: 5000 });
+    await new Promise((resolve) => setTimeout(resolve, RULE_SETTLE_MS * 2));
+    const top = (await placeOf(client, impl.sessionId))!;
+    await client.call('zone.cleanUp', { id: web.id });
+    await vi.waitFor(async () => expect(await placeOf(client, docs.sessionId)).toMatchObject({ x: top.x, y: top.y }), { timeout: 5000 });
+    await client.call('zone.putBackDone', { id: web.id, key: `agent:${impl.sessionId}` });
+    // Not its old slot at the top: under docs, which took the top meanwhile.
+    expect((await placeOf(client, impl.sessionId))!.y).toBeGreaterThan(top.y);
+    await expect(client.call('zone.moveToDone', { id: web.id, sessionId: docs.sessionId })).rejects.toThrow(/docs's ticket isn't finished/);
+
+    // Kept out of the next Clean up while its band is on the board; gone with the band, it is forgotten.
+    const keptOut = async () => ((await client.call('view.get', { key: `spine:${web.id}` })) as { keptOut?: string[] }).keptOut;
+    expect(await keptOut()).toEqual([`agent:${impl.sessionId}`]);
+    await client.call('agent.delete', { sessionId: impl.sessionId, force: true });
+    await vi.waitFor(async () => expect(await keptOut()).toBeUndefined(), { timeout: 5000 });
   });
 
   it('leaves the agents on a stage board out of the Spine, where the board draws them', async () => {

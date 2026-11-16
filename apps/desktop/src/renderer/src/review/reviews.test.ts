@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { ReviewRound } from '@agent-board/daemon/protocol';
-import { roundsOf, showsReviewTab, withReviewChange } from './reviews';
+import type { Agent, ReviewRound } from '@agent-board/daemon/protocol';
+import { reviewedPullRequests, roundsOf, showsReviewTab, withReviewChange } from './reviews';
 
 const round = (fields: Partial<ReviewRound> & Pick<ReviewRound, 'id' | 'round'>): ReviewRound => ({
   implementer: 'coder',
@@ -41,5 +41,34 @@ describe('showsReviewTab', () => {
     expect(showsReviewTab([round({ id: 'a', round: 1 })], false)).toBe(true);
     expect(showsReviewTab(dismissed, false)).toBe(false);
     expect(showsReviewTab(dismissed, true)).toBe(true);
+  });
+});
+
+describe('reviewedPullRequests', () => {
+  const agent = (sessionId: string, urls: string[] = []): Agent => ({ sessionId, pullRequests: urls.map((url) => ({ url })) }) as Agent;
+  const coder = agent('coder', ['https://github.com/acme/app/pull/418', 'https://github.com/acme/app/pull/400']);
+  const doc = '# Review\n\nVerdict: Request changes\n\n## Major\n- Retries 4xx too\n\n## Minor\n- No cap on the wait\n- Stale numbers';
+
+  it("is each reviewer's implementer's newest pull request, with its latest round's findings", () => {
+    const found = reviewedPullRequests([round({ id: 'a', round: 1, reviewer: 'r1', doc: '# Done\n\nVerdict: Approve' }), round({ id: 'b', round: 2, reviewer: 'r2', doc })], [coder]);
+    expect(found.get('r2')).toEqual({ surface: { kind: 'pr', repo: 'acme/app', number: 418 }, status: 'ready', findings: 3 });
+    expect(found.get('r1')).toEqual({ surface: { kind: 'pr', repo: 'acme/app', number: 418 }, status: 'ready', findings: 0 });
+  });
+
+  it('counts no findings while the review is still being written', () => {
+    expect(reviewedPullRequests([round({ id: 'a', round: 1, reviewer: 'r1', status: 'reviewing', doc: null })], [coder]).get('r1')).toEqual({
+      surface: { kind: 'pr', repo: 'acme/app', number: 418 },
+      status: 'reviewing',
+    });
+  });
+
+  it('says a round failed rather than that it is still being written', () => {
+    const failed = round({ id: 'a', round: 1, reviewer: 'r1', status: 'failed', doc: null, failedBecause: 'The reviewer stopped' });
+    expect(reviewedPullRequests([failed], [coder]).get('r1')).toEqual({ surface: { kind: 'pr', repo: 'acme/app', number: 418 }, status: 'failed' });
+  });
+
+  it('leaves out a dismissed reviewer and one whose implementer has no pull request', () => {
+    const found = reviewedPullRequests([round({ id: 'a', round: 1, reviewer: null }), round({ id: 'b', round: 1, reviewer: 'r2', implementer: 'bare' })], [coder, agent('bare')]);
+    expect(found.size).toBe(0);
   });
 });

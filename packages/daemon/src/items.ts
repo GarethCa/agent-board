@@ -47,6 +47,7 @@ import { checkMemoryData, checkQueueData } from './memory-queue.ts';
 import { checkStepsData } from './steps.ts';
 import { checkTodoData } from './todos.ts';
 import { STAGE_BOARD_KIND, stageBoardDataProblem } from './stage-board.ts';
+import { doneLineDataProblem } from './zone-clean-up.ts';
 import { zoneIdParam } from './tile-position.ts';
 
 type ItemMethods = Pick<DaemonMethods, Extract<keyof DaemonMethods, `item.${string}` | `image.${string}`>>;
@@ -158,6 +159,10 @@ const KIND_DATA: Record<BoardItemKind, (data: Record<string, unknown>) => void> 
   todo: (data) => checkTodoData(data),
   stages: (data) => {
     const problem = stageBoardDataProblem(data);
+    if (problem !== null) throw invalidParams(problem);
+  },
+  'done-line': (data) => {
+    const problem = doneLineDataProblem(data);
     if (problem !== null) throw invalidParams(problem);
   },
   // The rest of a crew card's data is the board's own, written from its crew (`crew-cards.ts`).

@@ -126,6 +126,10 @@ const api: AgentBoardApi = {
     update: (id, layout) => invoke(ZONE_IPC.update, id, layout),
     configure: (id, settings) => invoke(ZONE_IPC.configure, id, settings),
     followRule: (id, tiles, reflow) => invoke(ZONE_IPC.followRule, id, tiles, reflow),
+    cleanUp: (id) => invoke(ZONE_IPC.cleanUp, id),
+    undoCleanUp: (id, undo) => invoke(ZONE_IPC.undoCleanUp, id, undo),
+    putBackDone: (id, key) => invoke(ZONE_IPC.putBackDone, id, key),
+    moveToDone: (id, sessionId) => invoke(ZONE_IPC.moveToDone, id, sessionId),
     fold: (id) => invoke(ZONE_IPC.fold, id),
     unfold: (id, wake) => invoke(ZONE_IPC.unfold, id, wake),
     setTracker: (id, tracker) => invoke(ZONE_IPC.setTracker, id, tracker),
@@ -195,6 +199,7 @@ const api: AgentBoardApi = {
   },
   pullRequests: {
     details: (ref) => invoke(PULL_REQUEST_IPC.details, ref),
+    search: () => invoke(PULL_REQUEST_IPC.search),
     approve: (ref, headCommit) => invoke(PULL_REQUEST_IPC.approve, ref, headCommit),
     merge: (ref, headCommit, pastGate) => invoke(PULL_REQUEST_IPC.merge, ref, headCommit, pastGate),
   },

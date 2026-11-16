@@ -68,6 +68,11 @@ async function twoAgents(app: ElectronApplication, window: Page, repo: string): 
   await expect(tile(window)).toHaveCount(2);
 }
 
+// What ↵ does here. On the board with nothing selected, ⇧↵ has no session to open a row beside, so the pill says only
+// what ↵ does; in a window, a session row can open beside the one shown, and the pill says so short.
+const SHOWS = '↵ show on board';
+const SWITCHES = '↵ switch · ⇧↵ beside';
+
 test('⌘K flies to a tile clear of the Captain’s pane where it covers the board, not under it', async () => {
   const { repo, env } = scratch('output');
   const dataDir = tempDataDir();
@@ -117,12 +122,12 @@ test('⌘K on the board finds an agent by part of its name and flies to its tile
     await window.getByRole('button', { name: 'Zoom Out' }).click();
     await window.mouse.wheel(0, 600);
 
-    // Before anything is typed it lists the sessions and the zone, and says ↵ shows the tile here.
+    // Before anything is typed it lists the sessions and the zone, and says ↵ shows the tile here (nothing is selected).
     const fit = window.getByRole('button', { name: 'Fit View' });
     await fit.focus();
     await window.keyboard.press(windowKey('k'));
     await expect(field(window)).toBeFocused();
-    await expect(spotlight(window).getByTestId('spotlight-where')).toHaveText('↵ show on board');
+    await expect(spotlight(window).getByTestId('spotlight-where')).toHaveText(SHOWS);
     await expect(spotlight(window).getByTestId('spotlight-row')).toHaveCount(3);
     await window.keyboard.press('Escape');
     await expect(spotlight(window)).toHaveCount(0);
@@ -187,7 +192,7 @@ test('⌘K from a session window’s terminal switches the window to the agent p
     // The terminal doesn't keep ⌘K: the switcher opens, and Esc gives the terminal its focus back.
     await window.keyboard.press(windowKey('k'));
     await expect(field(window)).toBeFocused();
-    await expect(spotlight(window).getByTestId('spotlight-where')).toHaveText('↵ switch here');
+    await expect(spotlight(window).getByTestId('spotlight-where')).toHaveText(SWITCHES);
     await window.keyboard.press('Escape');
     await expect(spotlight(window)).toHaveCount(0);
     await expect.poll(() => terminalFocusedIn(window, '[data-testid="session-window"]')).toBe(true);
@@ -231,7 +236,7 @@ test('⌘K from an expanded tile’s terminal expands the agent picked in its pl
     await expect.poll(() => terminalFocusedIn(window, '.expanded-tile')).toBe(true);
 
     await window.keyboard.press(windowKey('k'));
-    await expect(spotlight(window).getByTestId('spotlight-where')).toHaveText('↵ switch here');
+    await expect(spotlight(window).getByTestId('spotlight-where')).toHaveText(SWITCHES);
     // Esc closes the switcher only: the tile stays expanded, its terminal focused.
     await window.keyboard.press('Escape');
     await expect(spotlight(window)).toHaveCount(0);
@@ -449,7 +454,7 @@ test('a popped-out window has the switcher too: ↵ shows the session picked in 
     // Opened from its terminal, Esc gives the terminal its focus back.
     await popped.keyboard.press(windowKey('k'));
     await expect(field(popped)).toBeFocused();
-    await expect(spotlight(popped).getByTestId('spotlight-where')).toHaveText('↵ switch here');
+    await expect(spotlight(popped).getByTestId('spotlight-where')).toHaveText(SWITCHES);
     await popped.keyboard.press('Escape');
     await expect(spotlight(popped)).toHaveCount(0);
     await expect.poll(() => terminalFocusedIn(popped, '[data-testid="session-window"]')).toBe(true);

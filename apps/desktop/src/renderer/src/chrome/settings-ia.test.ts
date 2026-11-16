@@ -58,6 +58,8 @@ describe('the Settings window’s groups', () => {
       'tethers',
       // Added since: whether a ticket's tile opens as its card or its terminal.
       'ticketTilesOpenAs',
+      // Added since: which design draws an agent's tile.
+      'tileDesign',
     ];
     const ids = SETTINGS_CONTROLS.map((control) => control.id);
     expect(new Set(ids).size).toBe(ids.length);
@@ -81,6 +83,7 @@ describe('the Settings window’s groups', () => {
     expect(home('characters')).toBe('general.design');
     expect(home('characterMotion')).toBe('general.design');
     expect(home('todoLook')).toBe('general.design');
+    expect(home('tileDesign')).toBe('general.design');
     expect(home('conversationAs')).toBe('agents.chat');
     expect(home('tethers')).toBe('board.connections');
   });

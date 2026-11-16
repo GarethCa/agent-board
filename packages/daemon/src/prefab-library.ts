@@ -212,6 +212,8 @@ export function createPrefabLibrary(db: DatabaseSync): PrefabLibrary {
           const repo = optionalStringParam(fields, 'repo');
           const issueId = optionalStringParam(fields, 'issueId');
           const description = optionalStringParam(fields, 'description');
+          const agentName = optionalStringParam(fields, 'agentName') ?? first.name ?? undefined;
+          const branch = optionalStringParam(fields, 'branch');
           const agent = await spawn(
             {
               ...(token === undefined ? {} : { token }),
@@ -224,7 +226,8 @@ export function createPrefabLibrary(db: DatabaseSync): PrefabLibrary {
               ...(first.model === null ? {} : { model: first.model }),
               ...(first.effort === null ? {} : { effort: first.effort }),
               ...(first.role === null ? {} : { role: first.role }),
-              ...(first.name === null ? {} : { name: first.name }),
+              ...(agentName === undefined ? {} : { name: agentName }),
+              ...(branch === undefined ? {} : { branch }),
               ...(first.template === null ? {} : { template: first.template }),
               ...(prefab.onBoard === 'ticket' ? { ticketChat: true, chatKind: prefab.ticketChat ?? DEFAULT_TICKET_CHAT_KIND } : {}),
             },

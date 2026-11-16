@@ -785,7 +785,7 @@ in its own worktree and branch, as any agent does.
     usage:
       'agent-board new [--zone <ref>] [--name <name>] [--harness claude|codex] [--model <model>] [--effort <level>] [--role <role>] ' +
       '[--repo <path>] [--branch <branch>] [--base <branch or agent ref>] [--edges auto|manual] [--issue <id>] [--description <text>] [--file <path>] [--] <prompt> | ' +
-      'new --prefab <name> [--zone <ref>] [--repo <path>] [--issue <id>] [--chat implementer|lead] [--description <text>] [--file <path>] [--] <prompt>',
+      'new --prefab <name> [--zone <ref>] [--repo <path>] [--issue <id>] [--chat implementer|lead] [--name <name>] [--branch <branch>] [--description <text>] [--file <path>] [--] <prompt>',
     text: `Starts an agent with <prompt> (or the text of --file) as its first message, in a new worktree and
 branch of its zone's repo, as the user starts one; --repo starts it in another, in any zone. In a
 group (a zone with no repo) without --repo, it works in the group's default repo; with neither, in
@@ -832,8 +832,8 @@ agent-board: see \`agent-board help orchestrate\`. It prints the new agent's ref
                      Its reviewers start on the builder's branch each time the builder hands
                      off, a fresh one each round, and their reviews go back to it, until each
                      approves or the round limit: see \`agent-board crew\`. A lead starts its
-                     own crew. Takes --zone, --repo, --issue, --description and --file; the
-                     prefab sets the rest.
+                     own crew. Takes --zone, --repo, --issue, --name, --branch, --description
+                     and --file (--name and --branch for that member); the prefab sets the rest.
   --chat <kind>      With a ticket prefab: its chat is the implementer, which builds, or its
                      own lead, which starts a builder: in place of the prefab's.
   --json             Print the agent as JSON.`,
@@ -2245,8 +2245,8 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
       const prefab = string('prefab');
       if (prefab === undefined && values.chat !== undefined) throw new UsageError('--chat picks the kind of ticket chat a ticket prefab starts: give --prefab too');
       if (prefab !== undefined) {
-        const set = (['name', 'harness', 'model', 'effort', 'role', 'no-template', 'branch', 'base', 'edges'] as const).find((option) => values[option] !== undefined);
-        if (set !== undefined) throw new UsageError(`--${set} is the prefab's to set: --prefab takes --zone, --repo, --issue, --chat, --description and --file`);
+        const set = (['harness', 'model', 'effort', 'role', 'no-template', 'base', 'edges'] as const).find((option) => values[option] !== undefined);
+        if (set !== undefined) throw new UsageError(`--${set} is the prefab's to set: --prefab takes --zone, --repo, --issue, --chat, --name, --branch, --description and --file`);
         const chat = string('chat');
         if (chat !== undefined && chat !== 'implementer' && chat !== 'lead') throw new UsageError('--chat is implementer or lead');
         return async (session) =>
@@ -2259,6 +2259,8 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
               issue: string('issue'),
               ...(chat === undefined ? {} : { chat }),
               description: string('description'),
+              agentName: string('name'),
+              branch: string('branch'),
             }),
           );
       }

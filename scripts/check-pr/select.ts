@@ -2,15 +2,18 @@
  * Which checks a PR needs, from the files it changes. Pure: `main.ts` feeds it `git diff` and runs the plan.
  *
  * The rules, in order:
- *  1. A change to the gate itself, the shared config, the e2e helpers, the fake CLIs, the daemon protocol, a heavily shared
- *     daemon module (`DAEMON_CORE_GLOBS`) or any file nothing here recognises can break anything, so the plan is the full gate
- *     (`pnpm check:local`). Unknown means full: the fallback never runs less than it should.
+ *  1. A change to the gate itself, the shared config, the e2e helpers, the fake CLIs, the migrations or any file nothing
+ *     here recognises can break anything, so the plan is the full gate (`pnpm check:local`). Unknown means full: the
+ *     fallback never runs less than it should. So does the daemon's protocol or a heavily shared daemon module
+ *     (`DAEMON_CORE_GLOBS`) changed together with a desktop file.
  *  2. Unit tests: `vitest related` on the changed files, plus the scanners (`SCANNERS`): tests that read the repo's files
  *     rather than import them, which `related` never selects.
- *  3. E2E: the specs the change maps to (`E2E_MAP`), plus any changed spec that still exists and runs in the `app` project. A changed app file that maps to nothing runs
- *     the smoke set. Tests, docs and scripts alone run no e2e.
- *     Desktop core (`DESKTOP_CORE_GLOBS`) runs the whole `unit` project and every spec instead.
- *  4. Visual: when anything under the renderer (styles, markup, layout code) or the baselines changed.
+ *  3. The server suite (the vitest `server` project): for any daemon source or suite file (`isServerSuite`). It
+ *     starts real daemons and drives them as their clients do, so it stands in for the e2e a daemon change can't reach.
+ *  4. E2E: the specs the change maps to (`E2E_MAP`), plus any changed spec that still exists and runs in the `app` project.
+ *     A changed app file that maps to nothing runs the smoke set, except a daemon file, which the server suite covers.
+ *     Tests, docs and scripts alone run no e2e. Desktop core (`DESKTOP_CORE_GLOBS`) runs the whole `unit` project and every spec instead.
+ *  5. Visual: when anything under the renderer (styles, markup, layout code) or the baselines changed.
  */
 import { matchesGlob } from 'node:path';
 
@@ -71,7 +74,6 @@ const FULL_GATE_GLOBS = [
   'apps/desktop/e2e/fonts/**',
   'apps/desktop/e2e/images/**',
   'packages/fake-harness/**',
-  'packages/daemon/src/protocol.ts',
   'packages/daemon/src/migrations/**',
   'packages/daemon/src/migrate.ts',
 ];
@@ -96,11 +98,25 @@ const DESKTOP_CORE_GLOBS = [
   'apps/desktop/src/main/{index,items,view,setup}.ts',
 ];
 
-/** Daemon-side modules nearly every journey goes through. Nothing under `apps/desktop` can reach the daemon's tests, but these can break the desktop's, so they keep the full gate. */
+/**
+ * Daemon-side modules nearly every journey goes through, and the protocol its clients share. Alone they run the server
+ * suite, which drives a real daemon as its clients do. Changed with a desktop file, they can break the desktop's side
+ * of the same change, which only the e2e sees, so the plan is the full gate.
+ */
 const DAEMON_CORE_GLOBS = [
+  'packages/daemon/src/protocol.ts',
   'packages/daemon/src/{rpc,params,index,daemon,sessions,agents,agent-spawns,agent-lifecycle,hook-states,deliveries,items,view-state,spawn,stop,permissions,subagents,worktrees,client,board-layout}.ts',
   'packages/daemon/src/{harness-state,claude-state,codex-state,terminal-backend,terminal-input}.ts',
 ];
+
+/**
+ * The server suite's own folders (`vitest.config.ts`'s `server` project): its tests and their helpers. Its tests live in
+ * `test/server`, and the devices' side in `test/remote`. A change to one runs the suite, and so does a daemon source file.
+ */
+export const SERVER_SUITE_DIRS = ['packages/daemon/test/server/**', 'packages/daemon/test/remote/**'];
+
+/** A desktop file whose change the e2e must see: anything under `apps/desktop` but its docs. */
+const isDesktopFile = (file: string): boolean => file.startsWith('apps/desktop/') && !file.endsWith('.md');
 
 /** Files that need no check beyond lint, typecheck, the Markdown lint and knip: docs, notes, the worker prompts and tooling with its own unit tests. */
 const NO_CHECK_GLOBS = [
@@ -251,6 +267,8 @@ export interface Plan {
   perf?: boolean;
   /** A recheck after a failed full run: every unit test of both projects (`pnpm test`), in place of `unit`. */
   testAll?: boolean;
+  /** Run the server suite (`vitest run --project server`): a daemon source or suite file changed. */
+  server?: boolean;
   /** A recheck after failed shots: the visual run on just these spec files (under apps/desktop/e2e), when `visual` is false. */
   visualFiles?: string[];
   /** One line per decision, for the reviewer to check. */
@@ -272,9 +290,18 @@ const isRenderer = (file: string): boolean =>
 const isAppSource = (file: string): boolean =>
   /^(apps\/desktop\/src|packages\/[^/]+\/src)\//.test(file) && /\.(ts|tsx|html|json|sql)$/.test(file) && !isTest(file);
 
+/** A file in the server suite's own folders, its tests and helpers. */
+const isSuiteFile = (file: string): boolean => matches(file, SERVER_SUITE_DIRS) && !file.endsWith('.md');
+
+/**
+ * A change the server suite checks: a daemon source file, or a file of the suite itself. A daemon unit test kept beside
+ * its module is only run itself, by `related`; any other file under the daemon's `src` is not a source this knows.
+ */
+export const isServerSuite = (file: string): boolean => isSuiteFile(file) || (file.startsWith('packages/daemon/src/') && isAppSource(file));
+
 /**
  * Blast radius of a change to `apps/desktop`: it cannot reach the daemon, fake or tracker tests (no test in a package's `test` directory
- * imports anything from the desktop), so only the daemon-side core, the gate and shared config run the full gate. Desktop core,
+ * imports anything from the desktop), so only the gate, shared config and the daemon-side core changed with it run the full gate. Desktop core,
  * which any desktop journey goes through, runs the whole `unit` project, all e2e specs and visual.
  */
 const isDesktopCore = (file: string): boolean => matches(file, DESKTOP_CORE_GLOBS) && !isTest(file);
@@ -328,17 +355,23 @@ export function selectChecks(
   }
 
   const isRecognised = (file: string): boolean =>
-    matches(file, NO_CHECK_GLOBS) || isTest(file) || isSpec(file) || isVisualSpec(file) || isSnapshot(file) || isAppSource(file) || isRenderer(file);
+    matches(file, NO_CHECK_GLOBS) || isTest(file) || isSpec(file) || isVisualSpec(file) || isSnapshot(file) || isAppSource(file) || isRenderer(file) || isSuiteFile(file);
   const gate = files.filter(
     (file) =>
       (matches(file, FULL_GATE_GLOBS) && !isSpec(file)) ||
-      matches(file, DAEMON_CORE_GLOBS) ||
       (isSpec(file) && file.endsWith('board-perf.spec.ts')) ||
       !isRecognised(file),
   );
   if (gate.length > 0) {
     plan.full = true;
     plan.reasons.push(`full gate: shared, core or unrecognised files changed (${gate.join(', ')})`);
+    return plan;
+  }
+  const daemonCore = files.filter((file) => matches(file, DAEMON_CORE_GLOBS));
+  const desktop = files.filter(isDesktopFile);
+  if (daemonCore.length > 0 && desktop.length > 0) {
+    plan.full = true;
+    plan.reasons.push(`full gate: the daemon's protocol or core (${daemonCore.join(', ')}) changed with desktop files (${desktop.join(', ')}), which only the e2e sees together`);
     return plan;
   }
 
@@ -357,6 +390,12 @@ export function selectChecks(
   const scanners = scanned.length > 0 ? `the scanners: ${scanned.join('; ')}` : '';
   plan.reasons.push(related || scanners ? `unit: ${[related, scanners].filter(Boolean).join(', and ')}` : 'unit: skipped, no code changed');
 
+  const served = files.filter(isServerSuite);
+  if (served.length > 0) {
+    plan.server = true;
+    plan.reasons.push(`server: ${served.length} daemon or server suite file(s) changed, so the server suite runs${daemonCore.length > 0 ? ` (daemon core: ${daemonCore.join(', ')})` : ''}`);
+  }
+
   const specs = new Set<string>();
   for (const file of files.filter(isSpec)) {
     const name = specName(file);
@@ -372,7 +411,9 @@ export function selectChecks(
   let smoke = false;
   for (const file of files.filter((f) => isAppSource(f))) {
     const mapped = E2E_MAP.filter(([glob]) => matchesGlob(file, glob)).flatMap(([, s]) => s);
-    if (mapped.length === 0) {
+    if (mapped.length === 0 && isServerSuite(file)) {
+      plan.reasons.push(`e2e: ${file} is in no map entry; the server suite covers it`);
+    } else if (mapped.length === 0) {
       smoke = true;
       plan.reasons.push(`e2e: ${file} is in no map entry, so the smoke set runs`);
     } else {

@@ -1,18 +1,20 @@
 // The user's queues in the Captain's For you (and beside the Simplified design's Needs-you list): "To look at · 4",
-// with Go through ▸ opening the focus view. The queues' own Needs-you rows stay where they are; the count includes them, as
+// with Go through ▸ bringing the queue's tile into view, selected, going through its things one at a time. The queues' own Needs-you rows stay where they are; the count includes them, as
 // the queue's card does.
 import { Inbox } from 'lucide-react';
 import type { Agent, BoardItem } from '@agent-board/daemon/protocol';
 import { Button } from '../../ui';
 import { needsYouEntries } from '../../../../shared/needs-you';
 import { useNeedsYouShows } from '../../needs-you-setting';
-import { openFocus } from './queue-board';
+import { useBoardCommands } from '../commands';
+import { goThrough } from './queue-board';
 import { queueData } from './queue-card';
 import { lookCount, needsInScope } from './to-look-at';
 
 /** A row for each of the user's queues with something to look at. */
 export function ToLookAtRows({ items, agents }: { items: readonly BoardItem[]; agents: readonly Agent[] }) {
   const entries = needsYouEntries(agents, useNeedsYouShows());
+  const commands = useBoardCommands();
   const rows = items.flatMap((item) => {
     if (item.kind !== 'queue') return [];
     const data = queueData(item.data);
@@ -28,7 +30,10 @@ export function ToLookAtRows({ items, agents }: { items: readonly BoardItem[]; a
           <b>
             {title} · {count}
           </b>
-          <Button size="sm" variant="primary" onClick={() => openFocus(item.id)}>
+          <Button size="sm" variant="primary" onClick={() => {
+              goThrough(item.id);
+              commands.showItem(item.id);
+            }}>
             Go through ▸
           </Button>
         </li>

@@ -377,7 +377,7 @@ describe('orchestrating from the command line', () => {
     expect(refused).toMatchObject({ code: 1, err: expect.stringContaining('Codex takes a reasoning effort of low, medium, high or xhigh') });
   });
 
-  it('starts an agent with its purpose from --description: one line, cut to the cap, for new and new --prefab', async () => {
+  it('starts an agent with its purpose from --description: one line, cut to the cap, for new and new --prefab, which takes --name and --branch too', async () => {
     const { env, client, web } = await board();
     const purposeOf = async (name: string) => (await client.call('agent.list')).find((agent) => agent.name === name)!.purpose;
 
@@ -393,6 +393,9 @@ describe('orchestrating from the command line', () => {
 
     const prefab = JSON.parse((await run(env, 'new', '--prefab', 'Solo agent', '--zone', ref('zone', web.id), '--description', 'Tidies up', '--json', '--', 'Tidy up')).out) as { started: { name: string }[] };
     expect(await purposeOf(prefab.started[0]!.name)).toBe('Tidies up');
+
+    expect(await run(env, 'new', '--prefab', 'Solo agent', '--zone', ref('zone', web.id), '--name', 'named solo', '--branch', 'solo-branch', '--', 'Go')).toMatchObject({ code: 0 });
+    expect((await client.call('agent.list')).find((agent) => agent.name === 'named solo')).toMatchObject({ branch: 'solo-branch' });
   });
 
   it("gives a running agent a role, and with --send-template the role's template too, saying when the role has none", async () => {

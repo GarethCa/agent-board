@@ -62,7 +62,7 @@ function setup(zone: Partial<ZoneRow> = {}, compactWindow = 0, { clickableLinks 
     hookUrl: () => HOOK_URL,
     boardMcpUrl: () => MCP_URL,
     permissionHoldMs: 60_000,
-    trackers: { issue: unused } as AgentHostOptions['trackers'],
+    trackers: { issue: unused, issueFrom: unused } as AgentHostOptions['trackers'],
     roleTemplates: { body: unused, describe: unused },
     broadcast: unused,
     log() {},
@@ -271,6 +271,15 @@ describe('default agent names', () => {
     expect(defaultName('Rewrite the session daemon so that it survives every kind of crash')).toBe(
       'Rewrite the session daemon so that it…',
     );
+  });
+
+  it('names from the text a Markdown line shows, keeping a word’s own underscores', () => {
+    expect(defaultName('## **You are** a `design` [mock](https://example.com) worker')).toBe('You are a design mock worker');
+    expect(defaultName('- Fix _the_ snake_case_name *now*')).toBe('Fix the snake_case_name now');
+    expect(defaultName('> 1. not a list')).toBe('1. not a list');
+    expect(defaultName('```\nconst x = 1\n```')).toBe('const x = 1');
+    expect(defaultName('# \n\n> \nreal text')).toBe('real text');
+    expect(defaultName('```\n```')).toBe('');
   });
 });
 

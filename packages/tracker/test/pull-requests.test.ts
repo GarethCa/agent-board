@@ -3,7 +3,7 @@ import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, onTestFinished } from 'vitest';
-import { checksState, findPushedPullRequests, listPullRequests, mergePullRequest, viewPullRequest } from '../src/index.ts';
+import { checksState, findPushedPullRequests, listOpenPullRequests, listPullRequests, mergePullRequest, viewPullRequest } from '../src/index.ts';
 import { createFakeGitHub, FAKE_GITHUB_STATE, type FakeGitHubPullRequest } from '../src/testing.ts';
 
 const checkRun = (status: string, conclusion = '') => ({ __typename: 'CheckRun', name: 'check', status, conclusion });
@@ -118,6 +118,36 @@ describe('listPullRequests', () => {
     await expect(listPullRequests('main', { gh: github.gh, cwd: '/tmp', repo: 'acme/app' })).rejects.toMatchObject({
       kind: 'unauthorized',
     });
+  });
+});
+
+describe('listOpenPullRequests', () => {
+  const fakeWith = (pullRequests: FakeGitHubPullRequest[]) => {
+    const github = createFakeGitHub({ ...FAKE_GITHUB_STATE, pullRequests });
+    onTestFinished(github.dispose);
+    return github;
+  };
+
+  it('lists the open pull requests of the repo gh infers, anyone’s, marking those whose review is asked of the viewer', async () => {
+    const github = fakeWith([
+      pr({ number: 44, author: 'hubot', headRefName: 'fix-login', reviewRequests: [{ login: 'octocat' }] }),
+      pr({ number: 43, author: 'octocat', isDraft: true, reviewRequests: [{ login: 'someone' }] }),
+      pr({ number: 42, state: 'MERGED' }),
+      pr({ number: 41, state: 'CLOSED' }),
+      pr({ number: 7, repo: 'acme/ops' }),
+    ]);
+    const cwd = repoWithRemotes({ origin: 'https://github.com/acme/app' });
+
+    expect(await listOpenPullRequests({ gh: github.gh, cwd }, 'octocat')).toEqual([
+      { repo: 'acme/app', number: 44, title: 'PR 44', url: 'https://github.com/acme/app/pull/44', author: 'hubot', branch: 'fix-login', draft: false, reviewRequested: true },
+      { repo: 'acme/app', number: 43, title: 'PR 43', url: 'https://github.com/acme/app/pull/43', author: 'octocat', branch: 'gh-34-fix-the-login-redirect', draft: true, reviewRequested: false },
+    ]);
+    expect(github.calls()[0]?.args.slice(0, 4)).toEqual(['pr', 'list', '--state', 'open']);
+  });
+
+  it('finds none in a repo with no GitHub remote', async () => {
+    const github = fakeWith([pr({ number: 44 })]);
+    expect(await listOpenPullRequests({ gh: github.gh, cwd: repoWithRemotes({}) }, 'octocat')).toEqual([]);
   });
 });
 

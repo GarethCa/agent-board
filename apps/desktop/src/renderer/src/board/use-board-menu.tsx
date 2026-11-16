@@ -52,6 +52,10 @@ interface BoardMenuOptions {
   handPlaced(nodeId: string): boolean;
   /** Puts the tile `nodeId`, placed by hand, back under its zone's layout rule. */
   followRule(nodeId: string): void;
+  /** Whether the tile `nodeId` is an ended agent in a Spine zone, whose ticket can go to the zone's Done line. */
+  movableToDone(nodeId: string): boolean;
+  /** Folds the ticket of the agent tile `nodeId` into its zone's Done line. */
+  moveToDone(nodeId: string): void;
 }
 
 /** Where a right-click was, on the screen. */
@@ -99,6 +103,8 @@ export function useBoardMenu({
   setLeadPinned,
   handPlaced,
   followRule,
+  movableToDone,
+  moveToDone,
 }: BoardMenuOptions) {
   const toasts = useToast();
   /** The context menu open, where it was asked for and on what: the selection, one agent's tile, or empty board. */
@@ -177,6 +183,8 @@ export function useBoardMenu({
     setLeadPinned,
     handPlaced,
     followRule,
+    movableToDone,
+    moveToDone,
     copy: (text, what) =>
       void navigator.clipboard.writeText(text).then(
         () => toasts.show({ tone: 'info', message: `${what} copied` }),
@@ -197,6 +205,8 @@ export function useBoardMenu({
       setLeadPinned: (nodeId, pinned) => tileBoardRef.current.setLeadPinned(nodeId, pinned),
       handPlaced: (nodeId) => tileBoardRef.current.handPlaced(nodeId),
       followRule: (nodeId) => tileBoardRef.current.followRule(nodeId),
+      movableToDone: (nodeId) => tileBoardRef.current.movableToDone(nodeId),
+      moveToDone: (nodeId) => tileBoardRef.current.moveToDone(nodeId),
       copy: (text, what) => tileBoardRef.current.copy(text, what),
     }),
     [],

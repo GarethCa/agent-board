@@ -32,6 +32,7 @@ import { drawnPane, drawnSections, searchable, searchSettings, type SettingsHit 
 import { SimplifiedDesignSetting } from './SimplifiedDesignSetting';
 import { CharactersSetting } from './CharactersSetting';
 import { TodoLookSetting } from './TodoLookSetting';
+import { TileDesignSetting } from './TileDesignSetting';
 import { UsagePlanSetting } from './UsageSetting';
 import { WebTabsSetting } from './WebTabsSetting';
 
@@ -106,6 +107,7 @@ function sectionBody(home: SettingsHome, onError: OnError): ReactNode {
         <>
           <SimplifiedDesignSetting onError={onError} />
           <CharactersSetting />
+          <TileDesignSetting />
           <TodoLookSetting />
         </>
       );

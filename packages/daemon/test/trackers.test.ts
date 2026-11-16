@@ -373,21 +373,19 @@ describe('agents and issues', () => {
     ]);
   });
 
-  it("refuses an issue from a team other than the zone's, for starting and for linking", async () => {
+  it("starts from an issue of a team other than the zone's from that team, but refuses to link one", async () => {
     const { client } = await trackerDaemon();
     const zone = await linearZone(client);
 
-    const spawned = await rpcError(
-      client.call('agent.spawn', { zoneId: zone.id, prompt: '', issueId: 'OPS-3', ...SIZE }),
-    );
-    expect(spawned.code).toBe(RPC_ERROR.invalidParams);
-    expect(spawned.message).toBe('ACME has no issue OPS-3');
+    // The zone's team can never hold OPS-3, whose key names team OPS: it is read from OPS.
+    const spawned = await client.call('agent.spawn', { zoneId: zone.id, prompt: '', issueId: 'OPS-3', ...SIZE });
+    expect(spawned).toMatchObject({ zoneId: zone.id, issue: { id: 'OPS-3' } });
     const agent = await client.call('agent.spawn', { zoneId: zone.id, prompt: 'Look around', ...SIZE });
     const linked = await rpcError(client.call('agent.link', { sessionId: agent.sessionId, issueId: 'OPS-3' }));
     expect(linked.message).toBe('ACME has no issue OPS-3');
   });
 
-  it("takes any issue of its team in a project zone, from no project or another, and still refuses other teams'", async () => {
+  it("takes any issue of its team in a project zone, from no project or another, and still refuses to link other teams'", async () => {
     const { client } = await trackerDaemon();
     await client.call('tracker.connect', { provider: 'linear', credential: GOOD_KEY });
     const zone = await client.call('zone.add', { path: tempRepo(), x: 0, y: 0 });
@@ -402,9 +400,6 @@ describe('agents and issues', () => {
     const relinked = await client.call('agent.link', { sessionId: inNoProject.sessionId, issueId: 'ACME-2' });
     expect(relinked.issue).toMatchObject({ id: 'ACME-2' });
 
-    const spawned = await rpcError(client.call('agent.spawn', { zoneId: zone.id, prompt: '', issueId: 'OPS-3', ...SIZE }));
-    expect(spawned.code).toBe(RPC_ERROR.invalidParams);
-    expect(spawned.message).toBe('ACME has no issue OPS-3');
     const linked = await rpcError(client.call('agent.link', { sessionId: inNoProject.sessionId, issueId: 'OPS-3' }));
     expect(linked.message).toBe('ACME has no issue OPS-3');
   });

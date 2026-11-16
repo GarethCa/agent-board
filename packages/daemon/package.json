@@ -33,6 +33,7 @@
     "./pid": "./src/pid.ts",
     "./protocol": "./src/protocol.ts",
     "./repo-zone": "./src/repo-zone.ts",
+    "./zone-clean-up": "./src/zone-clean-up.ts",
     "./review-doc": "./src/review-doc.ts",
     "./spawn": "./src/spawn.ts",
     "./steps-format": "./src/steps-format.ts",

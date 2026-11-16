@@ -1,5 +1,6 @@
 import type {
   ChecksState,
+  OpenPullRequest,
   PullRequest,
   PullRequestCheck,
   PullRequestComment,
@@ -26,6 +27,7 @@ export type { GateCleanup, GateRun, GateRunStatus } from './gate-rules.ts';
 export type { GateStep, GateStepStatus } from './gate-output.ts';
 export type {
   ChecksState,
+  OpenPullRequest,
   PullRequest,
   PullRequestCheck,
   PullRequestComment,
@@ -53,7 +55,7 @@ export interface IssuePick {
 }
 // The provider table has no Node imports, so clients (the app's renderer) can use it too.
 export { isTrackerProvider, shortIssueId, TRACKER_PROVIDERS } from '@agent-board/tracker/providers';
-export { pullRequestOfUrl } from '@agent-board/tracker/pull-request-ref';
+export { pullRequestKey, pullRequestOfUrl } from '@agent-board/tracker/pull-request-ref';
 import { isTrackerProvider } from '@agent-board/tracker/providers';
 
 /**
@@ -548,7 +550,7 @@ export interface ZoneLayout {
  * never one of the user's stickies. A `clock` is a schedule (`ClockData`). A `crew` is a running crew's card (`CrewCardData`),
  * which the board keeps.
  */
-export const BOARD_ITEM_KINDS = ['sticky', 'text', 'shape', 'image', 'link', 'issue', 'agent-note', 'clock', 'document', 'plan', 'steps', 'memory', 'queue', 'crew', 'todo', 'stages'] as const;
+export const BOARD_ITEM_KINDS = ['sticky', 'text', 'shape', 'image', 'link', 'issue', 'agent-note', 'clock', 'document', 'plan', 'steps', 'memory', 'queue', 'crew', 'todo', 'stages', 'done-line'] as const;
 export type BoardItemKind = (typeof BOARD_ITEM_KINDS)[number];
 
 /**
@@ -2548,6 +2550,50 @@ export const CLOCK_FOLDED_SIZE = { width: 200, height: 34 };
 
 /** How wide the chip is that stands for the clocks a Spine zone set aside, as they don't fit along its top (“+2”). */
 export const SPINE_MORE_CHIP_WIDTH = 56;
+
+/** The height of a Spine zone's Done line (an item of kind `done-line`): one row of chips under its band columns. */
+export const DONE_LINE_HEIGHT = 40;
+
+/**
+ * A finished ticket on a Spine zone's Done line, put there by a Clean up (`zone.cleanUp`): its band's tiles (`members`,
+ * tile keys) and the notes gathered to them (`notes`, item ids) are hidden behind its chip until it is put back.
+ */
+export interface DoneTicket {
+  /** Its band's key: `issue:<id>`, or its first tile's key. */
+  key: string;
+  issue: LinkedIssue | null;
+  /** What its chip says after the ticket's id: the ticket's title, or its first agent's name. */
+  title: string;
+  /** Its pull request: the merged one, else the newest. */
+  pr: { number: number; url: string } | null;
+  members: string[];
+  notes: string[];
+  /** When it went to the Done line. */
+  doneAt: string;
+}
+
+/** A Done line's data: its tickets, oldest first. */
+export interface DoneLineData {
+  tickets: DoneTicket[];
+}
+
+/**
+ * What a Clean up changed, for its Undo (`zone.undoCleanUp`): the zone's Spine state as it was, each item it moved or
+ * gathered where it was, and the Done line's data before (null: there was none).
+ */
+export interface CleanUpUndo {
+  spine: unknown;
+  items: { id: string; x: number; y: number; gatheredTo: string | null }[];
+  doneLine: DoneLineData | null;
+}
+
+/** What a Clean up did: how many tiles, notes and docs it moved, how many tickets went to Done, and its Undo. */
+export interface CleanUpResult {
+  zone: Zone;
+  moved: number;
+  done: number;
+  undo: CleanUpUndo;
+}
 
 /** How many of a clock's runs its status carries, newest first. */
 export const CLOCK_RUNS_KEPT = 20;
@@ -4837,7 +4883,8 @@ export type SpawnAgentParams = TerminalSize & {
   /**
    * An issue to start from: the agent is linked to it, its branch is named from it (`acme-12-short-title`), and the
    * issue comes first in its prompt, before `prompt`. Read from `issueZoneId`'s tracker, else its own zone's, else the
-   * tracker of the zone that names the issue's team, its starter's zone, or a zone of its repo.
+   * tracker of the zone that names the issue's team, else the tracker its key names, its starter's zone, or a zone of
+   * its repo. Only a tracker that can hold an id of its shape is tried: a team key is never read from GitHub.
    */
   issueId?: string;
   /**
@@ -5639,6 +5686,22 @@ export interface DaemonMethods {
    */
   'zone.followRule': { params: { id: string; tiles: string[]; reflow?: boolean }; result: Zone };
   /**
+   * The board's Clean up of a Spine zone: lays its bands out afresh, stands each agent's notes and docs at the tail of its
+   * band (the lead's at the foot of its column), and folds each finished ticket (every agent ended, or its pull request
+   * merged) into the zone's Done line. Never moves a tile placed by hand, an agent the user started, the user's own
+   * items, or a note the user edited or dragged. Refused for a zone not on Spine.
+   */
+  'zone.cleanUp': { params: { id: string }; result: CleanUpResult };
+  /** Puts a Clean up back as it was (`CleanUpUndo`, from `zone.cleanUp`), and lays the zone out by its rule again. */
+  'zone.undoCleanUp': { params: { id: string; undo: CleanUpUndo }; result: Zone };
+  /**
+   * Puts a ticket on a zone's Done line (`DoneTicket.key`) back on the board, at the foot of the shortest column as a new
+   * one goes, and keeps it out of the next Clean up.
+   */
+  'zone.putBackDone': { params: { id: string; key: string }; result: Zone };
+  /** Folds the finished ticket `sessionId`'s agent works on into the zone's Done line, by hand: one put back, say. */
+  'zone.moveToDone': { params: { id: string; sessionId: string }; result: CleanUpResult };
+  /**
    * Puts a sticky note (or a text item) of `text` on the board, marked as made by it, at `place` (`LayoutPlace`; in its
    * own zone by default), clear of the tiles and items there, in any zone.
    */
@@ -5728,6 +5791,10 @@ export interface DaemonMethods {
       repo?: string;
       issueId?: string;
       description?: string;
+      /** The name of the member that starts on the prompt (its builder, its lead, or a ticket's chat), in place of the prefab's. */
+      agentName?: string;
+      /** The branch that member works on, as `orchestrator.spawn`'s `branch`. */
+      branch?: string;
       roundLimit?: number;
       /** For a `ticket` prefab, the kind of chat this ticket starts with, in place of the prefab's (`CrewPrefab.ticketChat`). */
       ticketChat?: TicketChatKind;
@@ -6166,6 +6233,13 @@ export interface DaemonMethods {
    * when gh isn't logged in, and `invalidParams` for anything GitHub refuses, such as an unknown pull request.
    */
   'pullRequest.details': { params: PullRequestRef; result: PullRequestDetails };
+  /**
+   * The open pull requests of the repos the board's zones and agents work in, by anyone, through the user's own gh
+   * login: each once, by repo and newest first within one, each marked with whether a review is asked of the gh user by name. A
+   * repo GitHub can't be asked about is left out; fails as `pullRequest.details` does only when none could be. Read
+   * again at most every half minute.
+   */
+  'pullRequest.search': { params: undefined; result: OpenPullRequest[] };
   /**
    * Approves the pull request as the gh user at `headCommit`, the commit the user saw, refusing with `invalidParams` if
    * its head has moved on since; then reads it again. Fails as `pullRequest.details` does.

@@ -65,7 +65,7 @@ describe('the channels main handles', () => {
     ['gates', registerGateIpc, ['gate:list', 'gate:log', 'gate:merge', 'gate:run', 'gate:sendFailure', 'gate:status', 'gate:stop']],
     ['items', (d: DaemonLink) => registerItemIpc(d, '/data'), ['item:add-clock', 'item:change-memory', 'item:change-queue', 'item:change-todo', 'item:clocks', 'item:create', 'item:delete', 'item:hand-job', 'item:import-image', 'item:list', 'item:memory-history', 'item:queue-history', 'item:read-memory', 'item:read-queue', 'item:taken-jobs', 'item:update']],
     ['orchestrators', registerOrchestratorIpc, ['orchestrator:activity', 'orchestrator:arrange-ticket', 'orchestrator:check-prefab', 'orchestrator:crew-round', 'orchestrator:import-prefab', 'orchestrator:prefabs', 'orchestrator:remove-prefab', 'orchestrator:save-prefab', 'orchestrator:set-ticket-chat', 'orchestrator:start-prefab', 'orchestrator:stop-crew', 'orchestrator:usage']],
-    ['pull requests', registerPullRequestIpc, ['pull-request:approve', 'pull-request:details', 'pull-request:merge']],
+    ['pull requests', registerPullRequestIpc, ['pull-request:approve', 'pull-request:details', 'pull-request:merge', 'pull-request:search']],
     ['reviews', registerReviewIpc, ['review:dismiss', 'review:list', 'review:merge', 'review:send', 'review:set-cap', 'review:start']],
     ['shells', registerShellIpc, ['shell:closeOwnPanes', 'shell:closePane', 'shell:create', 'shell:createTab', 'shell:delete', 'shell:forgetWindow', 'shell:list', 'shell:move', 'shell:movePane', 'shell:moveSurface', 'shell:moveTab', 'shell:ownTab', 'shell:resizeSplit', 'shell:resumePane', 'shell:returnPane', 'shell:scripts', 'shell:setName', 'shell:setPaneName', 'shell:setWindowLayout', 'shell:split', 'shell:tabWindows', 'shell:unsplitTabs', 'shell:windowLayout']],
     ['web tabs', () => registerWebTabIpc({ isBoard: () => false, isSettings: () => false, keepLogins: async () => true }), ['web-tab:back', 'web-tab:cancelHandOff', 'web-tab:clearData', 'web-tab:close', 'web-tab:dismissOffered', 'web-tab:dismissPasskey', 'web-tab:find', 'web-tab:focus', 'web-tab:focusWindow', 'web-tab:forget', 'web-tab:forward', 'web-tab:handOff', 'web-tab:load', 'web-tab:open', 'web-tab:openInBrowser', 'web-tab:openOffered', 'web-tab:openPlan', 'web-tab:reload', 'web-tab:setBounds', 'web-tab:stopFind', 'web-tab:typing']],
@@ -123,6 +123,11 @@ describe('what a pass-through sends the daemon', () => {
     expect(await invoke('zone:configure', 'z1', { layoutRule: 'lanes' })).toMatchObject({ method: 'zone.configure', params: { id: 'z1', layoutRule: 'lanes' } });
     expect(await invoke('zone:followRule', 'z1', ['agent:a'])).toEqual({ method: 'zone.followRule', params: { id: 'z1', tiles: ['agent:a'] } });
     // A Tidy: laid out afresh.
+    expect(await invoke('zone:cleanUp', 'z1')).toEqual({ method: 'zone.cleanUp', params: { id: 'z1' } });
+    const undo = { spine: null, items: [], doneLine: null };
+    expect(await invoke('zone:undoCleanUp', 'z1', undo)).toEqual({ method: 'zone.undoCleanUp', params: { id: 'z1', undo } });
+    expect(await invoke('zone:putBackDone', 'z1', 'issue:A-1')).toEqual({ method: 'zone.putBackDone', params: { id: 'z1', key: 'issue:A-1' } });
+    expect(await invoke('zone:moveToDone', 'z1', 's1')).toEqual({ method: 'zone.moveToDone', params: { id: 'z1', sessionId: 's1' } });
     expect(await invoke('zone:followRule', 'z1', [], true)).toEqual({ method: 'zone.followRule', params: { id: 'z1', tiles: [], reflow: true } });
   });
 

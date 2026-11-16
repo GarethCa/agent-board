@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useRef, type ReactNode, type RefObject } from 'react';
+import type { Surface } from '@agent-board/daemon/window-layout';
 
 /** An agent's or a shell's tile, by its agent's session id or its shell's id. */
 export interface TileRef {
@@ -21,6 +22,14 @@ export interface BoardCommands {
   showTile(tile: TileRef): boolean;
   /** Opens the tile as Enter on it does once selected: its session window, or expanded in place, as the setting says. */
   openTile(tile: TileRef): boolean;
+  /**
+   * Opens a pull request, page or session picked in ⌘K on the board, with nothing open: in the window of the agent whose
+   * pull request it is, or `beside` (⇧↵) the agent selected, in a pane of its own there; else a pull request or page in
+   * a window of its own. False for a session with nothing to be beside, for the caller to open as ↵ does.
+   */
+  openSurface(surface: Surface, beside: boolean): boolean;
+  /** Whether ⇧↵ on the board opens the surface beside an agent's session, in a pane of its own, rather than as ↵ does. */
+  opensBeside(surface: Surface): boolean;
   /** Shows the tile expanded in place of the expanded tile `fromNodeId`, which collapses, the focus in its terminal. */
   switchExpanded(fromNodeId: string, tile: TileRef): boolean;
   /** Brings the zone into view, collapsing the expanded tile `collapseNodeId` first, if given. */
@@ -53,6 +62,8 @@ export function useBoardCommands(): BoardCommands {
       openSession: (sessionId) => commands.current?.openSession(sessionId) ?? false,
       showTile: (tile) => commands.current?.showTile(tile) ?? false,
       openTile: (tile) => commands.current?.openTile(tile) ?? false,
+      openSurface: (surface, beside) => commands.current?.openSurface(surface, beside) ?? false,
+      opensBeside: (surface) => commands.current?.opensBeside(surface) ?? false,
       switchExpanded: (fromNodeId, tile) => commands.current?.switchExpanded(fromNodeId, tile) ?? false,
       showZone: (zoneId, collapseNodeId) => commands.current?.showZone(zoneId, collapseNodeId) ?? false,
       showTicketItem: (ticket, itemId) => commands.current?.showTicketItem(ticket, itemId),

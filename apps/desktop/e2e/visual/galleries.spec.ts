@@ -361,7 +361,7 @@ for (const { theme, suffix } of THEMES) {
       // Not pinned: the app bundles its fonts, so these shots guard them too, and they render the same on any machine.
       const fontsLoaded = await window.evaluate(async () => {
         await document.fonts.ready;
-        return ['13px "Bricolage Grotesque Variable"', '11.5px "JetBrains Mono Variable"'].every((font) => document.fonts.check(font));
+        return ['13px "Manrope Variable"', '11.5px "JetBrains Mono Variable"'].every((font) => document.fonts.check(font));
       });
       expect(fontsLoaded, 'the bundled fonts loaded').toBe(true);
       await ignorePointer(window);
@@ -386,7 +386,7 @@ for (const { theme, suffix } of THEMES) {
     try {
       await expect(window.locator('html')).toHaveAttribute('data-design', 'simplified');
       await expect(window.getByTestId('component-gallery')).toBeVisible();
-      // Its tokens took: the system's type, not the bundled Bricolage. A machine without SF Pro still mismatches the shots.
+      // Its tokens took: the system's type, not the bundled Manrope. A machine without SF Pro still mismatches the shots.
       expect(await window.evaluate(() => getComputedStyle(document.body).fontFamily)).toContain('-apple-system');
       await window.evaluate(() => document.fonts.ready);
       await ignorePointer(window);
@@ -475,7 +475,7 @@ const QUEUE_SHOTS = ['card', 'inbox', 'empty', 'icons', 'peek'];
  * A queue handed on, on its own page: the user's with a Needs-you row, one no one takes from, a ticket on its taker's
  * tile, the focus view, Hand on and the drain sheet.
  */
-const HAND_ON_SHOTS = ['look', 'idle', 'ticket', 'focus', 'focus-needs', 'hand', 'drain'];
+const HAND_ON_SHOTS = ['look', 'idle', 'ticket', 'going', 'going-needs', 'going-narrow', 'hand', 'drain'];
 
 for (const design of ['classic', 'simplified'] as const) {
   for (const { theme, suffix } of THEMES) {
@@ -503,7 +503,7 @@ for (const design of ['classic', 'simplified'] as const) {
 for (const design of ['classic', 'simplified'] as const) {
   for (const { theme, suffix } of THEMES) {
     const named = (shot: string) => `queue-${shot}${design === 'simplified' ? '-simplified' : ''}${suffix}`;
-    test(`a queue handed on: Needs-you rows, no one taking, a ticket, the focus view, Hand on and the drain sheet: its gallery page, ${design}, ${theme}`, async () => {
+    test(`a queue handed on: Needs-you rows, no one taking, a ticket, going through in the tile, Hand on and the drain sheet: its gallery page, ${design}, ${theme}`, async () => {
       needsBaselines(...HAND_ON_SHOTS.map(named));
       const dataDir = tempDataDir();
       const { app, window } = await launchGallery(dataDir, theme, undefined, { design }, '#gallery-queue-hand-on');

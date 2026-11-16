@@ -36,7 +36,7 @@ test("a project's right-click menu makes terminals in it, tidies, renames, recol
     // A heading with a dot, its name and ⋯: none of the Classic tab's buttons.
     await expect(project(window).getByText('Kobo', { exact: true })).toBeVisible();
     await expect(project(window).getByRole('button', { name: 'Project options' })).toBeVisible();
-    for (const gone of ['New agent', 'New shell in zone', 'Zone tracker', 'Bind zone', 'Tidy zone', 'Zone options']) {
+    for (const gone of ['New agent', 'New shell in zone', 'Zone tracker', 'Bind zone', 'Clean up zone', 'Zone options']) {
       await expect(project(window).getByRole('button', { name: gone })).toHaveCount(0);
     }
 
@@ -48,7 +48,7 @@ test("a project's right-click menu makes terminals in it, tidies, renames, recol
       await expect(window.getByTestId('shell-tile')).toHaveCount(made);
     }
 
-    // Tidy up puts two scattered tiles back in a row, at a new project's roomy spacing.
+    // Clean up puts two scattered tiles back in a row, at a new project's roomy spacing.
     await window.evaluate(async () => {
       const { shells, zones } = globalThis.window.agentBoard;
       const [zone] = await zones.list();
@@ -60,7 +60,7 @@ test("a project's right-click menu makes terminals in it, tidies, renames, recol
       { x: 60, y: 120 },
       { x: 360, y: 150 },
     ]);
-    await pick(window, 'Tidy up');
+    await pick(window, 'Clean up');
     await expect.poll(() => shellPlaces(window)).toEqual([
       { x: 32, y: 56 },
       { x: 32 + 256 + 32, y: 56 },

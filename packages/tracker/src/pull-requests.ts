@@ -1,5 +1,5 @@
 import { GhError, runGh, type GhOptions } from './gh.ts';
-import type { PullRequestRef } from './pull-request-ref.ts';
+import { pullRequestOfUrl, type PullRequestRef } from './pull-request-ref.ts';
 
 /** A pull request's state, as a tile shows it. */
 export type PullRequestState = 'open' | 'draft' | 'merged' | 'closed';
@@ -110,6 +110,62 @@ export async function findPushedPullRequests(
   }
   if (found.size > 0 || where.commit === undefined || !COMMIT_ID.test(where.commit)) return [...found.values()];
   return pullRequestList(['--search', where.commit], options);
+}
+
+/** An open pull request in one of the board's repos, by anyone: what the switcher's `pr:` search lists. */
+export interface OpenPullRequest extends PullRequestRef {
+  title: string;
+  url: string;
+  /** Its author's login. */
+  author: string;
+  /** Its head branch. */
+  branch: string;
+  draft: boolean;
+  /** Whether a review is asked of the viewer by name (not through a team). */
+  reviewRequested: boolean;
+}
+
+/** At most this many open pull requests per repo. */
+const MAX_OPEN_PULL_REQUESTS = 30;
+
+/** What `gh pr list --json` gives for an open pull request in a repo. */
+interface GhOpenPullRequest {
+  number: number;
+  title: string;
+  url: string;
+  isDraft: boolean;
+  headRefName: string;
+  author: { login: string } | null;
+  reviewRequests: { login?: string }[] | null;
+}
+
+/**
+ * The open pull requests, newest first, of the GitHub repo gh infers from the git repo at `options.cwd`, through the
+ * user's own `gh` login, each marked with whether a review is asked of `viewer` (a login). None in a repo with no
+ * GitHub remote. Failures are `TrackerError`s.
+ */
+export async function listOpenPullRequests(options: PullRequestOptions, viewer: string): Promise<OpenPullRequest[]> {
+  let found: GhOpenPullRequest[];
+  try {
+    const args = ['pr', 'list', '--state', 'open', ...(options.repo === undefined ? [] : ['--repo', options.repo]), '--limit', String(MAX_OPEN_PULL_REQUESTS)];
+    found = JSON.parse(await runGh([...args, '--json', 'number,title,url,isDraft,headRefName,author,reviewRequests'], options)) as GhOpenPullRequest[];
+  } catch (error) {
+    if (error instanceof GhError && NOT_ON_GITHUB.test(error.stderr)) return [];
+    throw error;
+  }
+  return found.flatMap((pr) => {
+    const ref = pullRequestOfUrl(pr.url);
+    if (ref === undefined) return [];
+    return [{
+      ...ref,
+      title: pr.title,
+      url: pr.url,
+      author: pr.author?.login ?? '',
+      branch: pr.headRefName,
+      draft: pr.isDraft,
+      reviewRequested: (pr.reviewRequests ?? []).some((request) => request.login !== undefined && request.login.toLowerCase() === viewer.toLowerCase()),
+    }];
+  });
 }
 
 /** `gh pr list` of every state, narrowed by `filter`, newest first. */

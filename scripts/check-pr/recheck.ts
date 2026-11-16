@@ -13,7 +13,7 @@
  */
 import { execFileSync } from 'node:child_process';
 import { readRecord, type GateRecord } from '../gate-results/results.ts';
-import type { Plan } from './select.ts';
+import { isServerSuite, type Plan } from './select.ts';
 
 /** How many first-parent commits back from HEAD to look for a record. */
 const MAX_RECORD_DISTANCE = 50;
@@ -60,9 +60,13 @@ export function recheckPlan(record: GateRecord, changed: Plan, changedFiles: rea
     if (plan.unit.length === 0 && !plan.unitAll) reused.push('test');
   } else if (test.failed !== undefined) {
     plan.unit.push(...test.failed.filter((file) => !plan.unit.includes(file)));
+    // The server suite's files are in its own project, which only the server step runs: a failed one reruns the suite.
+    const suite = test.failed.filter(isServerSuite);
+    if (suite.length > 0) plan.server = true;
     // The whole unit project runs for the change already; the failed processes-project files need the related run.
-    if (plan.unitAll) plan.processes = [...new Set([...(plan.processes ?? []), ...test.failed])];
-    plan.reasons.push(`recheck: unit tests, the ${test.failed.length} file(s) that failed on ${short}`);
+    const processes = test.failed.filter((file) => !isServerSuite(file));
+    if (plan.unitAll && processes.length > 0) plan.processes = [...new Set([...(plan.processes ?? []), ...processes])];
+    plan.reasons.push(`recheck: unit tests, the ${test.failed.length} file(s) that failed on ${short}${suite.length > 0 ? `, ${suite.length} of them in the server suite, which runs again` : ''}`);
   } else {
     plan.testAll = true;
     plan.reasons.push(`recheck: every unit test, as the run on ${short} ended ${test.outcome} with no failed file to rerun`);

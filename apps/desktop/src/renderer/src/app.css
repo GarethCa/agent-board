@@ -3656,6 +3656,277 @@ kbd {
   white-space: nowrap;
 }
 
+/*
+ * The Porthole design of an agent's tile (PortholeTile.tsx), picked in Settings › Tile design: its robot in a round
+ * window whose ring carries its state, its name and state beside it, a line of what it is doing or asks, and its ticket,
+ * pull request and age along the foot. No buttons at rest: hover or focus shows Expand and More in a tray in its corner
+ * and its one action in the age's place. It looks the same at every zoom.
+ */
+.porthole-tile.hybrid-tile-agent {
+  justify-content: flex-start;
+  gap: var(--space-1-25);
+  padding: var(--space-2-5) var(--space-3-5);
+  border: none;
+  border-radius: var(--radius-glance);
+  font-family: var(--font-sans);
+  /* The ring round its window says its state; the tile itself keeps no outline but a hand-off's or a drop's. */
+  outline-color: transparent;
+}
+
+/* Done, it sits flat: no shadow, a hairline round it. A drop, a hand-off or its crew's halo still shows over it. */
+.porthole-tile.hybrid-tile-agent[data-glance='done']:not([data-drop-over], [data-job-drop], [data-handoff], [data-crew-lit], [data-orchestrator]) {
+  box-shadow: none;
+  outline: 1px solid var(--border);
+}
+
+.porthole-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2-5);
+  min-height: var(--porthole-size);
+}
+
+.porthole-port {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: var(--porthole-size);
+  height: var(--porthole-size);
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: var(--porthole-fill);
+  box-shadow: 0 0 0 var(--space-0-5) var(--border);
+  color: var(--text-soft);
+}
+
+/* The robot stands a little low in its window, its feet on the rim. */
+.porthole-port .character {
+  margin-top: var(--space-0-5);
+}
+
+.porthole-port[data-ring='work'] {
+  box-shadow: 0 0 0 var(--space-0-5) var(--glance-work-ring);
+  color: var(--accent-ink);
+}
+
+.porthole-port[data-ring='done'] {
+  box-shadow: 0 0 0 var(--space-0-5) var(--glance-done-ring);
+  color: var(--success);
+}
+
+.porthole-port[data-ring='ask'] {
+  box-shadow: 0 0 0 var(--glance-ring-width) var(--glance-ask);
+  color: var(--state-waiting-ink);
+}
+
+.porthole-port[data-ring='problem'] {
+  box-shadow: 0 0 0 var(--glance-ring-width) var(--glance-problem);
+  color: var(--glance-problem);
+}
+
+/* With robots off, its state's glyph fills the window. */
+.porthole-glyph {
+  width: var(--space-4);
+  height: var(--space-4);
+}
+
+.porthole-about {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.porthole-name {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 100%;
+}
+
+/* One size whatever its length, a step under the mock's, on up to two lines. */
+.porthole-tile .hybrid-tile-name {
+  min-width: 0;
+  padding-inline-end: var(--space-1);
+  font-size: var(--font-size-md-plus);
+  font-weight: var(--weight-bold);
+  line-height: var(--leading-snug);
+  letter-spacing: normal;
+}
+
+.porthole-word {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-25);
+  color: var(--muted);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+}
+
+.porthole-word-glyph {
+  flex: none;
+  width: var(--font-size-badge);
+  height: var(--font-size-badge);
+}
+
+.porthole-word[data-tone='work'] {
+  color: var(--accent-ink);
+}
+
+.porthole-word[data-tone='done'] {
+  color: var(--success);
+}
+
+.porthole-word[data-tone='limit'] {
+  color: var(--state-rate-limited-ink);
+}
+
+/* What wants the user, filled: amber when it asks, red when it went wrong. */
+.porthole-word[data-tone='chip'] {
+  padding: var(--space-0-5) var(--space-2-25) var(--space-0-5) var(--space-1-75);
+  border-radius: var(--radius-pill);
+  background: var(--glance-ask-fill);
+  color: var(--glance-ask-ink);
+  font-weight: var(--weight-bold);
+}
+
+.porthole-tile[data-glance='failed'] .porthole-word[data-tone='chip'] {
+  background: var(--glance-problem-fill);
+  color: var(--glance-problem-ink);
+}
+
+/* Up to two lines, in the room a two-line name leaves: fitted to the whole lines that fit. */
+.porthole-now {
+  display: -webkit-box;
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  color: var(--text-soft);
+  font-size: var(--font-size-md);
+  line-height: var(--space-4-5);
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+/* A command it asks to run, as the command. */
+.porthole-now[data-command] {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+}
+
+.porthole-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  min-width: 0;
+  min-height: var(--space-5);
+  margin-top: auto;
+}
+
+.porthole-meta .ui-chip {
+  border-radius: var(--radius-pill);
+}
+
+/* Its repo, its crew's flags and its other jobs: small quiet words, the repo giving way first when the row is full. */
+.glance-tile :is(.glance-tile-repo, .glance-tile-crew-flags, .glance-tile-more) {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+}
+
+.glance-tile .glance-tile-repo {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.porthole-age {
+  margin-inline-start: auto;
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Expand and More, in a tray in its top corner, each a 24px button with a 28px target. */
+.porthole-tools {
+  position: absolute;
+  top: var(--space-1-75);
+  right: var(--space-1-75);
+  display: flex;
+  align-items: center;
+  padding: var(--space-0-5);
+  border-radius: var(--radius-pill);
+  background: var(--raised);
+  box-shadow: var(--shadow-glance-tray);
+}
+
+.porthole-tools .ui-icon-button[data-size='xs'] {
+  position: relative;
+  width: var(--space-6);
+  height: var(--space-6);
+  border-radius: var(--radius-pill);
+  color: var(--muted);
+}
+
+.porthole-tools .ui-icon-button[data-size='xs']::after {
+  content: '';
+  position: absolute;
+  inset: calc(-1 * var(--space-0-5));
+}
+
+.porthole-tools .ui-icon-button svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+}
+
+/* Its one action, in its foot's corner, over the age: filled when it wants the user, quiet otherwise. */
+.porthole-action {
+  position: absolute;
+  right: var(--space-3);
+  bottom: var(--space-2-5);
+}
+
+.porthole-action .ui-button[data-size='xs'] {
+  height: var(--space-6);
+  padding: 0 var(--space-2-5);
+  border-radius: var(--radius-pill);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-bold);
+}
+
+/* At rest it has no buttons: hover, focus or selection shows them, and an open ask or menu keeps them. */
+.porthole-tile :is(.porthole-tools, .porthole-action) {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--motion-fast) var(--ease-out);
+}
+
+.porthole-tile:is(:hover, :focus-within) :is(.porthole-tools, .porthole-action),
+.react-flow__node.selected .porthole-tile :is(.porthole-tools, .porthole-action),
+.porthole-tile :is(.porthole-tools, .porthole-action):has([data-state='open']) {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.porthole-tile:has(.porthole-action):is(:hover, :focus-within) .porthole-age,
+.react-flow__node.selected .porthole-tile:has(.porthole-action) .porthole-age {
+  visibility: hidden;
+}
+
+@media (hover: none) {
+  .porthole-tile :is(.porthole-tools, .porthole-action) {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
 /* The calm tile's other faces under the Simplified design: a shell's tile and a start's tile are the calm tile (CalmShellTile.tsx,
    StartTile.tsx), so they take its rules above; what follows is only what they add. */
 .calm-tile .hybrid-tile-folder {
@@ -8954,35 +9225,52 @@ button.chat-chip[aria-expanded='true'] {
   box-shadow: var(--shadow-focus);
 }
 
-/* The focus view: one thing to look at, over the board. */
-.queue-focus-head {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1-5);
+/* The user's queue going through its things one at a time, in its own tile: the board around it stays usable. */
+.queue-going:focus {
+  outline: none;
 }
 
-.queue-focus-head svg {
-  width: var(--icon-sm);
-  height: var(--icon-sm);
+.queue-going-back {
+  flex: none;
+  margin: calc(-1 * var(--space-0-5)) calc(-1 * var(--space-1));
+  padding: var(--space-0-5) var(--space-1);
+  border: 0;
+  background: none;
+  color: var(--accent-strong);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  cursor: pointer;
 }
 
-.queue-focus {
-  display: grid;
-  gap: var(--space-2);
-  width: var(--queue-focus-width);
-  max-width: 100%;
+.queue-going-back:focus-visible {
+  border-radius: var(--radius-sm);
+  outline: none;
+  box-shadow: var(--shadow-focus);
 }
 
-.queue-focus-top {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
+.queue-going-place {
+  flex: none;
+  margin-left: auto;
   color: var(--muted);
   font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
-.queue-focus-kind {
+.queue-going-body {
+  display: grid;
+  flex: 1;
+  align-content: start;
+  justify-items: start;
+  gap: var(--space-1-5);
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.queue-going-kind {
   padding: var(--space-px) var(--space-1-5);
   border-radius: var(--radius-sm);
   background: var(--panel);
@@ -8992,24 +9280,47 @@ button.chat-chip[aria-expanded='true'] {
   font-weight: var(--weight-bold);
 }
 
-.queue-focus-kind[data-tone='needs'] {
+.queue-going-kind[data-tone='needs'] {
   background: var(--state-waiting-soft);
   color: var(--state-waiting-ink);
 }
 
-.queue-focus-title {
+.queue-going-title {
   margin: 0;
-  font-size: var(--font-size-lg);
+  font-size: var(--font-size-md);
   font-weight: var(--weight-semibold);
+  overflow-wrap: anywhere;
 }
 
-.queue-focus-facts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
+.queue-going-detail {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--font-size-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.queue-going-facts {
   margin: 0;
   color: var(--text-soft);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-xs);
+}
+
+.queue-going-foot {
+  display: grid;
+  gap: var(--space-1);
+  margin-top: auto;
+}
+
+/* Two rows, the same for every item: Skip and Done, then Next and the item's own action on the right. */
+.queue-going-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.queue-going-open {
+  margin-left: auto;
 }
 
 /* The user's queues in the Captain's For you: "To look at · 4" and Start. */
@@ -11921,11 +12232,11 @@ button.chat-chip[aria-expanded='true'] {
 }
 
 /*
- * Reviews. A reviewer's tile is dashed: it is ephemeral, gone once dismissed. An
- * implementer under review has a Review tab in its session window: the rounds on the left, the doc in the middle, and
- * what to do with it on the right.
+ * Reviews. A reviewer's tile is dashed: it is ephemeral, gone once dismissed. A glance tile has no outline:
+ * its state word and glyph say In review. An implementer under review has a Review tab in its session window: the
+ * rounds on the left, the doc in the middle, and what to do with it on the right.
  */
-.hybrid-tile-agent[data-reviewer] {
+.hybrid-tile-agent[data-reviewer]:where(:not(.glance-tile)) {
   outline: 1.5px dashed var(--reviewer-edge);
   outline-offset: -1px;
 }
@@ -19001,4 +19312,158 @@ button.tile-folded-row:is(:hover, :focus-visible) {
   margin: 0;
   padding: var(--space-2);
   color: var(--muted);
+}
+
+/* A zone's Done line: the tickets a Clean up folded away, in one row. */
+.done-line {
+  display: flex;
+  gap: var(--space-1-5);
+  align-items: center;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 0 var(--space-2);
+  overflow: hidden;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--raised);
+}
+
+.done-line-label {
+  display: inline-flex;
+  flex: none;
+  gap: var(--space-1);
+  align-items: center;
+  padding: 0 var(--space-1);
+  border: 0;
+  background: none;
+  color: var(--state-done-ink);
+  font: inherit;
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-bold);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.done-line-chip {
+  display: inline-flex;
+  flex: none;
+  gap: var(--space-1);
+  align-items: center;
+  max-width: 100%;
+  padding: var(--space-0-5) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--state-done-soft);
+  color: var(--state-done-ink);
+  font: inherit;
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.done-line-chip:disabled {
+  cursor: default;
+}
+
+.done-line-chip-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.done-line-chip-glyph {
+  width: var(--space-3);
+  height: var(--space-3);
+}
+
+.done-line-chip-pr {
+  font-family: var(--font-mono);
+}
+
+.done-line-more {
+  background: var(--raised);
+  color: var(--muted);
+}
+
+.done-line-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  max-height: 320px;
+  padding: var(--space-2);
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--raised);
+  box-shadow: var(--shadow-tile);
+}
+
+.done-line-row {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+  justify-content: space-between;
+}
+
+.done-line-ticket {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.done-line-parts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  margin: 0;
+  padding: 0 0 0 var(--space-6);
+  list-style: none;
+}
+
+.done-line-part {
+  display: inline-flex;
+  gap: var(--space-1);
+  align-items: center;
+  padding: var(--space-0-5) var(--space-1);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+}
+
+.done-line-part:hover:not(:disabled) {
+  background: var(--state-done-soft);
+}
+
+.done-line-part:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+.done-line-part svg {
+  width: var(--space-3);
+  height: var(--space-3);
+}
+
+.done-line-note {
+  max-width: 320px;
+  margin: 0 0 0 var(--space-4);
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+  white-space: pre-wrap;
+}
+
+.done-line-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--font-size-xs);
+}
+
+/* A finished agent in a ticket still going: dimmed in its band until the whole ticket is done. */
+.react-flow__node.finished-in-band {
+  opacity: 0.55;
 }

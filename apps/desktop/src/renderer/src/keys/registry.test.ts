@@ -29,7 +29,7 @@ describe('the key registry', () => {
     }
   });
 
-  it('marks only the cheat sheet, master, memory full screen, document editing, find, reading rail, arrow-swapping, board-arranging and way-out keys new so far: the rest were in the app before it', () => {
+  it('marks only the cheat sheet, master, memory full screen, document editing, find, reading rail, arrow-swapping, zone clean-up, board-arranging and way-out keys new so far: the rest were in the app before it', () => {
     expect(KEYS.filter((entry) => entry.status === 'new').map((entry) => entry.id)).toEqual([
       'tile.full',
       'move.cheatSheet',
@@ -37,6 +37,7 @@ describe('the key registry', () => {
       'move.cheatSheetAnywhere',
       'move.parkThought',
       'edit.swapDirection',
+      'edit.cleanUpZone',
       'edit.arrangeBoard',
       'window.saveDoc',
       'window.find',
@@ -226,8 +227,9 @@ describe('the cheat sheet', () => {
     expect(off).not.toContain('window.saveDoc');
     expect(off).not.toContain('edit.swapDirection');
     expect(off).not.toContain('edit.arrangeBoard');
+    expect(off).not.toContain('edit.cleanUpZone');
     expect(off).not.toContain('tile.full');
-    expect(off).toHaveLength(on.length - 16);
+    expect(off).toHaveLength(on.length - 17);
   });
 
   it('puts the sections for where it opened first, marked here', () => {

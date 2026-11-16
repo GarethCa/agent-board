@@ -33,6 +33,7 @@ import {
   type BoardItem,
   type BoardItemKind,
   DEFAULT_CONNECTOR_LOOK,
+  type CleanUpResult,
   type Connector,
   type ConnectorEnd,
   type ConnectorSide,
@@ -60,7 +61,7 @@ import { useChromeFolds } from '../chrome/chrome-folds';
 import type { PointerMode } from '../chrome/CreateToolbar';
 import type { ZoneSource } from '../chrome/zones';
 import { errorMessage } from '../../../shared/errors';
-import { ZOOM_KEY } from '../keys';
+import { inOverlay, ZOOM_KEY } from '../keys';
 import { motionDuration, tokenNumber } from '../theme';
 import { Button, Checkbox, Dialog, useToast } from '../ui';
 import { markSeen } from '../session/mark-seen';
@@ -69,7 +70,10 @@ import { boardSettled } from '../session/terminal-sharpness';
 import { handOffWebTabs, SessionWindowsLayer } from '../windows/SessionWindows';
 import type { NavSession } from '../windows/session-nav';
 import { requestReviewTab } from '../review/review-tab';
+import { useReviews } from '../review/ReviewsProvider';
+import { reviewedPullRequests } from '../review/reviews';
 import { requestTab } from '../session/tab-request';
+import { boardOpening, type SwitcherBoard } from './switcher-host';
 import { forgetViewsExcept } from '../session/session-view';
 import {
   agentWorktrees,
@@ -122,13 +126,15 @@ import { AddZonePopover } from './AddZonePopover';
 import { draggedZoneLayout, popoverPlacement } from './add-zone';
 import { AgentFlowEdge, BriefEdge, FlowEdgeActionsContext, type FlowEdgeActions } from './FlowEdge';
 import { TakenJobsContext, useTakenJobs } from './items/taken-jobs';
-import { draggedJob, JOB_DRAG, openHandOn, QueueBoardContext, setJobDropOver, startJobDrag, takesJobFrom, type QueueBoard } from './items/queue-board';
+import { queueData } from './items/queue-card';
+import { draggedJob, JOB_DRAG, openHandOn, QueueBoardContext, setJobDropOver, startJobDrag, stopGoingThroughUnless, takesJobFrom, type QueueBoard } from './items/queue-board';
 import { HandOnHost } from './items/HandOn';
 import { DrainSheetHost } from './items/DrainSheet';
-import { QueueFocusHost } from './items/QueueFocus';
 import { FLOW_EDGE_TYPE, flowEdgeIdOf, flowEdgeIdsOf, flowEdges, type FlowRailData, handoffEnds, HandoffsContext, isFlowEdge, NEW_EDGE_LABEL, panClear } from './flow-edges';
 import { useFlowEdges } from './use-flow-edges';
 import { withTuckedClocks } from './tucked-clocks';
+import { toDone, undoCleanUp, withDoneLines } from './done-lines';
+import { useSpineJoined } from './use-spine-joined';
 import { foldedSessionIds, foldedToast, roomOf, unfoldedToast, unfoldMoves, withFoldedExternals, withFoldedZones } from './fold-zone';
 import { letGoFoldedTerminals } from '../session/TerminalPane';
 import { foldedStack, laidOutTile, pinnedLead, withShelves } from './shelves';
@@ -167,7 +173,7 @@ import { useEditing } from './editing/use-editing';
 import { renameDirect, renameKey, paneLabel, RenameRequestContext, type RenameTarget } from './rename';
 import { zoneDeleteText, type ZoneToDelete } from './editing/delete-zones';
 import { historyKey, itemChange, patched, useHistory, type BoardState, type Change, type DissolvedGroup } from './editing/use-history';
-import { layoutChoiceStep, resizeMove, tileMoveStep, tileStepAction, zoneTidy } from './hand-moves';
+import { cleanUpMessage, layoutChoiceStep, movedToDoneMessage, resizeMove, tileMoveStep, tileStepAction, zoneTidy } from './hand-moves';
 import { useSnapping } from './editing/use-snapping';
 import { tidySize, VIEW_FOLLOW_DELAY_MS } from './expanded';
 import { tileOpenAction } from './click-opens';
@@ -178,7 +184,7 @@ import { ConnectionCountsContext, edgeCounts, nextConnectionsView, revealedBy, s
 import { railOf, withRailSelected } from './rails';
 import { CrewFramesContext, CrewViewContext, selectCrews, type CrewView } from './crew-view';
 import { AgentNoteLookContext, type AgentNoteLook } from './items/agent-note-look';
-import { useSimplified } from '../design';
+import { isSimplified, useSimplified } from '../design';
 import { agentNoteTethers, isTether, TETHER_EDGE_TYPE } from './items/agent-note-tethers';
 import { TetherEdge } from './items/TetherEdge';
 import {
@@ -281,7 +287,9 @@ import { useRenameRequests } from './use-rename-requests';
 import { CONTROLS, quickInsertAt, SESSION_SURFACES } from './board-shortcuts';
 import type { SheetContext } from '../keys/cheat-sheet';
 import { useCheatSheet } from '../keys/CheatSheet';
-import { keyText } from '../keys/registry';
+import { isGatheredKind } from '@agent-board/daemon/zone-clean-up';
+import { keyText, pressed } from '../keys/registry';
+import { isTyping } from '../keys/typing';
 import { useEscStep } from '../keys/esc-ladder';
 import { useMenuBarKey, useMenuBarWhen } from '../keys/menu-bar-bridge';
 import { centreOf } from '../geometry';
@@ -301,6 +309,9 @@ const nodeTypes: NodeTypes = {
   // An item's connector handles turn with it.
   ...Object.fromEntries(Object.entries(ITEM_NODE_TYPES).map(([type, node]) => [type, withRotation(withConnectorHandles(node))])),
 };
+/** How long the toast a Clean up shows stays up: long enough to reach its Undo. */
+const CLEAN_UP_TOAST_MS = 8000;
+
 /** How long a tile's hidden connections stay shown after the pointer leaves it, to reach one. */
 const HOVER_GRACE_MS = 400;
 const edgeTypes: EdgeTypes = { connector: ConnectorEdge, [BRIEF_EDGE_TYPE]: BriefEdge, [FLOW_EDGE_TYPE]: AgentFlowEdge, [TETHER_EDGE_TYPE]: TetherEdge };
@@ -474,6 +485,8 @@ function BoardView() {
   // Keeps the library followed, and the board's right-click menu current with it; a Classic zone's ⋯ follows it itself.
   usePrefabs();
   const { windows, windowsRestored, windowsRef, showWindow, closeWindow, popOut, popOutTabWindow, openShell, openAgent, poppedOut, onShellChange } = useBoardWindows();
+  // Read when ⌘K opens a reviewer beside its pull request.
+  const rounds = useReviews();
   /** The view settings every window shares: what a double-click opens, how agent notes look, which connections and tethers are drawn. */
   const { clickOpens, connections, tethers, agentNoteLook: savedNoteLook, ticketTilesOpenAs } = useViewSettings();
   // The Simplified design has one look for a note an agent writes, a card: the setting is Classic's alone.
@@ -760,6 +773,10 @@ function BoardView() {
     () => withFoldedExternals(projectSummaries(agents, needsYouShows), foldedZones === '' ? [] : foldedZones.split('\n'), externals),
     [agents, needsYouShows, foldedZones, externals],
   );
+  // What each reviewer reviews, read from the review docs once each time they or the agents change, not per ⌘K render.
+  const reviewed = useMemo(() => reviewedPullRequests(rounds, agents), [rounds, agents]);
+  const reviewedRef = useRef(reviewed);
+  reviewedRef.current = reviewed;
   // The same map until a count changes: every well reads it, and agents change on every bit of activity.
   const summariesKey = JSON.stringify([...summaries]);
   const projectSummary = useMemo(() => summaries, [summariesKey]);
@@ -803,7 +820,7 @@ function BoardView() {
   const shelvesActions = useMemo(() => ({ toggleStack: shelves.toggleStack, toggleDone: shelves.toggleDone, shows: needsYouShows }), [shelves.toggleStack, shelves.toggleDone, needsYouShows]);
   // The board's nodes as drawn: a shelved zone's work on its shelves, the clocks a Spine zone set aside as its "+N" chip,
   // a folded zone as a chip with nothing of its inside.
-  const drawn = useMemo(() => withFoldedZones(withTuckedClocks(shelved)), [shelved]);
+  const drawn = useMemo(() => withFoldedZones(withDoneLines(withTuckedClocks(shelved))), [shelved]);
   // A folded zone's terminals are let go whatever the keep-terminals setting says: that is the memory it frees.
   const foldedSessions = useMemo(
     () => [...foldedSessionIds(nodes.filter(isZone).map((node) => node.data.zone), agents, shells ?? [])].sort().join('\n'),
@@ -1299,6 +1316,9 @@ function BoardView() {
 
   /** The zone with a layout rule that the tile `nodeId` was placed by hand in, which the rule skips; undefined if none. */
   const handPlacedIn = useCallback((nodeId: string) => nodesRef.current.filter(isZone).find((node) => node.data.zone.handPlaced.includes(nodeId))?.id, []);
+  const spineJoined = useSpineJoined(nodes, agents.length);
+  /** The Spine zone and ended agent of the tile `nodeId`, whose ticket can go to Done by hand; undefined for any other tile. */
+  const movableToDone = useCallback((nodeId: string) => toDone(nodesRef.current, nodeId, spineJoined.current), [spineJoined]);
   /** Where the tile `nodeId` (standing for `tile`'s session) is saved now, as a move there; undefined if it has no place. */
   const tilePlace = useCallback((nodeId: string, tile: TileData): TileMove | undefined => {
     const { zoneId, position } = subjectOf(tile);
@@ -2047,7 +2067,10 @@ function BoardView() {
         zone === undefined
           ? placeOnBoard(absolute, size, zoneLayouts())
           : stageBoardDropPlace(absolute, size, { id: zone.id, ...layoutOf(zone) }, zoneGrid(zone.data.zone.spacing).gaps.padding);
-      itemActions.update({ id: node.data.item.id, ...place });
+      // A note or doc the user drags stays where they put it: a Clean up no longer gathers it to its agent.
+      const { item } = node.data;
+      const byHand = isGatheredKind(item.kind) && item.data.placedByHand !== true ? { data: { placedByHand: true } } : {};
+      itemActions.update({ id: item.id, ...place, ...byHand });
     },
     [getInternalNode, getNodes, zoneLayouts, itemActions],
   );
@@ -2130,14 +2153,41 @@ function BoardView() {
    * Tidies the zone: its tiles in rows, in reading order, round its notes and cards, and its height fitted to
    * them, at its spacing (or `spacing`, one just picked). Saved, as one step to undo.
    */
+  /**
+   * A Clean up of `zoneId` done (or a Move to Done of `sessionId`'s ticket): the zone as it left it, one step to undo,
+   * and the toast that says so, with its Undo.
+   */
+  const cleanedUp = useCallback(
+    (zoneId: string, result: CleanUpResult, message: string, sessionId?: string) => {
+      setNodes((current) => withZone(current, result.zone));
+      const again = sessionId === undefined ? {} : { sessionId };
+      history.record([[historyKey.cleanUp(zoneId), { type: 'cleanUp', undo: result.undo, ...again }, { type: 'cleanUp', undo: null, ...again }]]);
+      // Simplified keeps the toast to its words and its Undo: no key to learn, nothing to close.
+      const simplified = isSimplified();
+      toasts.show({
+        id: 'clean-up',
+        tone: 'info',
+        message,
+        lingerMs: CLEAN_UP_TOAST_MS,
+        dismissible: !simplified,
+        action: { label: 'Undo', onClick: () => undoCleanUp(history, zoneId), ...(simplified ? {} : { shortcut: keyText('edit.undo') }) },
+      });
+    },
+    [history, setNodes, toasts],
+  );
+
   const tidyZone = useCallback(
     (zoneId: string, spacing?: ArrangeSpacing) => {
       const zone = nodesRef.current.filter(isZone).find((node) => node.id === zoneId);
       // On shelves or in clusters the zone lays itself out: a tidy would move the places its tiles aren't drawn at, and
       // Free would no longer be as it was. Spine keeps the column each band went to, so a Tidy has the daemon lay them out
       // afresh; another rule lays the zone out itself.
-      const tidy = zone === undefined ? undefined : zoneTidy(zone.data.zone, window.agentBoard.zones);
-      if (tidy?.kind === 'byRule') tidy.saved.then((saved) => setNodes((current) => withZone(current, saved)), report('tidy the zone'));
+      const tidy = zone === undefined ? undefined : zoneTidy(zone.data.zone);
+      if (zone !== undefined && tidy?.kind === 'cleanUp') {
+        window.agentBoard.zones
+          .cleanUp(zoneId)
+          .then((result) => cleanedUp(zoneId, result, cleanUpMessage(zone.data.zone.name, result.moved, result.done)), report('clean the zone up'));
+      }
       if (zone === undefined || tidy?.kind !== 'rows') return;
       const children = nodesRef.current.filter((node) => node.parentId === zoneId);
       const tiles = children.filter(isSessionTile);
@@ -2153,8 +2203,23 @@ function BoardView() {
       freeOverlaps([...positions.keys()]);
       if (size.width !== layout.width || size.height !== layout.height) saveZoneLayout(zoneId, { ...layout, ...size });
     },
-    [moveTilesTo, report, saveZoneLayout, setNodes, tidySizeOf],
+    [cleanedUp, moveTilesTo, report, saveZoneLayout, tidySizeOf],
   );
+
+  // ⌥⌘K cleans up the zone under the pointer: the one it is over, or the one the tile or note it is over is in.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!pressed('edit.cleanUpZone', event) || isTyping(event) || inOverlay() || pointer.current === undefined) return;
+      const over = document.elementFromPoint(pointer.current.x, pointer.current.y)?.closest('.react-flow__node')?.getAttribute('data-id');
+      const node = over == null ? undefined : nodesRef.current.find((known) => known.id === over);
+      const zoneId = node === undefined ? undefined : isZone(node) ? node.id : node.parentId;
+      if (zoneId === undefined) return;
+      event.preventDefault();
+      tidyZone(zoneId);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [tidyZone]);
 
   /** What deleting `zones` leaves of each: the tiles that stay loose and the connectors that go with it. */
   const zonesToDelete = useCallback(
@@ -2389,6 +2454,13 @@ function BoardView() {
         const id = key.slice(historyKey.zoneSpacing('').length);
         if (!nodeIds.has(id)) continue;
         window.agentBoard.zones.configure(id, { spacing: state.spacing }).then((saved) => setNodes((current) => withZone(current, saved)), report('undo the zone’s spacing'));
+      } else if (state?.type === 'cleanUp') {
+        const id = key.slice(historyKey.cleanUp('').length);
+        if (!nodeIds.has(id)) continue;
+        const zones = window.agentBoard.zones;
+        const again = state.sessionId === undefined ? zones.cleanUp(id) : zones.moveToDone(id, state.sessionId);
+        const done = state.undo === null ? again.then((result) => result.zone) : zones.undoCleanUp(id, state.undo);
+        done.then((saved) => setNodes((current) => withZone(current, saved)), report(state.undo === null ? 'clean the zone up again' : 'undo the Clean up'));
       } else if (state?.type === 'zoneLayoutChoice') {
         const id = key.slice(historyKey.zoneLayoutChoice('').length);
         if (!nodeIds.has(id)) continue;
@@ -2667,6 +2739,14 @@ function BoardView() {
       const zoneId = handPlacedIn(nodeId);
       if (zoneId !== undefined) window.agentBoard.zones.followRule(zoneId, [nodeId]).then((saved) => setNodes((current) => withZone(current, saved)), report('put it back under the rule'));
     },
+    movableToDone: (nodeId) => movableToDone(nodeId) !== undefined,
+    moveToDone: (nodeId) => {
+      const to = movableToDone(nodeId);
+      if (to === undefined) return;
+      window.agentBoard.zones
+        .moveToDone(to.zone.id, to.sessionId)
+        .then((result) => cleanedUp(to.zone.id, result, movedToDoneMessage(to.zone.name), to.sessionId), report('move it to Done'));
+    },
   });
 
   const { onFilesDropped } = useIncoming({ loaded: loaded && !zoomedIn, createItem, report, pasteItems: editing.paste, pasteDiagram: editing.pasteDiagram, pointer, boardCentre, screenToFlowPosition });
@@ -2851,6 +2931,8 @@ function BoardView() {
       },
       pickDefaultRepo: setDefaultRepoZone,
       tidy: (zone) => tidyZone(zone.id),
+      cleanUpUndoable: (zone) => history.undoKeys().has(historyKey.cleanUp(zone.id)),
+      undo: () => history.undo(),
       setSpacing(zone, spacing) {
         window.agentBoard.zones.configure(zone.id, { spacing }).then((saved) => {
           setNodes((current) => withZone(current, saved));
@@ -3028,6 +3110,15 @@ function BoardView() {
     return true;
   };
 
+  /** What the board knows when a ⌘K pick lands on it: the agent selected, if one alone is, and what each reviewer reviews. */
+  const switcherBoard = useCallback(
+    (beside: boolean): SwitcherBoard => {
+      const [node, ...rest] = editing.selection().nodes;
+      const selected = node !== undefined && rest.length === 0 ? agentsRef.current.find((agent) => tileNodeId('agent', agent.sessionId) === node.id)?.sessionId : undefined;
+      return { agents: agentsRef.current, selected, beside, reviewed: reviewedRef.current };
+    },
+    [editing.selection],
+  );
   const boardCommands = useMemo<BoardCommands>(
     () => ({
       openSession(sessionId) {
@@ -3106,6 +3197,21 @@ function BoardView() {
         else tileActions.expand(node.id);
         return true;
       },
+      openSurface(surface, beside) {
+        const opening = boardOpening(surface, switcherBoard(beside), poppedOut);
+        if (opening.opens === 'window') {
+          openAgent(opening.host);
+          requestTab(opening.host.sessionId, opening.surface, { beside });
+          return true;
+        }
+        if (opening.opens === 'nothing') return false;
+        const owner = { kind: 'tabs', id: crypto.randomUUID() } as const;
+        void moveTab({ kind: 'surface', surface, from: null, to: { owner } }).then(({ made }) => made && popOutTabWindow(owner, surface));
+        return true;
+      },
+      opensBeside(surface) {
+        return boardOpening(surface, switcherBoard(true), poppedOut).opens === 'window';
+      },
       switchExpanded(fromNodeId, { kind, id }) {
         const nodeId = tileNodeId(kind, id);
         if (nodesRef.current.every((known) => known.id !== nodeId)) return false;
@@ -3141,7 +3247,7 @@ function BoardView() {
         if (prefab !== undefined) setCrewFlow({ kind: 'prompt', prefab, suggested });
       },
     }),
-    [getNodes, getInternalNode, zoneLayouts, openShell, openAgent, report, selectOnly, bringIntoView, flyTo, clickOpens, tileActions, collapse, boardCentre, unfoldStack, showOnTicket, toMainBoard, zoomsIn],
+    [getNodes, getInternalNode, zoneLayouts, openShell, openAgent, report, selectOnly, bringIntoView, flyTo, clickOpens, tileActions, collapse, boardCentre, unfoldStack, showOnTicket, toMainBoard, zoomsIn, switcherBoard, poppedOut, moveTab, popOutTabWindow],
   );
   useProvideBoardCommands(loaded ? boardCommands : undefined);
   /** Opens the agent's window from Needs you, the running count or the master's panel, on the level it is on. */
@@ -3271,6 +3377,8 @@ function BoardView() {
     };
   }, [agents, openAgent, tileActions, askStopCrew]);
   const queues = useMemo(() => boardItems.filter((item) => item.kind === 'queue'), [boardItems]);
+  // A queue going through its things stops once it is gone from the board, or no longer the user's.
+  useEffect(() => stopGoingThroughUnless(queues.filter((item) => queueData(item.data).audience === 'user').map((item) => item.id)), [queues]);
   /** The agent under the pointer that takes a dragged job of a queue in `zoneId`: idle, and in its scope. */
   const jobTakerAt = (x: number, y: number, zoneId: string | null) => {
     const owner = ownerAtPoint(x, y, { agentsOnly: true });
@@ -3862,7 +3970,6 @@ function BoardView() {
               onOpenLink={(url) => void window.agentBoard.trackers.openLink(url).catch(report('open the link'))}
             />
           )}
-          <QueueFocusHost queues={queues} board={queueBoard} onError={(message) => setNotice({ message })} />
           <HandOnHost queues={queues} board={queueBoard} onError={(message) => setNotice({ message })} />
           <DrainSheetHost queues={queues} zones={zones} onSave={(id, drain) => itemActions.update({ id, data: { drain: { ...drain } } })} />
           {/* Only while both its agents are on the board: one deleted takes the edge, which may not have been heard yet. */}

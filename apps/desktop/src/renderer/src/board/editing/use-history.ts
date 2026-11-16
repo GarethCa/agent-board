@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef } from 'react';
-import type { ArrangeSpacing, BoardItem, Connector, FlowEdge, PaneLayout, ShellPlace, TileMove, UpdateItemParams, WindowOwner, Zone, ZoneLayout, ZoneLayoutChoice, ZoneSnapshot } from '@agent-board/daemon/protocol';
+import type { ArrangeSpacing, BoardItem, CleanUpUndo, Connector, FlowEdge, PaneLayout, ShellPlace, TileMove, UpdateItemParams, WindowOwner, Zone, ZoneLayout, ZoneLayoutChoice, ZoneSnapshot } from '@agent-board/daemon/protocol';
 import type { Placement, Surface } from '@agent-board/daemon/window-layout';
 import type { RenameTarget } from '../rename';
 import { emptyHistory, merged, record, redo, undo, withoutLastCreation, type History, type States, type Step } from './history';
@@ -21,6 +21,9 @@ export type BoardState =
   | { type: 'zoneSpacing'; spacing: ArrangeSpacing }
   | { type: 'zoneLayoutChoice'; choice: ZoneLayoutChoice }
   | { type: 'zoneGroup'; group: DissolvedGroup }
+  // A zone's Clean up: before it, what puts the zone back as it was (`undo`); after it, the zone cleaned up (`null`).
+  // `sessionId`: a Move to Done of that agent's ticket alone, done again as one.
+  | { type: 'cleanUp'; undo: CleanUpUndo | null; sessionId?: string }
   // `handPlaced`: for the place a drag left, whether the tile was placed by hand there (undone, a tile that was not is
   // put back under its zone's layout rule).
   | { type: 'tile'; move: TileMove; handPlaced?: boolean }
@@ -58,6 +61,7 @@ export const historyKey = {
   zoneSpacing: (id: string) => `zone-spacing:${id}`,
   zoneLayoutChoice: (id: string) => `zone-layout-choice:${id}`,
   zoneGroup: (id: string) => `zone-group:${id}`,
+  cleanUp: (id: string) => `zone-clean-up:${id}`,
   tile: (nodeId: string) => `tile:${nodeId}`,
   tileSize: (nodeId: string) => `tile-size:${nodeId}`,
   unfolded: (nodeId: string) => `unfolded:${nodeId}`,
@@ -91,6 +95,8 @@ export interface BoardHistory {
   /** Takes back the last step, or does the last undone one again; false if there was none. */
   undo(): boolean;
   redo(): boolean;
+  /** The keys of the objects the step ⌘Z would undo now changed: none when there is nothing to undo. */
+  undoKeys(): ReadonlySet<string>;
   /** Forgets the last step if all it did was make `key`'s object, for one made and at once taken away; true if it did. */
   forgetCreation(key: string): boolean;
 }
@@ -144,6 +150,10 @@ export function useHistory(apply: (states: States<BoardState>) => void): BoardHi
       redo() {
         flush();
         return replay(redo(history.current));
+      },
+      undoKeys() {
+        const last = pending.current ?? history.current.done.at(-1);
+        return new Set(last === undefined ? [] : last.before.keys());
       },
       forgetCreation(key) {
         flush();

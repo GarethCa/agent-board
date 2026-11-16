@@ -1,5 +1,7 @@
 import { CalmTileGallery } from './board/CalmTileGallery';
 import { CharacterGallery } from './board/CharacterGallery';
+import { PortholeTileGallery } from './board/PortholeTileGallery';
+import { ShelfTileGallery } from './board/ShelfTileGallery';
 import { MemoryGallery } from './board/items/MemoryGallery';
 import { QueueGallery } from './board/items/QueueGallery';
 import { CrewGallery, PrefabGallery, TicketGallery } from './crews/PrefabGallery';
@@ -43,6 +45,8 @@ export function Gallery() {
       <TicketGallery />
       <TicketBoardGallery />
       <TicketOpenReadGallery />
+      <PortholeTileGallery />
+      <ShelfTileGallery />
       <GalleryFoot />
     </div>
   );

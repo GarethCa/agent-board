@@ -256,7 +256,7 @@ async function expectTabFits(page: Page, zone: Locator): Promise<void> {
 
 /** What ⋯ offers in each folded chip's place: the start of its name, which goes on with its hint if it has one. */
 const FOLDED_ENTRY: Record<string, RegExp> = {
-  tidy: /^Tidy/,
+  tidy: /^Clean up/,
   issue: /^Add issue…/,
   tracker: /^Issues from acme\//,
   bind: /^Bind…/,
@@ -331,9 +331,9 @@ test("a narrow zone's tab fits inside it at any zoom, its lower chips folded int
     // Widened, its chips come back out of ⋯.
     await resizeZone(page, name, 1400);
     await expect(zone.getByRole('button', { name: 'New shell in zone' })).toBeVisible();
-    await expect(zone.getByRole('button', { name: 'Tidy zone' })).toBeVisible();
+    await expect(zone.getByRole('button', { name: 'Clean up zone' })).toBeVisible();
 
-    // The zone still cloning, as narrow: its tab fits too, and what folded, Tidy first, is in a ⋯ of its own.
+    // The zone still cloning, as narrow: its tab fits too, and what folded, Clean up first, is in a ⋯ of its own.
     await resizeZone(page, 'web', 240);
     await expect(cloning).toHaveAttribute('data-width', '240');
     await page.getByRole('button', { name: 'Fit View' }).click();

@@ -92,6 +92,7 @@ export const SETTINGS_CONTROLS: readonly SettingsControl[] = [
   { id: 'technicalDetails', label: 'Show technical details', home: 'general.design', simplifiedOnly: true, also: 'branches models pull requests terminals' },
   { id: 'characters', label: 'Characters', home: 'general.design', also: 'robot bean block pebble pixel figure mascot status icons glyph' },
   { id: 'characterMotion', label: 'Motion', home: 'general.design', also: 'characters animation dip move still' },
+  { id: 'tileDesign', label: 'Tile design', home: 'general.design', also: 'agent tile look porthole shelf card robot window' },
   { id: 'todoLook', label: 'To-do lists', home: 'general.design', also: 'todo reminders checklist card clipboard look' },
   { id: 'mode', label: 'Mode', home: 'general.appearance', also: 'light dark system' },
   { id: 'theme', label: 'Theme', home: 'general.appearance', also: 'colour color palette pack' },

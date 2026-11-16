@@ -64,15 +64,18 @@ export function tileStepAction(state: Extract<BoardState, { type: 'tile' }>, mar
 }
 
 /**
- * How a Tidy of `zone` goes: on Spine, the daemon lays its bands out afresh (`reflow`, which nothing else asks for, as a
- * band otherwise keeps its column), and the result is the zone as saved; on Free with no rule, the board tidies it into
- * rows itself (`rows`); otherwise nothing, as its shelves, clusters or rule lay it out.
+ * How a Clean up of `zone` goes: on Spine, the daemon gathers its notes, folds its finished tickets into the Done line
+ * and lays its bands out afresh (`cleanUp`); on Free with no rule, the board tidies it into rows itself (`rows`);
+ * otherwise nothing, as its shelves, clusters or rule lay it out.
  */
-export function zoneTidy(
-  zone: Pick<Zone, 'id' | 'layoutMode' | 'layoutRule'>,
-  zones: { followRule(id: string, tiles: string[], reflow?: boolean): Promise<Zone> },
-): { kind: 'byRule'; saved: Promise<Zone> } | { kind: 'rows' } | undefined {
+export function zoneTidy(zone: Pick<Zone, 'layoutMode' | 'layoutRule'>): { kind: 'cleanUp' } | { kind: 'rows' } | undefined {
   if (zone.layoutMode !== 'free') return undefined;
-  if (zone.layoutRule === 'spine') return { kind: 'byRule', saved: zones.followRule(zone.id, [], true) };
+  if (zone.layoutRule === 'spine') return { kind: 'cleanUp' };
   return zone.layoutRule === 'off' ? { kind: 'rows' } : undefined;
 }
+
+/** What the toast says once a Clean up is done: "Cleaned up Crew · 3 moved · 1 to Done". */
+export const cleanUpMessage = (zoneName: string, moved: number, done: number): string => `Cleaned up ${zoneName} · ${moved} moved · ${done} to Done`;
+
+/** What the toast says after a ticket is moved to a zone's Done line by hand. */
+export const movedToDoneMessage = (zoneName: string): string => `Moved to ${zoneName}'s Done line`;

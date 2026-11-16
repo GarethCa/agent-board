@@ -1,12 +1,13 @@
 // What the ⌘K switcher lists: grouped before anything is typed, one ranked fuzzy list after. Pure, so the
 // grouping and the ranking are unit-tested.
-import { needsYouNow, permissionPrompt, planPending, questionPrompt, type Agent, type BoardItem, type LibraryPrefab, type NeedsYouShows, type Shell, type Zone } from '@agent-board/daemon/protocol';
+import { needsYouNow, permissionPrompt, planPending, pullRequestKey, pullRequestOfUrl, questionPrompt, type Agent, type BoardItem, type LibraryPrefab, type NeedsYouShows, type OpenPullRequest, type PullRequestRef, type Shell, type Zone } from '@agent-board/daemon/protocol';
 import type { Placement, SessionWindows } from '../windows/session-windows';
 import { extendedShortcuts } from '../keys/extended-shortcuts';
 import { binding, isActive, keyText, type KeyId } from '../keys/registry';
 import { SETTINGS_GROUPS } from './settings-ia';
 import { controlsIn, drawnSections, searchable } from './settings-search';
 import { itemKindTitle } from '../board/items/kind-labels';
+import type { ReviewedPullRequest } from '../review/reviews';
 
 /** What a row of the switcher is about: a setting's row opens the Settings window at its section (`group.section`). */
 export type SpotlightSubject =
@@ -15,10 +16,19 @@ export type SpotlightSubject =
   | { kind: 'zone'; zone: Zone }
   /** A note or document on a ticket's own board, and that ticket's chat's session id: whose board it is. */
   | { kind: 'item'; item: BoardItem; ticket: string }
+  /** A pull request, anyone's, to open in a PR tab. */
+  | { kind: 'pr'; pr: SpotlightPullRequest }
+  /** A web page, to open in a web tab. */
+  | { kind: 'web'; url: string }
   | { kind: 'setting'; pane: string }
   | { kind: 'action'; action: SpotlightAction }
   | { kind: 'crew'; prefab: string | null }
   | { kind: 'filter'; prefix: FilterPrefix };
+
+/** A pull request a row opens: by its repo and number, and its page. */
+export interface SpotlightPullRequest extends PullRequestRef {
+  url: string;
+}
 
 /** What an action row does: start an agent, open the Settings window, or park a thought. */
 export type SpotlightAction = 'newAgent' | 'openSettings' | 'parkThought';
@@ -67,6 +77,12 @@ export const NEEDS_YOU_GROUP = 'Needs you';
 
 /** The heading of the sessions most recently active, before anything is typed: the right column beside Needs you. */
 export const RECENT_GROUP = 'Recent';
+
+/** The heading of the open pull requests whose review is asked of you, under a `pr:` filter. */
+const REVIEW_REQUESTED_GROUP = 'Review requested from you';
+
+/** The heading of the agents with a pull request, under a `pr:` filter beside the open pull requests of their repos. */
+const ON_THE_BOARD_GROUP = 'On the board';
 
 /** The heading of the filters offered once a colon is typed. */
 export const FILTERS_GROUP = 'Filters';
@@ -118,7 +134,7 @@ export function spotlightStep(groups: readonly SpotlightGroup[], key: string | u
 /** The colon prefixes, in the order a lone colon lists them, with what each keeps. */
 const FILTERS: readonly { prefix: FilterPrefix; sub: string }[] = [
   { prefix: 'zone:', sub: 'Only the sessions in one zone' },
-  { prefix: 'pr:', sub: 'Only agents with a pull request, by its number or title' },
+  { prefix: 'pr:', sub: "Pull requests: the agents' and the open ones in the board's repos, by number or title" },
   { prefix: 'issue:', sub: 'Only agents on an issue, by its id or title' },
 ];
 
@@ -142,6 +158,12 @@ export interface SpotlightSources {
   extended?: boolean;
   /** The items on tickets' own boards, found once something is typed; none if unset. */
   ticketItems?: readonly BoardItem[];
+  /** The open pull requests of the board's repos, which a `pr:` filter lists too; none if unset. */
+  openPullRequests?: readonly OpenPullRequest[];
+  /** The pull request a pasted link names, once its title and author are read. */
+  pastedPullRequest?: PullRequestRef & { title: string; author: string };
+  /** What each reviewer reviews, by its session, which its row says; none if unset. */
+  reviewed?: ReadonlyMap<string, ReviewedPullRequest>;
   /** Whether the Windows group is listed: always under the Simplified design (the default), and under Classic with the windows the dock leaves out. */
   windowsListed?: boolean;
 }
@@ -189,7 +211,7 @@ const ACTIONS: readonly { action: SpotlightAction; name: string; sub: string; al
  * Actions group, with New agent (where one can start) and Open Settings, comes above Settings. Classic has no Windows
  * group, and its Actions group holds Park a thought alone.
  */
-export function spotlightGroups(query: string, { agents, shells, zones, shows, windows = [], current, canStartAgent = false, prefabs = [], simplified = false, windowsListed = simplified, extended = extendedShortcuts(), ticketItems = [] }: SpotlightSources): SpotlightGroup[] {
+export function spotlightGroups(query: string, { agents, shells, zones, shows, windows = [], current, canStartAgent = false, prefabs = [], simplified = false, windowsListed = simplified, extended = extendedShortcuts(), ticketItems = [], openPullRequests = [], pastedPullRequest, reviewed }: SpotlightSources): SpotlightGroup[] {
   const zoneName = (zoneId: string | null) => (zoneId === null ? 'Loose' : (zones.find((zone) => zone.id === zoneId)?.name ?? 'Loose'));
   // A helper is on its ticket's board: its ticket is where it is, as a zone is another agent's.
   const placeOf = (agent: Agent) => (agent.ticket === null ? undefined : ticketName(agent.ticket, agents)) ?? zoneName(agent.zoneId);
@@ -204,7 +226,7 @@ export function spotlightGroups(query: string, { agents, shells, zones, shows, w
     for (const entry of windows) {
       const agent = entry.kind === 'session' ? agents.find((each) => each.sessionId === entry.id) : undefined;
       const shell = entry.kind === 'shell' ? tiles.find((each) => each.id === entry.id) : undefined;
-      const base = agent !== undefined ? agentRow(agent, placeOf, [], shows) : shell !== undefined ? shellRow(shell, zoneName, []) : undefined;
+      const base = agent !== undefined ? agentRow(agent, placeOf, [], shows, reviewed) : shell !== undefined ? shellRow(shell, zoneName, []) : undefined;
       if (base === undefined) continue;
       const marks = match(base.name);
       if (marks === undefined) continue;
@@ -218,14 +240,14 @@ export function spotlightGroups(query: string, { agents, shells, zones, shows, w
   if (wanted === '') {
     const needing = agents.filter((agent) => needsYouNow(agent, shows) && !listed.has(agent.sessionId));
     const rest = [
-      ...agents.filter((agent) => !needsYouNow(agent, shows) && !listed.has(agent.sessionId)).map((agent) => ({ at: agent.finishedAt ?? agent.createdAt, row: agentRow(agent, placeOf, [], shows) })),
+      ...agents.filter((agent) => !needsYouNow(agent, shows) && !listed.has(agent.sessionId)).map((agent) => ({ at: agent.finishedAt ?? agent.createdAt, row: agentRow(agent, placeOf, [], shows, reviewed) })),
       ...tiles.filter((shell) => !listed.has(shell.id)).map((shell) => ({ at: shell.createdAt, row: shellRow(shell, zoneName, []) })),
     ];
     const recent = rest.sort((a, b) => b.at.localeCompare(a.at)).slice(0, RECENT_LIMIT);
     const groups: SpotlightGroup[] = [
       { label: WINDOWS_GROUP, rows: windowRows(() => []).map(({ row }) => row) },
       // A narrow column beside Recent: what it asks, without its zone.
-      { label: NEEDS_YOU_GROUP, rows: needing.map((agent) => ({ ...agentRow(agent, placeOf, [], shows), sub: askOf(agent) })) },
+      { label: NEEDS_YOU_GROUP, rows: needing.map((agent) => ({ ...agentRow(agent, placeOf, [], shows, reviewed), sub: askOf(agent) })) },
       { label: RECENT_GROUP, rows: recent.map(({ row }) => row) },
       { label: 'Zones', rows: [...zones].sort((a, b) => a.name.localeCompare(b.name)).map((zone) => zoneRow(zone, agents, tiles, [])) },
     ];
@@ -238,8 +260,14 @@ export function spotlightGroups(query: string, { agents, shells, zones, shows, w
     const offered = FILTERS.filter(({ prefix }) => prefix.startsWith(typed));
     if (offered.length > 0) return [{ label: FILTERS_GROUP, rows: offered.map(({ prefix, sub }) => ({ key: `filter:${prefix}`, subject: { kind: 'filter', prefix }, name: prefix, sub, marks: [] })) }];
   }
+  // A pasted link is the page it names: a pull request's in its PR tab, or the page itself.
+  const pasted = linkRows(wanted, openPullRequests, pastedPullRequest);
+  if (pasted !== undefined) return [{ rows: pasted }];
+
   const { filters, rest } = parseFilters(wanted);
-  if (filters.length > 0) return [{ rows: filteredRows(filters, rest, { agents, tiles, zoneName, placeOf, shows }) }];
+  const onBoard = filters.length > 0 ? filteredRows(filters, rest, { agents, tiles, zoneName, placeOf, shows, reviewed }) : [];
+  if (filters.length === 1 && filters[0]!.prefix === 'pr:' && openPullRequests.length > 0) return pullRequestGroups(filters[0]!.value, rest, onBoard, agents, openPullRequests);
+  if (filters.length > 0) return [{ rows: onBoard }];
 
   // The windows that match lead, in their own group, whatever else matches better: they are what is on screen. A
   // session whose window matched is listed there only; one that matched by its branch or issue stays in the list.
@@ -254,7 +282,7 @@ export function spotlightGroups(query: string, { agents, shells, zones, shows, w
   };
   for (const agent of agents) {
     if (inWindows.has(agent.sessionId)) continue;
-    consider(agent.name, agentFields(agent, zoneName), (marks) => agentRow(agent, placeOf, marks, shows));
+    consider(agent.name, agentFields(agent, zoneName), (marks) => agentRow(agent, placeOf, marks, shows, reviewed));
   }
   for (const shell of tiles) {
     if (inWindows.has(shell.id)) continue;
@@ -441,7 +469,14 @@ export function parseFilters(query: string): { filters: SpotlightFilter[]; rest:
 function filteredRows(
   filters: readonly SpotlightFilter[],
   rest: string,
-  { agents, tiles, zoneName, placeOf, shows }: { agents: readonly Agent[]; tiles: readonly Shell[]; zoneName: (zoneId: string | null) => string; placeOf: (agent: Agent) => string; shows: NeedsYouShows },
+  {
+    agents,
+    tiles,
+    zoneName,
+    placeOf,
+    shows,
+    reviewed,
+  }: { agents: readonly Agent[]; tiles: readonly Shell[]; zoneName: (zoneId: string | null) => string; placeOf: (agent: Agent) => string; shows: NeedsYouShows; reviewed: SpotlightSources['reviewed'] },
 ): SpotlightRow[] {
   const inZone = (zoneId: string | null, value: string) => value === '' || zoneName(zoneId).toLowerCase().includes(value.toLowerCase());
   const holds = (value: string, ...texts: (string | undefined)[]) => value === '' || texts.some((text) => text !== undefined && fuzzyMatch(value, text, true) !== undefined);
@@ -464,7 +499,7 @@ function filteredRows(
     const best = rest === '' ? { score: 1 } : bestMatch(rest, agent.name, agentFields(agent, zoneName));
     if (best === undefined) continue;
     const snippet = best.snippet ?? kept;
-    const row = agentRow(agent, placeOf, rest === '' ? [] : (fuzzyMatch(rest, agent.name)?.positions ?? []), shows);
+    const row = agentRow(agent, placeOf, rest === '' ? [] : (fuzzyMatch(rest, agent.name)?.positions ?? []), shows, reviewed);
     found.push({ score: best.score, at: agent.finishedAt ?? agent.createdAt, row: snippet === undefined ? row : { ...row, snippet } });
   }
   if (filters.every(({ prefix }) => prefix === 'zone:')) {
@@ -477,15 +512,93 @@ function filteredRows(
   return found.sort((a, b) => b.score - a.score || b.at.localeCompare(a.at)).map(({ row }) => row);
 }
 
+/** Whether `text` is a web link, and so a page to open. */
+const WEB_LINK = /^https?:\/\/[^\s/]+\.[^\s]*$/i;
+
+/**
+ * The rows for a pasted link: a pull request's opens its PR tab, named by its title and author once they are known,
+ * with its page in a web tab under it; any other web page, a web tab. Undefined for what isn't a web link.
+ */
+function linkRows(wanted: string, open: readonly OpenPullRequest[], read: SpotlightSources['pastedPullRequest']): SpotlightRow[] | undefined {
+  if (!WEB_LINK.test(wanted)) return undefined;
+  const ref = pullRequestOfUrl(wanted);
+  if (ref === undefined) {
+    return [{ key: `web:${wanted}`, subject: { kind: 'web', url: wanted }, name: wanted.replace(/^https?:\/\//i, '').replace(/\/$/, ''), sub: 'Open in a web tab', marks: [] }];
+  }
+  const same = (other: PullRequestRef) => pullRequestKey(other) === pullRequestKey(ref);
+  const known = (read !== undefined && same(read) ? read : undefined) ?? open.find(same);
+  const pr = { kind: 'pr' as const, pr: { ...ref, url: wanted } };
+  return [
+    known === undefined
+      ? { key: `pr:${pullRequestKey(ref)}`, subject: pr, name: `${ref.repo}#${ref.number}`, sub: 'Pull request', marks: [] }
+      : { key: `pr:${pullRequestKey(ref)}`, subject: pr, name: `#${ref.number} ${known.title}`, sub: joined(ref.repo, known.author === '' ? '' : `by ${known.author}`), marks: [] },
+    // The page is GitHub's own, where a passkey sign-in may not work: say so rather than repeat the link.
+    { key: `web:${wanted}`, subject: { kind: 'web', url: wanted }, name: 'Open the page instead', sub: 'In a web tab; GitHub may ask you to sign in', marks: [] },
+  ];
+}
+
+/** What ⌘K says under a `pr:` filter when the open pull requests couldn't be read, `failed` saying why; else nothing. */
+export function pullRequestsNote(query: string, failed: string | undefined): string | undefined {
+  if (failed === undefined || !parseFilters(query).filters.some((filter) => filter.prefix === 'pr:')) return undefined;
+  return `Couldn't read GitHub's open PRs: ${failed}`;
+}
+
+/**
+ * A `pr:` filter's groups beside the open pull requests of the board's repos: those whose review is asked of you, then
+ * the agents with one (`onBoard`), then the rest of each repo's, its repo in the heading; the one an agent's row stands
+ * for is listed only as that row. Each is narrowed to those the filter's `value` holds by number or title, and ranked by `rest` over
+ * the title, branch and author.
+ */
+function pullRequestGroups(value: string, rest: string, onBoard: readonly SpotlightRow[], agents: readonly Agent[], open: readonly OpenPullRequest[]): SpotlightGroup[] {
+  // The one each agent's row stands for; its others are listed as rows of their own.
+  const theirs = new Set(agents.flatMap((agent) => {
+    const ref = pullRequestOfUrl(pullRequestOf(agent)?.url ?? '');
+    return ref === undefined ? [] : [pullRequestKey(ref)];
+  }));
+  const wanted = value.replace(/^#/, '');
+  const ranked = open.flatMap((pr) => {
+    if (wanted !== '' && fuzzyMatch(wanted, String(pr.number), true) === undefined && fuzzyMatch(wanted, pr.title, true) === undefined) return [];
+    const best = rest === '' ? { score: 1 } : bestMatch(rest, pr.title, [{ text: pr.branch, weight: FIELD_WEIGHTS.branch, label: 'branch' }, { text: pr.author, weight: FIELD_WEIGHTS.also, label: 'desc' }]);
+    if (best === undefined) return [];
+    const row: SpotlightRow = {
+      key: `pr:${pullRequestKey(pr)}`,
+      subject: { kind: 'pr', pr: { repo: pr.repo, number: pr.number, url: pr.url } },
+      name: pr.title,
+      sub: joined(`${pr.repo}#${pr.number}`, pr.author, pr.draft ? 'draft' : ''),
+      marks: rest === '' ? [] : (fuzzyMatch(rest, pr.title)?.positions ?? []),
+    };
+    return [{ pr, score: best.score, row }];
+  }).sort((a, b) => b.score - a.score);
+  // The one an agent's row stands for is listed once, as that row in "On the board".
+  const notTheirs = ranked.filter(({ pr }) => !theirs.has(pullRequestKey(pr)));
+  const repos = [...new Set(notTheirs.filter(({ pr }) => !pr.reviewRequested).map(({ pr }) => pr.repo))].sort((a, b) => a.localeCompare(b));
+  const groups: SpotlightGroup[] = [
+    { label: REVIEW_REQUESTED_GROUP, rows: notTheirs.filter(({ pr }) => pr.reviewRequested).map(({ row }) => row) },
+    { label: ON_THE_BOARD_GROUP, rows: onBoard },
+    ...repos.map((repo) => ({ label: `Open in ${repo}`, rows: notTheirs.filter(({ pr }) => pr.repo === repo && !pr.reviewRequested).map(({ row }) => row) })),
+  ];
+  return groups.filter((group) => group.rows.length > 0);
+}
+
 /**
  * An agent's row: its sub line is what it asks while it needs you, else what it says it is for, else its zone and
  * branch.
  */
-function agentRow(agent: Agent, placeOf: (agent: Agent) => string, marks: readonly number[], shows: NeedsYouShows): SpotlightRow {
+function agentRow(agent: Agent, placeOf: (agent: Agent) => string, marks: readonly number[], shows: NeedsYouShows, reviewed: SpotlightSources['reviewed']): SpotlightRow {
   const row = { key: `agent:${agent.sessionId}`, subject: { kind: 'agent', agent }, name: agent.name, marks } as const;
   if (needsYouNow(agent, shows)) return { ...row, sub: joined(placeOf(agent), askOf(agent)) };
+  const reviews = reviewed?.get(agent.sessionId);
+  if (reviews !== undefined) return { ...row, sub: joined(placeOf(agent), reviewedText(reviews)) };
   if (agent.purpose) return { ...row, sub: agent.purpose, purpose: true };
   return { ...row, sub: joined(placeOf(agent), agent.branch) };
+}
+
+/** What a reviewer's row says it reviews: "reviewed #418 · 3 findings", "reviewing #418" while it writes, or "review failed #418". */
+function reviewedText(reviewed: ReviewedPullRequest): string {
+  const number = reviewed.surface.number;
+  if (reviewed.status === 'reviewing') return `reviewing #${number}`;
+  if (reviewed.status === 'failed') return `review failed #${number}`;
+  return `reviewed #${number} · ${reviewed.findings} finding${reviewed.findings === 1 ? '' : 's'}`;
 }
 
 /** A ticket's name, by its chat's session id: its issue's id, else its chat's name; undefined if that chat is no ticket's on the board. */

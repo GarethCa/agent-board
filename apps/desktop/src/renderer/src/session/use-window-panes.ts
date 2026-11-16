@@ -22,9 +22,10 @@ import { errorMessage } from '../../../shared/errors';
 import { bySession, nearestInDirection, paneGeometry, type Direction, type Rect } from './pane-geometry';
 import { arrivalPlacement, expectArrival, noteDepartures, settleArrival } from './placements';
 import { dropKey, dropMove, type TabDrag, type TabMove } from './shell-moves';
-import { noRoomToSplit } from './split-room';
-import { chosenFontSize } from './terminal-size';
-import { useTabRequest } from './tab-request';
+import { placeBeside, placeBesideOf, sideOf } from './open-beside';
+import { noRoomToSplit, restingRatio } from './split-room';
+import { chosenFontSize, DEFAULT_FONT_SIZE } from './terminal-size';
+import { useTabRequest, type TabRequest } from './tab-request';
 import {
   OWN_TAB,
   localServersOf,
@@ -104,6 +105,13 @@ export interface WindowPanesControl {
    * own not open here (a pull request, a web page, another session, a doc…), in a new tab of the pane (else the focused one).
    */
   open(surface: Surface, paneId?: string): void;
+  /**
+   * Shows the surface in a pane of its own right of the focused one (⇧↵ in ⌘K), the divider giving a terminal beside a
+   * page 120 columns on a wide screen, else half; one already in another pane is only shown there. The window's own
+   * session, or a shell tab of its own not open here, is shown as `open` shows it.
+   */
+  /** Opens `surface` beside the focused pane, or beside `besideOf` once that is shown. */
+  openBeside(surface: Surface, besideOf?: Surface): void;
   /** Shows `url` in a web tab: one of the window's already at it, else a new one in the pane (else the focused one). */
   openWeb(url: string, paneId?: string): void;
   /** Keeps where a web tab's page went, to reload it there at the next start. */
@@ -172,6 +180,7 @@ function sessionsOf(surface: WindowSurface): string[] {
     case 'gate':
     case 'plan':
     case 'todo':
+    case 'review':
     case 'doc':
     case 'document':
       return [];
@@ -188,8 +197,6 @@ function sessionsOf(surface: WindowSurface): string[] {
  */
 type Stored = { key: string; layout: WindowLayout | null; unread?: string };
 
-/** The terminal's font size when none is chosen: the body size the terminals take from the theme. */
-const DEFAULT_FONT_SIZE = 13;
 
 /**
  * The panes of an agent's or a shell tile's session window, or a tab window's (slice 4):
@@ -219,12 +226,12 @@ export function useWindowPanes(
   const [focused, setFocused] = useState<Record<string, string>>({});
   const [closingKey, setClosingKey] = useState<string>();
   /** A tab asked for (a row of the tile's shells chip) before the layout it is in was read. */
-  const [requested, setRequested] = useState<Surface>();
+  const [requested, setRequested] = useState<TabRequest>();
   /** The layout last taken, for the window `key` names. */
   const committed = useRef<{ key: string; layout: WindowLayout | null }>(undefined);
   /** The layout as drawn, or as changed since: what a change, even one made as a call answers later, starts from. */
   const working = useRef<WindowLayout>(undefined);
-  const openRef = useRef<(surface: Surface) => void>(undefined);
+  const openRef = useRef<(request: TabRequest) => void>(undefined);
   /** Changes asked for before the layout was read (⌘D as the window opens), made once it is. */
   const early = useRef<((current: WindowLayout) => WindowLayout | null)[]>([]);
 
@@ -553,6 +560,22 @@ export function useWindowPanes(
       if (paneOf(openKey) !== undefined) select(openKey);
       else if (surface.kind !== 'own' && surface.kind !== 'shell') placeAndShow(surface, { pane: paneOrFocused(paneId) });
     },
+    openBeside(surface, besideOf) {
+      const besideKey = surfaceKey(surface);
+      const own = surface.kind === 'session' && owner.kind === 'agent' && surface.target.kind === 'agent' && surface.target.id === owner.agent.sessionId;
+      if (own || surface.kind === 'own' || (surface.kind === 'shell' && paneOf(besideKey) === undefined)) {
+        control.open(own ? { kind: 'own' } : surface);
+        return;
+      }
+      const from = (besideOf === undefined ? undefined : paneOf(surfaceKey(besideOf))?.id) ?? focusedPane.id;
+      // The focused pane's width, from what it shows: a single pane draws no box of its own.
+      const box = document.querySelector(`[data-testid="session-tab-view"][data-pane="${CSS.escape(from)}"]:not([hidden])`)?.getBoundingClientRect();
+      const fontSize = chosenFontSize() ?? DEFAULT_FONT_SIZE;
+      const ratioOf = (first: Surface, second: Surface) =>
+        box === undefined || box.width === 0 ? 0.5 : restingRatio({ width: box.width, fontSize, first: sideOf(first), second: sideOf(second) });
+      const next = change((current) => (besideOf === undefined ? placeBeside(current, surface, from, newId, ratioOf) : placeBesideOf(current, besideOf, surface, from, newId, ratioOf)));
+      setFocusedPaneId(paneOfSurface(next, besideKey)?.id ?? from);
+    },
     openWeb(url, paneId) {
       const open = surfaces.find((surface) => surface.kind === 'web' && surface.web.url === url && surface.web.private !== true);
       if (open !== undefined) select(open.key);
@@ -615,7 +638,7 @@ export function useWindowPanes(
       return true;
     },
   };
-  openRef.current = control.open;
+  openRef.current = (request) => (request.beside ? control.openBeside(request.surface, request.besideOf) : control.open(request.surface));
 
   /** Does what one of the window's own keys asks, of `pane`. */
   function act(pressed: WindowPaneKey, pane: PaneView) {

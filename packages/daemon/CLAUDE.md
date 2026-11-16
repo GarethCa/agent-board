@@ -42,4 +42,6 @@ The daemon owns the board: the SQLite database, the agents' terminals, the hooks
 - `tempDataDir`, `tempRepo`, `git`: folders and repos that are removed when the test ends.
 - `insertFakeSession`, `recordEvents`: a session without a harness, and the events a client receives.
 
+`test/server/` holds the server suite (`pnpm exec vitest run --project server`): real daemons driven as their clients drive them, which the gate runs for a daemon change in place of e2e.
+
 `test/fake-clock.ts` drives time. Agents run on `packages/fake-harness`, never on the real CLIs.

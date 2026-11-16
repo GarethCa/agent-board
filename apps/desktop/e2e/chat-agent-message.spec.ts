@@ -11,7 +11,7 @@ const answer = (page: Page, sessionId: string, text: string) => page.evaluate(([
  * Wraps past four lines in a narrow chat but not in a wide one, and short enough (under four lines of the line-count
  * guess) that only measuring it at the chat's width says it is long.
  */
-const LONG = 'Two things to fix before merge. '.repeat(6).trim();
+const LONG = 'Two things to fix before merge. '.repeat(9).trim();
 
 const join = (page: Page, from: string, to: string) => page.evaluate(([a, b]) => window.agentBoard.flowEdges.create({ from: a!, to: b! }), [from, to]);
 

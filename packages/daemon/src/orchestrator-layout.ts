@@ -5,8 +5,9 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { agentNoteAuthor, agentNoteData, agentNoteSize } from './agent-notes.ts';
 import { arrangeBoard } from './arrange-board.ts';
-import { arrangeTiles, CLUSTER_LABEL_SIZE, CLUSTER_NOTE_SIZE, fittedSize, lanesOf, parkClusters, type ArrangeTile, type ArrangedCluster } from './board-arrange.ts';
-import { layOutSpine, type SpinePlace, type SpinePlaces } from './spine-layout.ts';
+import { arrangeTiles, CLUSTER_LABEL_SIZE, CLUSTER_NOTE_SIZE, fittedSize, lanesOf, LANE_SLOTS, parkClusters, type ArrangeTile, type ArrangedCluster } from './board-arrange.ts';
+import { layOutSpine, type SpinePlace, type SpinePlaces, type SpineTail } from './spine-layout.ts';
+import { DONE_LINE_KIND, doneLineData, doneLineDataProblem, doneTicketOf, gatheredTo, gatherTo, isFinished, spineViewKey } from './zone-clean-up.ts';
 import {
   AGENT_TILE_SIZE,
   besideSpot,
@@ -57,6 +58,7 @@ import {
   COLOR_SLOTS,
   DEFAULT_ARRANGE_SETTINGS,
   DEFAULT_ZONE_SIZE,
+  DONE_LINE_HEIGHT,
   ZONE_LAYOUT_CHOICES,
   zoneLayoutChoiceFields,
   NOTE_KINDS,
@@ -88,6 +90,9 @@ import {
   type ArrangeSettings,
   type ExpandedBox,
   type BoardItem,
+  type CleanUpResult,
+  type CleanUpUndo,
+  type DoneTicket,
   type BoardPlace,
   type Connector,
   type DaemonCall,
@@ -156,6 +161,10 @@ export type LayoutMethods = Pick<
   | 'orchestrator.editConnector'
   | 'orchestrator.removeConnector'
   | 'zone.followRule'
+  | 'zone.cleanUp'
+  | 'zone.undoCleanUp'
+  | 'zone.putBackDone'
+  | 'zone.moveToDone'
 >;
 
 export interface LayoutHandlerOptions {
@@ -188,8 +197,6 @@ const RULE_NAMES: Record<Exclude<ZoneLayoutRule, 'off'>, string> = { lanes: 'Lan
 const keepsRule = (zone: Zone): RpcMethodError =>
   invalidParams(`${zone.name} keeps the ${zone.layoutRule === 'off' ? '' : RULE_NAMES[zone.layoutRule]} rule: set it free first (zone layout free) to arrange it another way`);
 
-/** Where a Spine zone keeps its state between layouts (`SpineSaved`). */
-export const spineViewKey = (zoneId: string) => `spine:${zoneId}`;
 
 /** A band or a head-column tile the rule laid out: where, and the tiles in it. */
 interface SpineLaid extends Rect {
@@ -206,6 +213,8 @@ interface SpineSaved {
    * it: a tile dropped on one it isn't in joins.
    */
   laid?: SpineLaid[];
+  /** The tickets the user put back from the Done line: Clean up leaves them on the board until they are moved to Done by hand. */
+  keptOut?: string[];
 }
 
 const isSpinePlace = (value: unknown): value is SpinePlace =>
@@ -214,7 +223,7 @@ const isSpinePlace = (value: unknown): value is SpinePlace =>
 /** The Spine state saved in the view store, if it reads as one. */
 function spineSaved(value: unknown): SpineSaved | undefined {
   if (typeof value !== 'object' || value === null) return undefined;
-  const { places, joined, laid } = value as Record<string, unknown>;
+  const { places, joined, laid, keptOut } = value as Record<string, unknown>;
   if (typeof places !== 'object' || places === null || Array.isArray(places)) return undefined;
   const isLaid = (rect: unknown): rect is SpineLaid =>
     typeof rect === 'object' &&
@@ -226,7 +235,29 @@ function spineSaved(value: unknown): SpineSaved | undefined {
     places: Object.fromEntries(Object.entries(places).filter((entry): entry is [string, SpinePlace] => isSpinePlace(entry[1]))),
     ...(Array.isArray(joined) ? { joined: joined.filter((key): key is string => typeof key === 'string') } : {}),
     ...(Array.isArray(laid) ? { laid: laid.filter(isLaid) } : {}),
+    ...(Array.isArray(keptOut) ? { keptOut: keptOut.filter((key): key is string => typeof key === 'string') } : {}),
   };
+}
+
+/** The zone `id` names on `board`, refused unless it keeps the Spine rule: only a Spine zone has bands to clean up. */
+function spineZone(board: Board, id: string): Zone {
+  const zone = board.zones.find((each) => each.id === id);
+  if (zone === undefined) throw invalidParams(`no zone ${id}`);
+  if (zone.layoutRule !== 'spine') throw invalidParams(`${zone.name} isn't laid out by Spine: Clean up gathers a Spine zone's bands`);
+  return zone;
+}
+
+/** A Clean up's Undo as `value` (from the app) holds it, refused if it doesn't read as one. */
+function cleanUpUndo(value: unknown): CleanUpUndo {
+  const undo = value as Partial<CleanUpUndo> | null;
+  const items = undo?.items;
+  const itemsOk =
+    Array.isArray(items) &&
+    items.every((each) => typeof each === 'object' && each !== null && typeof each.id === 'string' && Number.isFinite(each.x) && Number.isFinite(each.y) && (each.gatheredTo === null || typeof each.gatheredTo === 'string'));
+  if (typeof undo !== 'object' || undo === null || !itemsOk || (undo.doneLine !== null && (typeof undo.doneLine !== 'object' || doneLineDataProblem(undo.doneLine as unknown as Record<string, unknown>) !== null))) {
+    throw invalidParams("undo must be a Clean up's { spine, items, doneLine }");
+  }
+  return { spine: undo.spine ?? null, items: items.map(({ id, x, y, gatheredTo: to }) => ({ id, x, y, gatheredTo: to })), doneLine: undo.doneLine ?? null };
 }
 
 /** Whether `zone` is laid out as its tiles are put: free, with no rule (a zone not found, as it was). */
@@ -1804,23 +1835,59 @@ export function layoutHandlers<Context extends BoardConnection>({
         const rect = inZone.find((each) => each.key === key)?.rect;
         return rect !== undefined && (saved?.laid === undefined || saved.laid.some((each) => !each.of.includes(key) && overlaps(rect, each)));
       };
+      // A finished ticket on the Done line (a Clean up's) is hidden behind its chip, its tiles and notes with it.
+      const doneItem = board.items.find((each) => each.zoneId === zone.id && each.kind === DONE_LINE_KIND);
+      const filed = doneItem === undefined ? [] : doneLineData(doneItem.data).tickets;
+      // A ticket that is no longer finished (one of its agents resumed, sent to, or working past a merge) is never hidden:
+      // it goes back on the board by itself, at the foot of the shortest column, as one put back does.
+      const agentsByKey = new Map(board.agents.map((each) => [tileSizeKey('agent', each.sessionId), each]));
+      const woke = (ticket: DoneTicket) => {
+        const present = ticket.members.map((key) => agentsByKey.get(key)).filter((each) => each !== undefined);
+        return present.length > 0 && !isFinished(present);
+      };
+      const woken = new Set(filed.filter(woke).flatMap((ticket) => [ticket.key, ...ticket.members]));
+      const done = { tickets: filed.filter((ticket) => !woken.has(ticket.key)) };
+      if (doneItem !== undefined && woken.size > 0 && done.tickets.length > 0) await call('item.update', { id: doneItem.id, data: { tickets: done.tickets } });
+      const places = Object.fromEntries(Object.entries(saved?.places ?? {}).filter(([key]) => !woken.has(key)));
+      const doneKeys = new Set(done.tickets.flatMap((ticket) => [...ticket.members, ...ticket.notes.map((id) => `item:${id}`)]));
       const joining = byHand.filter((key) => putBack.includes(key) || (zone.handPlaced.includes(key) && dropped(key)));
       const joined = [...new Set([...(saved?.joined ?? []).filter((key) => byHand.includes(key)), ...joining])];
       const held = new Set(byHand.filter((key) => !joined.includes(key)));
       if (joining.length > 0) zones.dropHandPlaced(zone.id, joining);
       const tiles = crewOf(THE_RULE, board, zone)
-        .filter((tile) => (!zone.handPlaced.includes(tile.id) || joining.includes(tile.id)) && !held.has(tile.id))
+        .filter((tile) => (!zone.handPlaced.includes(tile.id) || joining.includes(tile.id)) && !held.has(tile.id) && !doneKeys.has(tile.id))
         .map((tile) => (leads.has(tile.id) ? { ...tile, lead: true } : tile));
       const moving = new Set(tiles.map((tile) => tile.id));
+      // What a Clean up gathered to a tile laid out here stands with it, at its band's tail, until the user drags it.
+      const tails = new Map<string, SpineTail[]>();
+      const tailed: Placed[] = [];
+      for (const placed of inZone) {
+        const item = placed.kind === 'item' ? board.items.find((each) => each.id === placed.id) : undefined;
+        const to = item === undefined || doneKeys.has(placed.key) ? null : gatheredTo(item);
+        if (to === null || !moving.has(to)) continue;
+        tails.set(to, [...(tails.get(to) ?? []), { id: placed.key, size: { width: placed.rect.width, height: placed.rect.height } }]);
+        tailed.push(placed);
+      }
       const { parts, stale } = clusterParts(THE_RULE, zone.id, board.items);
       const going = [...stale, ...[...parts.values()].filter((item) => !(String(item.data.arrange).endsWith(CLUSTER_NOTE_SLOT) && edited(item)))];
       const goingKeys = new Set(going.map((item) => `item:${item.id}`));
       const staged = stagedIn(board, zone.id);
-      const fixed = inZone.filter((each) => !moving.has(each.key) && !goingKeys.has(each.key) && !staged.has(each.key)).map(takenBy);
+      const laidApart = new Set([...doneKeys, ...tailed.map((each) => each.key), ...(doneItem === undefined ? [] : [`item:${doneItem.id}`])]);
+      const fixed = inZone.filter((each) => !moving.has(each.key) && !goingKeys.has(each.key) && !staged.has(each.key) && !laidApart.has(each.key)).map(takenBy);
       // A lead the user started stays where it is, and heads the column there: its crew go right of it.
       const heldLead = inZone.find((each) => held.has(each.key) && leads.has(each.key));
       const anchor = heldLead === undefined ? {} : { anchor: takenBy(heldLead) };
-      const laid = layOutSpine({ tiles, links: await linksOf(), spacing: zone.spacing, ...(reflow || saved === undefined ? {} : { places: saved.places }), fixed, ...anchor });
+      const doneLine = done.tickets.length > 0 ? { doneLine: { height: DONE_LINE_HEIGHT } } : {};
+      const laid = layOutSpine({
+        tiles,
+        links: await linksOf(),
+        spacing: zone.spacing,
+        ...(reflow || saved === undefined ? {} : { places }),
+        fixed,
+        ...anchor,
+        tails,
+        ...doneLine,
+      });
       const { width, height } = laid.size;
       checkGrowth(board, zone, laid.size, 'laid out by its rule,');
       for (const item of going) await call('item.delete', { id: item.id });
@@ -1839,6 +1906,23 @@ export function layoutHandlers<Context extends BoardConnection>({
         await moveTo(placed, zone.id, spot);
         moved.push({ target: { kind: placed.kind as LayoutTarget['kind'], id: placed.id }, zoneId: zone.id, ticket: null, ...spot });
       }
+      for (const placed of tailed) {
+        const spot = laid.positions.get(placed.key)!;
+        if (placed.rect.x === spot.x && placed.rect.y === spot.y) continue;
+        await moveTo(placed, zone.id, spot);
+        moved.push({ target: { kind: 'item', id: placed.id }, zoneId: zone.id, ticket: null, ...spot });
+      }
+      if (doneItem !== undefined) {
+        if (laid.doneLine === null) await call('item.delete', { id: doneItem.id });
+        else {
+          const line = laid.doneLine;
+          if (doneItem.x !== line.x || doneItem.y !== line.y || doneItem.width !== line.width) await call('item.update', { id: doneItem.id, x: line.x, y: line.y, width: line.width, height: line.height });
+          // What it hides waits behind it, out of the way of what is laid out.
+          for (const placed of inZone.filter((each) => doneKeys.has(each.key))) {
+            if (placed.rect.x !== line.x || placed.rect.y !== line.y) await moveTo(placed, zone.id, line);
+          }
+        }
+      }
       await growTo(zone, laid.size);
       changedAny = moved.length > 0 || width !== zone.width || height !== zone.height;
       // The places of the agents held where they are are kept, for when they are laid out by the rule again.
@@ -1847,7 +1931,7 @@ export function layoutHandlers<Context extends BoardConnection>({
           .filter((each) => held.has(tileSizeKey('agent', each.sessionId)))
           .flatMap((each) => [tileSizeKey('agent', each.sessionId), ...(each.issue === null ? [] : [`issue:${each.issue.id}`])]),
       );
-      const kept = Object.entries(saved?.places ?? {}).filter(([key]) => heldKeys.has(key));
+      const kept = Object.entries(places).filter(([key]) => heldKeys.has(key));
       const inBand = new Set(laid.bands.flatMap((band) => band.members));
       const dropTargets: SpineLaid[] = [
         ...laid.bands.map((band) => ({ ...band.rect, of: band.members })),
@@ -1855,10 +1939,14 @@ export function layoutHandlers<Context extends BoardConnection>({
           .filter((tile) => tile.kind !== 'clock' && !inBand.has(tile.id))
           .map((tile) => ({ ...laid.positions.get(tile.id)!, ...(tile.size ?? AGENT_TILE_SIZE), of: [tile.id] })),
       ];
+      const bandKeys = new Set(laid.bands.map((band) => band.key));
+      const keptOut = (saved?.keptOut ?? []).filter((key) => bandKeys.has(key));
       const now: SpineSaved = {
         places: { ...(reflow ? {} : Object.fromEntries(kept)), ...laid.places },
         ...(joined.length > 0 ? { joined } : {}),
         ...(dropTargets.length === 0 ? {} : { laid: dropTargets }),
+        // What was put back stays kept out of the next Clean up while its band is on the board, and no longer.
+        ...(keptOut.length === 0 ? {} : { keptOut }),
       };
       if (JSON.stringify(now) !== JSON.stringify(saved)) await call('view.set', { key: spineViewKey(zone.id), value: now });
       entry.detail = `${tiles.length} tile${tiles.length === 1 ? '' : 's'} in ${laid.bands.length} band${laid.bands.length === 1 ? '' : 's'}${reflow ? ', afresh' : ''}${how}`;
@@ -1889,6 +1977,72 @@ export function layoutHandlers<Context extends BoardConnection>({
       warn(`could not arrange by itself: ${(error as Error).message}`);
       return false;
     }
+  };
+
+  /** A band of a Spine zone, as Clean up reads it: its ticket's key and its agents. */
+  interface CleanUpBand {
+    key: string;
+    members: Agent[];
+  }
+
+  /**
+   * Folds the bands `pick` chooses of the Spine zone `id` into its Done line, with their notes and docs, and lays the zone
+   * out afresh: Clean up, or Move to Done. `gatherAll` also moves every other agent's notes and docs beside its tile.
+   */
+  const foldIntoDone = async (
+    id: string,
+    pick: (bands: CleanUpBand[], keptOut: readonly string[], zone: Zone) => CleanUpBand[],
+    gatherAll: boolean,
+  ): Promise<CleanUpResult> => {
+    const board = await readBoard();
+    const zone = spineZone(board, id);
+    const spine = await call('view.get', { key: spineViewKey(id) });
+    const saved = spineSaved(spine);
+    const doneItem = board.items.find((each) => each.zoneId === id && each.kind === DONE_LINE_KIND);
+    const done = doneItem === undefined ? null : doneLineData(doneItem.data);
+    const doneKeys = new Set((done?.tickets ?? []).flatMap((ticket) => ticket.members));
+    // The bands as the rule lays them: of the crew, all but what stays where it is.
+    const joined = saved?.joined ?? [];
+    const leads = new Set(board.agents.filter((each) => each.zoneId === id && (isOrchestratorRole(each.roleName) || each.master)).map((each) => tileSizeKey('agent', each.sessionId)));
+    const agents = new Map(board.agents.map((agent) => [tileSizeKey('agent', agent.sessionId), agent]));
+    const tiles = crewOf(THE_RULE, board, zone)
+      .filter((tile) => !zone.handPlaced.includes(tile.id) && !doneKeys.has(tile.id))
+      .filter((tile) => { const agent = agents.get(tile.id); return agent === undefined || !startedByHand(agent) || joined.includes(tile.id); })
+      .map((tile) => (leads.has(tile.id) ? { ...tile, lead: true } : tile));
+    const laidOut = new Set(tiles.map((tile) => tile.id));
+    const bands = lanesOf(tiles, await linksOf()).lanes.map((lane) => ({
+      key: lane.key,
+      members: LANE_SLOTS.flatMap((slot) => lane.slots[slot]).map((tile) => agents.get(tile.id)).filter((agent) => agent !== undefined),
+    }));
+    const keptOut = saved?.keptOut ?? [];
+    const finished = pick(bands, keptOut, zone);
+    const doneOf = new Map(finished.flatMap((band) => band.members.map((agent) => [tileSizeKey('agent', agent.sessionId), band.key] as const)));
+    // Each note and doc to its agent: one of a finished ticket goes into its chip.
+    const undo: CleanUpUndo = { spine, items: [], doneLine: done };
+    const notesOf = new Map<string, string[]>();
+    for (const item of board.items.filter((each) => each.zoneId === id)) {
+      const to = gatheredTo(item) ?? gatherTo(item, madeBy(itemMadeBy, item.id));
+      if (to === null || !laidOut.has(to) || (!gatherAll && !doneOf.has(to))) continue;
+      undo.items.push({ id: item.id, x: item.x, y: item.y, gatheredTo: gatheredTo(item) });
+      const band = doneOf.get(to);
+      if (band !== undefined) notesOf.set(band, [...(notesOf.get(band) ?? []), item.id]);
+      if (gatheredTo(item) !== to) await call('item.update', { id: item.id, data: { gatheredTo: to } });
+    }
+    if (finished.length > 0) {
+      const at = new Date().toISOString();
+      const tickets = [...(done?.tickets ?? []), ...finished.map((band) => doneTicketOf(band.key, band.members, notesOf.get(band.key) ?? [], at))];
+      if (doneItem === undefined) await call('item.create', { kind: DONE_LINE_KIND, zoneId: id, x: 0, y: 0, width: AGENT_TILE_SIZE.width, height: DONE_LINE_HEIGHT, data: { tickets } });
+      else await call('item.update', { id: doneItem.id, data: { tickets } });
+      // A ticket moved to Done by hand is no longer kept out: put back again, it is kept out again.
+      const folded = new Set(finished.map((band) => band.key));
+      if (saved !== undefined && keptOut.some((key) => folded.has(key))) {
+        const rest = keptOut.filter((key) => !folded.has(key));
+        await call('view.set', { key: spineViewKey(id), value: { ...saved, keptOut: rest.length === 0 ? undefined : rest } });
+      }
+    }
+    const laid = await spineIn(id, true, gatherAll ? ', cleaned up' : ', moved to Done');
+    const after = (await call('zone.list', undefined)).find((each) => each.id === id) ?? zone;
+    return { zone: after, moved: laid.moved.length, done: finished.length, undo };
   };
 
   return {
@@ -2562,6 +2716,68 @@ export function layoutHandlers<Context extends BoardConnection>({
       // An agent the user started, put back, joins the bands.
       if (zone.layoutRule === 'spine') await spineIn(id, reflow, ', by its rule', true, tiles);
       else await arrangeIn(THE_RULE, id, () => ({}), ', by its rule', true);
+      return (await call('zone.list', undefined)).find((each) => each.id === id) ?? zone;
+    },
+
+    // The user's, from the zone's menu: no agent runs it.
+    'zone.cleanUp': async (params) => {
+      const id = stringParam(paramsObject(params), 'id');
+      return foldIntoDone(id, (bands, keptOut) => bands.filter((band) => !keptOut.includes(band.key) && isFinished(band.members)), true);
+    },
+
+    // The user's, from a put-back ticket's menu: folds that one ticket into the Done line again.
+    'zone.moveToDone': async (params) => {
+      const p = paramsObject(params);
+      const id = stringParam(p, 'id');
+      const sessionId = stringParam(p, 'sessionId');
+      return foldIntoDone(id, (bands, _keptOut, zone) => {
+        const band = bands.find((each) => each.members.some((agent) => agent.sessionId === sessionId));
+        if (band === undefined) throw invalidParams(`${sessionId} isn't in a band of ${zone.name}`);
+        if (!isFinished(band.members)) throw invalidParams(`${band.members.find((agent) => agent.sessionId === sessionId)!.name}'s ticket isn't finished: only finished work goes to Done`);
+        return [band];
+      }, false);
+    },
+
+    'zone.undoCleanUp': async (params) => {
+      const p = paramsObject(params);
+      const id = stringParam(p, 'id');
+      const undo = cleanUpUndo(p.undo);
+      const board = await readBoard();
+      const zone = spineZone(board, id);
+      await call('view.set', { key: spineViewKey(id), value: undo.spine });
+      const items = new Map(board.items.map((item) => [item.id, item]));
+      for (const each of undo.items) {
+        if (items.get(each.id)?.zoneId === id) await call('item.update', { id: each.id, x: each.x, y: each.y, data: { gatheredTo: each.gatheredTo } });
+      }
+      const doneItem = board.items.find((each) => each.zoneId === id && each.kind === DONE_LINE_KIND);
+      if (undo.doneLine === null || undo.doneLine.tickets.length === 0) {
+        if (doneItem !== undefined) await call('item.delete', { id: doneItem.id });
+      } else if (doneItem === undefined) {
+        await call('item.create', { kind: DONE_LINE_KIND, zoneId: id, x: 0, y: 0, width: AGENT_TILE_SIZE.width, height: DONE_LINE_HEIGHT, data: { ...undo.doneLine } });
+      } else await call('item.update', { id: doneItem.id, data: { ...undo.doneLine } });
+      await spineIn(id, false, ', Clean up undone');
+      return (await call('zone.list', undefined)).find((each) => each.id === id) ?? zone;
+    },
+
+    'zone.putBackDone': async (params) => {
+      const p = paramsObject(params);
+      const id = stringParam(p, 'id');
+      const key = stringParam(p, 'key');
+      const board = await readBoard();
+      const zone = spineZone(board, id);
+      const doneItem = board.items.find((each) => each.zoneId === id && each.kind === DONE_LINE_KIND);
+      const tickets = doneItem === undefined ? [] : doneLineData(doneItem.data).tickets;
+      if (doneItem === undefined || !tickets.some((ticket) => ticket.key === key)) throw invalidParams(`${zone.name}'s Done line has no ${key}`);
+      await call('item.update', { id: doneItem.id, data: { tickets: tickets.filter((ticket) => ticket.key !== key) } });
+      // Back as a new ticket goes, at the foot of the shortest column, not in its old slot; and kept out of the next Clean up.
+      const ticket = tickets.find((each) => each.key === key)!;
+      const saved = spineSaved(await call('view.get', { key: spineViewKey(id) })) ?? { places: {} };
+      const forgotten = new Set([key, ...ticket.members]);
+      await call('view.set', {
+        key: spineViewKey(id),
+        value: { ...saved, places: Object.fromEntries(Object.entries(saved.places).filter(([each]) => !forgotten.has(each))), keptOut: [...new Set([...(saved.keptOut ?? []), key])] },
+      });
+      await spineIn(id, false, ', put back from Done');
       return (await call('zone.list', undefined)).find((each) => each.id === id) ?? zone;
     },
   };

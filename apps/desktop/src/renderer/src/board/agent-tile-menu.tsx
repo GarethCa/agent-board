@@ -33,6 +33,10 @@ export interface TileMenuBoard {
   handPlaced(nodeId: string): boolean;
   /** Puts the tile placed by hand back under its zone's layout rule. */
   followRule(nodeId: string): void;
+  /** Whether the tile is an ended agent in a Spine zone, whose ticket can be folded into the zone's Done line. */
+  movableToDone(nodeId: string): boolean;
+  /** Folds the ticket of the agent tile into its zone's Done line. */
+  moveToDone(nodeId: string): void;
   /** Puts the text on the clipboard, saying what it was. */
   copy(text: string, what: string): void;
 }
@@ -50,6 +54,8 @@ const NOTHING: TileMenuBoard = {
   setLeadPinned: () => {},
   handPlaced: () => false,
   followRule: () => {},
+  movableToDone: () => false,
+  moveToDone: () => {},
   copy: () => {},
 };
 
@@ -102,6 +108,7 @@ export function useAgentTileMenu(nodeId: string, agent: Agent, links: TileLinks,
       ...(board.joinable(nodeId) ? { connect: () => board.connectFrom(nodeId) } : {}),
       ...(pinned === undefined ? {} : { leadPin: { pinned, toggle: () => board.setLeadPinned(nodeId, !pinned) } }),
       ...(board.handPlaced(nodeId) ? { backUnderRule: () => board.followRule(nodeId) } : {}),
+      ...(board.movableToDone(nodeId) ? { moveToDone: () => board.moveToDone(nodeId) } : {}),
       copy: board.copy,
       show: (sessionId) => void commands.showTile({ kind: 'agent', id: sessionId }),
     },

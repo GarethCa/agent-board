@@ -35,7 +35,7 @@ test('a zone on Lanes by ticket lays its agents out by the rule; a tile dragged 
     const scattered = await places(page);
 
     // The rule is picked in the same Layout list as the views.
-    await zoneNamed(page, 'monorepo').getByRole('button', { name: 'Tidy and spacing' }).click();
+    await zoneNamed(page, 'monorepo').getByRole('button', { name: 'Clean up and spacing' }).click();
     const menu = page.getByRole('menu');
     await expect(menu.getByRole('menuitemradio', { name: /^Free/ })).toHaveAttribute('aria-checked', 'true');
     await menu.getByRole('menuitemradio', { name: /Lanes by ticket/ }).click();
@@ -94,7 +94,7 @@ test('a zone on Lanes by ticket lays its agents out by the rule; a tile dragged 
   }
 });
 
-test("a zone on Spine leaves the user's own agents where they are, even on a Tidy, until the user drags one in; then it lays them out as bands", async () => {
+test("a zone on Spine leaves the user's own agents where they are, even on a Clean up, until the user drags one in; then it lays them out as bands", async () => {
   const { repo, env } = scratch('output');
   const dataDir = tempDataDir();
   const { app, window: page } = await launch(dataDir, env);
@@ -121,15 +121,15 @@ test("a zone on Spine leaves the user's own agents where they are, even on a Tid
     await untilStill(async () => JSON.stringify(await places(page)));
     const started = await places(page);
 
-    await zoneNamed(page, 'monorepo').getByRole('button', { name: 'Tidy and spacing' }).click();
+    await zoneNamed(page, 'monorepo').getByRole('button', { name: 'Clean up and spacing' }).click();
     const menu = page.getByRole('menu');
     await menu.getByRole('menuitemradio', { name: /^Spine/ }).click();
     await expect(menu).toBeHidden();
     await expect.poll(async () => (await zones(page))[0]!.layoutRule).toBe('spine');
-    // The user started both, so neither picking Spine nor a Tidy moves them. Tidy is taken from ⋯, which always has it.
+    // The user started both, so neither picking Spine nor a Clean up moves them. Clean up is taken from ⋯, which always has it.
     const tidy = async () => {
       await zoneNamed(page, 'monorepo').getByRole('button', { name: 'Zone options' }).click();
-      await page.getByRole('menu').getByRole('menuitem', { name: /^Tidy/ }).first().click();
+      await page.getByRole('menu').getByRole('menuitem', { name: /^Clean up/ }).first().click();
       await untilStill(async () => JSON.stringify(await places(page)));
     };
     await untilStill(async () => JSON.stringify(await places(page)));
@@ -159,7 +159,7 @@ test("a zone on Spine leaves the user's own agents where they are, even on a Tid
     expect(laidOut['Resize images']).toEqual(first);
     expect(laidOut['Pick a cache']!.y).toBeGreaterThan(first.y);
     expect((await zones(page))[0]!.width).toBeLessThan(zone!.width);
-    // Joined, they are laid out afresh by a Tidy, in the order they started: the first started on top.
+    // Joined, they are laid out afresh by a Clean up, in the order they started: the first started on top.
     await tidy();
     const tidied = await places(page);
     const at = (place: { x: number; y: number } | null | undefined) => ({ x: place!.x, y: place!.y });

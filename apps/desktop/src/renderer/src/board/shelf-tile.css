@@ -1,0 +1,299 @@
+/*
+ * An agent's tile drawn as a Shelf (ShelfTile.tsx), chosen in Settings › Tile design: a plain card its character peeks
+ * over, its name and line, and a state band along its bottom edge. Only the states that want the user colour the band,
+ * so the tile takes none of the outlines other designs ring a state with; a hand-off, a tab drop and a job drop still
+ * ring it, as on every tile. Every rule is scoped to .shelf-tile, so none of it reaches another design.
+ */
+.hybrid-tile-agent.shelf-tile {
+  gap: 0;
+  padding: 0;
+  border-color: transparent;
+  font-family: var(--font-sans);
+}
+
+/* Its state is in its band, not a ring: needs you, paused and stopped by a restart sit plain, with their frost. */
+.hybrid-tile-agent.shelf-tile:is([data-needs-you], [data-state='stopped-by-restart'], [data-state='hibernated'], [data-start]) {
+  outline: 2.5px solid transparent;
+}
+
+.hybrid-tile-agent.shelf-tile[data-state='stopped-by-restart'] {
+  background: var(--raised);
+  --tile-fill: var(--raised);
+}
+
+.hybrid-tile-agent.shelf-tile[data-handoff] {
+  outline-color: var(--flow-target-edge);
+}
+
+.hybrid-tile-agent.shelf-tile[data-drop-over] {
+  outline: 3px solid var(--shell-drop-halo);
+  outline-offset: -3px;
+}
+
+.hybrid-tile-agent.shelf-tile[data-job-drop] {
+  outline: var(--queue-drop-edge) dashed var(--queue-drop-halo);
+  outline-offset: calc(-1 * var(--queue-drop-edge));
+}
+
+/* Done, it lies flat: no shadow, a hairline edge. Its crew's halo and a hand-off's receiving ring, both shadows, still show. */
+.hybrid-tile-agent.shelf-tile[data-glance='done']:not([data-orchestrator], [data-master], [data-crew-lit], [data-handoff]) {
+  border-color: var(--border);
+  box-shadow: none;
+}
+
+/* Its character stands behind the top edge, only its head showing over it. */
+.shelf-tile-peek {
+  position: absolute;
+  top: calc(-1 * var(--space-4-5));
+  right: var(--space-4);
+  display: flex;
+  height: var(--space-4-5);
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* A figure that sits, sleeps or has toppled lies low in its box: it is raised, so its head still shows over the edge.
+   A pixel figure only drops a pixel, so it stays put. */
+.shelf-tile-peek:is([data-style='bean'], [data-style='pebble']):is([data-pose='idle'], [data-pose='hibernated']) > * {
+  margin-top: calc(-1 * var(--space-2));
+}
+
+.shelf-tile-peek:is([data-style='bean'], [data-style='pebble'])[data-pose='failed'] > * {
+  margin-top: calc(-1 * var(--space-3));
+}
+
+.shelf-tile-body {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: var(--space-1-25);
+  min-height: 0;
+  /* Nothing in it ever slides under the band. */
+  overflow: hidden;
+  padding: var(--space-3) var(--space-3) var(--space-2) var(--space-3);
+}
+
+.shelf-tile-head {
+  display: flex;
+  flex: none;
+  align-items: flex-start;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+/* Its name at one size whatever its length, a step under the mock's, on two lines at most. */
+.shelf-tile .hybrid-tile-name {
+  min-width: 0;
+  padding-inline-end: 0;
+  font-size: var(--font-size-md-plus);
+  font-weight: var(--weight-bold);
+  letter-spacing: normal;
+  line-height: var(--leading-snug);
+}
+
+/* What it is doing or asks, on two lines at most (its clamp, which the fitting keeps while it measures): one when its
+   name takes two, so the tile keeps its size. It asks only for its own lines, never the room a tile with no tags leaves. */
+.shelf-tile-line {
+  display: -webkit-box;
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: calc(2 * var(--space-4-5));
+  overflow: hidden;
+  color: var(--text-soft);
+  font-size: var(--font-size-md);
+  line-height: var(--space-4-5);
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+/* A command it asks to run, as the command. */
+.shelf-tile-line[data-command] {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+}
+
+.shelf-tile-meta {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  overflow: hidden;
+}
+
+.shelf-tile-meta .ui-chip {
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-badge);
+}
+
+/* Its crew's flags, the jobs it holds past the first, and its repo outside its zones: quiet, after its tags. */
+.shelf-tile-meta :is(.glance-tile-crew-flags, .glance-tile-more) {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--font-size-badge);
+  font-weight: var(--weight-semibold);
+}
+
+.shelf-tile-meta .glance-tile-repo {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--font-size-badge);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The band: its state's glyph and word, how long it has been in it at the end. */
+.shelf-tile-band {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1-5);
+  height: var(--space-7-5);
+  padding: 0 var(--space-2-5) 0 var(--space-3);
+  border-radius: 0 0 var(--radius-xl) var(--radius-xl);
+  background: var(--shelf-band);
+  color: var(--shelf-band-ink);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-bold);
+  white-space: nowrap;
+}
+
+.shelf-tile-band[data-level='1'] {
+  color: var(--shelf-at-work-ink);
+}
+
+.shelf-tile-band[data-glance='done'] {
+  color: var(--shelf-done-ink);
+}
+
+.shelf-tile-band[data-glance='limit'] {
+  color: var(--shelf-limit-ink);
+}
+
+.shelf-tile-band[data-level='2'] {
+  background: var(--shelf-wants);
+  color: var(--shelf-wants-ink);
+}
+
+.shelf-tile-band[data-level='3'] {
+  background: var(--shelf-problem);
+  color: var(--shelf-problem-ink);
+}
+
+.shelf-tile-glyph {
+  flex: none;
+}
+
+.shelf-tile-word {
+  flex: none;
+}
+
+/* Its word always shows whole: a long age, or a next run with its date, gives way instead. */
+.shelf-tile-age {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  margin-inline-start: auto;
+  text-overflow: ellipsis;
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
+  transition: opacity var(--motion-fast) var(--ease-out);
+}
+
+/* Expand and ⋯, in a small tray laid over the name's end on hover, its own fill hiding what it covers. */
+.shelf-tile-tools {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-1-75);
+  display: flex;
+  gap: var(--space-1);
+  padding: var(--space-0-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--raised);
+}
+
+.shelf-tile-tools .ui-icon-button {
+  position: relative;
+  width: var(--space-6);
+  height: var(--space-6);
+  border-radius: var(--radius-key);
+  color: var(--muted);
+}
+
+/* Each is a little bigger to click than it is drawn. */
+.shelf-tile-tools .ui-icon-button::after {
+  position: absolute;
+  inset: calc(-1 * var(--space-0-5));
+  content: '';
+}
+
+.shelf-tile-tools .ui-icon-button svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+}
+
+/* Its one action, at the band's end in the time's place. */
+.shelf-tile-act {
+  position: absolute;
+  right: var(--space-1-5);
+  bottom: var(--space-0-5);
+  display: flex;
+}
+
+.shelf-tile-act .glance-tile-action {
+  height: var(--space-6-5);
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-key);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-bold);
+}
+
+/* The tools and the action show on hover, focus, selection or with an ask or the menu open; hidden, they take no clicks
+   but stay in the tab order, so Tab onto one shows them. */
+.shelf-tile-tools,
+.shelf-tile-act {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--motion-fast) var(--ease-out);
+}
+
+.shelf-tile:is(:hover, :focus-within) :is(.shelf-tile-tools, .shelf-tile-act),
+.react-flow__node.selected .shelf-tile :is(.shelf-tile-tools, .shelf-tile-act),
+:is(.shelf-tile-tools, .shelf-tile-act):has([data-state='open']) {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.shelf-tile:is(:hover, :focus-within) .shelf-tile-age[data-hides],
+.react-flow__node.selected .shelf-tile .shelf-tile-age[data-hides] {
+  opacity: 0;
+}
+
+/* While its name is being typed, the tray gives the field the head. */
+.shelf-tile:has(.editable-name-field) .shelf-tile-tools {
+  visibility: hidden;
+}
+
+@media (hover: none) {
+  .shelf-tile-tools,
+  .shelf-tile-act {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .shelf-tile-age[data-hides] {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shelf-tile-tools,
+  .shelf-tile-act,
+  .shelf-tile-age {
+    transition: none;
+  }
+}

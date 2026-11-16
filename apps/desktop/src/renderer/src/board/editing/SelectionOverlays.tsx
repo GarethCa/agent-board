@@ -28,6 +28,7 @@ const NAMES: Record<BoardItemKind | 'item' | 'zone' | 'agent' | 'shell' | 'exter
   todo: ['to-do list', 'to-do lists'],
   crew: ['crew card', 'crew cards'],
   stages: ['stage board', 'stage boards'],
+  'done-line': ['Done line', 'Done lines'],
   clock: ['clock', 'clocks'],
   zone: ['zone', 'zones'],
   agent: ['agent', 'agents'],

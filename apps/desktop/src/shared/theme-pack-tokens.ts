@@ -183,6 +183,20 @@ function packTokens(theme: PackTheme, base: BaseThemes, required: readonly strin
   set('--state-rate-limited', p.hues.amber);
   set('--state-rate-limited-ink', readable(p.hues.amber, [rateLimitedSoft, p.tile]));
   set('--state-rate-limited-soft', rateLimitedSoft);
+  // A Shelf tile: its band at rest a step under the tile, each quiet word on it nudged to read there; filled in the
+  // palette's amber where it wants the user and in its failed red where it is a problem, under an ink that reads on each.
+  const shelfBand = mix(p.border, p.tile, 0.45);
+  set('--shelf-band', shelfBand);
+  set('--shelf-band-ink', readable(p.muted, [shelfBand]));
+  set('--shelf-at-work-ink', readable(accentInk, [shelfBand, p.tile]));
+  set('--shelf-done-ink', readable(success, [shelfBand, p.tile]));
+  set('--shelf-limit-ink', readable(p.hues.amber, [shelfBand, p.tile]));
+  const wants = dark ? p.hues.amber : mix(p.hues.amber, WHITE, 0.6);
+  set('--shelf-wants', wants);
+  set('--shelf-wants-ink', readable(dark ? p.desk : mix(p.hues.amber, BLACK, 0.3), [wants]));
+  const problem = dark ? p.fail : fillUnder(p.fail, WHITE);
+  set('--shelf-problem', problem);
+  set('--shelf-problem-ink', dark ? readable(p.desk, [problem]) : WHITE);
   const stateFailed = readable(p.inks?.failed ?? p.fail, [failedSoft, p.tile, dangerSoft]);
   set('--state-failed', stateFailed);
   set('--state-failed-soft', failedSoft);

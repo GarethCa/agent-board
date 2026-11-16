@@ -1,10 +1,11 @@
+import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, onTestFinished } from 'vitest';
 import { createFakeGitHub, FAKE_GITHUB_STATE, type FakeGitHubPullRequest, type FakeGitHubState } from '@agent-board/tracker/testing';
 import { BOARD_CALLER_METHODS, TRACKER_ERROR } from '../src/protocol.ts';
-import { connectTestClient, startTestDaemon } from './helpers.ts';
+import { connectTestClient, startTestDaemon, tempRepo } from './helpers.ts';
 
 const pr = (fields: Partial<FakeGitHubPullRequest> = {}): FakeGitHubPullRequest => ({
   repo: 'acme/app',
@@ -104,5 +105,60 @@ describe('PR tabs', () => {
 
   it('is never open to agents: only the user merges or approves', () => {
     for (const method of ['pullRequest.details', 'pullRequest.merge', 'pullRequest.approve'] as const) expect(BOARD_CALLER_METHODS.has(method)).toBe(false);
+  });
+});
+
+describe('finding pull requests to open', () => {
+  /** A zone bound to a repo whose GitHub remote is `remote`. */
+  async function boundTo(client: Awaited<ReturnType<typeof daemonWith>>['client'], name: string, remote: string) {
+    const repo = tempRepo(name);
+    execFileSync('git', ['-C', repo, 'remote', 'add', 'origin', `https://github.com/${remote}.git`]);
+    const zone = await client.call('zone.addUnbound', { name, x: 0, y: 0 });
+    await client.call('zone.bind', { id: zone.id, as: 'repo', path: repo });
+  }
+
+  it("lists the open pull requests of the board's repos, by anyone, each once, marking those whose review is asked of the user", async () => {
+    const { client, github } = await daemonWith({
+      pullRequests: [
+        pr({ number: 44, title: 'Fix the docs', author: 'hubot', reviewRequests: [{ login: 'octocat' }] }),
+        pr({ number: 43, state: 'MERGED' }),
+        pr({ number: 7, repo: 'acme/ops', title: 'Rotate the keys', headRefName: 'rotate' }),
+        pr({ number: 9, repo: 'acme/elsewhere' }),
+      ],
+    });
+    await boundTo(client, 'app', 'acme/app');
+    await boundTo(client, 'app-again', 'acme/app');
+    await boundTo(client, 'ops', 'acme/ops');
+
+    const found = await client.call('pullRequest.search');
+
+    expect(found.map(({ repo, number, reviewRequested }) => [repo, number, reviewRequested])).toEqual([
+      ['acme/app', 44, true],
+      ['acme/ops', 7, false],
+    ]);
+    expect(found[1]).toEqual({ repo: 'acme/ops', number: 7, title: 'Rotate the keys', url: 'https://github.com/acme/ops/pull/7', author: 'hubot', branch: 'rotate', draft: false, reviewRequested: false });
+
+    // Two folders that push to the same GitHub repo ask GitHub about it once.
+    expect(github.calls().filter((call) => call.args[0] === 'pr' && call.args[1] === 'list')).toHaveLength(2);
+  });
+
+  it('answers a search again soon after from what it found, asking GitHub nothing more', async () => {
+    const { client, github } = await daemonWith({ pullRequests: [pr()] });
+    await boundTo(client, 'app', 'acme/app');
+    const first = await client.call('pullRequest.search');
+    const asked = github.calls().length;
+
+    expect(await client.call('pullRequest.search')).toEqual(first);
+    expect(github.calls()).toHaveLength(asked);
+  });
+
+  it('finds none on a board with no repo, asking GitHub nothing', async () => {
+    const { client, github } = await daemonWith({ pullRequests: [pr()] });
+    expect(await client.call('pullRequest.search')).toEqual([]);
+    expect(github.calls()).toEqual([]);
+  });
+
+  it("isn't for agents", () => {
+    expect(BOARD_CALLER_METHODS).not.toContain('pullRequest.search');
   });
 });

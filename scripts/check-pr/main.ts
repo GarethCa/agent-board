@@ -72,7 +72,7 @@ function changedFiles(): { files: string[]; base: string } {
  * more for the unit tests, which may run on one worker per project. Past it, scripts/deadline kills the step and
  * everything it started.
  */
-const LIMIT_MIN: Record<string, number> = { unit: 45, processes: 45, visual: 10, e2e: 30 };
+const LIMIT_MIN: Record<string, number> = { unit: 45, processes: 45, server: 15, visual: 10, e2e: 30 };
 const limitOf = (step: Step): number => LIMIT_MIN[step.name] ?? 10;
 /** scripts/deadline's exit status, and the start of the line it prints, for a step that ran past its limit. */
 const TIMED_OUT = 124;

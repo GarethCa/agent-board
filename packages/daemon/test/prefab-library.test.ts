@@ -363,6 +363,9 @@ describe('starting a crew from a prefab', () => {
       isError: true,
       text: expect.stringContaining("model is the prefab's to set"),
     });
+    // The name and branch it is given go to the member that starts on the prompt.
+    expect(await mcp.callTool('new_agent', { prompt: 'Fix it', prefab: 'Solo agent', name: 'named solo', branch: 'solo-branch' })).toMatchObject({ isError: false });
+    expect((await setup.client.call('agent.list')).find((agent) => agent.name === 'named solo')).toMatchObject({ branch: 'solo-branch' });
   });
 
   it('starts the agent with the description new_agent is given, with and without prefab, and says what was stored', async () => {

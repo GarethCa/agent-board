@@ -20,7 +20,9 @@ vi.mock('../crews/prefab-store', async (original) => ({
 function spies<T>(): T & { calls: [string, unknown[]][] } {
   const calls: [string, unknown[]][] = [];
   return new Proxy({ calls } as T & { calls: [string, unknown[]][] }, {
-    get: (target, name) => (name === 'calls' ? calls : (...args: unknown[]) => void calls.push([String(name), args])),
+    // A question a menu asks is no call made: a Clean up has nothing to undo unless a test says so.
+    get: (target, name) =>
+      name === 'calls' ? calls : name === 'cleanUpUndoable' ? () => false : (...args: unknown[]) => void calls.push([String(name), args]),
   });
 }
 
@@ -285,6 +287,11 @@ describe("an agent tile's menu, grouped", () => {
     expect(row(byHand, 'follow-rule')).toMatchObject({ label: 'Put back under the rule', hint: "The zone's rule lays it out again" });
     (row(byHand, 'follow-rule') as { onSelect(): void }).onSelect();
     expect(calls).toEqual([['backUnderRule', []]]);
+    expect(menuIds(sub(agentTileMenu(tileInput(ended)), 'arrange'))).not.toContain('move-to-done');
+    const toDone = sub(agentTileMenu(tileInput(ended, { board: boardSpies([], { moveToDone: () => calls.push(['moveToDone', []]) }) })), 'arrange');
+    expect(row(toDone, 'move-to-done')).toMatchObject({ label: 'Move to Done', hint: "Folds its finished ticket into the zone's Done line" });
+    (row(toDone, 'move-to-done') as { onSelect(): void }).onSelect();
+    expect(calls).toEqual([['backUnderRule', []], ['moveToDone', []]]);
   });
 
   it('copies its branch name, worktree path and session id, and says when it has none', () => {
@@ -360,10 +367,10 @@ function zoneInput(zone: Zone, more: Partial<ZoneMenuInput> = {}): ZoneMenuInput
 describe("a zone's ⋯ menu", () => {
   it("lists a repo zone's rows, in order", () => {
     expect(menuIds(zoneMenu(zoneInput(repoZone)))).toEqual([
+      'tidy',
       'crew',
       'crew/new-ticket',
       'crew/crew-library',
-      'tidy',
       'spacing',
       'spacing/layout-free',
       'spacing/layout-spine',
@@ -395,11 +402,22 @@ describe("a zone's ⋯ menu", () => {
     expect(ids).not.toContain('trust-folder');
   });
 
-  it('leads with the chips folded off its tab', () => {
+  it('leads with Clean up, then the chips folded off its tab', () => {
     const folded: ModelEntry[] = [{ id: 'tab-new-agent', label: 'New agent', onSelect: () => {} }];
     const entries = zoneMenu(zoneInput(repoZone, { folded }));
-    expect(menuIds(entries).slice(0, 4)).toEqual(['tab-new-agent', 'crew', 'crew/new-ticket', 'crew/crew-library']);
-    expect(entries[2]).toBe('separator');
+    expect(menuIds(entries).slice(0, 5)).toEqual(['tidy', 'tab-new-agent', 'crew', 'crew/new-ticket', 'crew/crew-library']);
+    expect(entries[1]).toBe('separator');
+    expect(entries[4]).toBe('separator');
+  });
+
+  it('offers to undo a Clean up while it is the step an undo would take back', () => {
+    const actions = spies<ProjectContextMenuInput['actions']>();
+    const undoable = new Proxy(actions, { get: (target, name) => (name === 'cleanUpUndoable' ? () => true : Reflect.get(target, name)) });
+    const entries = zoneMenu(zoneInput(repoZone, { actions: undoable }));
+    expect(menuIds(entries).slice(0, 2)).toEqual(['tidy', 'undo-clean-up']);
+    (row(entries, 'undo-clean-up') as { onSelect(): void }).onSelect();
+    expect(actions.calls).toEqual([['undo', []]]);
+    expect(menuIds(zoneMenu(zoneInput(repoZone)))).not.toContain('undo-clean-up');
   });
 
   it('offers a crew from each prefab in the library, yours first, and the library itself', () => {
@@ -1225,6 +1243,13 @@ describe("every row's fields", () => {
     expect(fields(foldedZoneMenu({ ...repoZone, tracker: { provider: 'github', scope: 'acme/web' } as Zone['tracker'], gateCommand: 'pnpm check', trustsFolder: true }))).toMatchInlineSnapshot(`
       [
         {
+          "hint": "Its tiles in rows, in reading order",
+          "id": "tidy",
+          "label": "Clean up",
+          "shortcut": "⌘⌥K",
+        },
+        "separator",
+        {
           "disabled": false,
           "id": "tab-new-agent",
           "label": "New agent",
@@ -1257,11 +1282,6 @@ describe("every row's fields", () => {
           "label": "Add issue…",
         },
         "separator",
-        {
-          "hint": "Its tiles in rows, in reading order",
-          "id": "tidy",
-          "label": "Tidy",
-        },
         {
           "entries": [
             {
@@ -1399,6 +1419,13 @@ describe("every row's fields", () => {
     expect(fields(foldedZoneMenu({ ...group, defaultRepo: '/code/web', userFolder: true, fillOpacity: 30 }))).toMatchInlineSnapshot(`
       [
         {
+          "hint": "Its tiles in rows, in reading order",
+          "id": "tidy",
+          "label": "Clean up",
+          "shortcut": "⌘⌥K",
+        },
+        "separator",
+        {
           "disabled": false,
           "id": "tab-new-agent",
           "label": "New agent",
@@ -1450,11 +1477,6 @@ describe("every row's fields", () => {
           "label": "Pick where issues come from…",
         },
         "separator",
-        {
-          "hint": "Its tiles in rows, in reading order",
-          "id": "tidy",
-          "label": "Tidy",
-        },
         {
           "entries": [
             {
@@ -1610,19 +1632,23 @@ describe("every row's fields", () => {
           "label": "Pick where issues come from…",
         },
         {
+          "hint": "Its tiles in rows, in reading order",
           "id": "tab-tidy",
-          "label": "Tidy",
+          "label": "Clean up",
+          "shortcut": "⌘⌥K",
         },
       ]
     `);
   });
 
-  it("pins the tab's Tidy ▾, a zone's tab menus, and Bind…", () => {
+  it("pins the tab's Clean up ▾, a zone's tab menus, and Bind…", () => {
     expect(fields(tidyMenu(repoZone, 'roomy', spies()))).toMatchInlineSnapshot(`
       [
         {
+          "hint": "Its tiles in rows, in reading order",
           "id": "tidy",
-          "label": "Tidy now",
+          "label": "Clean up now",
+          "shortcut": "⌘⌥K",
         },
         "separator",
         {
@@ -2004,9 +2030,9 @@ describe("every row's handler", () => {
       ...wiring(tidyMenu(repoZone, undefined, actions), actions.calls),
     ]).toMatchInlineSnapshot(`
       [
+        "tidy → tidy(#z1)",
         "crew/new-ticket → newTicket(#z1)",
         "crew/crew-library → crewLibrary(#z1)",
-        "tidy → tidy(#z1)",
         "spacing/layout-free → setLayoutMode(#z1, "free")",
         "spacing/layout-spine → setLayoutMode(#z1, "spine")",
         "spacing/layout-lanes → setLayoutMode(#z1, "lanes")",
@@ -2026,9 +2052,9 @@ describe("every row's handler", () => {
         "gate-command → editGateCommand(#z1)",
         "role-templates → editRoleTemplates(#z1)",
         "delete → deleteZone(#z1)",
+        "tidy → tidy(#g1)",
         "crew/new-ticket → newTicket(#g1)",
         "crew/crew-library → crewLibrary(#g1)",
-        "tidy → tidy(#g1)",
         "spacing/layout-free → setLayoutMode(#g1, "free")",
         "spacing/layout-spine → setLayoutMode(#g1, "spine")",
         "spacing/layout-lanes → setLayoutMode(#g1, "lanes")",

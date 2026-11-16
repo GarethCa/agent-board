@@ -22,7 +22,7 @@ test("a zone's ▾ picks its spacing, tidies it at once, and keeps it across a r
     }
 
     // A new zone is roomy.
-    await zone.getByRole('button', { name: 'Tidy and spacing' }).click();
+    await zone.getByRole('button', { name: 'Clean up and spacing' }).click();
     const menu = window.getByRole('menu');
     await expect(menu.getByRole('menuitemradio', { name: /Roomy/ })).toHaveAttribute('aria-checked', 'true');
     await expect(menu.getByRole('menuitem', { name: /Default for new zones… Roomy · Settings/ })).toBeVisible();
@@ -56,7 +56,7 @@ test("a zone's ▾ picks its spacing, tidies it at once, and keeps it across a r
     ]);
 
     // Its default for new zones is in the Settings window, under Board › Tidying.
-    await zone.getByRole('button', { name: 'Tidy and spacing' }).click();
+    await zone.getByRole('button', { name: 'Clean up and spacing' }).click();
     await expect(menu.getByRole('menuitemradio', { name: /Compact/ })).toHaveAttribute('aria-checked', 'true');
     const [settings] = await Promise.all([app.waitForEvent('window'), menu.getByRole('menuitem', { name: /Default for new zones/ }).click()]);
     await expect(settingsSection(settings, 'Tidying')).toBeVisible();
@@ -66,7 +66,7 @@ test("a zone's ▾ picks its spacing, tidies it at once, and keeps it across a r
     ({ app, window } = await launch(dataDir, SHELL_ENV));
     await expect(window.getByTestId('zone')).toHaveCount(1);
     expect(await zoneSpacing(window)).toBe('compact');
-    await window.getByTestId('zone').getByRole('button', { name: 'Tidy and spacing' }).click();
+    await window.getByTestId('zone').getByRole('button', { name: 'Clean up and spacing' }).click();
     await expect(window.getByRole('menu').getByRole('menuitemradio', { name: /Compact/ })).toHaveAttribute('aria-checked', 'true');
   } finally {
     await app.close();

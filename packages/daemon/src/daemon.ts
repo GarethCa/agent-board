@@ -274,6 +274,8 @@ export interface Daemon {
   closed: Promise<DaemonExit>;
   /** What it found as it started: the live sessions it picked up, and how many agents wait for the user. */
   startedWith: { sessions: number; waiting: number };
+  /** Every RPC method it serves, sorted: what a test checks each client's rights against. */
+  methods: readonly string[];
   stop(): Promise<void>;
 }
 
@@ -1224,6 +1226,10 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       ...pullRequestTabHandlers<SessionSubscriber>({
         gh,
         cwd: homeDir,
+        repoFolders: () => [
+          ...zoneTable.list().flatMap((zone) => (zone.repoRoot === null ? [] : [zone.repoRoot])),
+          ...agents.list().flatMap((agent) => (agent.repoRoot === '' ? [] : [agent.repoRoot])),
+        ],
         // The tiles showing it say so at once, not at the watcher's next round.
         changed: async ({ repo, number }) => {
           const showing = agents.list().filter((agent) =>
@@ -1441,7 +1447,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
 
     log(`listening on ${paths.socket}, hook ingress on 127.0.0.1:${hookPort}, schema version ${schemaVersion}`);
     const startedWith = { sessions: countLiveSessions(), waiting: agents.list().filter((agent) => waitsForYou(agent, settings.get().needsYouShows)).length };
-    return { socketPath: paths.socket, hookPort, closed, startedWith, stop: () => shutdown('stopped') };
+    return { socketPath: paths.socket, hookPort, closed, startedWith, methods: Object.keys(handlers).sort(), stop: () => shutdown('stopped') };
   } catch (error) {
     external?.stop();
     await ingress?.close();
