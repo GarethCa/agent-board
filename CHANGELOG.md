@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.6.29 (2026-11-16)
+
+- Making prefabs, easier: a prefab's own board, Save as prefab…, Settings › Prefabs, + agent ▾
+
 ## v0.6.28 (2026-11-16)
 
 - Porthole circle 32px, and Manrope as the app's default font

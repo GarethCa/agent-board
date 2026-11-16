@@ -1,5 +1,6 @@
-// The app's crew prefabs: the crew library from the board menu, the flow editor it opens (a built-in copied under a
-// name of your own, edited, renamed, refused a built-in's name, removed), a file imported, and each way a crew starts:
+// The app's crew prefabs: the crew library from the board menu, a prefab's own board (a built-in copied under a name
+// of your own, changed, its problems listed at Save), Settings › Prefabs (open, import, delete), Save as prefab… from
+// an agent's tile, a board with changes not saved never swapped for another, and each way a crew starts:
 // New agent's Crew, a zone's ⋯, and ⌘K, through the one prompt box. A started crew's card is on the board, and its
 // crew stops from it on the user's yes.
 import { expect, type Page } from '@playwright/test';
@@ -8,15 +9,15 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { LibraryPrefab } from '@agent-board/daemon/protocol';
 import { run } from './board-helpers.ts';
-import { agents, launch, screen, sessionWindow, SHELL_ENV, TURN_MS, windowKey, zoneNamed, zones } from './agent-helpers.ts';
+import { agents, launch, screen, sessionWindow, SHELL_ENV, spawnAgent, tile, tileAction, TURN_MS, windowKey, zoneNamed, zones } from './agent-helpers.ts';
 import { test, browseForZone, pickFolderNext, removeDataDir, tempDataDir } from './launch.ts';
+import { openSettings } from './settings-helpers.ts';
 import { scratch } from './scratch.ts';
 
 /** The app's crew prefab library, as the app reads it. */
 const prefabs = (page: Page): Promise<LibraryPrefab[]> => page.evaluate(async () => (await window.agentBoard.orchestrators.prefabs()).prefabs);
 
 const library = (page: Page) => page.getByRole('dialog', { name: 'Crew library', exact: true });
-const editorOf = (page: Page) => page.getByRole('dialog', { name: 'Crew prefab', exact: true });
 const promptBox = (page: Page) => page.getByRole('dialog', { name: 'Start a crew', exact: true });
 const card = (page: Page, name: string) => library(page).getByTestId('prefab-card').filter({ hasText: name });
 /** A running crew's card on the board, by what its crew was asked. */
@@ -28,7 +29,7 @@ async function openLibrary(page: Page) {
   await expect(library(page)).toBeVisible();
 }
 
-test('the library makes and shares prefabs: copied, edited, renamed, refused a built-in’s name, removed, and a file imported', async () => {
+test('a prefab changes on its own board, problems listed at Save; Settings › Prefabs opens, imports and deletes one; Save as prefab… from a tile', async () => {
   const { dir, repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env);
@@ -40,55 +41,44 @@ test('the library makes and shares prefabs: copied, edited, renamed, refused a b
     await expect(card(window, 'Implementer + reviewer')).toContainText('Built in');
     await expect(card(window, 'Implementer + reviewer')).toContainText('3 rounds');
     await expect(card(window, 'Lead and crew')).toContainText('lead decides');
+    // A built-in opens as a copy, on its own board, to save as new.
     await card(window, 'Implementer + reviewer').getByRole('button', { name: 'Copy' }).click();
+    const board = window.getByTestId('prefab-board');
+    const name = board.getByRole('textbox', { name: 'Prefab name' });
+    await expect(name).toHaveValue('Implementer + reviewer (copy)');
+    await name.fill('Pair and design');
+    await board.getByRole('combobox', { name: 'Stop after' }).selectOption('4');
 
-    const editor = editorOf(window);
-    await expect(editor.getByRole('textbox', { name: 'Name', exact: true })).toHaveValue('Implementer + reviewer (mine)');
-    await editor.getByRole('textbox', { name: 'Name', exact: true }).fill('Pair and design');
-    await editor.getByRole('button', { name: 'Add member' }).click();
-    await editor.getByRole('textbox', { name: 'Member name' }).fill('Design review');
-    await editor.getByRole('group', { name: 'Reasoning' }).getByRole('button', { name: 'High', exact: true }).click();
-    await expect(editor.getByRole('button', { name: 'Design review, high' })).toHaveAttribute('aria-pressed', 'true');
-    await expect(editor).toContainText('If both approve, the crew stops: ready to merge.');
-    await editor.getByRole('button', { name: 'Save a copy' }).click();
-    await expect(editor).toBeHidden();
+    // An agent with no line in is listed at Save, not refused as it is drawn; Undo takes it off again.
+    await board.getByTestId('prefab-board-add').click();
+    await window.getByRole('menuitem', { name: 'Reviewer' }).click();
+    await board.getByTestId('prefab-board-save').click();
+    await expect(board.getByTestId('prefab-problems')).toContainText('has no line in.');
+    expect((await prefabs(window)).some((prefab) => prefab.name === 'Pair and design')).toBe(false);
+    await board.getByRole('button', { name: 'Undo' }).click();
+    await board.getByTestId('prefab-board-save').click();
+    await expect(board.getByTestId('prefab-ready')).toBeVisible();
+    await expect.poll(async () => (await prefabs(window)).find((prefab) => prefab.name === 'Pair and design')).toMatchObject({ roundLimit: 4, builtIn: false });
+    const kept = (await prefabs(window)).find((prefab) => prefab.name === 'Pair and design')!;
+    // Where each one was, for the next time it opens.
+    expect(Object.keys(kept.places ?? {}).length).toBe(kept.members.length + 1);
+    await board.getByTestId('prefab-board-back').click();
+    await expect(board).toBeHidden();
 
-    // Yours come first.
-    await expect(library(window).getByTestId('prefab-card').first()).toContainText('Pair and design');
-    await expect(card(window, 'Pair and design')).toContainText('Yours');
+    // Settings › Prefabs: yours, marked new, with the built-ins folded under them.
+    const settings = await openSettings(window, 'prefabs.library');
+    const row = settings.getByTestId('prefabs-row').filter({ hasText: 'Pair and design' });
+    await expect(row).toContainText('new');
+    await expect(settings.getByRole('button', { name: /Built in · \d/ })).toHaveAttribute('aria-expanded', 'false');
 
-    // Edited: renamed, with one more round, it replaces itself, and the library holds what was set.
-    await card(window, 'Pair and design').getByRole('button', { name: 'Edit' }).click();
-    await editor.getByRole('textbox', { name: 'Name', exact: true }).fill('Pair with design');
-    await editor.getByRole('combobox', { name: 'Round limit' }).selectOption('4');
-    await editor.getByRole('button', { name: 'Save', exact: true }).click();
-    await expect(editor).toBeHidden();
-    await expect(card(window, 'Pair and design')).toHaveCount(0);
-    await expect(card(window, 'Pair with design')).toBeVisible();
-    const kept = (await prefabs(window)).find((prefab) => prefab.name === 'Pair with design');
-    expect(kept).toMatchObject({ roundLimit: 4, builtIn: false });
-    expect(kept!.members.map((member) => [member.name, member.role, member.starts, member.effort])).toEqual([
-      [null, 'implementer', 'prompt', null],
-      [null, 'reviewer', 'handoff', null],
-      ['Design review', 'reviewer', 'handoff', 'high'],
-    ]);
+    // Open shows it on its board in the board's window.
+    await row.hover();
+    await row.getByTestId('prefabs-open').click();
+    await expect(name).toHaveValue('Pair and design');
+    await board.getByTestId('prefab-board-back').click();
+    await expect(board).toBeHidden();
 
-    // A name the library refuses (a built-in's) says why on Save; closing with the change asks before it is lost.
-    await card(window, 'Pair with design').getByRole('button', { name: 'Edit' }).click();
-    await editor.getByRole('textbox', { name: 'Name', exact: true }).fill('Solo agent');
-    await editor.getByRole('button', { name: 'Save', exact: true }).click();
-    await expect(editor).toContainText('Solo agent is a built-in prefab');
-    await editor.getByRole('button', { name: 'Cancel' }).click();
-    await window.getByRole('alertdialog', { name: 'Discard your changes?' }).getByRole('button', { name: 'Discard' }).click();
-    await expect(editor).toBeHidden();
-
-    // Remove asks first, on its card.
-    await card(window, 'Pair with design').getByRole('button', { name: 'Remove' }).click();
-    await expect(card(window, 'Pair with design')).toContainText('Remove it for good?');
-    await card(window, 'Pair with design').getByRole('button', { name: 'Remove' }).click();
-    await expect(card(window, 'Pair with design')).toHaveCount(0);
-
-    // A file is shown whole in the editor, and added only by Save.
+    // A file imported opens on its board, and is added only by Save.
     const file = join(dir, 'docs.crew.json');
     writeFileSync(
       file,
@@ -102,12 +92,51 @@ test('the library makes and shares prefabs: copied, edited, renamed, refused a b
       }),
     );
     await pickFolderNext(app, file);
-    await library(window).getByRole('button', { name: 'Import a file' }).click();
-    await expect(editor.getByRole('textbox', { name: 'Name', exact: true })).toHaveValue('Docs pass');
-    await expect(editor).toContainText('added to the library once you save');
+    await settings.getByRole('button', { name: 'Import a file…' }).click();
+    await expect(name).toHaveValue('Docs pass');
     expect((await prefabs(window)).some((prefab) => prefab.name === 'Docs pass')).toBe(false);
-    await editor.getByRole('button', { name: 'Save', exact: true }).click();
-    await expect(card(window, 'Docs pass')).toBeVisible();
+    await board.getByTestId('prefab-board-save').click();
+    await expect(settings.getByTestId('prefabs-row').filter({ hasText: 'Docs pass' })).toBeVisible();
+    await board.getByTestId('prefab-board-back').click();
+
+    // Delete asks first, in its row.
+    await row.hover();
+    await row.getByRole('button', { name: 'More for Pair and design' }).click();
+    await settings.getByRole('menuitem', { name: 'Delete…' }).click();
+    await expect(settings.getByText('It can’t be got back.')).toBeVisible();
+    await settings.getByTestId('prefabs-delete').click();
+    await expect(row).toHaveCount(0);
+    expect((await prefabs(window)).some((prefab) => prefab.name === 'Pair and design')).toBe(false);
+
+    // Save as prefab… from an agent's tile keeps its role and AI, never its chat: saved at once, then open on its
+    // board with the agent picked, where Save saves over it.
+    await spawnAgent(window, 'monorepo', 'Tidy the docs', { name: 'Docs tidier' });
+    await tileAction(tile(window).first(), 'Save as prefab…', 'Copy');
+    const saving = window.getByTestId('save-as-prefab');
+    await expect(saving).toContainText('this chat and your first message');
+    await saving.getByRole('textbox', { name: 'Prefab name' }).fill('Tidier');
+    await saving.getByTestId('save-as-prefab-save').click();
+    await expect(name).toHaveValue('Tidier');
+    await expect(board.getByRole('textbox', { name: 'Agent name' })).toHaveValue('Docs tidier');
+    const tidier = (await prefabs(window)).find((prefab) => prefab.name === 'Tidier')!;
+    expect(tidier.members).toMatchObject([{ name: 'Docs tidier', starts: 'prompt', template: null }]);
+    expect(JSON.stringify(tidier)).not.toContain('Tidy the docs');
+
+    // Changed and not saved, it stays open when Settings asks for another, and says why.
+    await board.getByRole('textbox', { name: 'Agent name' }).fill('Docs tidy');
+    const docs = settings.getByTestId('prefabs-row').filter({ hasText: 'Docs pass' });
+    await docs.hover();
+    await docs.getByTestId('prefabs-open').click();
+    await expect(window.getByText('Save or leave the prefab that’s open first')).toBeVisible();
+    await expect(name).toHaveValue('Tidier');
+    await board.getByTestId('prefab-board-save').click();
+    // The agent is still picked, so the panel is its own: the name's hint says it saved.
+    await expect(board.getByTestId('prefab-board-saved')).toHaveText('· saved');
+    await expect.poll(async () => (await prefabs(window)).filter((prefab) => prefab.name === 'Tidier').map((prefab) => prefab.members[0]?.name)).toEqual(['Docs tidy']);
+    // Saved, it gives way.
+    await docs.hover();
+    await docs.getByTestId('prefabs-open').click();
+    await expect(name).toHaveValue('Docs pass');
   } finally {
     await app.close();
     await removeDataDir(dataDir);
@@ -200,7 +229,7 @@ test('a crew starts in the right zone from every entry point, through one prompt
     // A zone's ⋯ › New crew names that zone.
     await web.getByRole('button', { name: 'Zone options' }).click();
     await window.getByRole('menuitem', { name: 'New crew' }).click();
-    await window.getByRole('menuitem', { name: /Spike \+ reviewer/ }).press('Enter');
+    await window.getByRole('menuitem', { name: /^Spike \+ reviewer/ }).press('Enter');
     await expect(box.getByRole('heading')).toHaveText('Spike + reviewer in monorepo');
     await box.getByRole('button', { name: 'Cancel' }).click();
 
@@ -220,7 +249,7 @@ test('a crew starts in the right zone from every entry point, through one prompt
     const nearest = 'api';
     await window.locator('.react-flow__pane').click({ button: 'right', position: { x: apiBox.x + apiBox.width / 2, y: apiBox.y + apiBox.height + 24 } });
     await window.getByRole('menuitem', { name: 'New crew' }).press('ArrowRight');
-    await window.getByRole('menuitem', { name: /Solo agent/ }).press('Enter');
+    await window.getByRole('menuitem', { name: /^Solo agent/ }).press('Enter');
     await expect(box.getByRole('combobox', { name: 'Zone' })).toHaveValue(idOf(nearest));
     await expect(box.getByRole('button', { name: /^Start/ })).toHaveText(/^Start(?! crew)/);
     await box.getByRole('textbox', { name: 'Prompt' }).fill('Tidy up');
@@ -232,7 +261,7 @@ test('a crew starts in the right zone from every entry point, through one prompt
     // Saved with no reload of the zone: its ⋯ lists it, as it does one added from a shell.
     await api.getByRole('button', { name: 'Zone options' }).click();
     await window.getByRole('menuitem', { name: 'New crew' }).click();
-    await window.getByRole('menuitem', { name: /Codex pair/ }).press('Enter');
+    await window.getByRole('menuitem', { name: /^Codex pair/ }).press('Enter');
     await box.getByRole('textbox', { name: 'Prompt' }).fill('Port it');
     await box.getByRole('button', { name: /Start crew/ }).click();
     const notice = window.getByRole('dialog', { name: 'About Codex hooks' });
@@ -330,7 +359,7 @@ test('a zone’s ▾ beside + agent offers a blank agent first, then the library
 
     // A blank agent first: it opens the New agent sheet, as + agent does.
     await web.getByRole('button', { name: 'Blank agent or prefab' }).click();
-    await expect(window.getByRole('menuitem').first()).toHaveText('Blank agent');
+    await expect(window.getByRole('menuitem').first()).toHaveText(/^Blank agent/);
     await window.getByRole('menuitem', { name: 'Blank agent' }).click();
     const sheet = window.getByRole('dialog', { name: 'New agent' });
     await expect(sheet.getByLabel('Task')).toBeVisible();
@@ -339,7 +368,7 @@ test('a zone’s ▾ beside + agent offers a blank agent first, then the library
 
     // A prefab from the library opens its prompt box for this zone, and its crew starts there.
     await web.getByRole('button', { name: 'Blank agent or prefab' }).click();
-    await window.getByRole('menuitem', { name: /Implementer \+ reviewer/ }).click();
+    await window.getByRole('menuitem', { name: /^Implementer \+ reviewer/ }).click();
     await expect(box.getByRole('heading')).toHaveText('Implementer + reviewer in monorepo');
     await box.getByRole('textbox', { name: 'Prompt' }).fill('Add a header');
     await box.getByRole('button', { name: /Start crew/ }).click();

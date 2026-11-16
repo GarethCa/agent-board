@@ -21,6 +21,13 @@ export interface MenuAction {
   checked?: boolean;
   /** A few muted words at the row's end, such as the gaps a spacing keeps. */
   detail?: string;
+  /** A word marked beside the label, such as "new". */
+  badge?: string;
+  /**
+   * A second thing to do with what the row names, as an icon button at its end, shown as the row is hovered or focused,
+   * such as opening a prefab to change it: a row of the menu's own, so the arrow keys reach it too.
+   */
+  aside?: { label: string; icon: ReactNode; onSelect(): void };
 }
 
 /** A choice's radio button, picked or not; nothing for a row that is no choice. */
@@ -227,7 +234,7 @@ function Entries({ entries }: { entries: MenuEntry[] }) {
         </RadixMenu.Sub>
       );
     }
-    return (
+    const item = (
       <RadixMenu.Item
         key={entry.label}
         className="ui-menu-item"
@@ -239,10 +246,20 @@ function Entries({ entries }: { entries: MenuEntry[] }) {
       >
         {entry.icon ?? radioOf(entry.checked)}
         {entry.label}
+        {entry.badge !== undefined && <span className="ui-menu-badge">{entry.badge}</span>}
         {entry.detail !== undefined && <span className="ui-menu-detail" title={entry.detail}>{entry.detail}</span>}
         {entry.shortcut !== undefined && <Kbd>{entry.shortcut}</Kbd>}
         {entry.hint !== undefined && <span className="ui-menu-hint">{entry.hint}</span>}
       </RadixMenu.Item>
+    );
+    if (entry.aside === undefined) return item;
+    return (
+      <div key={entry.label} className="ui-menu-pair">
+        {item}
+        <RadixMenu.Item className="ui-menu-aside" aria-label={entry.aside.label} title={entry.aside.label} onSelect={entry.aside.onSelect}>
+          {entry.aside.icon}
+        </RadixMenu.Item>
+      </div>
     );
   });
 }

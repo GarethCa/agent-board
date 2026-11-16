@@ -1,8 +1,8 @@
 import { BrowserWindow, dialog, ipcMain } from 'electron';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import type { DaemonLink } from '@agent-board/daemon/client';
-import { parsePrefab, prefabFile } from '@agent-board/daemon/crew-prefabs';
-import { DEFAULT_ACTIVITY_LIMIT, type CrewPrefab, type TicketChatKind } from '@agent-board/daemon/protocol';
+import { parsePrefab, prefabFile, prefabFileName } from '@agent-board/daemon/crew-prefabs';
+import { DEFAULT_ACTIVITY_LIMIT, type CrewPrefab, type PrefabPlaces, type TicketChatKind } from '@agent-board/daemon/protocol';
 import { ORCHESTRATOR_IPC, type StartPrefabParams } from '../preload/api';
 import { forwardEvents } from './broadcast';
 import { passthrough, passthroughVoid } from './passthrough';
@@ -34,9 +34,9 @@ export function registerOrchestratorIpc(daemon: DaemonLink): void {
   });
   // Written as its file, so the library reads an edit as strictly as an imported file. Renamed: the new name is saved
   // first, then the old one removed, so a refused save loses nothing. Names match as the library's do, in ASCII case.
-  ipcMain.handle(ORCHESTRATOR_IPC.savePrefab, async (_event, prefab: CrewPrefab, replaces?: string) => {
+  ipcMain.handle(ORCHESTRATOR_IPC.savePrefab, async (_event, prefab: CrewPrefab, replaces?: string, places?: PrefabPlaces) => {
     const renamed = replaces !== undefined && asciiFolded(replaces) !== asciiFolded(prefab.name);
-    const saved = await daemon.call('orchestrator.savePrefab', { text: prefabFile(prefab), replace: replaces !== undefined && !renamed });
+    const saved = await daemon.call('orchestrator.savePrefab', { text: prefabFile(prefab), replace: replaces !== undefined && !renamed, ...(places === undefined ? {} : { places }) });
     if (renamed) {
       // Gone already (removed from a shell meanwhile): the rename is done all the same.
       await daemon.call('orchestrator.removePrefab', { name: replaces }).catch((error: Error) => {
@@ -52,13 +52,24 @@ export function registerOrchestratorIpc(daemon: DaemonLink): void {
   passthrough(daemon, ORCHESTRATOR_IPC.arrangeTicket, 'orchestrator.arrangeTicket', (ticket: string) => ({ ticket }));
   passthrough(daemon, ORCHESTRATOR_IPC.stopCrew, 'orchestrator.stopCrew', (crewId: string) => ({ crewId }));
   passthrough(daemon, ORCHESTRATOR_IPC.crewRound, 'orchestrator.crewRound', (crewId: string) => ({ crewId }));
-  // Only read: the editor shows it whole, and Save adds it.
+  // Only read: it opens on its own board, and only Save adds it.
   ipcMain.handle(ORCHESTRATOR_IPC.importPrefab, async (event) => {
     const options = { title: 'Import a crew prefab', properties: ['openFile' as const], filters: [{ name: 'Crew prefab', extensions: ['json'] }] };
     const window = BrowserWindow.fromWebContents(event.sender);
     const picked = await (window ? dialog.showOpenDialog(window, options) : dialog.showOpenDialog(options));
     const [path] = picked.filePaths;
     return picked.canceled || path === undefined ? null : parsePrefab(await readFile(path, 'utf8'));
+  });
+  // Its file alone: where its agents sit on its board stays in this library. Read back first, as an import would read
+  // it, so the app never writes a file it would refuse.
+  ipcMain.handle(ORCHESTRATOR_IPC.exportPrefab, async (event, prefab: CrewPrefab) => {
+    const file = prefabFile(parsePrefab(prefabFile(prefab)));
+    const options = { title: 'Export a crew prefab', defaultPath: prefabFileName(prefab), filters: [{ name: 'Crew prefab', extensions: ['json'] }] };
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const picked = await (window ? dialog.showSaveDialog(window, options) : dialog.showSaveDialog(options));
+    if (picked.canceled || picked.filePath === undefined) return false;
+    await writeFile(picked.filePath, file, 'utf8');
+    return true;
   });
   passthroughVoid(daemon, ORCHESTRATOR_IPC.removePrefab, 'orchestrator.removePrefab', (name: string) => ({ name }));
 }

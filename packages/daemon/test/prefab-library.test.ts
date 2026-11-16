@@ -79,6 +79,26 @@ describe('the crew prefab library', () => {
     expect((await again.client.call('orchestrator.prefabs', {})).prefabs.at(-1)).toEqual(saved);
   });
 
+  it('keeps where each agent sits on its board, beside its file, and drops what names no agent of it', async () => {
+    const setup = await prefabDaemon();
+    const places = { '@prompt': { x: -200, y: 40 }, impl: { x: 0, y: 0 }, review: { x: 320, y: 12.5 } };
+    const saved = await setup.client.call('orchestrator.savePrefab', { text: prefabFile(pair()), places: { ...places, gone: { x: 1, y: 1 } } });
+    expect(saved.places).toEqual(places);
+    // The file itself stays as an older app reads it: the places are the library's, never the file's.
+    expect(prefabFile(saved)).toBe(prefabFile(pair()));
+
+    await setup.daemon.stop();
+    const again = await prefabDaemon(setup.dataDir);
+    expect((await again.client.call('orchestrator.prefabs', {})).prefabs.at(-1)?.places).toEqual(places);
+    // Saved again with none (from the command line), it has none: its agents may have changed.
+    const plain = await again.client.call('orchestrator.savePrefab', { text: prefabFile(pair()), replace: true });
+    expect(plain).not.toHaveProperty('places');
+    await expect(again.client.call('orchestrator.savePrefab', { text: prefabFile(pair()), replace: true, places: { impl: { x: 'left', y: 0 } } as never })).rejects.toMatchObject({
+      code: RPC_ERROR.invalidParams,
+      message: expect.stringContaining('place'),
+    });
+  });
+
   it('refuses a name it has, in any case, unless replaced; and never a built-in’s', async () => {
     const { client } = await prefabDaemon();
     await client.call('orchestrator.savePrefab', { text: prefabFile(pair()) });

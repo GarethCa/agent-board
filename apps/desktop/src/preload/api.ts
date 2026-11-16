@@ -4,6 +4,7 @@ import type {
   Crew,
   CrewPrefab,
   LibraryPrefab,
+  PrefabPlaces,
   PrefabStarted,
   Effort,
   GivenRole,
@@ -757,6 +758,7 @@ export const ORCHESTRATOR_IPC = {
   checkPrefab: 'orchestrator:check-prefab',
   startPrefab: 'orchestrator:start-prefab',
   importPrefab: 'orchestrator:import-prefab',
+  exportPrefab: 'orchestrator:export-prefab',
   stopCrew: 'orchestrator:stop-crew',
   crewRound: 'orchestrator:crew-round',
   setTicketChat: 'orchestrator:set-ticket-chat',
@@ -789,9 +791,12 @@ export interface OrchestratorsApi {
   prefabs(): Promise<{ prefabs: LibraryPrefab[]; unreadable: { name: string; reason: string }[] }>;
   /**
    * Saves `prefab` to the library, written as its `.crew.json` file and read back as the daemon reads any: replacing
-   * the saved one named `replaces` (its old name, when renamed) if given. Fails, saying why, for a prefab it refuses.
+   * the saved one named `replaces` (its old name, when renamed) if given, with where its agents sit on its board
+   * (`places`), kept beside the file. Fails, saying why, for a prefab it refuses.
    */
-  savePrefab(prefab: CrewPrefab, replaces?: string): Promise<LibraryPrefab>;
+  savePrefab(prefab: CrewPrefab, replaces?: string, places?: PrefabPlaces): Promise<LibraryPrefab>;
+  /** Writes `prefab` as a `.crew.json` file where the user picks: whether it was written (false if they cancelled). */
+  exportPrefab(prefab: CrewPrefab): Promise<boolean>;
   /** Removes a saved prefab; a built-in can't be. */
   removePrefab(name: string): Promise<void>;
   /** Why the library would refuse `prefab`, read by its own parser, or null if it would take it. */
@@ -1392,12 +1397,15 @@ export const WINDOW_IPC = {
 
 /**
  * What a popped-out window asks the board's window to do, from its ⌘K switcher: bring a zone into view, open New agent
- * with a name, or show a session's window there (from a tab window, which has no session of its own to switch).
+ * with a name, or show a session's window there (from a tab window, which has no session of its own to switch); or, from
+ * Settings, open a prefab on its own board.
  */
 export type BoardRequest =
   | { kind: 'zone'; zoneId: string }
   | { kind: 'newAgent'; name: string; zoneId: string | null }
   | { kind: 'crew'; prefab: string | null; zoneId: string | null }
+  /** A prefab on its own board, from Settings › Prefabs: `replaces` the name it saves over, or `null` to save it as new. */
+  | { kind: 'prefab'; prefab: CrewPrefab & { places?: PrefabPlaces }; replaces: string | null }
   | { kind: 'open'; target: WindowTarget };
 
 /**

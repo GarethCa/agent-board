@@ -17,6 +17,7 @@ import './overview/overview.css';
 import './onboarding/onboarding.css';
 import './demo/demo.css';
 import './board/shelf-tile.css';
+import './crews/prefabs.css';
 import { App } from './App';
 import { DaemonGate } from './DaemonStatus';
 import { Gallery } from './Gallery';

@@ -1,0 +1,666 @@
+/*
+ * A crew prefab as a board of its own (PrefabBoard.tsx), zoomed into over the main one as a ticket's board is: the
+ * canvas with its breadcrumb, Save and dock, and a panel down the right that changes what is selected.
+ */
+.prefab-board {
+  --xy-minimap-background-color: var(--island);
+  --xy-selection-background-color: var(--selection);
+  position: absolute;
+  inset: 0;
+  z-index: var(--layer-level);
+  display: flex;
+  background: var(--surface);
+}
+
+.prefab-board:focus {
+  outline: none;
+}
+
+/* Its toasts come under its bar, never over Save and Undo. */
+body:has(.prefab-board) .ui-toasts {
+  top: var(--prefab-side-top);
+}
+
+/* The arrowheads' shapes, drawn nowhere themselves. */
+.prefab-board-defs {
+  position: absolute;
+  width: 0;
+  height: 0;
+}
+
+.prefab-arrow {
+  fill: var(--muted);
+}
+
+.prefab-arrow-on {
+  fill: var(--accent);
+}
+
+.prefab-arrow-warn {
+  fill: var(--warning);
+}
+
+.prefab-board-canvas {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+/* Its bar centres on the window, as a ticket's board's does, clear of the board menu at the left: the panel down the
+ * right starts under it. */
+.prefab-board-canvas > .island-top-centre {
+  left: var(--prefab-bar-centre);
+}
+
+.prefab-board-name {
+  width: auto;
+  min-width: 0;
+  max-width: var(--size-ticket-crumb-title);
+  padding: var(--space-0-5) var(--space-1);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-weight: var(--weight-semibold);
+}
+
+.prefab-board-name:is(:hover, :focus) {
+  border-color: var(--border);
+  background: var(--raised);
+}
+
+.prefab-board-name:focus-visible {
+  outline: var(--focus-ring-width) solid var(--accent);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.prefab-board-saved {
+  color: var(--muted);
+}
+
+.prefab-board-actions {
+  padding: 0 var(--space-1-5);
+}
+
+.prefab-board-actions .ui-button {
+  margin-left: var(--space-1);
+}
+
+/* + Agent and Fit, at the foot of the canvas, over the sentence. */
+.prefab-board-dock {
+  position: absolute;
+  bottom: calc(var(--island-inset) + var(--space-9));
+  left: 50%;
+  z-index: var(--layer-chrome);
+  height: var(--island-height);
+  padding: 0 var(--space-1-5);
+  translate: -50% 0;
+}
+
+.prefab-kind-face {
+  display: inline-grid;
+  place-items: center;
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+}
+
+/* The board in words, under it. */
+.prefab-board-sentence {
+  position: absolute;
+  right: var(--space-4);
+  bottom: var(--island-inset);
+  left: var(--space-4);
+  z-index: var(--layer-chrome);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: var(--space-1-5);
+  margin: 0;
+  color: var(--text-soft);
+  font-size: var(--font-size-sm);
+  line-height: var(--leading-snug);
+  text-align: center;
+  pointer-events: none;
+}
+
+.prefab-board-sentence > svg {
+  flex: none;
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  color: var(--muted);
+}
+
+.prefab-board-sentence b {
+  color: var(--text);
+  font-weight: var(--weight-semibold);
+}
+
+/* Your prompt: a pill, where the crew starts. */
+.prefab-prompt {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--raised);
+  box-shadow: var(--shadow-tile);
+  color: var(--text);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  cursor: grab;
+}
+
+.prefab-prompt > svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  color: var(--accent-ink);
+}
+
+.prefab-prompt[data-selected] {
+  border-color: var(--accent);
+}
+
+/* An agent: the board's own tile, filling its node. */
+.prefab-agent.hybrid-tile-agent {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+}
+
+.prefab-agent[data-selected] {
+  outline: var(--glance-ring-width) solid var(--accent);
+}
+
+.react-flow__node.dragging :is(.prefab-agent, .prefab-prompt) {
+  cursor: grabbing;
+}
+
+/* The dots a line is drawn from (the right) and to (the left). */
+.react-flow__handle.prefab-handle {
+  width: var(--line-handle-size);
+  height: var(--line-handle-size);
+  border: var(--space-0-5) solid var(--raised);
+  background: var(--muted);
+}
+
+.react-flow__handle.prefab-handle:hover,
+.react-flow__handle.prefab-handle.connectingto {
+  background: var(--accent);
+}
+
+.prefab-line {
+  stroke: var(--muted);
+  stroke-width: var(--flow-edge-width);
+}
+
+.prefab-line[data-warn] {
+  stroke: var(--warning);
+  stroke-dasharray: 6 4;
+}
+
+.prefab-line[data-selected] {
+  stroke: var(--accent);
+  stroke-width: var(--prefab-line-picked);
+}
+
+.prefab-line-label {
+  position: absolute;
+  padding: var(--space-0-5) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--raised);
+  color: var(--text-soft);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-semibold);
+  pointer-events: none;
+}
+
+.prefab-line-label[data-selected] {
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+/* The panel down the right, under the top islands. */
+.prefab-board-side {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: var(--space-3);
+  box-sizing: border-box;
+  width: var(--size-prefab-side);
+  margin-top: var(--prefab-side-top);
+  padding: var(--space-4);
+  overflow-y: auto;
+  border-left: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.prefab-side-title {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--font-size-md-plus);
+  font-weight: var(--weight-bold);
+}
+
+.prefab-side-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1-5);
+}
+
+.prefab-side-label {
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-semibold);
+}
+
+.prefab-side-note {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: var(--font-size-sm);
+  line-height: var(--leading-snug);
+}
+
+.prefab-icon-row {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.prefab-icon-row > button {
+  display: grid;
+  place-items: center;
+  width: var(--space-8);
+  height: var(--space-8);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--raised);
+  color: var(--text-soft);
+  cursor: pointer;
+}
+
+.prefab-icon-row > button:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.prefab-icon-row > button[aria-checked='true'] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.prefab-icon-row > button:focus-visible {
+  outline: var(--focus-ring-width) solid var(--accent);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.prefab-icon-row svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+}
+
+.prefab-ready {
+  color: var(--success);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.prefab-problems {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1-5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.prefab-problems > li {
+  display: flex;
+  gap: var(--space-1-5);
+  color: var(--warning-ink);
+  font-size: var(--font-size-sm);
+  line-height: var(--leading-snug);
+}
+
+.prefab-problems svg {
+  flex: none;
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  margin-top: var(--space-0-5);
+}
+
+.prefab-side-who {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2-5);
+}
+
+.prefab-side-who > .ui-input {
+  flex: 1;
+}
+
+.prefab-side-many {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1-5);
+  color: var(--text-soft);
+  font-size: var(--font-size-sm);
+}
+
+.prefab-ai {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.prefab-ai > .ui-select,
+.prefab-ai > select {
+  flex: 1;
+}
+
+.prefab-harness-mark {
+  flex: none;
+  width: var(--space-2);
+  height: var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--muted);
+}
+
+.prefab-harness-mark[data-harness='claude'] {
+  background: var(--harness-claude);
+}
+
+.prefab-harness-mark[data-harness='codex'] {
+  background: var(--harness-codex);
+}
+
+.prefab-efforts {
+  width: 100%;
+}
+
+/* How the agent starts: a box, amber when nothing does. */
+.prefab-startbox {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2-5) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--raised);
+  color: var(--text-soft);
+  font-size: var(--font-size-sm);
+  line-height: var(--leading-snug);
+}
+
+.prefab-startbox b {
+  color: var(--text);
+  font-weight: var(--weight-semibold);
+}
+
+.prefab-startbox[data-warn] {
+  border-color: var(--warning-edge);
+  background: var(--warning-soft);
+}
+
+.prefab-startbox[data-warn] b {
+  color: var(--warning-ink);
+}
+
+.prefab-side-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: auto;
+  padding-top: var(--space-2);
+}
+
+/* Save as prefab…, beside an agent's tile. */
+.save-prefab-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  width: var(--size-prefab-save);
+  padding: var(--space-3-5);
+}
+
+.save-prefab-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--text);
+  font-size: var(--font-size-md-plus);
+  font-weight: var(--weight-bold);
+}
+
+.save-prefab-title > svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  color: var(--accent-ink);
+}
+
+.save-prefab-lists {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1-5);
+}
+
+.save-prefab-lists > ul {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0 0 var(--space-1-5);
+  padding: 0;
+  list-style: none;
+  font-size: var(--font-size-sm);
+}
+
+.save-prefab-keeps {
+  color: var(--text);
+}
+
+.save-prefab-leaves {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.save-prefab-mono {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+}
+
+.save-prefab-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+/* Settings › Prefabs: your prefabs as rows, the built-ins folded under them. */
+.prefabs-setting {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.prefabs-setting-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.prefabs-setting-say {
+  flex: 1;
+  color: var(--text-soft);
+  font-size: var(--font-size-sm);
+}
+
+.prefabs-setting-none {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--font-size-sm);
+}
+
+.prefabs-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.prefabs-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--size-prefabs-icon);
+  padding: var(--space-2);
+  border-radius: var(--radius-md);
+}
+
+.prefabs-row + .prefabs-row {
+  border-top: 1px solid var(--border);
+}
+
+.prefabs-row:is(:hover, :focus-within) {
+  background: var(--hover);
+}
+
+.prefabs-row[data-asking] {
+  background: var(--danger-soft);
+}
+
+.prefabs-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: var(--size-prefabs-icon);
+  height: var(--size-prefabs-icon);
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.prefabs-icon svg {
+  width: var(--icon-md);
+  height: var(--icon-md);
+}
+
+.prefabs-row[data-built-in] .prefabs-icon {
+  background: var(--raised);
+  color: var(--muted);
+}
+
+.prefabs-words {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  min-width: 0;
+}
+
+.prefabs-name {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  color: var(--text);
+  font-weight: var(--weight-semibold);
+}
+
+.prefabs-purpose {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  overflow: hidden;
+  color: var(--text-soft);
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.prefabs-purpose > svg {
+  flex: none;
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+}
+
+/* Your prompt ▸ the agent it starts ▸ the rest. */
+.prefabs-shape {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--muted);
+}
+
+.prefabs-shape > svg {
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+}
+
+.prefabs-shape-prompt {
+  width: var(--space-2);
+  height: var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+}
+
+/* Open, Duplicate and ⋯ show as the row is pointed at or focused; the built-ins' Duplicate and the delete ask always. */
+.prefabs-row-actions {
+  display: flex;
+  flex: none;
+  gap: var(--space-1);
+  opacity: 0;
+}
+
+.prefabs-row:is(:hover, :focus-within) .prefabs-row-actions,
+.prefabs-row-actions[data-shown] {
+  opacity: 1;
+}
+
+.prefabs-ask {
+  flex: 1;
+  color: var(--text);
+  font-size: var(--font-size-sm);
+}
+
+.prefabs-built {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+
+.prefabs-built-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) 0;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  cursor: pointer;
+}
+
+.prefabs-built-head > svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+}
+
+.prefabs-built-head > svg[data-open] {
+  rotate: 90deg;
+}
+
+.prefabs-built-head:focus-visible {
+  outline: var(--focus-ring-width) solid var(--accent);
+  outline-offset: var(--focus-ring-offset);
+}

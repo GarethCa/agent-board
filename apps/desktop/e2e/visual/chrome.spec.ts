@@ -616,7 +616,7 @@ test('the compact window setting: Off by default, then a custom window with its 
   }
 });
 
-/** The Settings window on each of its seven groups' pages, the Background service row with its Restart, and searching, light and dark. */
+/** The Settings window on each of its eight groups' pages, the Background service row with its Restart, and searching, light and dark. */
 for (const { theme, suffix } of [
   { theme: 'light', suffix: '' },
   { theme: 'dark', suffix: '-dark' },

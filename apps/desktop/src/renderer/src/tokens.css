@@ -914,6 +914,12 @@
   --size-header-chip-min: 56px; /* a session window header's branch and "N of M" chips, narrowest: they shrink before its title does */
   --size-tile-name: 96px; /* a tile's name, narrowest: it never gives way to badges */
   --size-ticket-crumb-title: 360px; /* a ticket's title in the breadcrumb over its own board, longest */
+  --size-prefab-side: 300px; /* the panel down the right of a prefab's own board */
+  --size-prefab-save: 300px; /* Save as prefab…, beside an agent's tile */
+  --prefab-bar-centre: calc((100% + var(--size-prefab-side)) / 2); /* the window's middle, from the left of a prefab board's canvas */
+  --size-prefabs-icon: 34px; /* a prefab's icon in its row of Settings › Prefabs */
+  --prefab-side-top: calc(var(--island-inset) * 2 + var(--island-height)); /* a prefab board's panel starts under its top islands */
+  --prefab-line-picked: 3px; /* a selected line on a prefab's own board */
   --size-ticket-board-gallery-width: 960px; /* a ticket's own board as the gallery draws it: a small window's worth */
   --size-ticket-board-gallery-height: 520px;
   --size-ticket-helper-card: 150px; /* a helper's card in an opened ticket's strip, narrowest */

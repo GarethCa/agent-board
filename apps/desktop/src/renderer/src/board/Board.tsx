@@ -100,6 +100,9 @@ import { documentSurfaceOf, gateSurfaceOf, liveShellCount, planSurfaceOf, pullRe
 import { shownWindow } from '../windows/session-windows';
 import { BoardBackdrop } from './BoardBackdrop';
 import { TicketBoard, useBoardLevel } from './TicketBoard';
+import { PrefabBoard, type PrefabBoardStart } from '../crews/PrefabBoard';
+import { SaveAsPrefab } from '../crews/SaveAsPrefab';
+import { libraryBoard, newPrefab } from '../crews/prefab-board';
 import { keptFocus, levelOf, memberNodeId, zoomsInto, type TicketBoardFocus } from './ticket-board';
 import { oneAtATime } from './one-at-a-time';
 import { installWheelLatch } from './wheel-latch';
@@ -480,6 +483,34 @@ function BoardView() {
   const [gateCommandZone, setGateCommandZone] = useState<Zone>();
   const [roleTemplatesZone, setRoleTemplatesZone] = useState<Zone>();
   const [crewFlow, setCrewFlow] = useState<CrewFlowStart>();
+  /** A crew prefab open on its own board, zoomed into as a ticket's is. */
+  const [prefabLevel, setPrefabLevel] = useState<PrefabBoardStart>();
+  // Whether the one open holds changes not saved yet, as it last said.
+  const prefabEdited = useRef(false);
+  /**
+   * Every way in to a prefab's board: one open with changes not saved yet is never swapped for another, which would
+   * throw them away. Its own Save or Back does that, asking first.
+   */
+  // Read through the ref alone, never what was open when it was made, so a command kept from an older render guards too.
+  const openPrefab = useCallback(
+    (start: PrefabBoardStart) => {
+      if (prefabEdited.current) {
+        toasts.show({ id: 'prefab-open', tone: 'info', message: 'Save or leave the prefab that’s open first: its changes aren’t saved.' });
+        return;
+      }
+      setPrefabLevel(start);
+    },
+    [toasts],
+  );
+  const leavePrefab = useCallback(() => {
+    prefabEdited.current = false;
+    setPrefabLevel(undefined);
+  }, []);
+  const prefabSaysEdited = useCallback((edited: boolean) => {
+    prefabEdited.current = edited;
+  }, []);
+  // Save as prefab…, open beside the agent's tile it was asked from.
+  const [savingPrefab, setSavingPrefab] = useState<Agent>();
   /** The builder of a crew just started, until its tile is on the board to show. */
   const [crewStarted, setCrewStarted] = useState<string>();
   // Keeps the library followed, and the board's right-click menu current with it; a Classic zone's ⋯ follows it itself.
@@ -1025,6 +1056,7 @@ function BoardView() {
       openAgent,
       openShell,
       popOutAgent: (agent) => popOut({ kind: 'session', id: agent.sessionId, title: agentTitle(agent) }),
+      saveAsPrefab: (agent) => setSavingPrefab(agent),
       popOutShell: (shell) => popOut({ kind: 'shell', id: shell.id, title: shellTitle(shell) }),
       // Live panes are processes that may be mid-command: ask first.
       deleteShell(shellId) {
@@ -1957,9 +1989,9 @@ function BoardView() {
     setMode(picked);
   }, []);
 
-  // Zoomed into a ticket's board, by the menu or restored on relaunch, nothing of the main board's under it stays
-  // picked, armed or open, for a key (Backspace, Esc) to act on out of sight.
-  const zoomedIn = boardLevel.level !== null;
+  // Zoomed into a ticket's board (by the menu or restored on relaunch) or a prefab's, nothing of the main board's under
+  // it stays picked, armed or open, for a key (Backspace, Esc) to act on out of sight.
+  const zoomedIn = boardLevel.level !== null || prefabLevel !== undefined;
   const foldShelves = shelves.fold;
   const setFlowSelected = flow.setSelected;
   useEffect(() => {
@@ -3040,6 +3072,7 @@ function BoardView() {
         if (prefab !== undefined) setCrewFlow({ kind: 'prompt', prefab, zone });
       },
       crewLibrary: (zone: Zone) => setCrewFlow({ kind: 'library', zone }),
+      editPrefab: (prefab) => openPrefab(prefab === null ? { prefab: newPrefab(), replaces: null } : libraryBoard(prefab)),
       newTicket: (zone: Zone) => setCrewFlow({ kind: 'ticket', zone }),
       // Under what stays outside it, selected so it can be dragged where it is wanted; the daemon keeps it to one a zone.
       addStageBoard: (zone: Zone) => {
@@ -3278,8 +3311,10 @@ function BoardView() {
     else if (boardRequest.kind === 'crew') {
       if (crewFlow === undefined) boardCommands.startCrew(boardRequest.prefab, boardRequest.zoneId);
     }
+    // Likewise a prefab's board already open, which may hold changes not saved yet: it says so.
+    else if (boardRequest.kind === 'prefab') openPrefab({ prefab: boardRequest.prefab, replaces: boardRequest.replaces });
     else showWindow(boardRequest.target);
-  }, [loaded, boardRequest, boardCommands, showWindow, crewFlow]);
+  }, [loaded, boardRequest, boardCommands, showWindow, crewFlow, openPrefab]);
 
   /** How an agent starts from the issue card `item`: the New agent dialog, the repo picker, or not now. */
   const issueStartOf = useCallback((item: BoardItem, card: IssueCardData) => {
@@ -3850,6 +3885,17 @@ function BoardView() {
                             {boardLevel.level !== null && (
                               <TicketBoard chatId={boardLevel.level} agents={agents} onLeave={boardLevel.leave} onOpenAgent={openAgent} onError={report} desk={desk} focus={keptFocus(ticketFocus, boardLevel.level)} />
                             )}
+                            {savingPrefab !== undefined && (
+                              <SaveAsPrefab
+                                agent={savingPrefab}
+                                onClose={() => setSavingPrefab(undefined)}
+                                onSaved={(start) => {
+                                  setSavingPrefab(undefined);
+                                  openPrefab(start);
+                                }}
+                              />
+                            )}
+                            {prefabLevel !== undefined && <PrefabBoard key={prefabLevel.replaces ?? prefabLevel.prefab.name} start={prefabLevel} desk={desk} onEdited={prefabSaysEdited} onLeave={leavePrefab} />}
                             {handOffChoice !== undefined && (
                               <HandOffChooser
                                 at={handOffChoice.at}
@@ -4090,6 +4136,10 @@ function BoardView() {
               onAddZone={() => {
                 setCrewFlow(undefined);
                 openAddZone();
+              }}
+              onEdit={(start) => {
+                setCrewFlow(undefined);
+                openPrefab(start);
               }}
             />
           )}

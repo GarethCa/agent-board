@@ -8,6 +8,7 @@ import { withTicketChat } from './ticket-tiles.ts';
 import type { ActivityEntry, OrchestratorAccess } from './orchestrator-types.ts';
 import { invalidParams, optionalBooleanParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
 import {
+  PROMPT_PLACE,
   DEFAULT_TICKET_CHAT_KIND,
   MAX_REVIEW_CAP,
   REVIEWER_ROLES,
@@ -18,6 +19,7 @@ import {
   type OrchestratorSpawnParams,
   type OrchestratorSpawned,
   type PrefabMember,
+  type PrefabPlaces,
   type PrefabStarted,
   type TicketChatKind,
 } from './protocol.ts';
@@ -30,6 +32,32 @@ interface PrefabRow {
   name: string;
   body: string;
   edited_at: string;
+  places: string | null;
+}
+
+/** The places given to save beside `prefab`: each a finite x and y, kept only for the prompt and its own agents. */
+function placesParam(value: unknown, prefab: CrewPrefab): PrefabPlaces | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'object' || Array.isArray(value)) throw invalidParams('places is an object of x and y by agent id');
+  const known = new Set([PROMPT_PLACE, ...prefab.members.map((member) => member.id)]);
+  const kept: PrefabPlaces = {};
+  for (const [id, place] of Object.entries(value)) {
+    const { x, y } = (place ?? {}) as { x?: unknown; y?: unknown };
+    if (typeof x !== 'number' || typeof y !== 'number' || !Number.isFinite(x) || !Number.isFinite(y)) throw invalidParams(`the place of ${id} is an x and a y, each a number`);
+    if (known.has(id)) kept[id] = { x, y };
+  }
+  return Object.keys(kept).length === 0 ? null : kept;
+}
+
+/** A row's places as saved, or none for a row saved without, or one a later release wrote in a way this one can't read. */
+function savedPlaces(text: string | null): { places?: PrefabPlaces } {
+  if (text === null) return {};
+  try {
+    const places = JSON.parse(text) as unknown;
+    return typeof places === 'object' && places !== null && !Array.isArray(places) ? { places: places as PrefabPlaces } : {};
+  } catch {
+    return {};
+  }
 }
 
 export interface PrefabLibraryOptions<Context> {
@@ -98,15 +126,15 @@ export interface PrefabLibrary {
 }
 
 export function createPrefabLibrary(db: DatabaseSync): PrefabLibrary {
-  const selectAll = db.prepare('SELECT name, body, edited_at FROM crew_prefabs ORDER BY name');
-  const selectOne = db.prepare('SELECT name, body, edited_at FROM crew_prefabs WHERE name = ?');
-  const insert = db.prepare('INSERT INTO crew_prefabs (name, body) VALUES (?, ?) RETURNING name, body, edited_at');
+  const selectAll = db.prepare('SELECT name, body, edited_at, places FROM crew_prefabs ORDER BY name');
+  const selectOne = db.prepare('SELECT name, body, edited_at, places FROM crew_prefabs WHERE name = ?');
+  const insert = db.prepare('INSERT INTO crew_prefabs (name, body, places) VALUES (?, ?, ?) RETURNING name, body, edited_at, places');
   const update = db.prepare(
-    "UPDATE crew_prefabs SET name = ?, body = ?, edited_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE name = ? RETURNING name, body, edited_at",
+    "UPDATE crew_prefabs SET name = ?, body = ?, places = ?, edited_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE name = ? RETURNING name, body, edited_at, places",
   );
   const remove = db.prepare('DELETE FROM crew_prefabs WHERE name = ?');
 
-  const saved = (row: PrefabRow): LibraryPrefab => ({ ...parsePrefab(row.body), builtIn: false, editedAt: row.edited_at });
+  const saved = (row: PrefabRow): LibraryPrefab => ({ ...parsePrefab(row.body), builtIn: false, editedAt: row.edited_at, ...savedPlaces(row.places) });
   /** A saved row, or why it can't be read: a later release may read stricter than the one that saved it. */
   const readRow = (row: PrefabRow): LibraryPrefab | { name: string; reason: string } => {
     try {
@@ -158,12 +186,14 @@ export function createPrefabLibrary(db: DatabaseSync): PrefabLibrary {
               throw invalidParams(`${prefab.name} is a built-in prefab: save your copy under a name of its own`);
             }
             const body = prefabFile(prefab);
+            const given = placesParam(fields.places, prefab);
+            const places = given === null ? null : JSON.stringify(given);
             const there = selectOne.get(prefab.name) as PrefabRow | undefined;
-            if (there === undefined) return saved(insert.get(prefab.name, body) as unknown as PrefabRow);
+            if (there === undefined) return saved(insert.get(prefab.name, body, places) as unknown as PrefabRow);
             if (optionalBooleanParam(fields, 'replace') !== true) {
               throw invalidParams(`the library has a crew prefab named ${there.name} already: replace it, or save under another name`);
             }
-            return saved(update.get(prefab.name, body, there.name) as unknown as PrefabRow);
+            return saved(update.get(prefab.name, body, places, there.name) as unknown as PrefabRow);
           });
         },
         'orchestrator.removePrefab': (params, connection) => {

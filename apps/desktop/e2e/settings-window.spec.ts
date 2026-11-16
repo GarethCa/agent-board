@@ -4,7 +4,7 @@ import { connectedDaemonPid, test, tempDataDir, removeDataDir } from './launch.t
 import { isSettingsWindow, openSettings, settingsSection } from './settings-helpers.ts';
 import { SETTINGS_CONTROLS, SETTINGS_GROUPS, sectionOf, type SettingsControl } from '../src/renderer/src/chrome/settings-ia.ts';
 
-// The Settings window: its own OS window beside the board, with a sidebar of seven groups, opened by the board menu's
+// The Settings window: its own OS window beside the board, with a sidebar of eight groups, opened by the board menu's
 // Settings… row, the gear, and on macOS the app menu's Settings… (⌘,). It reopens on the pane it last showed.
 
 test('Settings… opens the Settings window on General, and it reopens on the pane it last showed', async () => {
@@ -20,7 +20,7 @@ test('Settings… opens the Settings window on General, and it reopens on the pa
     await expect(sidebar).toBeVisible();
     await expect(settings).toHaveTitle('Settings');
     await expect(settings.getByRole('main', { name: 'General' })).toBeVisible();
-    // Seven groups, General open on its sections and the rest closed.
+    // Eight groups, General open on its sections and the rest closed.
     const groups = sidebar.locator('.settings-group-head');
     await expect(groups).toHaveText(SETTINGS_GROUPS.map((group, index) => (index === 0 ? group.name : `${group.name}${group.sections.length}`)));
     await expect(sidebar.getByRole('button', { name: 'General' })).toHaveAttribute('aria-expanded', 'true');
