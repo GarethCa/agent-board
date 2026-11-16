@@ -156,6 +156,7 @@ type AgentMenuActions = Pick<
   | 'openReview'
   | 'startReview'
   | 'openGate'
+  | 'saveAsPrefab'
   | 'deleteAgent'
 >;
 
@@ -393,7 +394,7 @@ function settingsEntries(agent: Agent, rename: () => void, actions: AgentTileMen
   ];
 }
 
-/** Copy ▸: its branch name, worktree path and session id. */
+/** Copy ▸: its branch name, worktree path and session id; then Save as prefab…, after Copy as in the right-click menu. */
 function copyEntries({ agent, board }: AgentTileMenuInput): ModelEntry[] {
   const copy = (id: string, label: string, text: string, what: string): ModelEntry => ({
     id,
@@ -403,6 +404,11 @@ function copyEntries({ agent, board }: AgentTileMenuInput): ModelEntry[] {
     onSelect: () => board.copy(text, what),
   });
   return [copy('branch', 'Branch name', agent.branch, 'Branch name'), copy('worktree', 'Worktree path', agent.worktree, 'Worktree path'), copy('session-id', 'Session id', agent.sessionId, 'Session id')];
+}
+
+/** Save as prefab…: the agent as a crew of one to start again, without its chat, ticket or branch. */
+function savePrefabEntry({ agent, actions }: AgentTileMenuInput): ModelEntry {
+  return { id: 'save-prefab', label: 'Save as prefab…', icon: <Users />, hint: 'Keeps its role, AI and model, not its chat', onSelect: () => actions.saveAsPrefab(agent) };
 }
 
 /**
@@ -430,7 +436,7 @@ export function agentTileMenu(input: AgentTileMenuInput): ModelEntry[] {
     { id: 'arrange', label: 'Arrange', icon: <Layers />, entries: arrangeEntries(input) },
     'separator',
     { id: 'ask', label: 'Ask Claude about it…', icon: <Sparkles />, shortcut: keyText('make.askClaude'), hint: 'Sends nothing until you press Ask', onSelect: board.askClaude },
-    { id: 'copy', label: 'Copy', icon: <Copy />, entries: copyEntries(input) },
+    { id: 'copy', label: 'Copy', icon: <Copy />, entries: [...copyEntries(input), 'separator', savePrefabEntry(input)] },
     'separator',
     { id: 'delete', label: 'Delete agent', icon: <Trash2 />, danger: true, shortcut: keyText('tile.delete'), onSelect: () => actions.deleteAgent(agent.sessionId) },
   ];
@@ -585,7 +591,7 @@ export function stateTileMenu(input: AgentTileMenuInput): ModelEntry[] {
       id: 'agent',
       label: 'Agent',
       icon: <UserRound />,
-      entries: [{ heading: 'Settings' }, ...settingsEntries(agent, rename, actions), 'separator', { heading: 'Review & gate' }, ...reviewGate, 'separator', { heading: 'Copy' }, ...copyEntries(input)],
+      entries: [{ heading: 'Settings' }, ...settingsEntries(agent, rename, actions), 'separator', { heading: 'Review & gate' }, ...reviewGate, 'separator', { heading: 'Copy' }, ...copyEntries(input), savePrefabEntry(input)],
     },
     { id: 'board', label: 'Board', icon: <LayoutTemplate />, entries: [...shows, ...(shows.length > 0 ? ['separator' as const] : []), ...arrangeEntries(input)] },
     'separator',
@@ -765,6 +771,8 @@ export interface ZoneBindingActions {
   startCrew(prefab: string, zone: Zone): void;
   /** Opens the app's crew library, one for every board, a crew from it starting in the zone. */
   crewLibrary(zone: Zone): void;
+  /** Opens a prefab on its own board to change it (a built-in as its copy), or a new one with `null`. */
+  editPrefab(prefab: LibraryPrefab | null): void;
   /** Opens the New ticket sheet: one ticket tile, from a ticket prefab, starting in the zone. */
   newTicket(zone: Zone): void;
   /** Adds the zone's stage board, which holds the work its agents started (one to a zone). */
@@ -1130,30 +1138,64 @@ const newAgentRow = ({ zone, noAgents, actions }: ProjectMenuInput, label: strin
   onSelect: () => actions.newAgent(zone),
 });
 
-/** Where a New crew's rows go: `start` opens the prompt box of a crew from the prefab named, `library` the library itself. */
+/**
+ * Where a New crew's rows go: `start` opens the prompt box of a crew from the prefab named, `library` the library itself.
+ * With `edit`, each prefab's row has ✎ (a built-in's, duplicate) to open it on its own board, `edit(null)` a new one.
+ */
 interface CrewPicks {
   start(prefab: string): void;
   library(): void;
+  edit?(prefab: LibraryPrefab | null): void;
 }
+
+/** How long a prefab saved is marked new in the menus. */
+const NEW_FOR_MS = 24 * 60 * 60 * 1000;
+
+/** A prefab of your own saved in the last day. */
+export const isNewPrefab = (prefab: LibraryPrefab, now: number): boolean =>
+  !prefab.builtIn && prefab.editedAt !== null && now - Date.parse(prefab.editedAt) < NEW_FOR_MS;
+
+/** A prefab in a few words: how many agents, and the model of the one your prompt starts ("2 · opus"). */
+const prefabShape = (prefab: LibraryPrefab): string => {
+  const first = prefab.members.find((member) => member.starts === 'prompt') ?? prefab.members[0];
+  return [String(prefab.members.length), first?.model ?? first?.harness].filter((part) => part !== undefined).join(' · ');
+};
 
 /**
  * Every New crew's rows: a crew from each prefab, each group under its heading (yours first), then the library itself.
- * `why`, if set, says why no crew can start here, on each prefab's row.
+ * `why`, if set, says why no crew can start here, on each prefab's row. With `picks.edit`, yours are newest first, each
+ * with its shape under it and new for a day, and Make a prefab… sits beside the library.
  */
-const prefabEntries = (prefabs: readonly LibraryPrefab[], picks: CrewPicks, why?: string): ModelEntry[] => [
-  ...prefabGroups(prefabs).flatMap((group): ModelEntry[] => [
-    { heading: prefabGroupHeading(group) },
-    ...group.map((prefab): ModelEntry => ({
-      id: `crew-${prefab.name}`,
-      label: prefab.name,
-      icon: <CrewFaces members={prefab.members} />,
-      ...(why === undefined ? {} : { disabled: true, hint: why }),
-      onSelect: () => picks.start(prefab.name),
-    })),
-    'separator',
-  ]),
-  { id: 'crew-library', label: 'Library…', icon: <LibraryBig />, onSelect: picks.library },
-];
+const prefabEntries = (prefabs: readonly LibraryPrefab[], picks: CrewPicks, why?: string, now = Date.now()): ModelEntry[] => {
+  const { edit } = picks;
+  const newest = (group: LibraryPrefab[]) =>
+    edit === undefined || group[0]?.builtIn !== false ? group : [...group].sort((a, b) => (b.editedAt ?? '').localeCompare(a.editedAt ?? ''));
+  return [
+    ...prefabGroups(prefabs).flatMap((group): ModelEntry[] => [
+      { heading: prefabGroupHeading(group) },
+      ...newest(group).map(
+        (prefab): ModelEntry => ({
+          id: `crew-${prefab.name}`,
+          label: prefab.name,
+          icon: <CrewFaces members={prefab.members} />,
+          ...(why === undefined ? (edit === undefined ? {} : { hint: prefabShape(prefab) }) : { disabled: true, hint: why }),
+          ...(edit !== undefined && isNewPrefab(prefab, now) ? { badge: 'new' } : {}),
+          ...(edit === undefined
+            ? {}
+            : {
+                aside: prefab.builtIn
+                  ? { label: `Duplicate ${prefab.name} to change it`, icon: <Copy />, onSelect: () => edit(prefab) }
+                  : { label: `Change ${prefab.name}`, icon: <Pencil />, onSelect: () => edit(prefab) },
+              }),
+          onSelect: () => picks.start(prefab.name),
+        }),
+      ),
+      'separator',
+    ]),
+    ...(edit === undefined ? [] : [{ id: 'make-prefab', label: 'Make a prefab…', icon: <Pencil />, onSelect: () => edit(null) }]),
+    { id: 'crew-library', label: edit === undefined ? 'Library…' : 'Crew library…', icon: <LibraryBig />, onSelect: picks.library },
+  ];
+};
 
 /** New crew where no zone is picked yet: the prompt box that follows asks for one. `onCrew(null)` opens the library. */
 export const crewMenu = (prefabs: readonly LibraryPrefab[], onCrew: (prefab: string | null) => void): ModelEntry => ({
@@ -1180,11 +1222,21 @@ const crewRow = (zone: Zone, actions: Pick<ZoneMenuActions, 'startCrew' | 'crewL
  * library as last known (yours first, each group under its heading), then the library itself. `noAgents` says why the
  * zone can start none, on every row that would.
  */
-export function newAgentMenu(zone: Zone, noAgents: string | undefined, actions: Pick<ZoneMenuActions, 'startCrew' | 'crewLibrary'> & { newAgent(zone: Zone): void }): ModelEntry[] {
+export function newAgentMenu(
+  zone: Zone,
+  noAgents: string | undefined,
+  actions: Pick<ZoneMenuActions, 'startCrew' | 'crewLibrary' | 'editPrefab'> & { newAgent(zone: Zone): void },
+  now = Date.now(),
+): ModelEntry[] {
   return [
-    { id: 'new-agent', label: 'Blank agent', icon: <Plus />, ...(noAgents === undefined ? {} : { disabled: true, hint: noAgents }), onSelect: () => actions.newAgent(zone) },
+    { id: 'new-agent', label: 'Blank agent', icon: <Plus />, shortcut: '⏎', ...(noAgents === undefined ? {} : { disabled: true, hint: noAgents }), onSelect: () => actions.newAgent(zone) },
     'separator',
-    ...zonePrefabEntries(zone, actions, noAgents),
+    ...prefabEntries(
+      currentPrefabs(),
+      { start: (prefab) => actions.startCrew(prefab, zone), library: () => actions.crewLibrary(zone), edit: actions.editPrefab },
+      noAgents,
+      now,
+    ),
   ];
 }
 

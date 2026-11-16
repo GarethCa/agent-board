@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { SETTINGS_CONTROLS, SETTINGS_GROUPS, settingsPaneFrom, sectionOf } from './settings-ia';
 
 describe('the Settings window’s groups', () => {
-  it('are the seven, in order', () => {
-    expect(SETTINGS_GROUPS.map((group) => group.name)).toEqual(['General', 'Board', 'Agents', 'Alerts', 'Usage', 'Accounts', 'Advanced']);
+  it('are the eight, in order', () => {
+    expect(SETTINGS_GROUPS.map((group) => group.name)).toEqual(['General', 'Board', 'Agents', 'Prefabs', 'Alerts', 'Usage', 'Accounts', 'Advanced']);
   });
 
   it('hold every control the app has, each in exactly one section: nothing is lost in the move', () => {
@@ -60,6 +60,8 @@ describe('the Settings window’s groups', () => {
       'ticketTilesOpenAs',
       // Added since: which design draws an agent's tile.
       'tileDesign',
+      // Added since: the crew prefabs, to open, duplicate, export or delete, and to make or import one.
+      'prefabs',
     ];
     const ids = SETTINGS_CONTROLS.map((control) => control.id);
     expect(new Set(ids).size).toBe(ids.length);

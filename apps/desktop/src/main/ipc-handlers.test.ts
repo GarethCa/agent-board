@@ -64,7 +64,7 @@ describe('the channels main handles', () => {
     ['unsaved plan edits', registerUnsavedPlanEditIpc, ['plan:markUnsavedEdit', 'plan:unsavedEdits']],
     ['gates', registerGateIpc, ['gate:list', 'gate:log', 'gate:merge', 'gate:run', 'gate:sendFailure', 'gate:status', 'gate:stop']],
     ['items', (d: DaemonLink) => registerItemIpc(d, '/data'), ['item:add-clock', 'item:change-memory', 'item:change-queue', 'item:change-todo', 'item:clocks', 'item:create', 'item:delete', 'item:hand-job', 'item:import-image', 'item:list', 'item:memory-history', 'item:queue-history', 'item:read-memory', 'item:read-queue', 'item:taken-jobs', 'item:update']],
-    ['orchestrators', registerOrchestratorIpc, ['orchestrator:activity', 'orchestrator:arrange-ticket', 'orchestrator:check-prefab', 'orchestrator:crew-round', 'orchestrator:import-prefab', 'orchestrator:prefabs', 'orchestrator:remove-prefab', 'orchestrator:save-prefab', 'orchestrator:set-ticket-chat', 'orchestrator:start-prefab', 'orchestrator:stop-crew', 'orchestrator:usage']],
+    ['orchestrators', registerOrchestratorIpc, ['orchestrator:activity', 'orchestrator:arrange-ticket', 'orchestrator:check-prefab', 'orchestrator:crew-round', 'orchestrator:export-prefab', 'orchestrator:import-prefab', 'orchestrator:prefabs', 'orchestrator:remove-prefab', 'orchestrator:save-prefab', 'orchestrator:set-ticket-chat', 'orchestrator:start-prefab', 'orchestrator:stop-crew', 'orchestrator:usage']],
     ['pull requests', registerPullRequestIpc, ['pull-request:approve', 'pull-request:details', 'pull-request:merge', 'pull-request:search']],
     ['reviews', registerReviewIpc, ['review:dismiss', 'review:list', 'review:merge', 'review:send', 'review:set-cap', 'review:start']],
     ['shells', registerShellIpc, ['shell:closeOwnPanes', 'shell:closePane', 'shell:create', 'shell:createTab', 'shell:delete', 'shell:forgetWindow', 'shell:list', 'shell:move', 'shell:movePane', 'shell:moveSurface', 'shell:moveTab', 'shell:ownTab', 'shell:resizeSplit', 'shell:resumePane', 'shell:returnPane', 'shell:scripts', 'shell:setName', 'shell:setPaneName', 'shell:setWindowLayout', 'shell:split', 'shell:tabWindows', 'shell:unsplitTabs', 'shell:windowLayout']],
@@ -172,8 +172,9 @@ describe("main's crew prefab calls", () => {
     expect(JSON.parse(calls[0]![1].text as string)).toMatchObject({ agentBoardCrewPrefab: 1, name: 'Pair' });
 
     calls = recording();
-    await invoke('orchestrator:save-prefab', prefab, 'pair');
+    await invoke('orchestrator:save-prefab', prefab, 'pair', { '@prompt': { x: -200, y: 0 } });
     expect(saved(calls)).toEqual([['orchestrator.savePrefab', true]]);
+    expect(calls[0]![1].places).toEqual({ '@prompt': { x: -200, y: 0 } });
 
     calls = recording();
     await invoke('orchestrator:save-prefab', prefab, 'Old pair');
@@ -204,5 +205,10 @@ describe("main's crew prefab calls", () => {
     recording();
     expect(await invoke('orchestrator:check-prefab', prefab)).toBeNull();
     expect(await invoke('orchestrator:check-prefab', { ...prefab, name: 'x'.repeat(49) })).toMatch(/at most 48 characters/);
+  });
+
+  it('refuses to export a prefab its own import would refuse, before asking where to write it', async () => {
+    recording();
+    await expect(invoke('orchestrator:export-prefab', { ...prefab, name: 'x'.repeat(49) })).rejects.toThrow(/at most 48 characters/);
   });
 });

@@ -203,7 +203,7 @@ describe("an agent tile's menu, grouped", () => {
       'review', 'review/open-pr', 'review/start-review', 'review/run-gate',
       'arrange', 'arrange/front', 'arrange/forward', 'arrange/backward', 'arrange/back', 'arrange/align',
       'ask',
-      'copy', 'copy/branch', 'copy/worktree', 'copy/session-id',
+      'copy', 'copy/branch', 'copy/worktree', 'copy/session-id', 'copy/save-prefab',
       'delete',
     ]);
   });
@@ -294,12 +294,14 @@ describe("an agent tile's menu, grouped", () => {
     expect(calls).toEqual([['backUnderRule', []], ['moveToDone', []]]);
   });
 
-  it('copies its branch name, worktree path and session id, and says when it has none', () => {
+  it('copies its branch name, worktree path and session id, and says when it has none, then saves it as a prefab', () => {
     const copy = sub(agentTileMenu(tileInput({ ...running, branch: '', worktree: '/w/fix' })), 'copy');
     expect(copy).toMatchObject([
       { label: 'Branch name', disabled: true, hint: 'It has none' },
       { label: 'Worktree path', detail: '/w/fix' },
       { label: 'Session id', detail: running.sessionId },
+      'separator',
+      { label: 'Save as prefab…' },
     ]);
   });
 
@@ -536,24 +538,36 @@ describe("a zone's tab menus", () => {
     expect(menuIds([zoneTabEntries(group, undefined, spies()).bind!])).toEqual(['tab-bind', 'tab-bind/repo', 'tab-bind/project', 'tab-bind/tracker']);
   });
 
-  it("offers a blank agent first beside + agent, then the library's prefabs, yours first, and the library itself", () => {
+  it("offers a blank agent first beside + agent, then yours newest first, the built-ins, and a way to make one or open the library", () => {
+    const now = Date.parse('2026-11-16T12:00:00Z');
+    const one = { harness: 'claude', model: 'opus', starts: 'prompt' };
     library.current = [
-      { name: 'Ticket', icon: 'ticket', builtIn: true, members: [] },
-      { name: 'Builder', icon: 'agent', builtIn: false, members: [] },
-      { name: 'Reviewer', icon: 'review', builtIn: false, members: [] },
+      { name: 'Ticket', icon: 'ticket', builtIn: true, editedAt: null, members: [one] },
+      { name: 'Builder', icon: 'agent', builtIn: false, editedAt: '2026-11-01T00:00:00Z', members: [one] },
+      { name: 'Reviewer', icon: 'review', builtIn: false, editedAt: '2026-11-16T09:00:00Z', members: [{ ...one, model: null }, one] },
     ] as unknown as LibraryPrefab[];
     const actions = spies<ZoneBindingActions & { newAgent(zone: Zone): void }>();
-    const entries = newAgentMenu(repoZone, undefined, actions);
+    const entries = newAgentMenu(repoZone, undefined, actions, now);
     library.current = [];
-    expect(menuIds(entries)).toEqual(['new-agent', 'crew-Builder', 'crew-Reviewer', 'crew-Ticket', 'crew-library']);
-    expect(row(entries, 'new-agent')).toMatchObject({ label: 'Blank agent' });
+    expect(menuIds(entries)).toEqual(['new-agent', 'crew-Reviewer', 'crew-Builder', 'crew-Ticket', 'make-prefab', 'crew-library']);
+    expect(row(entries, 'new-agent')).toMatchObject({ label: 'Blank agent', shortcut: '⏎' });
     expect(entries.filter((entry) => typeof entry === 'object' && 'heading' in entry)).toEqual([{ heading: 'Your prefabs' }, { heading: 'Built in' }]);
-    for (const id of ['new-agent', 'crew-Reviewer', 'crew-Ticket', 'crew-library']) (row(entries, id) as { onSelect(): void }).onSelect();
+    // Saved in the last day is new; each says how many agents, and the model of the one your prompt starts.
+    expect(row(entries, 'crew-Reviewer')).toMatchObject({ badge: 'new', hint: '2 · claude', aside: { label: 'Change Reviewer' } });
+    expect(row(entries, 'crew-Builder')).toMatchObject({ hint: '1 · opus' });
+    expect(row(entries, 'crew-Builder')).not.toHaveProperty('badge');
+    expect(row(entries, 'crew-Ticket')).toMatchObject({ aside: { label: 'Duplicate Ticket to change it' } });
+    expect(row(entries, 'crew-library')).toMatchObject({ label: 'Crew library…' });
+    for (const id of ['new-agent', 'crew-Reviewer', 'crew-Ticket', 'make-prefab', 'crew-library']) (row(entries, id) as { onSelect(): void }).onSelect();
+    for (const id of ['crew-Builder', 'crew-Ticket']) (row(entries, id) as { aside: { onSelect(): void } }).aside.onSelect();
     expect(actions.calls).toEqual([
       ['newAgent', [repoZone]],
       ['startCrew', ['Reviewer', repoZone]],
       ['startCrew', ['Ticket', repoZone]],
+      ['editPrefab', [null]],
       ['crewLibrary', [repoZone]],
+      ['editPrefab', [expect.objectContaining({ name: 'Builder' })]],
+      ['editPrefab', [expect.objectContaining({ name: 'Ticket' })]],
     ]);
   });
 
@@ -1985,6 +1999,7 @@ describe("every row's handler", () => {
         "copy/branch → copy("acme-18-waiting", "Branch name")",
         "copy/worktree → copy("/worktrees/gallery", "Worktree path")",
         "copy/session-id → copy("a1", "Session id")",
+        "copy/save-prefab → saveAsPrefab(#a1)",
         "delete → deleteAgent("a1")",
         "wake → resumeAgent("a2")",
         "run/stop → stopAgent("a2")",

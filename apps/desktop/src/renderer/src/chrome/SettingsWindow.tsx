@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Bell, Bot, ChevronRight, Gauge, LayoutDashboard, Search, SlidersHorizontal, UserRound, Wrench } from 'lucide-react';
+import { Bell, Bot, ChevronRight, Gauge, LayoutDashboard, Search, SlidersHorizontal, UserRound, Users, Wrench } from 'lucide-react';
 import { WINDOW_QUERY } from '../../../preload/api';
 import { errorMessage } from '../../../shared/errors';
 import { ExternalHooksToggle } from '../board/ExternalHooksToggle';
@@ -9,6 +9,7 @@ import { HeldPayloadsSetting } from '../board/HeldPayloadsSetting';
 import { daemonStatusText, RestartDaemon, useDaemonStatus } from '../DaemonStatus';
 import { useSimplified } from '../design';
 import { storedValue } from '../stored-value';
+import { PrefabsSetting } from '../crews/PrefabsSetting';
 import { Readout, useToast } from '../ui';
 import { useLiveLists } from '../windows/use-live-lists';
 import { AppearanceSetting } from './AppearanceSetting';
@@ -45,6 +46,7 @@ const GROUP_ICONS: Record<SettingsGroupId, ReactNode> = {
   general: <SlidersHorizontal aria-hidden />,
   board: <LayoutDashboard aria-hidden />,
   agents: <Bot aria-hidden />,
+  prefabs: <Users aria-hidden />,
   alerts: <Bell aria-hidden />,
   usage: <Gauge aria-hidden />,
   accounts: <UserRound aria-hidden />,
@@ -148,6 +150,8 @@ function sectionBody(home: SettingsHome, onError: OnError): ReactNode {
       return <CompactWindowSetting onError={onError} />;
     case 'agents.links':
       return <ClickableLinksSetting onError={onError} />;
+    case 'prefabs.library':
+      return <PrefabsSetting />;
     case 'alerts.notifications':
       return <MutedNotificationsSetting onError={onError} />;
     case 'usage.plan':

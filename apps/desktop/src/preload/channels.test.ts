@@ -134,6 +134,7 @@ const CHANNELS: string[] = [
   'orchestrator:arrange-ticket',
   'orchestrator:check-prefab',
   'orchestrator:crew-round',
+  'orchestrator:export-prefab',
   'orchestrator:import-prefab',
   'orchestrator:logged',
   'orchestrator:prefabs',

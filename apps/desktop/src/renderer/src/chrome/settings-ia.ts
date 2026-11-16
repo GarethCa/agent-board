@@ -1,8 +1,8 @@
-// Where every setting lives in the Settings window: seven groups in its sidebar, each a page of sections, and every
+// Where every setting lives in the Settings window: eight groups in its sidebar, each a page of sections, and every
 // control in exactly one section. The window draws its sidebar and headings from here; searching settings reads the
 // same table, so a control that moves is still found by its label.
 
-export type SettingsGroupId = 'general' | 'board' | 'agents' | 'alerts' | 'usage' | 'accounts' | 'advanced';
+export type SettingsGroupId = 'general' | 'board' | 'agents' | 'prefabs' | 'alerts' | 'usage' | 'accounts' | 'advanced';
 
 export interface SettingsSection {
   id: string;
@@ -15,7 +15,7 @@ export interface SettingsGroup {
   sections: readonly SettingsSection[];
 }
 
-/** The sidebar, in order: how the app looks and talks to you, the board, agents, alerts, usage, other programs, and plumbing. */
+/** The sidebar, in order: how the app looks and talks to you, the board, agents, crew prefabs, alerts, usage, other programs, and plumbing. */
 export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
   {
     id: 'general',
@@ -47,6 +47,7 @@ export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
       { id: 'links', name: 'Links' },
     ],
   },
+  { id: 'prefabs', name: 'Prefabs', sections: [{ id: 'library', name: 'Your prefabs' }] },
   { id: 'alerts', name: 'Alerts', sections: [{ id: 'notifications', name: 'Notifications' }] },
   {
     id: 'usage',
@@ -114,6 +115,7 @@ export const SETTINGS_CONTROLS: readonly SettingsControl[] = [
   { id: 'roleEfforts', label: 'Reasoning per role', home: 'agents.reasoning', also: 'effort thinking role level' },
   { id: 'compactWindow', label: "Compact agents' context at", home: 'agents.context', also: 'context window tokens' },
   { id: 'clickableLinks', label: 'Clickable links from Claude', home: 'agents.links', also: 'urls open browser' },
+  { id: 'prefabs', label: 'Prefabs', home: 'prefabs.library', also: 'crew prefab team template make new import export duplicate delete built in' },
   { id: 'needsYouShows', label: 'Needs you shows', home: 'alerts.notifications', also: 'inbox turns' },
   { id: 'osNotifications', label: 'OS notifications', home: 'alerts.notifications', also: 'alerts banners' },
   { id: 'notifyInFront', label: 'Also while agent-board is in front', home: 'alerts.notifications', also: 'focused foreground' },

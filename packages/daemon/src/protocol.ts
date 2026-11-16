@@ -4694,10 +4694,21 @@ export interface CrewPrefab {
   members: PrefabMember[];
 }
 
+/** The key of the prompt's place among a prefab's places: never an agent's id, which starts with a letter or digit. */
+export const PROMPT_PLACE = '@prompt';
+
+/**
+ * Where each agent of a prefab sits on its board, by its id, and the prompt by `PROMPT_PLACE`: the library's, kept beside
+ * the prefab's file and never in it, so an older app reads the file as before. One with none is laid out from its lines.
+ */
+export type PrefabPlaces = Record<string, { x: number; y: number }>;
+
 /** A prefab in the library: the prefab, whether it is one of the app's own, and when it was last saved (null for a built-in). */
 export interface LibraryPrefab extends CrewPrefab {
   builtIn: boolean;
   editedAt: string | null;
+  /** Where its agents sit on its board, if it was saved from there. */
+  places?: PrefabPlaces;
 }
 
 /** What starting a prefab did: the agents it started, and the members that start later, with when. */
@@ -5773,7 +5784,7 @@ export interface DaemonMethods {
    * A name a prefab already has, in any case, is refused unless `replace`; a built-in's always (save a copy under a
    * name of its own).
    */
-  'orchestrator.savePrefab': { params: { token?: string; text: string; replace?: boolean }; result: LibraryPrefab };
+  'orchestrator.savePrefab': { params: { token?: string; text: string; replace?: boolean; places?: PrefabPlaces }; result: LibraryPrefab };
   /** Removes a saved crew prefab. A built-in can't be removed; one with no such name fails. */
   'orchestrator.removePrefab': { params: { token?: string; name: string }; result: null };
   /**

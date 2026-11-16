@@ -935,6 +935,58 @@
   white-space: normal;
 }
 
+/* A word marked beside a row's label, such as "new". */
+.ui-menu-badge {
+  flex: none;
+  padding: 0 var(--space-1-5);
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-semibold);
+}
+
+/* A row with a second thing to do at its end, an icon button shown as the row is hovered or either is focused. */
+.ui-menu-pair {
+  position: relative;
+}
+
+.ui-menu-pair > .ui-menu-item {
+  padding-right: calc(var(--control-row) + var(--space-1));
+}
+
+.ui-menu-aside {
+  position: absolute;
+  top: var(--space-1);
+  right: var(--space-1);
+  display: grid;
+  place-items: center;
+  width: calc(var(--control-row) - var(--space-2));
+  height: calc(var(--control-row) - var(--space-2));
+  box-sizing: border-box;
+  border: 1px solid transparent;
+  border-radius: var(--radius-item);
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0;
+  outline: none;
+}
+
+.ui-menu-aside svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+}
+
+.ui-menu-pair:is(:hover, :focus-within) > .ui-menu-aside {
+  opacity: 1;
+}
+
+.ui-menu-aside:is([data-highlighted], :hover) {
+  border-color: var(--border);
+  background: var(--raised);
+  color: var(--text);
+}
+
 /* A labelled row of colours. */
 .ui-menu-swatches {
   padding: var(--space-1) var(--space-2) var(--space-1-5);

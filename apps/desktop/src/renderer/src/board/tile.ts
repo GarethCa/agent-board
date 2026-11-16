@@ -90,6 +90,8 @@ export interface TileActions {
   popOutShell(shell: Shell): void;
   /** Asks to delete the shell tile, confirming first if it has live panes. */
   deleteShell(shellId: string): void;
+  /** Opens Save as prefab… beside the agent's tile: the agent as a crew of one, without its chat or ticket. */
+  saveAsPrefab(agent: Agent): void;
   /** Asks to delete the agent, confirming first if that would lose work. */
   deleteAgent(sessionId: string): void;
   /**
@@ -204,6 +206,7 @@ export const TileActionsContext = createContext<TileActions>({
   popOutAgent: () => {},
   popOutShell: () => {},
   deleteShell: () => {},
+  saveAsPrefab: () => {},
   deleteAgent: () => {},
   stopAgent: () => {},
   interruptAgent: () => {},

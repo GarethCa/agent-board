@@ -86,7 +86,7 @@ for (const { theme, suffix } of THEMES) {
           await window.getByRole('button', { name: 'More to start' }).click();
           await window.getByRole('menuitem', { name: 'New crew' }).press('ArrowRight');
         }
-        await expect(window.getByRole('menuitem', { name: /Five crew checks/ })).toBeVisible();
+        await expect(window.getByRole('menuitem', { name: /^Five crew checks/ })).toBeVisible();
         await settle(window);
         await expect.soft(window.locator('body')).toHaveScreenshot(`${named('new-agent-menu')}.png`, SHOT);
       } finally {
