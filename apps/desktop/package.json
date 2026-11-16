@@ -1,6 +1,6 @@
 {
   "name": "@agent-board/desktop",
-  "version": "0.6.27",
+  "version": "0.6.28",
   "private": true,
   "description": "An infinite board for your Claude Code and Codex sessions",
   "homepage": "https://github.com/GarethCa/agent-board#readme",
@@ -41,6 +41,7 @@
     "@fontsource-variable/bricolage-grotesque": "5.2.10",
     "@fontsource-variable/inter": "5.3.0",
     "@fontsource-variable/jetbrains-mono": "5.2.8",
+    "@fontsource-variable/manrope": "5.3.0",
     "@fontsource/caveat": "5.2.8",
     "@radix-ui/react-dialog": "1.1.23",
     "@radix-ui/react-dropdown-menu": "2.1.24",

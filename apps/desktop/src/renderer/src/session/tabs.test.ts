@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { PaneLayout } from '@agent-board/daemon/pane-layout';
 import type { Agent, Shell } from '@agent-board/daemon/protocol';
 import type { Surface } from '@agent-board/daemon/window-layout';
-import { liveShellCount, localServersOf, OWN_TAB, pullRequestChoices, sessionChoices, shellsChipLabel, surfaceAgentIds, tabAtDigit, tabKey, tabLiveShells, todoChoice, windowShells, windowSurfaces, windowTabs, wordedTabLabel, type TabOwner } from './tabs';
+import { liveShellCount, localServersOf, OWN_TAB, pullRequestChoices, sessionChoices, shellsChipLabel, surfaceAgentIds, tabAtDigit, tabKey, tabLiveShells, tabWindowTitle, todoChoice, windowShells, windowSurfaces, windowTabs, wordedTabLabel, type TabOwner } from './tabs';
 
 const agent = { sessionId: 'agent-1', harness: 'claude' } as Agent;
 const byAgent: TabOwner = { kind: 'agent', agent };
@@ -194,6 +194,17 @@ describe("a window's surfaces", () => {
       [`todo:${agent.sessionId}`, 'To do', 'todo'],
       ['todo:agent-2', 'To do · impl-auth', 'todo'],
     ]);
+  });
+
+  it("shows an implementer's review rounds as Review in its own window, after its agent elsewhere, and none once the agent has gone", () => {
+    const shown: Surface[] = [{ kind: 'review', sessionId: agent.sessionId }, { kind: 'review', sessionId: 'agent-2' }, { kind: 'review', sessionId: 'gone' }];
+    expect(windowSurfaces(byAgent, [], shown, targets).map((each) => [each.key, each.label, each.kind])).toEqual([
+      ['own', 'claude', 'tab'],
+      [`review:${agent.sessionId}`, 'Review', 'review'],
+      ['review:agent-2', 'Review · impl-auth', 'review'],
+    ]);
+    expect(surfaceAgentIds(byAgent, [{ kind: 'review', sessionId: 'agent-2' }])).toEqual(['agent-1', 'agent-2']);
+    expect(tabWindowTitle({ kind: 'review', sessionId: 'agent-2' })).toBe('Review');
   });
 
   it("offers its agent's to-do list until it is shown, and none in a tab window", () => {

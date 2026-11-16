@@ -35,7 +35,7 @@ import {
   type SpawnAgentParams,
   type TerminalSize,
 } from './protocol.ts';
-import { folderPath, issueZoneOf } from './repo-zone.ts';
+import { folderPath, issueZoneOf, type IssueKeyTracker } from './repo-zone.ts';
 import { checkNamedTemplate, fillTemplate, roleChoice, type TemplateValues } from './role-templates.ts';
 import { RpcMethodError } from './rpc.ts';
 import { sessionEnv, type SessionHost } from './sessions.ts';
@@ -58,6 +58,9 @@ import {
 } from './worktrees.ts';
 import { nameSlug } from './work-units.ts';
 import { groupFolder, initProject, resolveZoneFolder, zoneFolder } from './zones.ts';
+
+/** Where a new agent's issue is read from: a zone's tracker, by the zone's id, or the tracker its key names. */
+type IssueSource = string | IssueKeyTracker;
 
 /** Codex's flag that runs untrusted hooks without review (ADR-0004). */
 export const CODEX_BYPASS_FLAG = '--dangerously-bypass-hook-trust';
@@ -386,11 +389,11 @@ export function createAgentSpawns(
   const reservedNames = new Map<string, string>();
 
   /** The lowest `new-agent-N` no agent is called, or is being given: what an agent started with no task is named. */
-  const freeAgentName = (): string => {
+  const freeAgentName = (stem = 'new-agent'): string => {
     const taken = new Set([...(selectNames.all() as { name: string }[]).map((row) => row.name), ...reservedNames.values()]);
     let n = 1;
-    while (taken.has(`new-agent-${n}`)) n += 1;
-    return `new-agent-${n}`;
+    while (taken.has(`${stem}-${n}`)) n += 1;
+    return `${stem}-${n}`;
   };
 
   /**
@@ -489,9 +492,9 @@ export function createAgentSpawns(
   /**
    * The zone a new agent's issue comes from: `issueZoneId`, which must have a tracker; else whichever zone's tracker
    * would have it (`issueZoneOf`), as a zone is only a group: its own, the one that names the issue's team,
-   * its starter's, one of its repo.
+   * else the tracker its key names when no zone has that team or repo, else its starter's, one of its repo.
    */
-  const issueZone = (params: SpawnAgentParams & { issueId: string }, zone: ZoneRow | undefined, spawnedBy: string | undefined): string => {
+  const issueZone = (params: SpawnAgentParams & { issueId: string }, zone: ZoneRow | undefined, spawnedBy: string | undefined): IssueSource => {
     if (params.issueZoneId !== undefined) {
       const from = getZone(params.issueZoneId);
       if (from === undefined || from.tracker_provider === null) throw invalidParams(`${from?.name ?? `zone ${params.issueZoneId}`} has no tracker to read issues from`);
@@ -508,7 +511,7 @@ export function createAgentSpawns(
     const spawnerZoneId = spawnedBy === undefined ? null : (getRow(spawnedBy)?.zone_id ?? null);
     const found = issueZoneOf({ issueId: params.issueId, zoneId: zone?.id ?? null, spawnerZoneId, repo }, zones);
     if (typeof found === 'string') throw invalidParams(found);
-    return found.id;
+    return 'id' in found ? found.id : found;
   };
 
   const starts = createAgentStarts(options.broadcast);
@@ -599,7 +602,15 @@ export function createAgentSpawns(
     const fromZone = issueId === undefined ? undefined : issueZone({ ...params, issueId }, zone, spawnedBy);
     const id = randomUUID();
     // Named for now by what it was given; one started from an issue is named after it once the issue is read.
-    const shownName = name?.trim() || (issueId !== undefined ? issueId : prompt.trim() === '' ? freeAgentName() : defaultName(prompt.trim()));
+    // A ticket's chat is its ticket's tile, titled as the ticket is: by its issue, else what it is for, else `ticket-N`;
+    // never by its prompt, which is the brief its chat works from.
+    const shownName =
+      name?.trim() ||
+      (issueId !== undefined
+        ? issueId
+        : params.ticketChat === true
+          ? defaultName(params.purpose ?? '') || freeAgentName('ticket')
+          : defaultName(prompt) || freeAgentName());
     // Kept until its agent is made or its tile dismissed, so no other start takes the name meanwhile.
     reservedNames.set(id, shownName);
     const shown: NewStart = { sessionId: id, zoneId, position: position ?? null, name: shownName, harness, model, effort, spawnedBy: spawnedBy ?? null };
@@ -638,7 +649,8 @@ export function createAgentSpawns(
       reviewer: boolean;
       /** It works in the repo's own checkout: no worktree is made for it. */
       mainCheckout: boolean;
-      fromZone: string | undefined;
+      /** Where its issue is read from: a zone's tracker, by the zone's id, or the tracker its key names. */
+      fromZone: IssueSource | undefined;
       /** The ticket it is the chat or a helper of, as asked for and checked. */
       ticket: TicketPlace;
       allowProjectCodexConfig: boolean;
@@ -672,7 +684,7 @@ export function createAgentSpawns(
       stillWanted();
       // Started from an issue: the issue comes first in its prompt, and names its branch.
       if (fromZone !== undefined) progress.step('issue', 'now');
-      const fromIssue = fromZone === undefined || issueId === undefined ? undefined : await within(options.trackers.issue(fromZone, issueId), 'reading the issue');
+      const fromIssue = fromZone === undefined || issueId === undefined ? undefined : await within((typeof fromZone === 'string' ? options.trackers.issue(fromZone, issueId) : options.trackers.issueFrom(fromZone, issueId)), 'reading the issue');
       if (fromIssue !== undefined) progress.step('issue', 'done', shortIssueId(fromIssue.issue));
       stillWanted();
       const task = [fromIssue && issuePrompt(fromIssue.issue), prompt.trim()].filter(Boolean).join('\n\n');
@@ -682,7 +694,7 @@ export function createAgentSpawns(
       const agentName = renamed
         ? progress.start.name
         : name?.trim() ||
-          (fromIssue ? defaultName(`${shortIssueId(fromIssue.issue)}: ${fromIssue.issue.title}`) : task === '' ? shownName : defaultName(task));
+          (fromIssue ? cutName(`${shortIssueId(fromIssue.issue)}: ${fromIssue.issue.title}`) : task === '' || params.ticketChat === true ? shownName : defaultName(task) || shownName);
       reservedNames.set(id, agentName);
       if (!renamed) progress.rename(agentName);
       if (place === undefined && !mainCheckout) progress.step('worktree', 'now');
@@ -1247,13 +1259,36 @@ export function harnessLaunch(
   return { command: shell, args: [...shellArgs, '-c', script, cwd, command, ...args] };
 }
 
-/** A tile name from a prompt: its first line, cut at a word boundary to at most `MAX_DEFAULT_NAME_LENGTH`. */
+/**
+ * A tile name from a prompt: its first line with any text once its Markdown is gone (emphasis, code marks and fences,
+ * a heading's, quote's or list item's mark, a link's address), as `cutName` cuts it. Empty when no line has any.
+ */
 export function defaultName(prompt: string): string {
-  const line = prompt.split('\n', 1)[0]!.replace(/\s+/g, ' ').trim();
+  for (const line of prompt.split('\n')) {
+    const text = plainText(line).replace(/\s+/g, ' ').trim();
+    if (text !== '') return cutName(text);
+  }
+  return '';
+}
+
+/** A line as a tile name, as it is (an issue's title is text, not Markdown): cut at a word boundary to at most `MAX_DEFAULT_NAME_LENGTH`. */
+function cutName(text: string): string {
+  const line = text.replace(/\s+/g, ' ').trim();
   if (line.length <= MAX_DEFAULT_NAME_LENGTH) return line;
   const cut = line.slice(0, MAX_DEFAULT_NAME_LENGTH);
   const space = cut.lastIndexOf(' ');
   return `${(space > 20 ? cut.slice(0, space) : cut).trimEnd()}…`;
+}
+
+/** A line of Markdown as the text it shows. Underscores inside a word (`snake_case`) are the word's own, and kept. */
+function plainText(line: string): string {
+  return line
+    .replace(/^\s*(?:#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)/, '')
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/`+/g, '')
+    .replace(/(\*\*|__)(.+?)\1/g, '$2')
+    .replace(/(^|[^\w*])\*(?!\s)([^*]+?)\*(?!\w)/g, '$1$2')
+    .replace(/(^|[^\w])_(?!\s)([^_]+?)_(?!\w)/g, '$1$2');
 }
 
 /** The `issue_provider`, `issue_id`, `issue_title` and `issue_url` columns for an agent's issue, all null for none. */

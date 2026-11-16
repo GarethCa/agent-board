@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { historyPlace, layoutChoiceStep, nudgeMove, resizeMove, tileMoveStep, tileStepAction, zoneTidy } from './hand-moves';
+import { historyPlace, layoutChoiceStep, nudgeMove, resizeMove, tileMoveStep, tileStepAction, zoneTidy, cleanUpMessage, movedToDoneMessage } from './hand-moves';
 
 describe('the user moving a tile by hand', () => {
   it('counts a nudge as a move by hand', () => {
@@ -85,24 +85,17 @@ describe('the history of a tile moved by hand', () => {
   });
 });
 
-describe('a Tidy of a zone', () => {
-  const saved = Promise.resolve({ id: 'z1' } as never);
-  const calls = () => {
-    const made: unknown[][] = [];
-    return { made, zones: { followRule: (...args: unknown[]) => (made.push(args), saved) } };
-  };
-
-  it('has the daemon lay a Spine zone out afresh, which is the only call to ask for that', () => {
-    const { made, zones } = calls();
-    expect(zoneTidy({ id: 'z1', layoutMode: 'free', layoutRule: 'spine' }, zones)).toEqual({ kind: 'byRule', saved });
-    expect(made).toEqual([['z1', [], true]]);
+describe('a Clean up of a zone', () => {
+  it('has the daemon clean a Spine zone up', () => {
+    expect(zoneTidy({ layoutMode: 'free', layoutRule: 'spine' })).toEqual({ kind: 'cleanUp' });
   });
 
   it('tidies a free zone into rows itself, and leaves one laid out by another rule, shelves or clusters alone', () => {
-    const { made, zones } = calls();
-    expect(zoneTidy({ id: 'z1', layoutMode: 'free', layoutRule: 'off' }, zones)).toEqual({ kind: 'rows' });
-    expect(zoneTidy({ id: 'z1', layoutMode: 'free', layoutRule: 'lanes' }, zones)).toBeUndefined();
-    expect(zoneTidy({ id: 'z1', layoutMode: 'shelves', layoutRule: 'spine' }, zones)).toBeUndefined();
-    expect(made).toEqual([]);
+    expect(zoneTidy({ layoutMode: 'free', layoutRule: 'off' })).toEqual({ kind: 'rows' });
+    expect(zoneTidy({ layoutMode: 'free', layoutRule: 'lanes' })).toBeUndefined();
+    expect(zoneTidy({ layoutMode: 'shelves', layoutRule: 'spine' })).toBeUndefined();
   });
+
+  it('says what it did', () => expect(cleanUpMessage('Crew', 3, 1)).toBe('Cleaned up Crew · 3 moved · 1 to Done'));
+  it('says where a ticket moved to Done by hand went', () => expect(movedToDoneMessage('Crew')).toBe("Moved to Crew's Done line"));
 });

@@ -287,6 +287,29 @@ describe('theme tokens', () => {
     expect(room).toBe(`${RAIL_TOKEN_ROOM}px`);
   });
 
+  // The app's face is Manrope unless a theme sets its own, the wordmark stays the brand's Bricolage, and the glance
+  // tiles draw in the app's face, not one of their own, so a theme's font reaches them too.
+  it('sets Manrope as the default font, Bricolage as the wordmark, and glance tiles in the app font', () => {
+    const rootValue = (name: string) => {
+      let value = '';
+      postcss.parse(read('tokens.css')).walkRules(':root', (rule) => {
+        rule.walkDecls(name, (decl) => void (value ||= decl.value));
+      });
+      return value;
+    };
+    expect(rootValue('--font-sans')).toMatch(/^'Manrope Variable',/);
+    expect(rootValue('--font-wordmark')).toMatch(/^'Bricolage Grotesque Variable',/);
+    const faceOf = (file: string, selector: string) => {
+      let value = '';
+      postcss.parse(read(file)).walkRules((rule) => {
+        if (rule.selector === selector) rule.walkDecls('font-family', (decl) => void (value ||= decl.value));
+      });
+      return value;
+    };
+    expect(faceOf('app.css', '.porthole-tile.hybrid-tile-agent')).toBe('var(--font-sans)');
+    expect(faceOf('board/shelf-tile.css', '.hybrid-tile-agent.shelf-tile')).toBe('var(--font-sans)');
+  });
+
   it('only defines tokens something reads', () => {
     const used = new Set([...sourceFiles(), ...TOKEN_FILES].flatMap((file) => readsIn(read(file))));
     expect([...defined].filter((name) => !used.has(name))).toEqual([]);
@@ -492,6 +515,10 @@ const TEXT_PAIRS: [text: string, background: string][] = [
   ['--accent-ink', '--accent-soft'],
   ['--accent-strong', '--accent-soft'],
   ['--toggle-on-ink', '--toggle-on'],
+  // A Shelf tile: its state's word on its band, quiet or filled.
+  ['--shelf-wants-ink', '--shelf-wants'],
+  ['--shelf-problem-ink', '--shelf-problem'],
+  ...['--shelf-band-ink', '--shelf-at-work-ink', '--shelf-done-ink', '--shelf-limit-ink'].map((ink): [string, string] => [ink, '--shelf-band']),
   // A review doc's severity groups: each head in its colour, and its count on it (ReviewViewer, outside the window).
   ...['blocker', 'major', 'minor'].flatMap((severity): [string, string][] => [
     [`--severity-${severity}`, '--raised'],

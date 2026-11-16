@@ -75,7 +75,7 @@ export interface AgentHostOptions {
   /** How long after the user's last key in an agent's terminal nothing is typed there for the board: `USER_IDLE_MS`. */
   userIdleMs?: number;
   /** The zones' trackers, where agents started from or linked to an issue get it. */
-  trackers: Pick<TrackerHost, 'issue'>;
+  trackers: Pick<TrackerHost, 'issue' | 'issueFrom'>;
   /** The pull requests made from the agent's branch, as last seen. */
   pullRequests(sessionId: string): readonly PullRequest[];
   /** The pull requests of branches it pushed to, as last seen: for its tile alone. */

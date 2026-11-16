@@ -7,10 +7,10 @@
 
 import { isClosed, tileSizeKey } from './board-layout.ts';
 import type { Clock } from './clock.ts';
-import { spineViewKey } from './orchestrator-layout.ts';
 import { startedByHand, type Agent, type BoardItem, type DaemonCall, type DaemonEvent, type DaemonMethods, type FlowEdge, type Shell, type Zone } from './protocol.ts';
 import type { RpcHandlers } from './rpc.ts';
 import { STAGE_BOARD_KIND } from './stage-board.ts';
+import { atRest, DONE_LINE_KIND, doneLineData, hasEnded, spineViewKey } from './zone-clean-up.ts';
 import type { ZoneTable } from './zones.ts';
 
 /** How long after the last change a zone waits to be laid out again: a burst of changes is laid out once. */
@@ -29,9 +29,11 @@ export type RuleInputs = Map<string, Seen>;
 /**
  * What an agent's place in a rule's layout depends on. In a Spine zone (`spines`), where an agent the user started by hand
  * is held where it is until the user drags it onto the layout, that agent's place is one too: the drop is what lets it join.
+ * One on a Done line (`folded`, by tile key) is hidden only while its ticket is finished, so whether it is at rest is too.
  */
-const agentInputs = (agent: Agent, spines: ReadonlySet<string> = new Set()): Seen => {
+const agentInputs = (agent: Agent, spines: ReadonlySet<string> = new Set(), folded: ReadonlySet<string> = new Set()): Seen => {
   const held = agent.zoneId !== null && spines.has(agent.zoneId) && startedByHand(agent);
+  const onDone = folded.has(tileSizeKey('agent', agent.sessionId));
   return {
     zoneId: agent.zoneId,
     shape: JSON.stringify([
@@ -44,6 +46,7 @@ const agentInputs = (agent: Agent, spines: ReadonlySet<string> = new Set()): See
       agent.branch,
       isClosed(agent),
       ...(held ? [agent.position?.x, agent.position?.y] : []),
+      ...(onDone ? [hasEnded(agent), atRest(agent)] : []),
     ]),
   };
 };
@@ -73,11 +76,11 @@ function heard(inputs: RuleInputs, key: string, now: Seen | undefined): (string 
  * The zones `event` changes what a rule lays out by in, as `inputs` last heard them (which it updates): `'all'` for a
  * change that may reach any zone (an edge between two agents, or a tile it never heard of going).
  */
-export function zonesChangedBy(event: DaemonEvent, inputs: RuleInputs, spines?: ReadonlySet<string>): string[] | 'all' {
+export function zonesChangedBy(event: DaemonEvent, inputs: RuleInputs, spines?: ReadonlySet<string>, folded?: ReadonlySet<string>): string[] | 'all' {
   const zones = (changed: (string | null)[]) => changed.filter((zoneId) => zoneId !== null);
   switch (event.type) {
     case 'agent.updated':
-      return zones(heard(inputs, tileSizeKey('agent', event.agent.sessionId), agentInputs(event.agent, spines)));
+      return zones(heard(inputs, tileSizeKey('agent', event.agent.sessionId), agentInputs(event.agent, spines, folded)));
     case 'agent.removed': {
       const key = tileSizeKey('agent', event.sessionId);
       return inputs.has(key) ? zones(heard(inputs, key, undefined)) : 'all';
@@ -152,6 +155,12 @@ export function createZoneRules({ call, zones: marks, clock, log }: ZoneRulesOpt
   const inputs: RuleInputs = new Map();
   /** The zones on Spine, as last heard. */
   const spines = new Set<string>();
+  /** The agents on each zone's Done line, by the line's item id, as last heard. */
+  const doneLines = new Map<string, readonly string[]>();
+  const folded = () => new Set([...doneLines.values()].flat());
+  const heardDoneLine = (item: BoardItem) => {
+    if (item.kind === DONE_LINE_KIND) doneLines.set(item.id, doneLineData(item.data).tickets.flatMap((ticket) => ticket.members));
+  };
   const due = new Set<string>();
   let everyZone = false;
   let cancel: (() => void) | undefined;
@@ -202,7 +211,9 @@ export function createZoneRules({ call, zones: marks, clock, log }: ZoneRulesOpt
       if (!started) return;
       if (event.type === 'zone.updated') heardSpine(event.zone.id, event.zone);
       if (event.type === 'zone.removed') heardSpine(event.id, undefined);
-      const changed = zonesChangedBy(event, inputs, spines);
+      if (event.type === 'item.updated') heardDoneLine(event.item);
+      if (event.type === 'item.removed') doneLines.delete(event.id);
+      const changed = zonesChangedBy(event, inputs, spines, folded());
       if (changed === 'all') everyZone = true;
       else if (changed.length === 0) return;
       else for (const zoneId of changed) due.add(zoneId);
@@ -218,7 +229,8 @@ export function createZoneRules({ call, zones: marks, clock, log }: ZoneRulesOpt
       ]);
       for (const zone of zones) inputs.set(`zone:${zone.id}`, zoneInputs(zone));
       for (const zone of zones) if (zone.layoutRule === 'spine') spines.add(zone.id);
-      for (const agent of agents) inputs.set(tileSizeKey('agent', agent.sessionId), agentInputs(agent, spines));
+      for (const item of items) heardDoneLine(item);
+      for (const agent of agents) inputs.set(tileSizeKey('agent', agent.sessionId), agentInputs(agent, spines, folded()));
       for (const shell of shells) if (shell.owner === null) inputs.set(tileSizeKey('shell', shell.id), shellInputs(shell));
       for (const item of items) {
         const seen = itemInputs(item);

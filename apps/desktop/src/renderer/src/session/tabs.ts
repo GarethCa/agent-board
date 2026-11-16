@@ -3,7 +3,7 @@
 // shells chip draw them.
 import { paneIds, type PaneLayout } from '@agent-board/daemon/pane-layout';
 import { inTabOrder, isOwnedBy, isOwnTab, pullRequestOfUrl, type Agent, type DocumentSummary, type PullRequest, type Shell, type ShellOwner, type WindowOwner } from '@agent-board/daemon/protocol';
-import { OWN_SURFACE, surfaceKey, type DocSurface, type DocumentSurface, type GateSurface, type PlanSurface, type PullRequestSurface, type Surface, type TodoSurface, type WebSurface } from '@agent-board/daemon/window-layout';
+import { OWN_SURFACE, surfaceKey, type DocSurface, type DocumentSurface, type GateSurface, type PlanSurface, type PullRequestSurface, type ReviewSurface, type Surface, type TodoSurface, type WebSurface } from '@agent-board/daemon/window-layout';
 import { webTabLabel } from '@agent-board/daemon/web-url';
 import { paneLabel } from '../board/rename';
 
@@ -190,6 +190,7 @@ export type WindowSurface = { key: string; surface: Surface; label: string } & (
   | { kind: 'gate'; gate: GateSurface; agent: Agent }
   | { kind: 'plan'; plan: PlanSurface; agent: Agent }
   | { kind: 'todo'; todo: TodoSurface; agent: Agent }
+  | { kind: 'review'; review: ReviewSurface; agent: Agent }
   | { kind: 'doc'; doc: DocSurface; agent: Agent }
   | { kind: 'document'; agent: Agent; document: DocumentSummary }
 );
@@ -199,6 +200,9 @@ export const gateSurfaceOf = (sessionId: string): GateSurface => ({ kind: 'gate'
 
 /** The surface of an agent's plans. */
 export const planSurfaceOf = (sessionId: string): PlanSurface => ({ kind: 'plan', sessionId });
+
+/** The surface of an implementer's review rounds. */
+export const reviewSurfaceOf = (sessionId: string): ReviewSurface => ({ kind: 'review', sessionId });
 
 /** The surface of an agent's own to-do list. */
 export const todoSurfaceOf = (sessionId: string): TodoSurface => ({ kind: 'todo', sessionId });
@@ -229,18 +233,19 @@ export const docSurfaceOf = (sessionId: string, path: string): DocSurface => ({ 
 export const docName = (path: string): string => path.split('/').filter(Boolean).at(-1) ?? path;
 
 /**
- * An agent's gate's, plans', to-do list's or doc's surface, named as its tab is: Gate, Plan, To do or the doc's file
- * name, in its own window; else after its agent. Undefined once its agent has gone.
+ * An agent's gate's, plans', to-do list's, review rounds' or doc's surface, named as its tab is: Gate, Plan, To do,
+ * Review or the doc's file name, in its own window; else after its agent. Undefined once its agent has gone.
  */
 function agentToolSurface(owner: TabOwner, surface: Surface, agents: readonly Agent[]): WindowSurface | undefined {
-  if (surface.kind !== 'gate' && surface.kind !== 'plan' && surface.kind !== 'todo' && surface.kind !== 'doc') return undefined;
+  if (surface.kind !== 'gate' && surface.kind !== 'plan' && surface.kind !== 'todo' && surface.kind !== 'review' && surface.kind !== 'doc') return undefined;
   const agent = agents.find((each) => each.sessionId === surface.sessionId);
   if (agent === undefined) return undefined;
   const own = owner.kind === 'agent' && owner.agent.sessionId === agent.sessionId;
-  const name = surface.kind === 'gate' ? 'Gate' : surface.kind === 'plan' ? 'Plan' : surface.kind === 'todo' ? 'To do' : docName(surface.path);
+  const name = surface.kind === 'gate' ? 'Gate' : surface.kind === 'plan' ? 'Plan' : surface.kind === 'todo' ? 'To do' : surface.kind === 'review' ? 'Review' : docName(surface.path);
   const base = { key: surfaceKey(surface), label: own ? name : `${name} · ${agent.name}`, agent };
   if (surface.kind === 'gate') return { ...base, surface, kind: 'gate', gate: surface };
   if (surface.kind === 'todo') return { ...base, surface, kind: 'todo', todo: surface };
+  if (surface.kind === 'review') return { ...base, surface, kind: 'review', review: surface };
   return surface.kind === 'plan' ? { ...base, surface, kind: 'plan', plan: surface } : { ...base, surface, kind: 'doc', doc: surface };
 }
 
@@ -297,6 +302,7 @@ export function tabWindowTitle(surface: Surface): string {
   if (surface.kind === 'gate') return 'Gate';
   if (surface.kind === 'plan') return 'Plan';
   if (surface.kind === 'todo') return 'To do';
+  if (surface.kind === 'review') return 'Review';
   if (surface.kind === 'doc') return docName(surface.path);
   if (surface.kind === 'document') return 'Document';
   return 'Tabs';
@@ -329,7 +335,7 @@ export function surfaceAgentIds(owner: TabOwner | undefined, shown: readonly Sur
   const ids = new Set<string>(owner?.kind === 'agent' ? [owner.agent.sessionId] : []);
   for (const surface of shown) {
     if (surface.kind === 'session' && surface.target.kind === 'agent') ids.add(surface.target.id);
-    else if (surface.kind === 'gate' || surface.kind === 'plan' || surface.kind === 'todo' || surface.kind === 'doc' || surface.kind === 'document') ids.add(surface.sessionId);
+    else if (surface.kind === 'gate' || surface.kind === 'plan' || surface.kind === 'todo' || surface.kind === 'review' || surface.kind === 'doc' || surface.kind === 'document') ids.add(surface.sessionId);
   }
   return [...ids].sort();
 }

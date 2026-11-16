@@ -1,10 +1,10 @@
 import { memo, useContext, useId, useState, type CSSProperties, type ReactNode } from 'react';
 import { usePrefabs } from '../crews/prefab-store';
 import { NodeResizer, type Node, type NodeProps } from '@xyflow/react';
-import { ChevronDown, CircleDot, Ellipsis, GitBranch, LayoutGrid, Link2, ListPlus, Plus, X } from 'lucide-react';
+import { Broom, ChevronDown, CircleDot, Ellipsis, GitBranch, Link2, ListPlus, Plus, X } from 'lucide-react';
 import { Chip, EditableName, Menu, useRenaming } from '../ui';
 import { folderLabel } from './folders';
-import { bindEntries, newAgentMenu, tidyBlocked, tidyMenu, zoneMenu, zoneTabEntries, type ModelEntry, type ZoneBindingActions, type ZoneTabChip } from './menu-model';
+import { bindEntries, cleanUpHint, newAgentMenu, tidyBlocked, tidyMenu, zoneMenu, zoneTabEntries, type ModelEntry, type ZoneBindingActions, type ZoneTabChip } from './menu-model';
 import { leastZoneSize, zoneGrid } from '@agent-board/daemon/board-layout';
 import { CrewFramesContext } from './crew-view';
 import { CrewFrameBoxes } from './CrewFrameBoxes';
@@ -77,7 +77,7 @@ function themeFillOpacity(): number {
 }
 
 /**
- * The tab's Tidy button, and the ▾ beside it: a menu of Tidy now, the zone's spacing, and where the spacing for new zones
+ * The tab's Clean up button, and the ▾ beside it: a menu of Clean up now, the zone's spacing, and where the spacing for new zones
  * is set (named as it is now, read as the menu opens).
  */
 function TidyChips({ zone, binding }: { zone: Zone; binding: ZoneBindingActions }) {
@@ -90,18 +90,18 @@ function TidyChips({ zone, binding }: { zone: Zone; binding: ZoneBindingActions 
     <span className="zone-tab-split">
       <Chip
         className="zone-tab-control nodrag"
-        icon={<LayoutGrid />}
-        aria-label="Tidy zone"
+        icon={<Broom />}
+        aria-label="Clean up zone"
         // Not `disabled`, which would hide the tooltip saying why.
         aria-disabled={blocked.disabled}
-        title={blocked.hint ?? 'Tidy: its tiles in rows, in reading order'}
+        title={blocked.hint ?? `Clean up: ${cleanUpHint(zone).toLowerCase()}`}
         onClick={() => blocked.disabled === undefined && binding.tidy(zone)}
       />
       <Menu
         onOpenChange={readNewZones}
         entries={tidyMenu(zone, newZones, binding)}
       >
-        <Chip className="zone-tab-control nodrag" icon={<ChevronDown />} aria-label="Tidy and spacing" title="Tidy now, or pick this zone's spacing" />
+        <Chip className="zone-tab-control nodrag" icon={<ChevronDown />} aria-label="Clean up and spacing" title="Clean up now, or pick this zone's spacing" />
       </Menu>
     </span>
   );
@@ -391,7 +391,7 @@ function ClassicZone({
           )}
           {clone === null && (
             <Menu entries={menu}>
-              <Chip className="zone-tab-control nodrag" icon={<Ellipsis />} aria-label="Zone options" title="Tidy, spacing, rename, colour, default repo, unbind, trusting its folder, board MCP, orchestrating, gate command, role templates, delete" />
+              <Chip className="zone-tab-control nodrag" icon={<Ellipsis />} aria-label="Zone options" title="Clean up, spacing, rename, colour, default repo, unbind, trusting its folder, board MCP, orchestrating, gate command, role templates, delete" />
             </Menu>
           )}
         </div>

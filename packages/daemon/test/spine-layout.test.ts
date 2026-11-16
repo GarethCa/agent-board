@@ -223,4 +223,34 @@ describe('layOutSpine', () => {
     const layout = layOutSpine({ tiles: [ticket(1)], links: [], spacing: 'normal' });
     expect(xy(layout, 'agent:i1')).toEqual([PAD + BAND, TOP]);
   });
+
+  it("stands what an agent gathered at its band's tail, so the band (and its column) is that much wider", () => {
+    const note = { id: 'item:n1', size: { width: 240, height: 100 } };
+    const tiles = [lead(), ticket(1), reviewer(1), ticket(2), ticket(3), ticket(4)];
+    const layout = layOutSpine({ tiles, links: [], spacing: 'normal', tails: new Map([['agent:i1', [note]]]) });
+    expect(xy(layout, 'item:n1')).toEqual([FIRST_LINE + 2 * (TW + GAP), TOP]);
+    expect(layout.bands[0]!.rect.width).toBe(2 * (TW + GAP) + 240);
+    // The next column starts right of the widest band, its tail included.
+    expect(xy(layout, 'agent:i4')).toEqual([FIRST_LINE + 2 * (TW + GAP) + 240 + UX, TOP]);
+  });
+
+  it("stacks the lead's own things at the foot of its column, under its shells", () => {
+    const list = { id: 'item:todo', size: { width: 260, height: 120 } };
+    const layout = layOutSpine({ tiles: [lead(), shell('dev'), ticket(1)], links: [], spacing: 'normal', tails: new Map([['agent:lead', [list]]]) });
+    expect(xy(layout, 'item:todo')).toEqual([PAD, TOP + TH + GAP + TH + GAP]);
+    expect(layout.size.height).toBe(TOP + TH + GAP + TH + GAP + 120 + PAD);
+  });
+
+  it('lays the Done line under the band columns, as wide as they are', () => {
+    const tiles = [lead(), ticket(1), reviewer(1), ticket(2)];
+    const layout = layOutSpine({ tiles, links: [], spacing: 'normal', doneLine: { height: 40 } });
+    expect(layout.doneLine).toEqual({ x: FIRST_LINE, y: TOP - PERCH_ROOM + 2 * BAND_STEP, width: 2 * TW + GAP, height: 40 });
+    expect(layout.size.height).toBe(TOP - PERCH_ROOM + 2 * BAND_STEP + 40 + PAD);
+  });
+
+  it('gives no Done line unless asked, and a least width with no bands', () => {
+    expect(layOutSpine({ tiles: [lead(), ticket(1)], links: [], spacing: 'normal' }).doneLine).toBeNull();
+    const alone = layOutSpine({ tiles: [lead()], links: [], spacing: 'normal', doneLine: { height: 40 } });
+    expect(alone.doneLine).toEqual({ x: FIRST_LINE, y: TOP - PERCH_ROOM, width: TW, height: 40 });
+  });
 });

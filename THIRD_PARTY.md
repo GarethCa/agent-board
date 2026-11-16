@@ -70,6 +70,7 @@ ones in each package's `LICENSE` file.
 | --- | --- | --- |
 | Bricolage Grotesque | `@fontsource-variable/bricolage-grotesque` | Copyright 2022 The Bricolage Grotesque Project Authors (<https://github.com/ateliertriay/bricolage>) |
 | Inter | `@fontsource-variable/inter` | Copyright 2016 The Inter Project Authors (<https://github.com/rsms/inter>) |
+| Manrope | `@fontsource-variable/manrope` | Copyright 2019 The Manrope Project Authors (<https://github.com/sharanda/manrope>) |
 | JetBrains Mono | `@fontsource-variable/jetbrains-mono` | Copyright 2020 The JetBrains Mono Project Authors (<https://github.com/JetBrains/JetBrainsMono>) |
 | Caveat | `@fontsource/caveat` | Copyright 2014 The Caveat Project Authors (<https://github.com/googlefonts/caveat>) |
 

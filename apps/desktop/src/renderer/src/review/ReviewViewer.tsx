@@ -1,12 +1,12 @@
 import { useState } from 'react';
-import { Check, ChevronDown, CircleAlert, CircleCheck, FileCode, GitMerge, GitPullRequest, Play, Send } from 'lucide-react';
+import { Check, ChevronDown, CircleAlert, CircleCheck, Columns2, FileCode, GitMerge, GitPullRequest, Play, Send } from 'lucide-react';
 import type { Agent, ReviewRound } from '@agent-board/daemon/protocol';
 import { mergeBlocked, openFindings, parseReviewDoc, SEVERITIES, startBlocked, type ReviewFinding, type Severity } from '@agent-board/daemon/review-doc';
 import { MAX_REVIEW_CAP } from '@agent-board/daemon/protocol';
 import { renderMarkdown } from '../board/items/StickyNode';
 import { Button, ErrorText, Menu } from '../ui';
 import { requestTab } from '../session/tab-request';
-import { pullRequestSurfaceOf } from '../session/tabs';
+import { pullRequestSurfaceOf, reviewSurfaceOf } from '../session/tabs';
 import { useAction } from '../use-action';
 import { shortWhen } from '../when';
 
@@ -230,9 +230,21 @@ function ReviewActions({ implementer, rounds, round, onDismissed }: ReviewAction
         </>
       )}
       {newest !== undefined && (
-        <Button size="sm" variant="ghost" icon={<GitPullRequest />} onClick={() => requestTab(implementer.sessionId, newest)} data-testid="review-open-pr">
-          Open PR #{newest.number}
-        </Button>
+        <>
+          <Button size="sm" variant="ghost" icon={<GitPullRequest />} onClick={() => requestTab(implementer.sessionId, newest)} data-testid="review-open-pr">
+            Open PR #{newest.number}
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            icon={<Columns2 />}
+            tooltip="The review in a pane, the pull request in one beside it"
+            onClick={() => requestTab(implementer.sessionId, newest, { besideOf: reviewSurfaceOf(implementer.sessionId) })}
+            data-testid="review-open-pr-beside"
+          >
+            Open PR beside
+          </Button>
+        </>
       )}
       <Button
         size="sm"

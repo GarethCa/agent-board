@@ -52,6 +52,19 @@ export interface SpineInput {
    * among `fixed` too. The head column is its: the shells stack under it and the bands go right of it.
    */
   anchor?: Rect;
+  /**
+   * What stands with a tile, by the tile's id: the notes and docs gathered to it. A band's go at its tail, after its
+   * last tile; the head column's stack at its foot, under its shells.
+   */
+  tails?: ReadonlyMap<string, readonly SpineTail[]>;
+  /** The Done line's height, to lay it under the band columns; without, there is none. */
+  doneLine?: { height: number };
+}
+
+/** Something gathered to a tile: a note or doc, by its id, and its size. */
+export interface SpineTail {
+  id: string;
+  size: Size;
 }
 
 export interface SpineBand {
@@ -75,6 +88,8 @@ export interface SpineLayout {
   places: SpinePlaces;
   /** The chip that stands for the clocks that don't fit, relative to the zone, and those clocks, or null if all fit. */
   more: (Rect & { hidden: string[] }) | null;
+  /** The Done line, relative to the zone: under the band columns and as wide as they reach, or null if not asked. */
+  doneLine: Rect | null;
   /** The zone's size: hugging what it holds, with its padding. */
   size: Size;
 }
@@ -84,6 +99,7 @@ const sizeOf = (tile: ArrangeTile): Size => tile.size ?? AGENT_TILE_SIZE;
 interface Band {
   key: string;
   tiles: ArrangeTile[];
+  tails: readonly SpineTail[];
   size: Size;
   /** Its place in start order, among the bands. */
   order: number;
@@ -94,8 +110,9 @@ const keptPlace = (band: Band, saved: Readonly<SpinePlaces>): SpinePlace | undef
   saved[band.key] ?? band.tiles.map((tile) => saved[tile.id]).find((place) => place !== undefined);
 
 /** Lays `input`'s crew out by the Spine rule. */
-export function layOutSpine({ tiles, links, spacing, places: saved, fixed = [], anchor }: SpineInput): SpineLayout {
+export function layOutSpine({ tiles, links, spacing, places: saved, fixed = [], anchor, tails = new Map(), doneLine: doneAsk }: SpineInput): SpineLayout {
   const gaps = SPACING_GAPS[spacing];
+  const sizes = new Map<string, Size>([...tiles.map((tile) => [tile.id, sizeOf(tile)] as const), ...[...tails.values()].flat().map((tail) => [tail.id, tail.size] as const)]);
   const spine = SPINE_GAPS[spacing];
   const { top, lanes } = lanesOf(tiles, links);
   const head = top.filter((tile) => tile.kind !== 'clock');
@@ -133,13 +150,23 @@ export function layOutSpine({ tiles, links, spacing, places: saved, fixed = [], 
     down = headBottom + gaps.tile;
     headWidth = Math.max(headWidth, sizeOf(tile).width);
   }
+  // The head's own things at its foot, under its shells.
+  for (const tail of head.flatMap((tile) => tails.get(tile.id) ?? [])) {
+    const at = clear({ x: headLeft, y: down, ...tail.size }, 'down');
+    positions.set(tail.id, { x: at.x, y: at.y });
+    headBottom = at.y + at.height;
+    down = headBottom + gaps.tile;
+    headWidth = Math.max(headWidth, tail.size.width);
+  }
   const headHeight = headBottom - headTop;
 
   const bands: Band[] = lanes.map((lane, order) => {
     const members = LANE_SLOTS.flatMap((slot) => lane.slots[slot]);
-    const width = members.reduce((sum, tile, index) => sum + (index === 0 ? 0 : gaps.tile) + sizeOf(tile).width, 0);
-    const height = PERCH_ROOM + Math.max(...members.map((tile) => sizeOf(tile).height));
-    return { key: lane.key, tiles: members, size: { width, height }, order };
+    const gathered = members.flatMap((tile) => tails.get(tile.id) ?? []);
+    const along = [...members.map(sizeOf), ...gathered.map((tail) => tail.size)];
+    const width = along.reduce((sum, size, index) => sum + (index === 0 ? 0 : gaps.tile) + size.width, 0);
+    const height = PERCH_ROOM + Math.max(...along.map((size) => size.height));
+    return { key: lane.key, tiles: members, tails: gathered, size: { width, height }, order };
   });
 
   // A column takes bands until it is as tall as the head column, and holds at least three.
@@ -183,6 +210,7 @@ export function layOutSpine({ tiles, links, spacing, places: saved, fixed = [], 
   const laidBands: SpineBand[] = [];
   const places: SpinePlaces = {};
   let x = headLeft + (headWidth > 0 ? headWidth + spine.across : 0) + spine.band;
+  const firstLine = x;
   for (const [line, column] of columns.entries()) {
     let y = below;
     for (const [rank, band] of column.entries()) {
@@ -191,6 +219,10 @@ export function layOutSpine({ tiles, links, spacing, places: saved, fixed = [], 
       for (const tile of band.tiles) {
         positions.set(tile.id, { x: along, y: rect.y + PERCH_ROOM });
         along += sizeOf(tile).width + gaps.tile;
+      }
+      for (const tail of band.tails) {
+        positions.set(tail.id, { x: along, y: rect.y + PERCH_ROOM });
+        along += tail.size.width + gaps.tile;
       }
       places[band.key] = { line, rank };
       for (const tile of band.tiles) places[tile.id] = { line, rank };
@@ -201,7 +233,7 @@ export function layOutSpine({ tiles, links, spacing, places: saved, fixed = [], 
   }
 
   // The width the tiles take: the clocks run along the top within it, never wider, each clear of what stays put.
-  const reach = Math.max(0, ...[...positions].map(([id, spot]) => spot.x + sizeOf(tiles.find((tile) => tile.id === id)!).width));
+  const reach = Math.max(0, ...[...positions].map(([id, spot]) => spot.x + sizes.get(id)!.width));
   let more: SpineLayout['more'] = null;
   if (clocks.length > 0) {
     // With no tiles to keep within, a clock still shows.
@@ -230,14 +262,23 @@ export function layOutSpine({ tiles, links, spacing, places: saved, fixed = [], 
     for (const [id, spot] of laid.spots) positions.set(id, spot);
   }
 
+  // The Done line: one row under the band columns, as wide as they reach, clear of what stays put.
+  let doneLine: Rect | null = null;
+  if (doneAsk !== undefined) {
+    const y = laidBands.length === 0 ? below : Math.max(...laidBands.map(({ rect }) => rect.y + rect.height)) + spine.down;
+    const right = Math.max(firstLine + AGENT_TILE_SIZE.width, ...laidBands.map(({ rect }) => rect.x + rect.width));
+    doneLine = clear({ x: firstLine, y, width: right - firstLine, height: doneAsk.height }, 'down');
+  }
+
   const hiddenIds = new Set(more?.hidden ?? []);
-  const shown = [...positions].filter(([id]) => !hiddenIds.has(id)).map(([id, spot]) => ({ ...spot, ...sizeOf(tiles.find((tile) => tile.id === id)!) }));
-  const all = [...shown, ...(more === null ? [] : [more]), ...fixed];
+  const shown = [...positions].filter(([id]) => !hiddenIds.has(id)).map(([id, spot]) => ({ ...spot, ...sizes.get(id)! }));
+  const all = [...shown, ...(more === null ? [] : [more]), ...(doneLine === null ? [] : [doneLine]), ...fixed];
   return {
     positions,
     bands: laidBands,
     places,
     more,
+    doneLine,
     size: {
       width: Math.max(MIN_ZONE_SIZE.width, ...all.map((rect) => rect.x + rect.width + gaps.padding)),
       height: Math.max(MIN_ZONE_SIZE.height, ...all.map((rect) => rect.y + rect.height + gaps.padding)),

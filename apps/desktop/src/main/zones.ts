@@ -4,6 +4,7 @@ import {
   RPC_ERROR,
   zoneSnapshot,
   TRACKER_ERROR,
+  type CleanUpUndo,
   type NewZoneParams,
   type Zone,
   type ZoneBinding,
@@ -106,6 +107,10 @@ export function registerZoneIpc(daemon: DaemonLink): void {
   ipcMain.handle(ZONE_IPC.followRule, (_event, id: string, tiles: string[], reflow?: boolean) =>
     daemon.call('zone.followRule', { id, tiles, ...(reflow === true ? { reflow } : {}) }),
   );
+  ipcMain.handle(ZONE_IPC.cleanUp, (_event, id: string) => daemon.call('zone.cleanUp', { id }));
+  ipcMain.handle(ZONE_IPC.undoCleanUp, (_event, id: string, undo: CleanUpUndo) => daemon.call('zone.undoCleanUp', { id, undo }));
+  ipcMain.handle(ZONE_IPC.putBackDone, (_event, id: string, key: string) => daemon.call('zone.putBackDone', { id, key }));
+  ipcMain.handle(ZONE_IPC.moveToDone, (_event, id: string, sessionId: string) => daemon.call('zone.moveToDone', { id, sessionId }));
   ipcMain.handle(ZONE_IPC.fold, (_event, id: string) => daemon.call('zone.fold', { id }));
   ipcMain.handle(ZONE_IPC.unfold, (_event, id: string, wake?: boolean) => daemon.call('zone.unfold', { id, wake: wake === true }));
   ipcMain.handle(ZONE_IPC.setTracker, (_event, id: string, tracker: ZoneTracker | null) =>

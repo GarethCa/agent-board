@@ -176,6 +176,17 @@
   --state-on-command: #0b7285; /* a command left running: its row on the tile, the running count and the stopwatch */
   --state-on-command-ink: var(--state-on-command);
   --state-on-command-soft: #e3f6f8;
+  /* A Shelf tile: colour only where it wants the user. Its band wants the user in the
+     waiting fill and is a problem in the failed one, each under its own ink; the quiet states keep the card's. */
+  --shelf-wants: #ffd27a;
+  --shelf-wants-ink: #3f2600;
+  --shelf-problem: #c4362f;
+  --shelf-problem-ink: #ffffff;
+  --shelf-at-work-ink: var(--accent-ink);
+  --shelf-done-ink: var(--state-done-ink);
+  --shelf-limit-ink: var(--state-rate-limited-ink);
+  --shelf-band: #f1eee7; /* a Shelf tile's state band, at rest */
+  --shelf-band-ink: var(--muted); /* a quiet state's word on it */
   /* A work category in the Overview (ADR-0024): its edge or dot, its text, and its soft fill, on the states' colours */
   --cat-help: var(--state-waiting);
   --cat-help-ink: var(--state-waiting-ink);
@@ -206,6 +217,22 @@
   --tile-starting: color-mix(in srgb, var(--raised) 75%, var(--surface));
   --tile-starting-edge: var(--neutral-edge);
   --tile-start-failed-edge: var(--state-failed);
+  /* A glance tile (Porthole, Shelf): its corners, and its colours for what wants the user (amber) and what went
+     wrong (red), filled only for those, so the colour on the board is the work waiting for the user */
+  --radius-glance: 16px;
+  --glance-ask: var(--state-rate-limited); /* the ring round what asks: amber, softer than the orange outline */
+  --glance-ask-fill: var(--state-rate-limited-soft); /* its state's chip */
+  --glance-ask-ink: var(--state-rate-limited-ink); /* text on that chip */
+  --glance-problem: var(--state-failed); /* the ring round what went wrong */
+  --glance-problem-fill: var(--state-failed-soft); /* its state's chip */
+  --glance-problem-ink: var(--state-failed-ink); /* text on that chip */
+  --glance-work-ring: color-mix(in srgb, var(--accent) 45%, transparent);
+  --glance-done-ring: color-mix(in srgb, var(--success) 55%, transparent);
+  /* The Porthole's round window, small enough that the name, not the robot, leads the tile */
+  --porthole-size: 32px;
+  --shadow-glance-tray: 0 0 0 1px var(--border); /* the tray of a glance tile's tools */
+  --glance-ring-width: 3px; /* the ring round what wants the user, a pixel heavier than the rest */
+  --porthole-fill: var(--state-idle-soft);
   /* What a tile waiting for you asks, in a warm box under its head */
   --ask: #fff7ef;
   --ask-edge: #fde0c4;
@@ -370,7 +397,6 @@
   --queue-done: var(--success);
   --hand-on-width: 480px; /* Hand on: the agents to pick from and the message */
   --hand-on-agents-height: 180px;
-  --queue-focus-width: 520px; /* the focus view's card: one thing to look at */
   --queue-drop-halo: var(--accent); /* round an idle agent's tile a dragged job would be handed to */
   --queue-drop-edge: 2px;
   --ticket-width: 168px; /* a job an agent holds, on its tile: its first words */
@@ -753,7 +779,7 @@
   --radius-window: 14px; /* a session window on the board */
 
   /* Type: body text is --font-size-md; dense chrome (tiles, badges) steps down the scale, headings up it. */
-  --font-sans: 'Bricolage Grotesque Variable', system-ui, sans-serif;
+  --font-sans: 'Manrope Variable', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono Variable', ui-monospace, Menlo, monospace; /* branches, paths, keys and the terminal */
   --font-hand: Caveat, cursive; /* a sticky note's handwriting */
   --font-size-2xs: 10.5px; /* a key cap, a section's caps label */
@@ -763,7 +789,7 @@
   --font-size-sm: 12px; /* a label, a small button, a tooltip */
   --font-size-sm-plus: 12.5px; /* an empty state's body */
   --font-display: var(--font-sans); /* titles on link cards */
-  --font-wordmark: var(--font-sans); /* the app's name atop the board menu */
+  --font-wordmark: 'Bricolage Grotesque Variable', system-ui, sans-serif; /* the app's name atop the board menu, as the brand draws it */
   --font-size-md: 13px; /* body */
   --font-size-lg: 14.5px; /* a tile's name */
   --font-size-xl: 15px; /* an empty state's title */
@@ -1323,6 +1349,11 @@
   --state-hibernated-soft: #262b3d;
   --state-on-command: #5cc4d4;
   --state-on-command-soft: #16313a;
+  --shelf-wants: #e8a640;
+  --shelf-wants-ink: #241500;
+  --shelf-problem: #e5675f;
+  --shelf-problem-ink: #250b09;
+  --shelf-band: #302e2c;
   --ask: #33281f;
   --ask-edge: #4a3826;
   --ask-ink: #f3d9c2;

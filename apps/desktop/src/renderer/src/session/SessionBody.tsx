@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
-import { ClipboardList, FileText, GitPullRequest, Globe, SquareCheckBig, SquareTerminal } from 'lucide-react';
+import { ClipboardList, FileCheck, FileText, GitPullRequest, Globe, SquareCheckBig, SquareTerminal } from 'lucide-react';
 import type { PaneLayout } from '@agent-board/daemon/pane-layout';
 import { OWN_SURFACE } from '@agent-board/daemon/window-layout';
 import type { Agent, PullRequest, Shell, ShellOwner } from '@agent-board/daemon/protocol';
@@ -40,6 +40,7 @@ import { pressed } from '../keys/registry';
 import { PullRequestTab } from './PullRequestTab';
 import { WebTab } from './WebTab';
 import { GateTab } from '../gate/GateTab';
+import { ReviewTab } from '../review/ReviewTab';
 import { PlanTab } from '../plan/PlanTab';
 import { TodoTab } from './TodoTab';
 import { DocumentTab } from '../doc/DocumentTab';
@@ -313,6 +314,7 @@ export function SessionBody({
     if (surface.kind === 'web') return { ...base, icon: <Globe />, title: surface.web.url || 'New tab', closeHint: 'Close the tab and forget its cookies' };
     if (surface.kind === 'plan') return { ...base, icon: <ClipboardList />, title: `${surface.agent.name}'s plans`, closeHint: 'Close the tab; its plans stay in its history' };
     if (surface.kind === 'todo') return { ...base, icon: <SquareCheckBig />, title: `${surface.agent.name}'s to-do list`, closeHint: 'Close the tab; the list stays on the board' };
+    if (surface.kind === 'review') return { ...base, icon: <FileCheck />, title: `${surface.agent.name}'s review rounds`, closeHint: 'Close the tab; the rounds stay in its Review tab' };
     if (surface.kind === 'doc') return { ...base, icon: <FileText />, title: surface.doc.path, closeHint: 'Close the tab; the doc stays in its sidebar' };
     if (surface.kind === 'document') return { ...base, icon: <FileText />, title: surface.document.path, closeHint: 'Close the tab; the document stays on its agent' };
     if (surface.kind === 'gate') return { ...base, dot: gateDot(gateRuns.get(surface.gate.sessionId)), title: `${surface.agent.name}'s merge gate`, closeHint: 'Close the tab; the gate keeps its last run' };
@@ -580,6 +582,7 @@ function SurfaceView({
   }
   if (surface.kind === 'pr') return <PullRequestTab pr={surface.pr} visible={shown && visible} />;
   if (surface.kind === 'todo') return <TodoTab agent={surface.agent} />;
+  if (surface.kind === 'review') return <ReviewTab implementer={surface.agent} />;
   if (surface.kind === 'gate') return <GateTab sessionId={surface.gate.sessionId} agent={surface.agent} visible={shown && visible} />;
   if (surface.kind === 'doc') {
     const paneId = panes.panes.find((pane) => pane.surfaces.includes(surface))?.id;

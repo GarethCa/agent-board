@@ -9,6 +9,7 @@ import {
   ArrowUpToLine,
   Brain,
   Check,
+  CheckCheck,
   CircleDot,
   Bell,
   BellOff,
@@ -30,7 +31,8 @@ import {
   Hash,
   Layers,
   LayoutDashboard,
-  LayoutGrid,
+  Broom,
+  Undo2,
   Link2,
   LocateFixed,
   ListPlus,
@@ -263,6 +265,8 @@ export interface TileBoardActions {
   leadPin?: { pinned: boolean; toggle(): void };
   /** For a tile placed by hand in a zone with a layout rule: puts it back under the rule. */
   backUnderRule?: () => void;
+  /** For an ended agent in a Spine zone: folds its finished ticket into the zone's Done line. */
+  moveToDone?: () => void;
   /** Puts the text on the clipboard, saying what it was. */
   copy(text: string, what: string): void;
   /** Selects the tile of the session and flies to it. */
@@ -358,6 +362,7 @@ function arrangeEntries({ nodeId, agent, board, actions }: AgentTileMenuInput): 
             : { id: 'lead-pin', label: 'Pin top-left', icon: <Pin />, hint: "Back in the zone's head row, above the shelves", onSelect: board.leadPin.toggle },
         ]),
     ...(board.backUnderRule === undefined ? [] : [{ id: 'follow-rule', label: 'Put back under the rule', icon: <Rows3 />, hint: "The zone's rule lays it out again", onSelect: board.backUnderRule }]),
+    ...(board.moveToDone === undefined ? [] : [{ id: 'move-to-done', label: 'Move to Done', icon: <CheckCheck />, hint: "Folds its finished ticket into the zone's Done line", onSelect: board.moveToDone }]),
     ...(board.connect === undefined ? [] : [{ id: 'connect', label: 'Connect to…', icon: <Spline />, hint: 'Then click what to join it to', onSelect: board.connect }]),
   ];
   return [
@@ -715,8 +720,15 @@ export interface ZoneBindingActions {
   initRepo(zone: Zone): void;
   /** Asks for a group's default repo, to set or clear it. */
   pickDefaultRepo(zone: Zone): void;
-  /** Lays its tiles out in rows, in reading order, and fits its height to them. */
+  /**
+   * Cleans it up: a Spine zone's notes and docs go to their agents' bands and its finished tickets to its Done line; a
+   * free zone's tiles are laid out in rows, in reading order, its height fitted to them.
+   */
   tidy(zone: Zone): void;
+  /** Whether the step ⌘Z undoes now is this zone's Clean up. */
+  cleanUpUndoable(zone: Zone): boolean;
+  /** Undoes the board's last step. */
+  undo(): void;
   /** Keeps `spacing` as the zone's, for its Tidy and its orchestrators' arrange, and tidies it at once. */
   setSpacing(zone: Zone, spacing: ArrangeSpacing): void;
   /** Opens Settings, where the spacing new zones take is. */
@@ -848,6 +860,25 @@ export function tidyBlocked(zone: Pick<Zone, 'layoutMode' | 'layoutRule'>): { di
   return {};
 }
 
+/** What a zone's Clean up does, as its row's hint says: a Spine zone gathers and folds; a free one is tidied into rows. */
+export const cleanUpHint = (zone: Pick<Zone, 'layoutRule'>): string =>
+  zone.layoutRule === 'spine' ? 'Notes to their agents, finished tickets to the Done line' : 'Its tiles in rows, in reading order';
+
+/** A zone's Clean up row, `label` as the menu names it, with its key. */
+const cleanUpRow = (zone: Zone, actions: Pick<ZoneMenuActions, 'tidy'>, id: string, label: string): ModelEntry => ({
+  id,
+  label,
+  icon: <Broom />,
+  shortcut: keyText('edit.cleanUpZone'),
+  hint: cleanUpHint(zone),
+  ...tidyBlocked(zone),
+  onSelect: () => actions.tidy(zone),
+});
+
+/** Undo Clean up, while the zone's last Clean up is the step ⌘Z undoes; nothing otherwise. */
+const undoCleanUpRows = (zone: Zone, actions: Pick<ZoneMenuActions, 'cleanUpUndoable' | 'undo'>): ModelEntry[] =>
+  actions.cleanUpUndoable(zone) ? [{ id: 'undo-clean-up', label: 'Undo Clean up', icon: <Undo2 />, shortcut: keyText('edit.undo'), onSelect: actions.undo }] : [];
+
 /** Each zone layout's name and what it draws, as the zone's Layout menu offers them. */
 const LAYOUT_MODE_LABELS: Record<ZoneLayoutChoice, { label: string; hint: string }> = {
   free: { label: 'Free', hint: 'Each tile where you put it' },
@@ -869,12 +900,12 @@ function layoutModeEntries(zone: Zone, actions: Pick<ZoneMenuActions, 'setLayout
 }
 
 /**
- * The tab's Tidy ▾ menu: Tidy now, the zone's layout and spacing, and where the spacing for new zones is set, named as it is
+ * The tab's Clean up ▾ menu: Clean up now, the zone's layout and spacing, and where the spacing for new zones is set, named as it is
  * (`newZones`, read as the menu opens).
  */
 export function tidyMenu(zone: Zone, newZones: ArrangeSpacing | undefined, actions: Pick<ZoneMenuActions, 'tidy' | 'setSpacing' | 'openSettings' | 'setLayoutMode'>): ModelEntry[] {
   return [
-    { id: 'tidy', label: 'Tidy now', icon: <LayoutGrid />, ...tidyBlocked(zone), onSelect: () => actions.tidy(zone) },
+    cleanUpRow(zone, actions, 'tidy', 'Clean up now'),
     'separator',
     { heading: 'Layout' },
     ...layoutModeEntries(zone, actions),
@@ -939,8 +970,8 @@ export function zoneTabEntries(zone: Zone, noAgents: string | undefined, actions
     bind: zone.repoRoot === null && clone === null ? { id: 'tab-bind', label: 'Bind…', icon: <Link2 />, entries: bindEntries(zone, actions) } : undefined,
     agent: { id: 'tab-new-agent', label: 'New agent', icon: <Plus />, disabled: noAgents !== undefined, hint: noAgents, onSelect: () => actions.newAgent(zone) },
     shell: { id: 'tab-new-shell', label: 'New shell', icon: <Plus />, onSelect: () => actions.newShell(zone) },
-    // The zone's own ⋯ has Tidy already; while it clones, ⋯ holds only what folded.
-    tidy: clone === null ? undefined : { id: 'tab-tidy', label: 'Tidy', icon: <LayoutGrid />, ...tidyBlocked(zone), onSelect: () => actions.tidy(zone) },
+    // The zone's own ⋯ has Clean up already; while it clones, ⋯ holds only what folded.
+    tidy: clone === null ? undefined : cleanUpRow(zone, actions, 'tab-tidy', 'Clean up'),
     // ⋯ has Fold to a chip already, and a zone still cloning has no Fold button.
     fold: undefined,
   };
@@ -970,11 +1001,13 @@ export function zoneMenu({ zone, folded, themeFill, rename, stageBoard = false, 
   // A crew is one more way to start something: under what starts an agent or a shell, where those folded onto this menu.
   const afterStarts = folded.findLastIndex((entry) => entry !== 'separator' && 'id' in entry && (entry.id === 'tab-new-agent' || entry.id === 'tab-new-shell')) + 1;
   return [
+    cleanUpRow(zone, actions, 'tidy', 'Clean up'),
+    ...undoCleanUpRows(zone, actions),
+    'separator',
     ...folded.slice(0, afterStarts),
     crewRow(zone, actions, 'New crew'),
     ...folded.slice(afterStarts),
     'separator',
-    { id: 'tidy', label: 'Tidy', icon: <LayoutGrid />, hint: 'Its tiles in rows, in reading order', ...tidyBlocked(zone), onSelect: () => actions.tidy(zone) },
     // One row for both, so ⋯ grows no taller for the layout.
     {
       id: 'spacing',
@@ -1164,7 +1197,7 @@ const newShellRow = ({ zone, actions }: ProjectMenuInput, label: string): ModelE
 
 const addIssueRow = ({ zone, actions }: ProjectMenuInput): ModelEntry => ({ id: 'add-issue', label: 'Add issue…', icon: <ListPlus />, detail: zone.tracker?.scope, onSelect: () => actions.addIssue(zone) });
 
-const tidyUpRow = ({ zone, actions }: ProjectMenuInput): ModelEntry => ({ id: 'tidy', label: 'Tidy up', icon: <LayoutGrid />, hint: 'Its tiles in rows, in reading order', ...tidyBlocked(zone), onSelect: () => actions.tidy(zone) });
+const tidyUpRow = ({ zone, actions }: ProjectMenuInput): ModelEntry => cleanUpRow(zone, actions, 'tidy', 'Clean up');
 
 const colourRow = ({ zone, actions }: ProjectMenuInput): ModelEntry => ({
   id: 'colour',

@@ -19,6 +19,7 @@ export const ITEM_KIND_LABELS: Record<BoardItemKind, string> = {
   todo: 'to-do list',
   crew: 'crew card',
   stages: 'stage board',
+  'done-line': 'Done line',
 };
 
 /** The kind's name as a sentence uses it; a kind this app doesn't know (a newer app's) by its own word: "mod item". */

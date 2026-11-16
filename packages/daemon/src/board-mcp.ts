@@ -961,7 +961,7 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
             'Start a crew from this crew prefab (as `agent-board prefab ls` lists them) in place of one agent: its member ' +
             'that starts on the prompt, its builder or its lead, gets the prompt, started as the prefab says. Its reviewers ' +
             'start on the builder\'s branch each time the builder hands off, and their reviews go back to it, until each approves ' +
-            'or the round limit (`agent-board crew`); a lead starts its own crew. Takes zone, repo, issue, description and chat; the prefab sets the rest.',
+            'or the round limit (`agent-board crew`); a lead starts its own crew. Takes zone, repo, issue, description, chat, and name and branch for that member; the prefab sets the rest.',
         },
         chat: {
           type: 'string',
@@ -1871,8 +1871,8 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
     if (chat !== undefined && chat !== 'implementer' && chat !== 'lead') throw new BoardError('chat is implementer or lead');
     if (chat !== undefined && prefab === undefined) throw new BoardError("chat picks the kind of ticket chat a ticket prefab starts: give prefab too");
     if (prefab !== undefined) {
-      const set = ['name', 'harness', 'model', 'effort', 'role', 'template', 'branch', 'base', 'edges'].find((key) => args[key] !== undefined);
-      if (set !== undefined) throw new BoardError(`${set} is the prefab's to set: with prefab, give zone, repo, issue, chat and description alone`);
+      const set = ['harness', 'model', 'effort', 'role', 'template', 'base', 'edges'].find((key) => args[key] !== undefined);
+      if (set !== undefined) throw new BoardError(`${set} is the prefab's to set: with prefab, give zone, repo, issue, chat, name, branch and description alone`);
       return (
         await startPrefab(session, {
           name: prefab,
@@ -1881,6 +1881,8 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
           repo: stringArg(args, 'repo', true),
           issue: stringArg(args, 'issue', true),
           description: stringArg(args, 'description', true),
+          agentName: stringArg(args, 'name', true),
+          branch: stringArg(args, 'branch', true),
           ...(chat === undefined ? {} : { chat }),
         })
       ).text;

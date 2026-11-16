@@ -4,6 +4,7 @@ import {
   AGENT_NOTE_SIZE,
   CLOCK_SIZE,
   CREW_CARD_SIZE,
+  DONE_LINE_HEIGHT,
   DOCUMENT_CARD_SIZE,
   PLAN_CARD_SIZE,
   STEPS_CARD_SIZE,
@@ -16,6 +17,7 @@ import {
   type ColorSlot,
   type FillSlot,
 } from '@agent-board/daemon/protocol';
+import { AGENT_TILE_SIZE } from '@agent-board/daemon/board-layout';
 import { EMPTY_STAGE_BOARD_SIZE } from '@agent-board/daemon/stage-board';
 import { fillToken, foldColors, foldFills, shapeColors, slotName, slotPaint, slotToken, stickyPaint } from '../../board-colors';
 import { foldedNow } from './use-folded-slots';
@@ -26,6 +28,7 @@ import { clockData } from '../clocks';
 import { ClockNode } from './ClockNode';
 import { CrewCardNode } from './CrewCardNode';
 import { DocumentNode } from './DocumentNode';
+import { DoneLineNode } from './DoneLineNode';
 import { PlanNode } from './PlanNode';
 import { ImageNode, imageData } from './ImageNode';
 import { ISSUE_CARD_SIZE, IssueNode } from './IssueNode';
@@ -229,6 +232,14 @@ export const ITEM_KINDS: Record<BoardItemKind, ItemKind> = {
     node: StagesNode,
     size: EMPTY_STAGE_BOARD_SIZE,
     newData: () => ({ joined: [], left: [] }),
+    editOnCreate: false,
+    minimapColor: () => 'var(--raised)',
+  },
+  // A Spine zone's, made by its first Clean up that finds a ticket finished: none is made from the board's menus.
+  'done-line': {
+    label: ITEM_KIND_LABELS['done-line'],
+    node: DoneLineNode,
+    size: { width: AGENT_TILE_SIZE.width, height: DONE_LINE_HEIGHT },
     editOnCreate: false,
     minimapColor: () => 'var(--raised)',
   },

@@ -52,6 +52,7 @@ import type {
   UpdateFlowEdgeParams,
   PullRequestActed,
   PullRequestDetails,
+  OpenPullRequest,
   PullRequestRef,
   ReviewRound,
   ReviewUpdatedEvent,
@@ -113,6 +114,8 @@ import type {
   ZoneRemovedEvent,
   ZoneUpdatedEvent,
   ZoneFoldResult,
+  CleanUpResult,
+  CleanUpUndo,
   ZoneSettings,
   ZoneUnfoldResult,
   ZoneSnapshot,
@@ -260,6 +263,10 @@ export const ZONE_IPC = {
   update: 'zone:update',
   configure: 'zone:configure',
   followRule: 'zone:followRule',
+  cleanUp: 'zone:cleanUp',
+  undoCleanUp: 'zone:undoCleanUp',
+  putBackDone: 'zone:putBackDone',
+  moveToDone: 'zone:moveToDone',
   fold: 'zone:fold',
   unfold: 'zone:unfold',
   setTracker: 'zone:setTracker',
@@ -319,6 +326,14 @@ export interface ZonesApi {
    * `reflow`, as a Tidy, afresh (a Spine zone's bands out of the columns they kept).
    */
   followRule(id: string, tiles: string[], reflow?: boolean): Promise<Zone>;
+  /** Cleans a Spine zone up: notes and docs to their agents' bands, finished tickets to its Done line. */
+  cleanUp(id: string): Promise<CleanUpResult>;
+  /** Puts a Clean up back as it was. */
+  undoCleanUp(id: string, undo: CleanUpUndo): Promise<Zone>;
+  /** Puts a ticket on a zone's Done line (its key) back on the board. */
+  putBackDone(id: string, key: string): Promise<Zone>;
+  /** Folds the finished ticket an agent works on into its zone's Done line, by hand, with what Undo needs. */
+  moveToDone(id: string, sessionId: string): Promise<CleanUpResult>;
   /** Folds a zone to a chip: its agents that can pause are paused, and the result says which were kept live and why. */
   fold(id: string): Promise<ZoneFoldResult>;
   /** Unfolds a zone. Its paused agents stay paused unless `wake` asks for them. */
@@ -472,6 +487,7 @@ export interface ReviewsApi {
 /** The PR tab's IPC channels between the preload and main. */
 export const PULL_REQUEST_IPC = {
   details: 'pull-request:details',
+  search: 'pull-request:search',
   approve: 'pull-request:approve',
   merge: 'pull-request:merge',
 } as const;
@@ -482,6 +498,8 @@ export const PULL_REQUEST_IPC = {
  */
 export interface PullRequestsApi {
   details(ref: PullRequestRef): Promise<PullRequestDetails>;
+  /** The open pull requests of the board's repos, by anyone, each marked with whether a review is asked of the user. */
+  search(): Promise<OpenPullRequest[]>;
   /**
    * Approves it as the gh user at `headCommit`, the commit shown, refusing if it has moved on since; answers with it as
    * it is now, or why it couldn't be read again.

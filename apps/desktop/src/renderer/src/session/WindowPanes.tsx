@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState, type CSSProperties, type DragEvent, type ReactNode } from 'react';
 import type { Placement, WindowPane } from '@agent-board/daemon/window-layout';
-import { dropZoneAt, type DropZone, type Rect } from './pane-geometry';
+import { splitSurfaces, sideOf } from './open-beside';
+import { dropZoneAt, type Divider, type DropZone, type Rect } from './pane-geometry';
+import { dividerStops, nextStop, snapRatio, type SplitSides } from './split-room';
+import { chosenFontSize, DEFAULT_FONT_SIZE } from './terminal-size';
 import { dropTaken, tabDrag, useTabDrag } from './shell-moves';
 import { TabStrip, type StripTab } from './TabStrip';
 import type { WindowSurface } from './tabs';
@@ -41,7 +44,23 @@ interface WindowPanesProps {
  */
 export function WindowPanes({ panes, stripTab, renderSurface, here, panelId, inlineStrip, trailingOf }: WindowPanesProps) {
   const container = useRef<HTMLDivElement>(null);
-  const { dividers } = useDividerDrag(container, panes.layout, paneId, panes.resize);
+  /** A side-by-side divider's sides, to snap it to, and step it through, 120 columns for a terminal beside a page. */
+  const sidesAt = (divider: Divider): SplitSides | undefined => {
+    const shown = divider.direction === 'horizontal' ? splitSurfaces(panes.layout, divider.splitId) : undefined;
+    const width = (container.current?.getBoundingClientRect().width ?? 0) * divider.region.width;
+    if (shown === undefined || width === 0) return undefined;
+    return { width, fontSize: chosenFontSize() ?? DEFAULT_FONT_SIZE, first: sideOf(shown.first), second: sideOf(shown.second) };
+  };
+  const { dividers } = useDividerDrag(container, panes.layout, paneId, panes.resize, {
+    snap: (divider, ratio) => {
+      const sides = sidesAt(divider);
+      return sides === undefined ? ratio : snapRatio(ratio, sides);
+    },
+    onStep: (divider) => {
+      const sides = sidesAt(divider);
+      if (sides !== undefined) void panes.resize(divider.splitId, nextStop(divider.ratio, dividerStops(sides)));
+    },
+  });
   const dragging = useTabDrag();
   // A frame after the drag starts: covering what is dragged (a pane's header) as it starts would end the drag at once.
   const [armed, setArmed] = useState(false);

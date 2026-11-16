@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import type { Agent, BoardItem, Shell, Zone } from '@agent-board/daemon/protocol';
-import { fuzzyMatch, RECENT_LIMIT, SETTINGS_LIMIT, CREWS_GROUP, FILTERS_GROUP, newAgentLeads, parseFilters, sideBySide, spotlightGroups, spotlightStep, type SpotlightRow } from './spotlight-results';
+import type { Agent, BoardItem, OpenPullRequest, Shell, Zone } from '@agent-board/daemon/protocol';
+import { fuzzyMatch, pullRequestsNote, RECENT_LIMIT, SETTINGS_LIMIT, CREWS_GROUP, FILTERS_GROUP, newAgentLeads, parseFilters, sideBySide, spotlightGroups, spotlightStep, type SpotlightRow } from './spotlight-results';
+import type { ReviewedPullRequest } from '../review/reviews';
 
 const zone = (id: string, name: string): Zone => ({ id, name, color: '#3b5bdb' }) as Zone;
 
@@ -136,6 +137,31 @@ describe('what an agent says it is for', () => {
     const asking = agent('Asking', { state: 'waiting', purpose: 'Something', ask: { question: 'Push?' } as Agent['ask'] });
     expect(typed('', [asking])[0]!.rows[0]!.sub).toBe('asks: Push?');
     expect(typed('push', [asking])[0]!.rows[0]!.sub).toBe('agent-board · asks: Push?');
+  });
+});
+
+describe('what a reviewer reviews', () => {
+  const surface = { kind: 'pr', repo: 'acme/payments', number: 418 } as const;
+  const reviewedRows = (round: number | 'reviewing' | 'failed', agents = [agent('Reviewer', { purpose: 'Reviews the retry fix' })]) =>
+    spotlightGroups('', {
+      agents,
+      shells: [],
+      zones,
+      shows: 'turns',
+      reviewed: new Map<string, ReviewedPullRequest>([['s-Reviewer', typeof round === 'number' ? { surface, status: 'ready', findings: round } : { surface, status: round }]]),
+    })[0]!.rows;
+
+  it('is the sub line, with its findings once written, in place of what it is for', () => {
+    expect(reviewedRows(3)[0]!.sub).toBe('agent-board · reviewed #418 · 3 findings');
+    expect(reviewedRows(1)[0]!.sub).toBe('agent-board · reviewed #418 · 1 finding');
+    expect(reviewedRows('reviewing')[0]!.sub).toBe('agent-board · reviewing #418');
+    expect(reviewedRows('failed')[0]!.sub).toBe('agent-board · review failed #418');
+    expect(reviewedRows(3)[0]!.purpose).toBeUndefined();
+  });
+
+  it('gives way to what it asks while it needs you', () => {
+    const asking = agent('Reviewer', { state: 'waiting', ask: { question: 'Post the findings?' } as Agent['ask'] });
+    expect(reviewedRows(3, [asking])[0]!.sub).toBe('asks: Post the findings?');
   });
 });
 
@@ -529,5 +555,108 @@ describe('spotlightGroups through the boards of tickets', () => {
   it('leaves out an item whose ticket’s chat is no longer on the board as one', () => {
     const rows = spotlightGroups('dot', { agents: [builder], shells: [], zones, shows: 'turns', ticketItems: [note('n1', { text: 'the dot' })] }).flatMap((group) => group.rows);
     expect(rows.some((row) => row.subject.kind === 'item')).toBe(false);
+  });
+});
+
+describe('spotlightGroups and links', () => {
+  const link = 'https://github.com/acme/app/pull/44';
+
+  it('offers a pasted pull request link as that pull request, and its page in a web tab', () => {
+    const [group, ...others] = spotlightGroups(`  ${link}  `, { agents: [], shells: [], zones, shows: 'turns' });
+    expect(others).toEqual([]);
+    expect(group!.rows.map((row) => [row.key, row.subject, row.name, row.sub])).toEqual([
+      ['pr:acme/app#44', { kind: 'pr', pr: { repo: 'acme/app', number: 44, url: link } }, 'acme/app#44', 'Pull request'],
+      ['web:' + link, { kind: 'web', url: link }, 'Open the page instead', 'In a web tab; GitHub may ask you to sign in'],
+    ]);
+  });
+
+  it('names a pasted pull request by its number and title, its repo and author below, once they are read or as an open one of the board’s', () => {
+    const read = spotlightGroups(link, { agents: [], shells: [], zones, shows: 'turns', pastedPullRequest: { repo: 'acme/app', number: 44, title: 'Fix the docs', author: 'hubot' } });
+    expect([read[0]!.rows[0]!.name, read[0]!.rows[0]!.sub]).toEqual(['#44 Fix the docs', 'acme/app · by hubot']);
+    const listed = spotlightGroups(link, { agents: [], shells: [], zones, shows: 'turns', openPullRequests: [openPr(44, 'Fix it', { author: 'monalisa' })] });
+    expect([listed[0]!.rows[0]!.name, listed[0]!.rows[0]!.sub]).toEqual(['#44 Fix it', 'acme/app · by monalisa']);
+  });
+
+  it('offers any other web link in a web tab', () => {
+    const [group] = spotlightGroups('https://example.com/docs', { agents: [agent('Docs')], shells: [], zones, shows: 'turns' });
+    expect(group!.rows.map((row) => [row.subject, row.name, row.sub])).toEqual([[{ kind: 'web', url: 'https://example.com/docs' }, 'example.com/docs', 'Open in a web tab']]);
+  });
+});
+
+const openPr = (number: number, title: string, more: Partial<OpenPullRequest> = {}): OpenPullRequest => ({
+  repo: 'acme/app',
+  number,
+  title,
+  url: `https://github.com/${more.repo ?? 'acme/app'}/pull/${number}`,
+  author: 'hubot',
+  branch: `branch-${number}`,
+  draft: false,
+  reviewRequested: false,
+  ...more,
+});
+
+describe('spotlightGroups and the open pull requests of the board’s repos', () => {
+  const mine = agent('Hooks', { pullRequests: [{ ...pr(571, 'Hooks go quiet'), url: 'https://github.com/acme/app/pull/571' }] });
+  const open = [
+    openPr(571, 'Hooks go quiet'),
+    openPr(580, 'Rotate the keys', { repo: 'acme/ops', reviewRequested: true, author: 'monalisa' }),
+    openPr(575, 'Fix the docs', { draft: true }),
+    openPr(9, 'Tidy up', { repo: 'acme/ops' }),
+  ];
+  const groups = (query: string) => spotlightGroups(query, { agents: [mine, agent('None')], shells: [], zones, shows: 'turns', openPullRequests: open });
+
+  it('lists those whose review is asked of you, then the agents with one, then the rest by repo', () => {
+    const found = groups('pr:');
+    expect(found.map((group) => [group.label, names(group.rows)])).toEqual([
+      ['Review requested from you', ['Rotate the keys']],
+      ['On the board', ['Hooks']],
+      ['Open in acme/app', ['Fix the docs']],
+      ['Open in acme/ops', ['Tidy up']],
+    ]);
+    expect(found[0]!.rows[0]).toMatchObject({ key: 'pr:acme/ops#580', subject: { kind: 'pr', pr: { repo: 'acme/ops', number: 580, url: 'https://github.com/acme/ops/pull/580' } }, sub: 'acme/ops#580 · monalisa' });
+    expect(found[2]!.rows[0]!.sub).toBe('acme/app#575 · hubot · draft');
+  });
+
+  it('narrows them all by number or title, and ranks them by the words left', () => {
+    expect(groups('pr:#9').map((group) => [group.label, names(group.rows)])).toEqual([['Open in acme/ops', ['Tidy up']]]);
+    expect(groups('pr: docs').map((group) => [group.label, names(group.rows)])).toEqual([['Open in acme/app', ['Fix the docs']]]);
+  });
+
+  it('keeps to the agents with another filter beside it', () => {
+    expect(groups('pr: zone:agent').map((group) => [group.label, names(group.rows)])).toEqual([[undefined, ['Hooks']]]);
+  });
+  it("lists a pull request an agent on the board pushed to once, as its agent's row, even with its review asked of you", () => {
+    const pusher = agent('Keys', { pushedPullRequests: [{ ...pr(580, 'Rotate the keys'), url: 'https://github.com/acme/ops/pull/580' }] });
+    const found = spotlightGroups('pr:', { agents: [mine, pusher], shells: [], zones, shows: 'turns', openPullRequests: open });
+    expect(found.map((group) => [group.label, names(group.rows)])).toEqual([
+      ['On the board', ['Hooks', 'Keys']],
+      ['Open in acme/app', ['Fix the docs']],
+      ['Open in acme/ops', ['Tidy up']],
+    ]);
+  });
+
+  it("still lists an agent's later pull requests, which its row doesn't stand for, as rows of their own", () => {
+    const pusher = agent('Keys', {
+      pushedPullRequests: [
+        { ...pr(9, 'Tidy up'), url: 'https://github.com/acme/ops/pull/9' },
+        { ...pr(580, 'Rotate the keys'), url: 'https://github.com/acme/ops/pull/580' },
+      ],
+    });
+    const found = spotlightGroups('pr:580', { agents: [mine, pusher], shells: [], zones, shows: 'turns', openPullRequests: open });
+    expect(found.map((group) => [group.label, names(group.rows)])).toEqual([['Review requested from you', ['Rotate the keys']]]);
+    const all = spotlightGroups('pr:', { agents: [mine, pusher], shells: [], zones, shows: 'turns', openPullRequests: open });
+    expect(all.map((group) => [group.label, names(group.rows)])).toEqual([
+      ['Review requested from you', ['Rotate the keys']],
+      ['On the board', ['Hooks', 'Keys']],
+      ['Open in acme/app', ['Fix the docs']],
+    ]);
+  });
+});
+
+describe('what ⌘K says when the open pull requests could not be read', () => {
+  it("says why under a pr: filter, and nothing elsewhere or once they are read", () => {
+    expect(pullRequestsNote('pr: keys', 'gh: not logged in')).toBe("Couldn't read GitHub's open PRs: gh: not logged in");
+    expect(pullRequestsNote('Hooks', 'gh: not logged in')).toBeUndefined();
+    expect(pullRequestsNote('pr:', undefined)).toBeUndefined();
   });
 });

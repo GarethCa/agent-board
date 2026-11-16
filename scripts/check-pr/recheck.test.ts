@@ -44,6 +44,12 @@ describe('recheckPlan', () => {
     expect(next.processes).toEqual(['packages/daemon/test/a.test.ts']);
   });
 
+  it('reruns the server suite for a failed file of its own, in its own step', () => {
+    const { plan: next } = recheckPlan(record({ test: { outcome: 'FAIL', failed: ['packages/daemon/test/server/viewers.test.ts'] } }), plan({ unit: ['scripts/x.ts'] }), ['scripts/x.ts'], selectVisual);
+    expect(next.server).toBe(true);
+    expect(next.reasons.at(-1)).toContain('1 of them in the server suite');
+  });
+
   it.each(['TIMEOUT', 'FAIL', 'not run'])('reruns every unit test when the run ended %s with no failed file', (outcome) => {
     const { plan: next, reused } = recheckPlan(record({ test: { outcome } }), plan(), [], selectVisual);
     expect(next.testAll).toBe(true);
@@ -123,6 +129,13 @@ describe('recheckPlan, for a change that runs everything (desktop core)', () => 
   it('adds the failed processes-project files to the related run', () => {
     const { plan: next } = recheckPlan(record({ test: { outcome: 'FAIL', failed: ['packages/daemon/test/a.test.ts'] } }), widened(), [], selectVisual);
     expect(argvOf(next, 'processes')!.slice(-2)).toEqual(['apps/desktop/src/shared/x.ts', 'packages/daemon/test/a.test.ts']);
+  });
+
+  it('reruns the server suite for a failed suite file, which neither the whole unit run nor the processes run reaches', () => {
+    const failed = 'packages/daemon/test/server/send.test.ts';
+    const { plan: next } = recheckPlan(record({ test: { outcome: 'FAIL', failed: [failed] } }), widened(), ['apps/desktop/src/shared/x.ts'], selectVisual);
+    expect(argvOf(next, 'server')).toEqual(['pnpm', 'exec', 'vitest', 'run', '--project', 'server']);
+    expect(argvOf(next, 'processes')).not.toContain(failed);
   });
 
   it.each<[string, StepRecord]>([

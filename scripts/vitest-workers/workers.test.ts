@@ -10,17 +10,18 @@ const base: WorkerInputs = {
 };
 
 describe('worker caps in the Vitest configs', () => {
-  it('applies the chosen counts to both projects of the package config and the root config', async () => {
+  it('applies the chosen counts to the projects of the package config and the root config', async () => {
     const { packageConfig, workerCounts } = await import('../../vitest.shared.ts');
     const { default: root } = await import('../../vitest.config.ts');
     const counts = workerCounts();
-    for (const config of [packageConfig(), root]) {
-      const projects = (config.test?.projects ?? []) as { test: { name: string; maxWorkers: number } }[];
-      expect(projects.map((p) => [p.test.name, p.test.maxWorkers])).toEqual([
-        ['unit', counts.unit],
-        ['processes', counts.processes],
-      ]);
-    }
+    const caps = (config: typeof root) => ((config.test?.projects ?? []) as { test: { name: string; maxWorkers: number } }[]).map((p) => [p.test.name, p.test.maxWorkers]);
+    const unitAndProcesses = [
+      ['unit', counts.unit],
+      ['processes', counts.processes],
+    ];
+    expect(caps(packageConfig())).toEqual(unitAndProcesses);
+    // The root's server suite starts daemons and terminals, as the processes project does, and shares its cap.
+    expect(caps(root)).toEqual([...unitAndProcesses, ['server', counts.processes]]);
   });
 });
 

@@ -112,6 +112,7 @@ export const KEYS = [
   { id: 'edit.resetRotation', label: 'Reset the rotation of what is selected', section: 'edit', scope: 'board', status: 'today', keys: [{ key: 'r', text: 'R', shift: true }] },
   { id: 'edit.snapTurn', label: `Hold while turning: ${ROTATION_SNAP}° steps`, section: 'edit', scope: 'board', status: 'today', keys: [{ text: '⇧' }] },
   { id: 'edit.handOffDrag', label: 'Hold while drawing an edge between agents: a hand-off', section: 'edit', scope: 'board', status: 'today', keys: [{ text: '⌥' }] },
+  { id: 'edit.cleanUpZone', label: 'Clean up the zone under the pointer', section: 'edit', scope: 'board', status: 'new', keys: [{ mod: 'pane', code: 'KeyK', text: 'K' }] },
   { id: 'edit.arrangeBoard', label: 'Arrange the board', section: 'edit', scope: 'board', status: 'new', keys: [{ key: 'l', text: 'L', shift: true }] },
   { id: 'edit.delete', label: 'Delete (sessions and zones ask first)', section: 'edit', scope: 'board', status: 'today', keys: [{ text: '⌫' }] },
 
@@ -213,6 +214,7 @@ export const KEYS = [
   { id: 'dialog.close', label: 'Close, the focus back where it was', section: 'dialog', scope: 'dialog', status: 'today', keys: [{ text: 'esc' }] },
   { id: 'dialog.submit', label: 'Start it, in New agent', section: 'dialog', scope: 'dialog', status: 'today', keys: [{ mod: 'command', text: '↵' }] },
   { id: 'dialog.openFromSwitcher', label: 'Open the session, from the switcher', section: 'dialog', scope: 'dialog', status: 'today', keys: [{ mod: 'window', text: '↵' }] },
+  { id: 'dialog.openBeside', label: 'Open the row beside what is open, from the switcher', section: 'dialog', scope: 'dialog', status: 'today', keys: [{ shift: true, text: '↵' }] },
   { id: 'dialog.handOff', label: 'Make the new edge a hand-off, in its chooser', section: 'dialog', scope: 'dialog', status: 'today', keys: [{ text: 'H' }] },
   { id: 'dialog.answer', label: 'Answer an ask with option 1–9, in the inbox', section: 'dialog', scope: 'dialog', status: 'today', keys: [{ text: '1–9' }] },
 ] as const satisfies readonly KeyBinding[];

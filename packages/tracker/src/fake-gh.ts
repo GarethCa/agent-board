@@ -144,8 +144,10 @@ function answer(state: FakeGitHubState, { words, flags, fields: apiFields }: Com
     const repo = flags.get('--repo') ?? remoteRepo();
     const head = flags.get('--head');
     const search = flags.get('--search');
+    const wanted = flags.get('--state') ?? 'open';
     return state.pullRequests
       .filter((pr) => pr.repo.toLowerCase() === repo.toLowerCase())
+      .filter((pr) => wanted === 'all' || pr.state.toLowerCase() === wanted)
       .filter((pr) => head === undefined || pr.headRefName === head)
       .filter((pr) => search === undefined || holdsCommit(pr, search))
       .slice(0, Number(flags.get('--limit') ?? 30))

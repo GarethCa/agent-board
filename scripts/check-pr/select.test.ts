@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { E2E_MAP, SCANNERS, SMOKE_SPECS, selectChecks } from './select.ts';
+import { E2E_MAP, isServerSuite, SCANNERS, SERVER_SUITE_DIRS, SMOKE_SPECS, selectChecks } from './select.ts';
 import { stepsFor } from './steps.ts';
 
 /** The test that scans every script for a writer of green stamps; any script change selects it. */
@@ -47,7 +47,7 @@ describe('selectChecks', () => {
   });
 
   it('adds the smoke set to the mapped specs when one file is unmapped', () => {
-    const plan = selectChecks(['packages/daemon/src/flow-edges.ts', 'packages/daemon/src/counts.ts']);
+    const plan = selectChecks(['packages/daemon/src/flow-edges.ts', 'apps/desktop/src/renderer/src/Gallery.tsx']);
     expect(plan.e2e).toEqual(expect.arrayContaining(['flow-edges.spec.ts', ...SMOKE_SPECS]));
   });
 
@@ -201,8 +201,6 @@ describe('selectChecks', () => {
     });
 
     it.each([
-      'packages/daemon/src/rpc.ts',
-      'packages/daemon/src/protocol.ts',
       'packages/daemon/src/migrations/001.sql',
       'packages/fake-harness/src/claude.ts',
     ])('keeps the full gate for daemon-side core %s', (file) => {
@@ -230,23 +228,8 @@ describe('selectChecks', () => {
     expect(selectChecks([file]).full).toBe(true);
   });
 
-  it.each([
-    'packages/daemon/src/items.ts',
-    'packages/daemon/src/rpc.ts',
-    'packages/daemon/src/sessions.ts',
-    'packages/daemon/src/migrate.ts',
-    'packages/daemon/src/board-layout.ts',
-  ])('runs the full gate for the widely shared module %s', (file) => {
-    expect(selectChecks([file]).full).toBe(true);
-  });
-
-  it.each([
-    'packages/daemon/src/agent-spawns.ts',
-    'packages/daemon/src/agent-lifecycle.ts',
-    'packages/daemon/src/hook-states.ts',
-    'packages/daemon/src/deliveries.ts',
-  ])('runs the full gate for %s, split out of the agent host', (file) => {
-    expect(selectChecks([file]).full).toBe(true);
+  it('runs the full gate for the migration runner, as for the migrations', () => {
+    expect(selectChecks(['packages/daemon/src/migrate.ts']).full).toBe(true);
   });
 
   it('maps the daemon zone and tracker modules to their specs', () => {
@@ -301,6 +284,106 @@ describe('selectChecks', () => {
     const { readdirSync } = await import('node:fs');
     const existing = new Set(readdirSync(new URL('../../apps/desktop/e2e/', import.meta.url)));
     for (const spec of [...SMOKE_SPECS, ...E2E_MAP.flatMap(([, specs]) => specs)]) expect(existing, spec).toContain(spec);
+  });
+});
+
+describe('the server suite', () => {
+  /** A daemon file that no spec maps to and that is not daemon core. */
+  const DAEMON_FILE = 'packages/daemon/src/event-ring.ts';
+  const runs = (plan: ReturnType<typeof selectChecks>) => stepsFor(plan, { leakCheck: false, exists: () => true, headless: false }).map((step) => step.name);
+
+  it('runs the suite and unit tests for a change to a daemon file no spec maps to, with no e2e and no visual', () => {
+    const plan = selectChecks([DAEMON_FILE]);
+    expect(plan).toMatchObject({ full: false, server: true, e2e: [], visual: false });
+    expect(plan.unit).toEqual(expect.arrayContaining([DAEMON_FILE]));
+    expect(runs(plan)).toEqual(expect.arrayContaining(['unit', 'server']));
+    expect(runs(plan)).not.toEqual(expect.arrayContaining(['build']));
+    expect(runs(plan).filter((name) => ['e2e', 'visual'].includes(name))).toEqual([]);
+    expect(plan.reasons.join('\n')).toContain('the server suite covers it');
+  });
+
+  it.each([
+    'packages/daemon/src/protocol.ts',
+    'packages/daemon/src/rpc.ts',
+    'packages/daemon/src/items.ts',
+    'packages/daemon/src/sessions.ts',
+    'packages/daemon/src/board-layout.ts',
+    'packages/daemon/src/agent-spawns.ts',
+    'packages/daemon/src/deliveries.ts',
+    'packages/daemon/src/counts.ts',
+  ])('runs the suite in place of the full gate or the smoke set for the daemon file %s alone', (file) => {
+    const plan = selectChecks([file]);
+    expect(plan).toMatchObject({ full: false, server: true, visual: false });
+    expect(plan.e2e.filter((spec) => SMOKE_SPECS.includes(spec))).toEqual([]);
+  });
+
+  it('keeps the specs a daemon file maps to, beside the suite', () => {
+    expect(selectChecks(['packages/daemon/src/flow-edges.ts'])).toMatchObject({ server: true, e2e: ['flow-edges.spec.ts'] });
+  });
+
+  it('runs the suite for its own tests and helpers', () => {
+    for (const file of ['packages/daemon/test/server/send.test.ts', 'packages/daemon/test/server/viewers.test.ts']) {
+      expect(selectChecks([file]), file).toMatchObject({ full: false, server: true, e2e: [] });
+    }
+  });
+
+  it('keeps the full gate for a file under the daemon\'s src that is no source it knows', () => {
+    for (const file of ['packages/daemon/src/hooks/notify.sh', 'packages/daemon/src/agent.plist', 'packages/daemon/src/page.js']) {
+      expect(selectChecks([file]).full, file).toBe(true);
+    }
+  });
+
+  it('covers every test the server project in vitest.config.ts runs', async () => {
+    const { default: root } = await import('../../vitest.config.ts');
+    const projects = (root.test?.projects ?? []) as { test: { name: string; include: string[] } }[];
+    const include = projects.find((project) => project.test.name === 'server')!.test.include;
+    expect(include.length).toBeGreaterThan(0);
+    for (const glob of include) {
+      const file = glob.replace('**/*.test.ts', 'a/b.test.ts');
+      expect(isServerSuite(file), glob).toBe(true);
+      expect(SERVER_SUITE_DIRS.some((dir) => glob.startsWith(dir.replace('**', ''))), glob).toBe(true);
+    }
+  });
+
+  it('leaves the suite out of a change that touches no daemon file, and of a daemon unit test kept beside its module', () => {
+    expect(selectChecks(['apps/desktop/src/renderer/src/board/zones.ts']).server).toBeFalsy();
+    expect(selectChecks(['packages/daemon/src/terminal-sizing.test.ts']).server).toBeFalsy();
+    expect(selectChecks(['packages/daemon/src/README.md']).server).toBeFalsy();
+  });
+
+  it('still runs e2e when desktop files change with daemon files', () => {
+    const plan = selectChecks([DAEMON_FILE, 'apps/desktop/src/renderer/src/Gallery.tsx']);
+    expect(plan.server).toBe(true);
+    expect(plan.e2e).toEqual([...SMOKE_SPECS].sort());
+    expect(runs(plan)).toEqual(expect.arrayContaining(['server', 'e2e', 'visual']));
+  });
+
+  it('runs the full gate for the protocol or a daemon core file changed with a desktop file', () => {
+    for (const daemon of ['packages/daemon/src/protocol.ts', 'packages/daemon/src/sessions.ts']) {
+      const plan = selectChecks([daemon, 'apps/desktop/src/main/zones.ts']);
+      expect(plan.full, daemon).toBe(true);
+      expect(plan.reasons[0]).toContain(daemon);
+    }
+    // A desktop doc is no desktop change.
+    expect(selectChecks(['packages/daemon/src/protocol.ts', 'apps/desktop/CLAUDE.md']).full).toBe(false);
+  });
+
+  it('runs the suite on its own, and leaves its project out of the related run', () => {
+    const steps = stepsFor(selectChecks([DAEMON_FILE]), { leakCheck: false, exists: () => true, headless: false });
+    expect(steps.find((step) => step.name === 'server')!.argv).toEqual(['pnpm', 'exec', 'vitest', 'run', '--project', 'server']);
+    expect(steps.find((step) => step.name === 'unit')!.argv).toEqual(expect.arrayContaining(['related', '--project', 'unit', '--project', 'processes']));
+    // A plain related run, with no suite, keeps every project.
+    expect(stepsFor(selectChecks(['apps/desktop/src/renderer/src/board/zones.ts']), { leakCheck: false, exists: () => true, headless: false }).find((step) => step.name === 'unit')!.argv).not.toContain('--project');
+  });
+
+  it('runs it in --quick too, which runs the unit tests a plan selects', () => {
+    const steps = stepsFor(selectChecks([DAEMON_FILE]), { leakCheck: false, exists: () => true, headless: false, quick: true });
+    expect(steps.map((step) => step.name)).toContain('server');
+  });
+
+  it('needs no server step when every unit test runs', () => {
+    const plan = { ...selectChecks([DAEMON_FILE]), testAll: true };
+    expect(runs(plan)).not.toContain('server');
   });
 });
 

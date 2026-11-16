@@ -1,4 +1,4 @@
-import { QUEUE_CARD_SIZE, LIST_CARD_FOLDED_SIZE, ZONE_COLORS, QUEUE_LATER, type QueueJob } from '@agent-board/daemon/protocol';
+import { QUEUE_CARD_SIZE, LIST_CARD_FOLDED_SIZE, LIST_CARD_MIN_SIZE, ZONE_COLORS, QUEUE_LATER, type QueueJob } from '@agent-board/daemon/protocol';
 import { PopoverPreview } from '../../ui';
 import { jobBrief } from '@agent-board/daemon/memory-lines';
 import type { Agent } from '@agent-board/daemon/protocol';
@@ -8,7 +8,7 @@ import { HybridTile } from '../HybridTile';
 import { galleryAgent } from '../TileGallery';
 import { DrainSheetView, NEW_DRAIN } from './DrainSheet';
 import { HandOnView } from './HandOn';
-import { FocusCardView } from './QueueFocus';
+import { GoThroughView } from './QueueGoThrough';
 import { TakenJobsContext } from './taken-jobs';
 import { QueueCardView, QueueIconView, QueuePeek } from './QueueCard';
 import { nextJob } from './queue-card';
@@ -77,7 +77,10 @@ const IDLE: Agent = { ...galleryAgent('idle'), sessionId: 'gallery-idle', name: 
 const WORKER: Agent = { ...galleryAgent('running'), sessionId: 'gallery-worker', name: 'impl-2', zoneId: 'web' };
 const NEEDS: NeedsYouEntry[] = [{ agent: ASKING, kind: 'asks', since: at(11, 2) }];
 const HELD = new Map([[WORKER.sessionId, [{ sessionId: WORKER.sessionId, queueId: 'gallery', queueTitle: 'api jobs', job: JOBS[0]! }]]]);
-const FOCUS_ACTS = { onOpen: noop, onNext: noop, onSkip: noop, onDone: noop, onClose: noop };
+const GOING_ACTS = { onOpen: noop, onNext: noop, onSkip: noop, onDone: noop, onBack: noop };
+/** An item with more to it than its headline, going through in a tile cut to its least size. */
+const PLAN = job('u5', 'Split the checkout: the plan\n\nTwo services, one database for now. Read the open questions at the end before you approve it.', { kind: 'backlog', link: 'docs/plans/checkout-split.md' });
+const narrow = { width: LIST_CARD_MIN_SIZE.width, height: LIST_CARD_MIN_SIZE.height };
 /** The api zone's colour, as a zone stores it. */
 const ZONE = ZONE_COLORS[0];
 const card = { width: QUEUE_CARD_SIZE.width, height: QUEUE_CARD_SIZE.height };
@@ -143,7 +146,7 @@ export function QueueGallery() {
 
 /**
  * A queue reaching agents and the user: the user's with a Needs-you row, one no one takes from, a ticket on its taker's
- * tile, the focus view, Hand on and the drain sheet.
+ * tile, the tile going through its things one at a time, Hand on and the drain sheet.
  */
 export function QueueHandOnGallery() {
   return (
@@ -165,11 +168,14 @@ export function QueueHandOnGallery() {
         </div>
       </div>
       <div className="listcard-gallery-row">
-        <div data-testid="queue-gallery-focus">
-          <FocusCardView queueTitle="To look at" item={{ kind: 'job', job: TO_LOOK_AT[0]! }} at={2} total={4} now={NOW} {...FOCUS_ACTS} inline />
+        <div style={card} data-testid="queue-gallery-going">
+          <GoThroughView title="To look at" item={{ kind: 'job', job: TO_LOOK_AT[0]! }} at={2} total={4} now={NOW} {...GOING_ACTS} />
         </div>
-        <div data-testid="queue-gallery-focus-needs">
-          <FocusCardView queueTitle="To look at" item={{ kind: 'needs', entry: NEEDS[0]! }} at={1} total={4} now={NOW} {...FOCUS_ACTS} inline />
+        <div style={card} data-testid="queue-gallery-going-needs">
+          <GoThroughView title="To look at" item={{ kind: 'needs', entry: NEEDS[0]! }} at={1} total={4} now={NOW} {...GOING_ACTS} />
+        </div>
+        <div style={narrow} data-testid="queue-gallery-going-narrow">
+          <GoThroughView title="To look at" item={{ kind: 'job', job: PLAN }} at={3} total={4} now={NOW} {...GOING_ACTS} />
         </div>
       </div>
       <div className="listcard-gallery-row">

@@ -25,7 +25,7 @@ import { Button, Chip, IconButton, StatusPill, Tag } from '../ui';
 import { EXPANDED_MAX_SIZE, EXPANDED_MIN_SIZE, EXPANDED_SIZE, isNarrowTile, resizeAllowed, type ExpandedParent } from './expanded';
 import { HarnessMark } from './HarnessMark';
 import { CommandFigure } from './CommandFigure';
-import { PullRequestChip } from './HybridTile';
+import { PullRequestChip } from './PullRequestChip';
 import { StatusMark } from './StatusMark';
 import { SubagentPerch } from './SubagentPerch';
 import { TileActionsContext, type TileProps } from './tile';

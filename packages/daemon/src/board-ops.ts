@@ -1460,6 +1460,10 @@ export interface StartPrefabOptions {
   chat?: 'implementer' | 'lead';
   /** What its first agent is for, as `NewAgentOptions.description`. */
   description?: string;
+  /** Its first agent's name, in place of the prefab's, as `NewAgentOptions.name`. */
+  agentName?: string;
+  /** Its first agent's branch, as `NewAgentOptions.branch`. */
+  branch?: string;
 }
 
 /** `new --prefab`: starts a crew from a prefab, its builder or lead with the prompt, and says which members start later. */
@@ -1480,6 +1484,8 @@ export async function startPrefab(session: BoardSession, options: StartPrefabOpt
     ...(options.issue === undefined ? {} : { issueId: options.issue }),
     ...(options.chat === undefined ? {} : { ticketChat: options.chat }),
     ...(options.description === undefined ? {} : { description: options.description }),
+    ...(options.agentName === undefined ? {} : { agentName: options.agentName }),
+    ...(options.branch === undefined ? {} : { branch: options.branch }),
   });
   const lines = [crew.crew === null ? `Started a crew from ${crew.prefab}:` : `Started crew:${crew.crew} from ${crew.prefab}:`];
   const json: unknown[] = [];

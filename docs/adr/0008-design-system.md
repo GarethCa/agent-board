@@ -3,7 +3,7 @@ status: accepted
 ---
 # An in-repo design system on Radix primitives and lucide icons
 
-The renderer's controls live in `apps/desktop/src/renderer/src/ui/`: our own components, with our own look (`ui/ui.css`, on the tokens in `tokens.css`), and no UI kit. The look is the maintainer's "Soft workbench" pick: an 8px radius, soft fills and shadows, and an accent-blue primary action. The fonts are Bricolage Grotesque for the UI, JetBrains Mono for code, branches and keys, and Caveat for sticky notes.
+The renderer's controls live in `apps/desktop/src/renderer/src/ui/`: our own components, with our own look (`ui/ui.css`, on the tokens in `tokens.css`), and no UI kit. The look is the maintainer's "Soft workbench" pick: an 8px radius, soft fills and shadows, and an accent-blue primary action. The fonts are Manrope for the UI (Bricolage Grotesque until the Porthole tile made Manrope the app font), JetBrains Mono for code, branches and keys, and Caveat for sticky notes.
 
 Behaviour that is hard to get right is borrowed from headless Radix primitives, each used by one component:
 
@@ -20,7 +20,7 @@ The app's parents open a dialog by mounting it, so Radix has no trigger to give 
 
 Icons come from `lucide-react`, imported one by one so the build tree-shakes them. The only drawn glyphs are the harness marks (`board/HarnessMark.tsx`, stand-ins until the vendors' marks land), the characters, and the samples on a text item's or shape's bar (a stroke's weight, a shape's outline), which show the item's own style as a swatch shows its colour.
 
-Fonts come from the Fontsource packages (`@fontsource-variable/bricolage-grotesque`, `@fontsource-variable/jetbrains-mono`, `@fontsource/caveat`). Vite bundles their files into the app, so they load from `'self'` under the renderer's Content-Security-Policy and work offline. Google Fonts would need a CSP exception and the network.
+Fonts come from the Fontsource packages (`@fontsource-variable/manrope`, `@fontsource-variable/bricolage-grotesque` for the wordmark, `@fontsource-variable/jetbrains-mono`, `@fontsource/caveat`). Vite bundles their files into the app, so they load from `'self'` under the renderer's Content-Security-Policy and work offline. Google Fonts would need a CSP exception and the network.
 
 ## Considered options
 

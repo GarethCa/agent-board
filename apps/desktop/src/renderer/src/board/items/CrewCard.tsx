@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { Repeat } from 'lucide-react';
 import { Button, ErrorText, StatusPill } from '../../ui';
 import { PrefabIcon, RoleIcon } from '../../crews/icons';
-import { PullRequestChip } from '../HybridTile';
+import { PullRequestChip } from '../PullRequestChip';
 import { StatusMark } from '../StatusMark';
 import type { CrewAction, CrewCardModel, CrewRow } from './crew-card';
 

@@ -49,6 +49,9 @@ function load(): number | undefined {
   }
 }
 
+/** The terminal's font size when none is chosen: the body size the terminals take from the theme. */
+export const DEFAULT_FONT_SIZE = 13;
+
 /** The chosen size, or undefined while it is the theme's. Fractional while pinching; terminals round it. */
 export function chosenFontSize(): number | undefined {
   return current;

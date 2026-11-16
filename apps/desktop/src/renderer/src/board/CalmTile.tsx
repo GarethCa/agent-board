@@ -210,8 +210,8 @@ export function CalmTile({ id, selected, agent, repo, from, crew, crewFlags, imp
   );
 }
 
-/** The calm tile's one button, doing what its kind says; disabled while what it started is under way. */
-function CalmButton({ action, agent, actions, open }: { action: CalmAction; agent: Agent; actions: TileActions; open(): void }) {
+/** The calm tile's one button, doing what its kind says; disabled while what it started is under way. A glance tile draws it too. */
+export function CalmButton({ action, agent, actions, open, className = 'calm-tile-action' }: { action: CalmAction; agent: Agent; actions: TileActions; open(): void; className?: string }) {
   const [pending, setPending] = useState(false);
   const run = (act: () => Promise<void>) => {
     setPending(true);
@@ -240,7 +240,7 @@ function CalmButton({ action, agent, actions, open }: { action: CalmAction; agen
     <Button
       size="xs"
       variant={action.prominent ? 'primary' : 'secondary'}
-      className="calm-tile-action nodrag"
+      className={`${className} nodrag`}
       data-testid="tile-action"
       data-prominent={action.prominent || undefined}
       disabled={pending}

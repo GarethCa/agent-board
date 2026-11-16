@@ -70,6 +70,11 @@ export interface TrackerHost {
    */
   issue(zoneId: string, issueId: string): Promise<IssueForAgent>;
   /**
+   * The issue from a tracker no zone need be bound to (the team or repo its key names), with its branch name;
+   * `invalidParams` if that scope has no such issue.
+   */
+  issueFrom(tracker: Pick<ZoneTracker, 'provider' | 'scope'>, issueId: string): Promise<IssueForAgent>;
+  /**
    * An issue or pull request a URL points to, looked up with the tracker; undefined unless a zone is bound to its
    * scope (the configured tracker), or the tracker has no such issue.
    */
@@ -128,6 +133,15 @@ export function createTrackerHost(options: TrackerHostOptions): TrackerHost {
     if (tracker === null) throw invalidParams('the zone has no tracker');
     return tracker;
   };
+
+  const issueFrom: TrackerHost['issueFrom'] = ({ provider, scope }, issueId) =>
+    call(async () => {
+      const client = await tracker(provider);
+      const issue = await client.getIssue(issueId);
+      // A scope's issues are its own: an issue from another team or repo is no more its than a missing one.
+      if (issue === undefined || issue.scope.toLowerCase() !== scope.toLowerCase()) throw invalidParams(`${scope} has no issue ${issueId}`);
+      return { issue, branch: client.branchName(issue) };
+    });
 
   return {
     zoneTracker,
@@ -214,16 +228,10 @@ export function createTrackerHost(options: TrackerHostOptions): TrackerHost {
         return client.issueFilters === undefined ? { projects: [], milestones: [] } : client.issueFilters(scope);
       });
     },
-    async issue(zoneId, issueId) {
-      const { provider, scope } = requiredZoneTracker(zoneId);
-      return call(async () => {
-        const client = await tracker(provider);
-        const issue = await client.getIssue(issueId);
-        // The zone's issues are its scope's: an issue from another team or repo is no more its than a missing one.
-        if (issue?.scope !== scope) throw invalidParams(`${scope} has no issue ${issueId}`);
-        return { issue, branch: client.branchName(issue) };
-      });
+    issue(zoneId, issueId) {
+      return issueFrom(requiredZoneTracker(zoneId), issueId);
     },
+    issueFrom,
   };
 }
 

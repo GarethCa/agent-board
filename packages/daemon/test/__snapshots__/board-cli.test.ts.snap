@@ -481,7 +481,7 @@ For a question with answers to pick from, use the MCP tool \`ask\`, which waits 
 `;
 
 exports[`agent-board --help > has help for new 1`] = `
-"usage: agent-board new [--zone <ref>] [--name <name>] [--harness claude|codex] [--model <model>] [--effort <level>] [--role <role>] [--repo <path>] [--branch <branch>] [--base <branch or agent ref>] [--edges auto|manual] [--issue <id>] [--description <text>] [--file <path>] [--] <prompt> | new --prefab <name> [--zone <ref>] [--repo <path>] [--issue <id>] [--chat implementer|lead] [--description <text>] [--file <path>] [--] <prompt>
+"usage: agent-board new [--zone <ref>] [--name <name>] [--harness claude|codex] [--model <model>] [--effort <level>] [--role <role>] [--repo <path>] [--branch <branch>] [--base <branch or agent ref>] [--edges auto|manual] [--issue <id>] [--description <text>] [--file <path>] [--] <prompt> | new --prefab <name> [--zone <ref>] [--repo <path>] [--issue <id>] [--chat implementer|lead] [--name <name>] [--branch <branch>] [--description <text>] [--file <path>] [--] <prompt>
 
 Starts an agent with <prompt> (or the text of --file) as its first message, in a new worktree and
 branch of its zone's repo, as the user starts one; --repo starts it in another, in any zone. In a
@@ -529,8 +529,8 @@ agent-board: see \`agent-board help orchestrate\`. It prints the new agent's ref
                      Its reviewers start on the builder's branch each time the builder hands
                      off, a fresh one each round, and their reviews go back to it, until each
                      approves or the round limit: see \`agent-board crew\`. A lead starts its
-                     own crew. Takes --zone, --repo, --issue, --description and --file; the
-                     prefab sets the rest.
+                     own crew. Takes --zone, --repo, --issue, --name, --branch, --description
+                     and --file (--name and --branch for that member); the prefab sets the rest.
   --chat <kind>      With a ticket prefab: its chat is the implementer, which builds, or its
                      own lead, which starts a builder: in place of the prefab's.
   --json             Print the agent as JSON.

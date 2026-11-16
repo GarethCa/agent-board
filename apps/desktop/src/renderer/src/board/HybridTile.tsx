@@ -11,10 +11,8 @@ import {
   continuesOnCredits,
   type AgentRole,
   type AgentSchedule,
-  type ChecksState,
   planPending,
   type ExternalSession,
-  type PullRequest,
   type Shell,
 } from '@agent-board/daemon/protocol';
 import { paneIds } from '@agent-board/daemon/pane-layout';
@@ -29,10 +27,13 @@ import { agentSetupLine, branchLine, EFFORT_LABELS, effortText, modelLabel, role
 import { useNow, useNowForSince } from '../inbox/use-now';
 import { clockBadge } from './schedule';
 import { commandLine } from './command-row';
-import { ArrowUpRight, BellOff, Brain, Check, ClipboardList, Clock, Coins, Dot, Expand, FileCheck, FileText, Folder, GitBranch, Hammer, Network, Pause, PenLine, Play, RefreshCw, RotateCcw, Search, ShieldCheck, SquareArrowOutUpRight, Timer, TriangleAlert, X } from 'lucide-react';
+import { BellOff, Brain, Check, ClipboardList, Clock, Coins, Expand, FileCheck, FileText, Folder, GitBranch, Hammer, Network, Pause, PenLine, Play, RefreshCw, RotateCcw, Search, ShieldCheck, SquareArrowOutUpRight, Timer, TriangleAlert } from 'lucide-react';
 import { Button, Chip, EditableName, FlowPill, HoverCard, RenameButton, Spinner, StatusPill, Tag, useRenaming, useSlowClickRename } from '../ui';
 import { useCharacterStyle } from './characters';
 import { TileCharacter } from './TileCharacter';
+import { PortholeTile } from './PortholeTile';
+import { PullRequestChip } from './PullRequestChip';
+import { useTileDesign } from './tile-design';
 import { lookShown } from '@agent-board/daemon/character';
 import { poseOfPill } from './tile-pose';
 import { TileRobot } from './CommandFigure';
@@ -40,7 +41,7 @@ import { JobTicket, useHeldJobs } from './items/taken-jobs';
 import { useJobDropOver } from './items/queue-board';
 import { HandoffsContext } from './flow-edges';
 import { PlusChip, type PlusItem } from './PlusChip';
-import { badgeLine, checksLabel, EXTRA_FOLD_RANK, foldRanking, isStarting, setupText, tileFooter } from './tile-footer';
+import { badgeLine, EXTRA_FOLD_RANK, foldRanking, isStarting, setupText, tileFooter } from './tile-footer';
 import { useFooterFold } from './use-footer-fold';
 import { STATE_LABELS, TILE_STATE_LABELS } from '../states';
 import { useNeedsYouShows } from '../needs-you-setting';
@@ -65,6 +66,7 @@ import { useAgentTileMenu } from './agent-tile-menu';
 import { useMenuBarSection } from '../keys/menu-bar-bridge';
 import { CalmShellTile } from './CalmShellTile';
 import { CalmTile } from './CalmTile';
+import { ShelfTile } from './ShelfTile';
 import { TicketTile } from './TicketTile';
 import { ResumeButton } from './RestartBanner';
 import { ShellFolderChip } from './shell-parts';
@@ -92,9 +94,17 @@ const MARK_CHARACTER_HEIGHT = 24;
 export const HybridTile = memo(function HybridTile({ id, tile, selected = false }: TileProps) {
   const harness = tile.harness ?? 'shell';
   const simplified = useSimplified();
+  const design = useTileDesign();
   if (tile.start !== undefined) return <StartTile id={id} start={tile.start} />;
   if (tile.agent !== undefined && tile.helpers !== undefined) {
     return <TicketTile id={id} selected={selected} chat={tile.agent} helpers={tile.helpers} from={tile.from} crew={tile.crew} implementer={tile.implementer} />;
+  }
+  // A glance design, chosen in Settings, draws every agent's tile, under either look.
+  if (tile.agent !== undefined && design === 'porthole') {
+    return <PortholeTile id={id} selected={selected} agent={tile.agent} repo={tile.repo} from={tile.from} crew={tile.crew} crewFlags={tile.crewFlags} implementer={tile.implementer} />;
+  }
+  if (tile.agent !== undefined && design === 'shelf') {
+    return <ShelfTile id={id} selected={selected} agent={tile.agent} repo={tile.repo} from={tile.from} crew={tile.crew} crewFlags={tile.crewFlags} implementer={tile.implementer} />;
   }
   if (tile.agent !== undefined && simplified) {
     return <CalmTile id={id} selected={selected} agent={tile.agent} repo={tile.repo} from={tile.from} crew={tile.crew} crewFlags={tile.crewFlags} implementer={tile.implementer} />;
@@ -987,39 +997,6 @@ function ClockChip({ schedule, ended, inWords, open }: { schedule: AgentSchedule
       onDoubleClick={stopPropagation}
     >
       {label}
-    </Chip>
-  );
-}
-
-const CHECK_MARKS: Record<ChecksState, ReactNode> = {
-  passing: <Check aria-hidden />,
-  failing: <X aria-hidden />,
-  pending: <Dot aria-hidden />,
-  none: null,
-};
-
-/**
- * A pull request made from the agent's branch: its number in its state's colour, and a mark for its checks. One of a
- * branch it `pushed` to leads with an arrow and says so; it is only shown, as it isn't the agent's own.
- */
-export function PullRequestChip({ pr, pushed = false, open }: { pr: PullRequest; pushed?: boolean; open(): void }) {
-  const checks = checksLabel(pr);
-  return (
-    <Chip
-      mono
-      icon={pushed ? <ArrowUpRight aria-hidden /> : undefined}
-      className="hybrid-tile-pr nodrag"
-      data-testid="tile-pr"
-      data-state={pr.state}
-      data-checks={pr.checks}
-      data-pushed={pushed || undefined}
-      aria-label={`${pushed ? 'Pushed to pull request' : 'Pull request'} #${pr.number}, ${pr.state}, ${checks}`}
-      title={`${pushed ? 'Pushed to ' : ''}#${pr.number} ${pr.title}\n${pr.state}, ${checks}. Open it in a PR tab.`}
-      onClick={open}
-      onDoubleClick={stopPropagation}
-    >
-      #{pr.number}
-      {pr.checks !== 'none' && <span className="hybrid-tile-pr-checks">{CHECK_MARKS[pr.checks]}</span>}
     </Chip>
   );
 }

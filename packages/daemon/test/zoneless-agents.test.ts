@@ -5,6 +5,7 @@ import { existsSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { fakeHarnessEnv } from '@agent-board/fake-harness';
+import type { Tracker } from '@agent-board/tracker';
 import { createFakeTracker, createMemoryCredentialStore } from '@agent-board/tracker/testing';
 import type { DaemonClient } from '../src/client.ts';
 import { RPC_ERROR, type HookEvent } from '../src/protocol.ts';
@@ -14,14 +15,29 @@ const SIZE = { cols: 100, rows: 30 };
 const LINEAR_KEY = 'lin_api_good';
 const at = { x: 40, y: 80 };
 
-async function agentDaemon() {
+/** A GitHub tracker that has the repo `acme/paper` and no issues, and keeps every issue it is asked for. */
+function fakeGitHubTracker() {
+  const asked: string[] = [];
+  const tracker: Tracker = {
+    ...createFakeTracker(),
+    provider: 'github',
+    getScope: async (key) => (key === 'acme/paper' ? { key, name: 'paper' } : undefined),
+    getIssue: async (id) => {
+      asked.push(id);
+      return undefined;
+    },
+  };
+  return { tracker, asked };
+}
+
+async function agentDaemon(github?: Tracker) {
   const scratchDir = join(tempDataDir(), 'scratch');
   const daemon = await startTestDaemon({
     worktreesDir: tempDataDir(),
     scratchDir,
     agentEnv: fakeHarnessEnv({ scenario: 'output', home: tempDataDir(), idleNotifyMs: 200 }),
     credentials: createMemoryCredentialStore(),
-    trackers: { linear: () => createFakeTracker() },
+    trackers: { linear: () => createFakeTracker(), ...(github === undefined ? {} : { github: () => github }) },
   });
   const client = await connectTestClient(daemon);
   return { client, recorder: recordEvents(client), scratchDir };
@@ -279,6 +295,49 @@ describe('zone-less agents', () => {
     expect(agent).toMatchObject({ zoneId: web.id, issue: { id: 'ACME-12' }, branch: 'acme-12-spawn-agents-in-a-pty' });
   });
 
+  it("start from a team key's issue in its tracker, never in an older zone's GitHub repo, however they are started", async () => {
+    const github = fakeGitHubTracker();
+    const { client } = await agentDaemon(github.tracker);
+    await client.call('tracker.connect', { provider: 'linear', credential: LINEAR_KEY });
+    // The older zone tracks a GitHub repo; the agent's own zone tracks nothing, and no zone tracks team ACME.
+    await client.call('zone.addUnbound', { name: 'Paper', tracker: { provider: 'github', scope: 'acme/paper' }, ...at });
+    const board = await client.call('zone.add', { path: tempRepo('board'), name: 'board', x: 4000, y: 0 });
+
+    const spawned = await client.call('agent.spawn', { zoneId: board.id, prompt: '', issueId: 'ACME-12', ...SIZE });
+    const started = await client.call('orchestrator.spawn', { zoneId: board.id, prompt: 'hi', issueId: 'ACME-16' });
+    const ticket = await client.call('orchestrator.startPrefab', { name: 'ticket', zoneId: board.id, prompt: 'hi', issueId: 'ACME-2' });
+
+    expect(spawned).toMatchObject({ zoneId: board.id, issue: { id: 'ACME-12' } });
+    expect(started).toMatchObject({ zoneId: board.id, issue: { id: 'ACME-16' } });
+    expect(ticket.started[0]).toMatchObject({ zoneId: board.id, issue: { id: 'ACME-2' } });
+    expect(github.asked).toEqual([]);
+  });
+
+  it('read a team key from the zone that tracks its team, of two zones on different trackers', async () => {
+    const github = fakeGitHubTracker();
+    const { client } = await agentDaemon(github.tracker);
+    await client.call('tracker.connect', { provider: 'linear', credential: LINEAR_KEY });
+    const paper = await client.call('zone.addUnbound', { name: 'Paper', tracker: { provider: 'github', scope: 'acme/paper' }, ...at });
+    await client.call('zone.addUnbound', { name: 'Planning', tracker: { provider: 'linear', scope: 'ACME' }, x: 2000, y: 0 });
+
+    // Started in the GitHub zone, it still reads the Linear key from the zone that tracks team ACME.
+    const agent = await client.call('agent.spawn', { zoneId: paper.id, repo: { path: tempRepo() }, prompt: '', issueId: 'ACME-12', ...SIZE });
+
+    expect(agent).toMatchObject({ zoneId: paper.id, issue: { id: 'ACME-12' } });
+    expect(github.asked).toEqual([]);
+  });
+
+  it('refuse an issue of a GitHub repo no zone is bound to, which is never read', async () => {
+    const github = fakeGitHubTracker();
+    const { client } = await agentDaemon(github.tracker);
+    const paper = await client.call('zone.addUnbound', { name: 'Paper', tracker: { provider: 'github', scope: 'acme/paper' }, ...at });
+
+    await expect(
+      client.call('agent.spawn', { zoneId: paper.id, repo: { path: tempRepo() }, prompt: '', issueId: 'evil/repo#1', ...SIZE }),
+    ).rejects.toMatchObject({ message: expect.stringContaining('no zone tracks evil/repo') });
+    expect(github.asked).toEqual([]);
+  });
+
   it('refuse to start with no repo to cut a worktree from', async () => {
     const { client } = await agentDaemon();
 
@@ -286,6 +345,41 @@ describe('zone-less agents', () => {
       code: RPC_ERROR.invalidParams,
       message: 'pick a repo to start the agent in',
     });
+  });
+});
+
+describe('a ticket started from the Ticket prefab', () => {
+  const brief = '**You are a design mock worker** for the board.\nRead the brief first.';
+  const start = async (client: DaemonClient, zoneId: string, params: Record<string, string> = {}) => {
+    const started = await client.call('orchestrator.startPrefab', { name: 'ticket', zoneId, prompt: brief, ...params });
+    return (await client.call('agent.list')).find((agent) => agent.sessionId === started.started[0]!.sessionId)!;
+  };
+
+  it('is named for its issue, else what it is for, else ticket-N; never for its prompt', async () => {
+    const { client } = await agentDaemon();
+    await client.call('tracker.connect', { provider: 'linear', credential: LINEAR_KEY });
+    const zone = await client.call('zone.add', { path: tempRepo('web'), name: 'web', x: 0, y: 0 });
+    await client.call('zone.setTracker', { id: zone.id, tracker: { provider: 'linear', scope: 'ACME' } });
+
+    const fromIssue = await start(client, zone.id, { issueId: 'ACME-12' });
+    const described = await start(client, zone.id, { description: 'Mock the **ticket** tile' });
+    const bare = await start(client, zone.id);
+    const another = await start(client, zone.id);
+
+    expect(fromIssue).toMatchObject({ name: 'ACME-12: Spawn agents in a PTY', branch: 'acme-12-spawn-agents-in-a-pty' });
+    expect(described).toMatchObject({ name: 'Mock the ticket tile', branch: expect.stringMatching(/^mock-the-ticket-tile/) });
+    expect(bare).toMatchObject({ name: 'ticket-1', branch: expect.stringMatching(/^ticket-1/) });
+    expect(another.name).toBe('ticket-2');
+    for (const agent of [fromIssue, described, bare, another]) expect(`${agent.name} ${agent.branch}`).not.toMatch(/design|mock-worker|\*/i);
+  });
+
+  it('takes the name and branch it is given', async () => {
+    const { client } = await agentDaemon();
+    const zone = await client.call('zone.add', { path: tempRepo('web'), name: 'web', x: 0, y: 0 });
+
+    const named = await start(client, zone.id, { agentName: 'Board mocks', branch: 'mocks-for-the-board' });
+
+    expect(named).toMatchObject({ name: 'Board mocks', branch: 'mocks-for-the-board' });
   });
 });
 

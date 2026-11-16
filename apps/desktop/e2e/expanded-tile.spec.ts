@@ -742,7 +742,7 @@ test("Tidy with a tile expanded lays the zone out round its expanded size, and e
     await viewSettled(window);
     await window.getByRole('button', { name: 'Zoom Out' }).click();
     await viewSettled(window);
-    await zone.getByRole('button', { name: 'Tidy zone' }).click();
+    await zone.getByRole('button', { name: 'Clean up zone' }).click();
     // The board draws only the tiles in view, and Tidy may put some below the expanded one, past the window's edge.
     await window.getByRole('button', { name: /^Fit view/ }).click();
     const drawn = () => Promise.all(ids.map((id) => nodeRect(shellNode(window, id))));
@@ -851,7 +851,7 @@ test('Tidy lays a messy zone out in rows in reading order, fitting the zone to t
     const before = await stored();
     const zoneBefore = await zoneRect(zone);
 
-    await zone.getByRole('button', { name: 'Tidy zone' }).click();
+    await zone.getByRole('button', { name: 'Clean up zone' }).click();
     // In reading order: the top one, then the one on the left, then the one below on the right; the zone keeps its
     // width and fits its height to one row of two and a second row, at a new zone's spacing (roomy).
     const { padding: PADDING, tile: GAP, lane: LANE } = SPACING_GAPS.roomy;

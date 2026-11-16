@@ -101,7 +101,7 @@ test('a waiting job is handed to an idle agent with only the words the user send
   });
 });
 
-test("the user's queue shows an agent's question beside its items, and Start goes through them one at a time", async () => {
+test("the user's queue shows an agent's question beside its items, and goes through them one at a time in its own tile while the board stays usable", async () => {
   await withApp(async (page, zoneId) => {
     const asker = await spawn(page, 'Ask: Keep the old cursor param? | Yes | No', 'impl-3');
     await expect.poll(async () => (await page.evaluate(() => window.agentBoard.agents.list())).find((each) => each.sessionId === asker.sessionId)?.ask?.question).toBe('Keep the old cursor param?');
@@ -113,16 +113,42 @@ test("the user's queue shows an agent's question beside its items, and Start goe
     await expect(look.locator('.listcard-count')).toHaveText('2');
 
     await look.getByTestId('queue-start').click();
-    const focus = page.getByTestId('queue-focus');
-    await expect(focus.getByTestId('queue-focus-card')).toHaveAttribute('data-kind', 'needs');
-    await expect(focus).toContainText('1 of 2');
+    // The tile itself goes through them: nothing is drawn over the board.
+    const going = page.getByTestId('queue-going');
+    await expect(going).toHaveAttribute('data-kind', 'needs');
+    await expect(going.getByTestId('queue-going-place')).toHaveText('1 of 2');
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await going.locator('.listcard-title').click();
     await page.keyboard.press('ArrowRight');
-    await expect(focus).toContainText('Load-test findings');
+    await expect(going).toContainText('Load-test findings');
+
+    // Another tile stays clickable meanwhile, and the queue's keys are not its: D there takes nothing off.
+    const askerTile = tile(page).and(page.locator(`[data-session-id="${asker.sessionId}"]`));
+    await askerTile.click();
+    await expect(page.locator('.react-flow__node.selected').getByTestId('agent-tile')).toHaveCount(1);
+    await page.keyboard.press('d');
+    await expect(going).toContainText('Load-test findings');
+    expect((await readQueue(page, queue.id)).jobs[0]?.state).toBe('queued');
+
+    // Selected again, D takes the item off and the tile shows what is left.
+    await going.locator('.listcard-title').click();
     await page.keyboard.press('d');
     await expect.poll(async () => (await readQueue(page, queue.id)).jobs[0]?.state).toBe('done');
-    await expect(focus).toContainText('1 of 1');
-    await page.keyboard.press('Escape');
-    await expect(focus).toBeHidden();
+    await expect(going.getByTestId('queue-going-place')).toHaveText('1 of 1');
+    await going.getByTestId('queue-going-back').click();
+    await expect(going).toBeHidden();
+    await expect(look.locator('.queue-needs-row')).toBeVisible();
+
+    // Started from the peek after another tile was clicked, the keys are the queue's at once: no click on the tile first.
+    await page.evaluate((id) => window.agentBoard.items.changeQueue(id, { action: 'add', text: 'Read the release notes' }), queue.id);
+    await expect(look.locator('.listcard-count')).toHaveText('2');
+    await askerTile.click();
+    await look.getByRole('button', { name: 'Open ↗' }).click();
+    await page.getByTestId('queue-peek-start').click();
+    await expect(going.getByTestId('queue-going-place')).toHaveText('1 of 2');
+    await page.keyboard.press('ArrowRight');
+    await expect(going.getByTestId('queue-going-place')).toHaveText('2 of 2');
+    await expect(going).toContainText('Read the release notes');
   });
 });
 

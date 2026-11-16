@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.6.28 (2026-11-16)
+
+- Porthole circle 32px, and Manrope as the app's default font
+- new --issue reads a team key from its tracker, never another zone's GitHub repo
+- A ticket tile is named for its issue or description, never its prompt; new --prefab takes --name and --branch
+- Shelf agent tile at the glance level, the second choice in Settings › Tile design
+- Right-click a zone › Clean up gathers notes to their agents and folds finished tickets into a Done line, with Undo
+- ⇧↵ in ⌘K opens any PR, agent or page beside what is open, with 120-column splits and reviewers paired with their PR
+- Porthole agent tile and Settings › Tile design
+- Go through turns the queue tile into one item at a time, in place of the overlay
+
 ## v0.6.27 (2026-11-15)
 
 - A send waits while the user is typing at the agent's prompt

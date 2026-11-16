@@ -9,12 +9,14 @@ const percent = (fraction: number) => `${fraction * 100}%`;
  * dragged divider moves alone, as a guide line, and the panes take their new sizes once it is let go, so their
  * terminals are resized once, not on every pointer move. `onResize` saves where it was left, and settles once the saved
  * layout is in (or saving failed). The geometry is the layout's, with a let-go divider held where it was left meanwhile.
+ * `snap` moves where a divider is let go to a stop near it; `onStep` is a double-click on one.
  */
 export function useDividerDrag<L extends { type: 'pane' }>(
   container: RefObject<HTMLElement | null>,
   layout: SplitTree<L>,
   idOf: (leaf: L) => string,
   onResize: (splitId: string, ratio: number) => Promise<void>,
+  options: { snap?(divider: Divider, ratio: number): number; onStep?(divider: Divider): void } = {},
 ): { geometry: PaneGeometry; dividers: DividersProps } {
   /** The divider being dragged and where it is; `released` once let go, until the saved layout replaces it. */
   const [drag, setDrag] = useState<{ splitId: string; ratio: number; released: boolean }>();
@@ -41,7 +43,7 @@ export function useDividerDrag<L extends { type: 'pane' }>(
     };
     const onMove = (event: globalThis.PointerEvent) => setDrag({ splitId: divider.splitId, ratio: ratioFor(event), released: false });
     const onUp = (event: globalThis.PointerEvent) => {
-      const ratio = ratioFor(event);
+      const ratio = options.snap?.(divider, ratioFor(event)) ?? ratioFor(event);
       stop();
       // Held where it was let go until the saved layout replaces it, so it doesn't snap back meanwhile.
       setDrag({ splitId: divider.splitId, ratio, released: true });
@@ -62,7 +64,7 @@ export function useDividerDrag<L extends { type: 'pane' }>(
     window.addEventListener('pointercancel', onCancel, true);
     endDrag.current = stop;
   };
-  return { geometry, dividers: { dividers, dragging: current?.released === false ? current.splitId : undefined, onStart: start } };
+  return { geometry, dividers: { dividers, dragging: current?.released === false ? current.splitId : undefined, onStart: start, onStep: options.onStep } };
 }
 
 interface DividersProps {
@@ -70,10 +72,12 @@ interface DividersProps {
   /** The divider being dragged, not yet let go. */
   dragging: string | undefined;
   onStart(divider: Divider, event: PointerEvent): void;
+  /** A double-click on a divider, if it steps through stops. */
+  onStep?(divider: Divider): void;
 }
 
 /** The dividers between panes, each dragged to resize the panes either side. */
-export function Dividers({ dividers, dragging, onStart, className = 'shell-divider', testId = 'shell-divider' }: DividersProps & { className?: string; testId?: string }) {
+export function Dividers({ dividers, dragging, onStart, onStep, className = 'shell-divider', testId = 'shell-divider' }: DividersProps & { className?: string; testId?: string }) {
   return dividers.map((divider) => {
     const side = divider.direction === 'horizontal';
     const at = side ? divider.region.x + divider.region.width * divider.ratio : divider.region.y + divider.region.height * divider.ratio;
@@ -93,6 +97,7 @@ export function Dividers({ dividers, dragging, onStart, className = 'shell-divid
             : { top: percent(at), left: percent(divider.region.x), width: percent(divider.region.width) }
         }
         onPointerDown={(event) => onStart(divider, event)}
+        onDoubleClick={onStep && (() => onStep(divider))}
       />
     );
   });

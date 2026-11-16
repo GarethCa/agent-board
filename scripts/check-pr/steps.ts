@@ -35,6 +35,8 @@ export const STAGES: string[][] = [
   ['unit'],
   // Related tests of the processes project, after a whole-unit run; the unit step's timeouts need the machine to themselves.
   ['processes'],
+  // The server suite: real daemons driven as their clients do. Alone, as its sockets and terminals are timed too.
+  ['server'],
   // The Electron runs hold the e2e lock; the native visual run goes first, then the e2e.
   ['visual'],
   ['e2e'],
@@ -79,8 +81,12 @@ export function stepsFor(plan: Plan, { leakCheck, exists, headless: onVirtualDis
     const processesRelated = (plan.processes ?? []).filter(exists);
     if (processesRelated.length > 0) steps.push({ name: 'processes', argv: ['pnpm', 'exec', 'vitest', 'related', '--run', '--passWithNoTests', '--project', 'processes', ...processesRelated] });
   } else if (related.length > 0) {
-    steps.push({ name: 'unit', argv: ['pnpm', 'exec', 'vitest', 'related', '--run', '--passWithNoTests', ...related] });
+    // The server step runs the whole suite, so the related run leaves its project out rather than run its tests twice.
+    const projects = plan.server === true ? ['--project', 'unit', '--project', 'processes'] : [];
+    steps.push({ name: 'unit', argv: ['pnpm', 'exec', 'vitest', 'related', '--run', '--passWithNoTests', ...projects, ...related] });
   }
+  // `pnpm test` (testAll) runs every project, the server suite's too.
+  if (plan.server === true && plan.testAll !== true) steps.push({ name: 'server', argv: ['pnpm', 'exec', 'vitest', 'run', '--project', 'server'] });
   if (quick) return steps;
   if (plan.e2e.length > 0 || plan.e2eAll || plan.visual || visualFiles.length > 0) steps.unshift({ name: 'build', argv: ['pnpm', 'build'] });
   if (plan.e2e.length > 0 || plan.e2eAll) {
@@ -123,13 +129,14 @@ export async function runStages(steps: Step[], { settle, outcomeOf, runElectron 
   const named = (names: string[]): Step[] => steps.filter((step) => names.includes(step.name));
   const runStage = async (names: string[]): Promise<void> => void (await Promise.all(named(names).map(settle)));
   const failedQuick = (): string | undefined => QUICK_STEPS.find((name) => (outcomeOf(name) ?? 'pass') !== 'pass');
-  const [preflightStage, staticStage, unitStage, processesStage, ...electronStages] = STAGES as [string[], string[], string[], string[], ...string[][]];
+  const [preflightStage, staticStage, unitStage, processesStage, serverStage, ...electronStages] = STAGES as [string[], string[], string[], string[], string[], ...string[][]];
   await runStage(preflightStage);
   if (failedQuick() === undefined) await runStage(staticStage);
   const quickFailure = failedQuick();
   if (quickFailure !== undefined) return { notRun: quickFailure === 'preflight' ? 'the pre-flight failed' : 'a quick check failed' };
   await runStage(unitStage);
   await runStage(processesStage);
+  await runStage(serverStage);
   const electron = electronStages.map(named).filter((stage) => stage.length > 0);
   if ((outcomeOf('build') ?? 'pass') === 'pass' && electron.length > 0) await runElectron(electron);
   return { notRun: 'the build failed' };

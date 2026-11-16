@@ -1,5 +1,5 @@
-import { memo, useCallback, useContext, useMemo, useState } from 'react';
-import type { NodeProps } from '@xyflow/react';
+import { memo, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { useReactFlow, type NodeProps } from '@xyflow/react';
 import { Bot, Inbox, Ticket } from 'lucide-react';
 import { jobsFrom } from '@agent-board/daemon/memory-lines';
 import { QUEUE_CARD_SIZE, LIST_CARD_FOLDED_SIZE, LIST_CARD_MIN_SIZE, type QueueAudience, type QueueChange, type QueueJob } from '@agent-board/daemon/protocol';
@@ -8,8 +8,9 @@ import { ItemActionsContext, useOnlySelected, type ItemNodeType } from './items'
 import { scopeText } from './memory-card';
 import { needsYouEntries } from '../../../../shared/needs-you';
 import { useNeedsYouShows } from '../../needs-you-setting';
-import { openDrain, openFocus, openHandOn, QueueBoardContext } from './queue-board';
-import { lookCount, needsInScope } from './to-look-at';
+import { goThrough, moveGoingThrough, openDrain, openHandOn, QueueBoardContext, stopGoingThrough, useGoingThrough } from './queue-board';
+import { lookCount, lookItems, needsInScope } from './to-look-at';
+import { QueueGoThrough } from './QueueGoThrough';
 import { QueueCardView, QueueIconView, QueuePeek, type AddJob } from './QueueCard';
 import { agentLine, freshJob, jobLine, newestChange, nextJob, queueData, queueTitle } from './queue-card';
 import { CardResizer } from './CardSizing';
@@ -45,10 +46,17 @@ export const QueueNode = memo(function QueueNode({ id: nodeId, data, selected: p
   const board = useContext(QueueBoardContext);
   const shows = useNeedsYouShows();
   const needs = useMemo(() => (queue.audience === 'user' ? needsInScope(needsYouEntries(board.agents, shows), item.zoneId) : []), [queue.audience, board.agents, shows, item.zoneId]);
+  const { setNodes } = useReactFlow();
   const start = () => {
     setPeek(false);
-    openFocus(item.id);
+    goThrough(item.id);
+    // Selected, so its keys work at once: the peek's button is outside the tile, and clicking it selects nothing.
+    setNodes((nodes) => nodes.map((node) => ((node.selected === true) === (node.id === nodeId) ? node : { ...node, selected: node.id === nodeId })));
   };
+  // Going through its things one at a time, in the tile: open, as a folded one has no room; back to its list once none is left.
+  const goingThrough = useGoingThrough();
+  const going = goingThrough?.queueId === item.id;
+  const looks = useMemo(() => lookItems(shown, needs), [shown, needs]);
   const taken = shown.some((job) => job.state === 'taken');
 
   const change = useCallback(
@@ -92,6 +100,15 @@ export const QueueNode = memo(function QueueNode({ id: nodeId, data, selected: p
     const { size, kept } = foldTo(item, folded, { folded: LIST_CARD_FOLDED_SIZE, open: QUEUE_CARD_SIZE });
     update({ id: item.id, data: { folded, ...kept }, ...size });
   };
+  const goingFolded = going && queue.folded === true;
+  const goingEmpty = going && jobs !== undefined && looks.length === 0;
+  useEffect(() => {
+    if (goingFolded) fold(false);
+    // Only as it starts: `fold` is made anew each render.
+  }, [goingFolded]);
+  useEffect(() => {
+    if (goingEmpty) stopGoingThrough();
+  }, [goingEmpty]);
   // Who it is for; a name it was given for its audience follows it, one the user typed stays.
   const setAudience = (audience: QueueAudience) => {
     if (audience === queue.audience) return;
@@ -130,7 +147,22 @@ export const QueueNode = memo(function QueueNode({ id: nodeId, data, selected: p
     </ListCardToolbar>
   );
 
-  const body = queue.folded ? (
+  const body = going && !queue.folded && jobs !== undefined && looks.length > 0 ? (
+    <QueueGoThrough
+      title={queue.title}
+      items={looks}
+      selected={selected}
+      place={goingThrough.place}
+      onPlace={(place) => moveGoingThrough(item.id, place)}
+      start={goingThrough.start}
+      openAgent={(look) => board.openAgent(look.entry.agent)}
+      openLink={board.openLink}
+      change={(job, action) => void change(action === 'done' ? { action: 'done', job: job.id } : { action: 'move', job: job.id, before: null })}
+      onBack={stopGoingThrough}
+    >
+      {toolbar}
+    </QueueGoThrough>
+  ) : queue.folded ? (
     <QueueIconView
       audience={queue.audience}
       title={queue.title}

@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useId, useImperativeHandle, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type Ref } from 'react';
 import * as RadixDialog from '@radix-ui/react-dialog';
-import type { Agent, BoardItem, Shell, Zone } from '@agent-board/daemon/protocol';
-import { CircleDot, FileText, Link, MessageCircleDashed, Plus, Search, Settings, LibraryBig, ListFilter, Shapes, StickyNote, type LucideIcon } from 'lucide-react';
+import { pullRequestOfUrl, type Agent, type BoardItem, type OpenPullRequest, type Shell, type Zone } from '@agent-board/daemon/protocol';
+import { CircleDot, FileText, GitPullRequest, Globe, Link, MessageCircleDashed, Plus, Search, Settings, LibraryBig, ListFilter, Shapes, StickyNote, type LucideIcon } from 'lucide-react';
 import { CrewFaces } from '../crews/icons';
 import { usePrefabs } from '../crews/prefab-store';
 import { SESSION_SURFACES } from '../board/board-shortcuts';
@@ -15,14 +15,19 @@ import { useNeedsYouShows } from '../needs-you-setting';
 import { useSimplified } from '../design';
 import { useDock } from '../dock';
 import { Kbd, StatusPill, Tag, useToast } from '../ui';
+import type { Surface } from '@agent-board/daemon/window-layout';
 import type { WindowTarget } from '../../../preload/api';
-import { errorMessage } from '../../../shared/errors';
+import { errorMessage, ipcErrorMessage } from '../../../shared/errors';
 import { outOfDock, type SessionWindows } from '../windows/session-windows';
+import { useReviews } from '../review/ReviewsProvider';
+import { reviewedPullRequests } from '../review/reviews';
 import {
   ACTIONS_GROUP,
   CREWS_GROUP,
   NEEDS_YOU_GROUP,
   newAgentLeads,
+  parseFilters,
+  pullRequestsNote,
   RECENT_GROUP,
   SETTINGS_GROUP,
   sideBySide,
@@ -45,6 +50,8 @@ export interface SpotlightPlace<C> {
   mode: 'show' | 'switch';
   /** The row key of the session the view shows already (`agent:<session id>`, `shell:<id>`): picking it only closes. */
   current?: string;
+  /** Whether ⇧↵ opens the surface beside something here, rather than as ↵ does; with none, every surface does. */
+  opensBeside?(surface: Surface): boolean;
 }
 
 /** The key of the "New agent named …" row, among the rows' keys as ↑↓ move through them. */
@@ -79,9 +86,10 @@ export interface SpotlightProps<C> {
   /**
    * Does what ↵ (with `open`, ⌘↵) asks of the subject. False (now, or once it has asked the main process) if it showed
    * nothing here, and the focus goes back. `windowed`: the row is one of the Windows group's, which brings its window
-   * back whatever `open` says. A setting is the switcher's own to open, from every window.
+   * back whatever `open` says. `beside` (⇧↵): it opens beside what is open (`opensBeside`). A setting is the switcher's
+   * own to open, from every window.
    */
-  onPick(context: C, subject: BoardSubject, open: boolean, windowed: boolean): boolean | Promise<boolean>;
+  onPick(context: C, subject: BoardSubject, open: boolean, windowed: boolean, beside: boolean): boolean | Promise<boolean>;
   /** Whether a new agent can start from here: "New agent named …" is offered only then. */
   canStartAgent: boolean;
   onNewAgent(context: C, name: string): void;
@@ -105,6 +113,28 @@ export const windowTargetOf = (subject: SpotlightSubject): WindowTarget | undefi
     : subject.kind === 'shell'
       ? { kind: 'shell', id: subject.shell.id, title: shellTitle(subject.shell) }
       : undefined;
+
+/** Whether ⇧↵ opens the subject beside what is open: a session, a pull request or a web page, where the place has one to be beside; anything else as ↵ does. */
+export function opensBeside(subject: SpotlightSubject, place: SpotlightPlace<unknown> | undefined): boolean {
+  const surface = surfaceOfSubject(subject);
+  return surface !== undefined && (place?.opensBeside?.(surface) ?? true);
+}
+
+/** What a row opens as a tab of a window: a session shown there, a pull request's tab or a web tab; undefined for anything else. */
+export function surfaceOfSubject(subject: SpotlightSubject): Surface | undefined {
+  switch (subject.kind) {
+    case 'agent':
+      return { kind: 'session', target: { kind: 'agent', id: subject.agent.sessionId } };
+    case 'shell':
+      return { kind: 'session', target: { kind: 'shell', id: subject.shell.id } };
+    case 'pr':
+      return { kind: 'pr', repo: subject.pr.repo, number: subject.pr.number };
+    case 'web':
+      return { kind: 'web', id: crypto.randomUUID(), url: subject.url };
+    default:
+      return undefined;
+  }
+}
 
 /**
  * How to give the focus back to what had it at `at`. A web tab's (or a plan's) page is another web contents, so the
@@ -169,9 +199,15 @@ export function Spotlight<C>({ ref, agents, shells, zones, windows, ticketItems,
   const listedWindows = useMemo(() => (simplified || windows === undefined ? windows : outOfDock(windows, dock)), [simplified, windows, dock]);
   // The id of the session the view shows already, from its row key (`agent:<id>`, `shell:<id>`).
   const current = opened?.place.current?.replace(/^(agent|shell):/, '');
+  const { openPullRequests, searchFailed, pastedPullRequest } = usePullRequestsFound(opened !== undefined, query);
+  // Under pr:, why the open pull requests couldn't be read; they are asked for again the next time ⌘K opens.
+  const note = pullRequestsNote(query, searchFailed);
+  const rounds = useReviews();
+  const reviewed = useMemo(() => reviewedPullRequests(rounds, agents), [rounds, agents]);
   const groups = useMemo(
-    () => spotlightGroups(query, { agents, shells: shells ?? [], zones, shows, windows: listedWindows, current, canStartAgent, prefabs, simplified, windowsListed: simplified || dock !== 'all', ticketItems }),
-    [query, agents, shells, zones, shows, listedWindows, current, canStartAgent, prefabs, simplified, dock, ticketItems],
+    () =>
+      spotlightGroups(query, { agents, shells: shells ?? [], zones, shows, windows: listedWindows, current, canStartAgent, prefabs, simplified, windowsListed: simplified || dock !== 'all', ticketItems, openPullRequests, pastedPullRequest, reviewed }),
+    [query, agents, shells, zones, shows, listedWindows, current, canStartAgent, prefabs, simplified, dock, ticketItems, openPullRequests, pastedPullRequest, reviewed],
   );
   const rows = groups.flatMap((group) => group.rows);
   const place = opened?.place;
@@ -202,7 +238,7 @@ export function Spotlight<C>({ ref, agents, shells, zones, windows, ticketItems,
     requestAnimationFrame(from.restore);
   }
 
-  function pick(row: SpotlightRow, open: boolean) {
+  function pick(row: SpotlightRow, open: boolean, beside = false) {
     if (opened === undefined) return;
     const { subject } = row;
     // A filter is taken into the field, in place of the colon typed, for its value to follow.
@@ -229,7 +265,7 @@ export function Spotlight<C>({ ref, agents, shells, zones, windows, ticketItems,
               return false;
             },
           )
-        : onPick(opened.place.context, subject, open, row.window !== undefined);
+        : onPick(opened.place.context, subject, open, row.window !== undefined, beside && opensBeside(subject, opened.place));
     void Promise.resolve(shown).then((done) => done || requestAnimationFrame(opened.restore));
   }
 
@@ -258,7 +294,7 @@ export function Spotlight<C>({ ref, agents, shells, zones, windows, ticketItems,
       setActiveKey(keys[(index + step + keys.length) % keys.length]!);
     } else if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
       event.preventDefault();
-      if (active !== undefined) pick(active, event.metaKey || event.ctrlKey);
+      if (active !== undefined) pick(active, event.metaKey || event.ctrlKey, event.shiftKey);
       else if (activeKeyNow === NEW_AGENT_KEY) startNew();
     }
   };
@@ -267,7 +303,11 @@ export function Spotlight<C>({ ref, agents, shells, zones, windows, ticketItems,
   // A crew's row opens its prompt box, wherever ⌘K was pressed.
   const opensCrew = active?.subject.kind === 'crew';
   const filtering = active?.subject.kind === 'filter';
-  const where = filtering ? 'filter' : opensCrew ? 'open' : showing ? 'show on board' : 'switch here';
+  const beside = active !== undefined && opensBeside(active.subject, place);
+  // Short beside ⇧↵, for the pill to leave the field's placeholder whole; the foot still says what each key does.
+  // A pull request or a page opens in a tab of its own, so ↵ opens it wherever ⌘K is.
+  const opensPage = active?.subject.kind === 'pr' || active?.subject.kind === 'web';
+  const where = filtering ? 'filter' : opensCrew || opensPage ? 'open' : showing ? (beside ? 'show' : 'show on board') : beside ? 'switch' : 'switch here';
   const newAgentRow = offerNew && (
     <div
       id={`${listId}-${NEW_AGENT_KEY}`}
@@ -329,6 +369,7 @@ export function Spotlight<C>({ ref, agents, shells, zones, windows, ticketItems,
             />
             <span className="spotlight-where" data-testid="spotlight-where">
               ↵ {where}
+              {beside && ` · ${keyText('dialog.openBeside')} beside`}
             </span>
           </div>
           <div className="spotlight-list" id={listId} role="listbox" aria-label="Sessions, zones and settings">
@@ -364,7 +405,12 @@ export function Spotlight<C>({ ref, agents, shells, zones, windows, ticketItems,
               );
             })}
             {!newLeads && newAgentRow}
-            {rows.length === 0 && !offerNew && <p className="spotlight-empty">{newName === '' ? 'Nothing on the board yet' : 'Nothing matches'}</p>}
+            {note !== undefined && (
+              <p className="spotlight-empty" role="status" data-testid="spotlight-note">
+                {note}
+              </p>
+            )}
+            {rows.length === 0 && !offerNew && note === undefined && <p className="spotlight-empty">{newName === '' ? 'Nothing on the board yet' : 'Nothing matches'}</p>}
           </div>
           <div className="spotlight-foot" aria-hidden>
             <span>
@@ -386,19 +432,77 @@ export function Spotlight<C>({ ref, agents, shells, zones, windows, ticketItems,
               <Kbd>{keyText('dialog.pick')}</Kbd>
               {filtering && <Kbd>⇥</Kbd>} {filtering ? 'take' : opensCrew ? 'open' : showing ? 'show' : 'switch'}
             </span>
+            {beside && (
+              <span>
+                <Kbd>{keyText('dialog.openBeside')}</Kbd> beside
+              </span>
+            )}
             {showing && !opensCrew && !filtering && (
               <span>
                 <Kbd>{keyText('dialog.openFromSwitcher')}</Kbd> open
               </span>
             )}
+            {/* Short with ⇧↵ or the columns there too, for the foot to keep to one line. */}
             <span>
-              <Kbd>{keyText('dialog.close')}</Kbd> {columns ? 'back' : 'back to where you were'}
+              <Kbd>{keyText('dialog.close')}</Kbd> {columns || beside ? 'back' : 'back to where you were'}
             </span>
           </div>
         </RadixDialog.Content>
       </RadixDialog.Portal>
     </RadixDialog.Root>
   );
+}
+
+/**
+ * What the switcher reads from GitHub as it is typed in, through the daemon's gh: once a `pr:` filter is typed, the open
+ * pull requests of the board's repos (once each time it opens); for a pasted pull request link, its title and author.
+ * Nothing is asked while it is shut. If the open pull requests can't be read, `searchFailed` says why; a pasted link's
+ * details that can't be read are left out, and its rows say less.
+ */
+function usePullRequestsFound(
+  open: boolean,
+  query: string,
+): { openPullRequests?: readonly OpenPullRequest[]; searchFailed?: string; pastedPullRequest?: { repo: string; number: number; title: string; author: string } } {
+  const [openPullRequests, setOpenPullRequests] = useState<readonly OpenPullRequest[]>();
+  const [searchFailed, setSearchFailed] = useState<string>();
+  const [pasted, setPasted] = useState<{ repo: string; number: number; title: string; author: string }>();
+  const wantsOpen = open && parseFilters(query).filters.some((filter) => filter.prefix === 'pr:');
+  useEffect(() => {
+    if (open) return;
+    setOpenPullRequests(undefined);
+    setSearchFailed(undefined);
+  }, [open]);
+  const asked = openPullRequests !== undefined;
+  useEffect(() => {
+    if (!wantsOpen || asked) return;
+    let live = true;
+    window.agentBoard.pullRequests.search().then(
+      (found) => live && setOpenPullRequests(found),
+      (error: unknown) => {
+        if (!live) return;
+        setOpenPullRequests([]);
+        setSearchFailed(ipcErrorMessage(error));
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, [wantsOpen, asked]);
+  const link = open ? pullRequestOfUrl(query.trim()) : undefined;
+  const linkRepo = link?.repo;
+  const linkNumber = link?.number;
+  useEffect(() => {
+    if (linkRepo === undefined || linkNumber === undefined) return;
+    let live = true;
+    window.agentBoard.pullRequests.details({ repo: linkRepo, number: linkNumber }).then(
+      (details) => live && setPasted({ repo: linkRepo, number: linkNumber, title: details.title, author: details.author }),
+      () => {},
+    );
+    return () => {
+      live = false;
+    };
+  }, [linkRepo, linkNumber]);
+  return { openPullRequests, searchFailed, pastedPullRequest: pasted };
 }
 
 /** Whether the two columns sit one above the other, as a narrow window lays them out. */
@@ -442,6 +546,10 @@ function Row({ id, row, active, compact = false, onHover, onPick }: { id: string
           subject.kind === 'action' && subject.action === 'newAgent' ? <Plus /> : subject.kind === 'action' && subject.action === 'parkThought' ? <MessageCircleDashed /> : <Settings />
         ) : subject.kind === 'item' ? (
           <ItemIcon kind={subject.item.kind} />
+        ) : subject.kind === 'pr' ? (
+          <GitPullRequest />
+        ) : subject.kind === 'web' ? (
+          <Globe />
         ) : subject.kind === 'zone' ? (
           // A zone's colour is its data, not a theme token.
           <span className="spotlight-zone-ring" style={{ '--zone-color': subject.zone.color } as CSSProperties} />
@@ -474,6 +582,10 @@ function Row({ id, row, active, compact = false, onHover, onPick }: { id: string
         <span className="spotlight-act">show zone</span>
       ) : subject.kind === 'item' ? (
         <span className="spotlight-act">show</span>
+      ) : subject.kind === 'pr' ? (
+        <span className="spotlight-act">open PR</span>
+      ) : subject.kind === 'web' ? (
+        <span className="spotlight-act">open page</span>
       ) : subject.kind === 'action' ? (
         <span className="spotlight-act">run</span>
       ) : subject.kind === 'filter' ? (

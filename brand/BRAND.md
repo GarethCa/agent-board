@@ -75,9 +75,9 @@ These match the app's "Workbench" theme. The desk is `#EEEDE8`, the waiting oran
 ## Type
 
 - **Wordmark:** `agent-board`, all lowercase, Bricolage Grotesque ExtraBold (800), letter-spacing −0.02 to −0.03em.
-- **App UI:** Bricolage Grotesque 400/600/700.
+- **App UI:** Manrope 400/600/700.
 - **Code:** JetBrains Mono.
-- Both fonts are on Google Fonts and Fontsource under the OFL. Bundle them with the app instead of loading them from a CDN.
+- All three fonts are on Google Fonts and Fontsource under the OFL. Bundle them with the app instead of loading them from a CDN.
 
 ## Rules
 

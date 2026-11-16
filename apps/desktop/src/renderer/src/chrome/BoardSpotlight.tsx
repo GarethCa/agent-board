@@ -3,7 +3,8 @@ import type { Agent, Shell, Zone } from '@agent-board/daemon/protocol';
 import { useBoardCommands, type TileRef } from '../board/commands';
 import { shownWindow } from '../windows/session-windows';
 import { useSessionWindows } from '../windows/SessionWindows';
-import { rowKeyOf, Spotlight, windowTargetOf, type SpotlightHandle, type SpotlightPlace } from './Spotlight';
+import { requestTab } from '../session/tab-request';
+import { rowKeyOf, Spotlight, surfaceOfSubject, windowTargetOf, type SpotlightHandle, type SpotlightPlace } from './Spotlight';
 import type { BoardSubject } from './spotlight-results';
 import { useTicketItems } from './ticket-items';
 
@@ -21,7 +22,9 @@ const tileOf = (subject: BoardSubject): TileRef | undefined =>
  * The board window's ⌘K switcher. On the board, ↵ flies to the tile, pulses and selects it, and ⌘↵ opens it. In
  * the session window shown on the board, ↵ switches it to the session, as ‹ › do; in an expanded tile with the focus,
  * the session picked expands in its place. A session popped out into an OS window of its own comes forward there. A
- * zone, or an item on a ticket's board, is brought into view, out of the session window or expanded tile.
+ * zone, or an item on a ticket's board, is brought into view, out of the session window or expanded tile. A pull
+ * request or page opens as a tab of the session window or expanded tile, or from the board in its agent's window, else
+ * a window of its own; ⇧↵ opens a session, pull request or page beside the session in view, in a pane of its own.
  */
 export function BoardSpotlight({ ref, agents, shells, zones }: { ref?: Ref<SpotlightHandle>; agents: readonly Agent[]; shells: readonly Shell[] | undefined; zones: readonly Zone[] }) {
   const sessionWindows = useSessionWindows();
@@ -34,11 +37,12 @@ export function BoardSpotlight({ ref, agents, shells, zones }: { ref?: Ref<Spotl
     const expanded = at?.closest<HTMLElement>('.expanded-tile');
     const nodeId = expanded?.closest('.react-flow__node')?.getAttribute('data-id');
     const id = expanded?.dataset.sessionId ?? expanded?.dataset.shellId;
-    if (nodeId == null || id === undefined) return { context: { kind: 'board' }, mode: 'show' };
+    // On the board, ⇧↵ has a session to open beside only with an agent selected, or for a reviewer or a pull request an agent opened.
+    if (nodeId == null || id === undefined) return { context: { kind: 'board' }, mode: 'show', opensBeside: board.opensBeside };
     return { context: { kind: 'expanded', nodeId, id }, mode: 'switch', current: nodeId };
   };
 
-  const onPick = (context: BoardContext, subject: BoardSubject, open: boolean, windowed: boolean): boolean => {
+  const onPick = (context: BoardContext, subject: BoardSubject, open: boolean, windowed: boolean, beside: boolean): boolean => {
     if (subject.kind === 'zone') {
       const shown = board.showZone(subject.zone.id, context.kind === 'expanded' ? context.nodeId : undefined);
       if (shown && context.kind === 'window') sessionWindows.close(context.id);
@@ -49,6 +53,15 @@ export function BoardSpotlight({ ref, agents, shells, zones }: { ref?: Ref<Spotl
       board.showTicketItem(subject.ticket, subject.item.id);
       if (context.kind === 'window') sessionWindows.close(context.id);
       return true;
+    }
+    const surface = surfaceOfSubject(subject);
+    if (surface !== undefined && (beside || subject.kind === 'pr' || subject.kind === 'web')) {
+      if (context.kind !== 'board') {
+        requestTab(context.id, surface, { beside });
+        return true;
+      }
+      // A session with nothing selected to be beside opens as ↵ opens it.
+      if (board.openSurface(surface, beside)) return true;
     }
     const tile = tileOf(subject)!;
     // A row of the Windows group brings its window back, minimised or not, wherever ⌘K was pressed, and flies the board
