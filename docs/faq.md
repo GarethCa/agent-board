@@ -16,7 +16,7 @@ Each agent works in its own git worktree under `~/.agent-board/worktrees/`, on i
 No. It does what the CLIs do and no more: permission prompts wait for you, in the inbox or the terminal. Edge conditions that run a command run only after you approve that exact command ([ADR-0009](adr/0009-edge-condition-approvals.md)).
 
 **Linux or Windows?**
-macOS is the supported platform today. The end-to-end tests pass on Linux, but it is not packaged yet; Windows comes later.
+macOS and Linux (x86-64). On Linux, `pnpm package` builds a `.deb` and a `.tar.gz` and installs the `.deb` on Debian and Ubuntu; [Linux](install.md#linux) says what doesn't work there yet. Windows comes later.
 
 **Is it made by Anthropic or OpenAI?**
 No. agent-board is an independent project, not affiliated with or endorsed by either.

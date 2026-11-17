@@ -19,7 +19,7 @@ import { watchPastePane } from './paste-pane';
 import { PaneDecisions } from './PaneDecision';
 import { StepsWaitBody } from '../inbox/StepsWaitBody';
 import { stepsWaitKey } from '../../../shared/needs-you';
-import { paneDecision, showsStepsStrip, useDeferredDecisions } from './pane-decision';
+import { inPane, paneDecision, showsStepsStrip, useDeferredDecisions } from './pane-decision';
 import type { RunsChoice, RunsMode } from './chat';
 import { useChatTheme } from './chat-theme';
 import { ChatControls } from './ChatControls';
@@ -418,7 +418,7 @@ export function SessionBody({
           </div>
         )}
         {notice}
-        {agent && !(simplified && chat && paneDecision(agent, deferredIds)?.kind === 'permission' && agent.permissions.every((prompt) => prompt.heldUntil !== null)) && <BlockedBanner agent={agent} chat={chat} onShowTerminal={onShowTerminal} />}
+        {agent && !(simplified && chat && paneDecision(agent, deferredIds)?.kind === 'permission' && agent.permissions.every(inPane)) && <BlockedBanner agent={agent} chat={chat} onShowTerminal={onShowTerminal} />}
         {agent && canRestart(agent) && (
           <div className="agent-exit-banner" role="status" data-testid="agent-exit-banner">
             {exitText(agent)}

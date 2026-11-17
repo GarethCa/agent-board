@@ -18,6 +18,7 @@ import { useMenuBarSection } from '../keys/menu-bar-bridge';
 import { useNowForSince, useNowToward } from '../inbox/use-now';
 import { calmTimes, QUIET_TILE, tileProgress } from './tile-shows';
 import { useRenameRequest } from './rename';
+import { ReviewerMark } from './ReviewerMark';
 import { poseOfStatus } from './tile-pose';
 import { PullRequestChip } from './PullRequestChip';
 import { SubagentPerch } from './SubagentPerch';
@@ -43,6 +44,8 @@ export interface GlanceParts {
   look: CharacterLook & { harness: Harness };
   /** Its name, which a slow click renames, with its starting spinner and its marks. */
   name: ReactNode;
+  /** A reviewer's mark, which follows its state word: nothing for an agent that reviews nothing. */
+  reviewer: ReactNode;
   /** Its ⋯ menu. */
   menu: ReactNode;
   expand(): void;
@@ -124,6 +127,7 @@ export function GlanceTileFrame({
         <HandPlacedMark nodeId={id} />
       </>
     ),
+    reviewer: <ReviewerMark agent={agent} implementer={implementer} />,
     menu: <TileMenu entries={menu.entries} onOpen={menu.reread} />,
     expand: () => expand(id),
     prompt:

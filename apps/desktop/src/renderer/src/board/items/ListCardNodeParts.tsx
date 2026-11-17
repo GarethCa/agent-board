@@ -6,6 +6,7 @@ import { ChevronsLeftRight, ChevronsRightLeft, Trash2, UserRoundCheck, UserRound
 import { AnchoredPopover, IconButton, Kbd } from '../../ui';
 import { keyText } from '../../keys/registry';
 import { isZone } from '../tiles';
+import { pressClosesPeek } from './peek-press';
 
 /** The zone with id `zoneId` as the board draws it: its name and colour. */
 export function useZone(zoneId: string | null): { name?: string; color?: string } {
@@ -149,9 +150,22 @@ export function ListCardToolbar({ visible, folded, onFold, agents, noun, onDelet
 /**
  * The peek over the board, beside its card. A toast's Undo is pressed with the peek still open, and it stays open to show
  * it: the toast may be gone from the page by the time the press is heard, so a press on what is no longer there counts as
- * one. Esc while editing a row puts the row back, and leaves the peek open.
+ * one. Esc while editing a row puts the row back, and leaves the peek open. A press anywhere on the board closes it,
+ * a zone's empty body too (`pressClosesPeek`).
  */
 export function ListCardPeekPopover(props: Omit<ComponentProps<typeof AnchoredPopover>, 'onPointerDownOutside' | 'onEscapeKeyDown'>) {
+  const { open, onOpenChange } = props;
+  const close = useRef(onOpenChange);
+  close.current = onOpenChange;
+  useEffect(() => {
+    if (!open) return;
+    // Before anything on the board can stop it.
+    const onPointerDown = (event: PointerEvent) => {
+      if (pressClosesPeek(event.target instanceof Element ? event.target : null, event.button)) close.current(false);
+    };
+    window.addEventListener('pointerdown', onPointerDown, true);
+    return () => window.removeEventListener('pointerdown', onPointerDown, true);
+  }, [open]);
   return (
     <AnchoredPopover
       {...props}

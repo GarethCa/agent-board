@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Zone } from '@agent-board/daemon/protocol';
 import { folderLabel } from './folders';
-import { agentStartIn, dropPlace, issueScope, issueStartIn, trackerZoneFor } from './place-session';
+import { agentStartIn, dropPlace, inFreeDrop, issueScope, issueStartIn, trackerZoneFor } from './place-session';
 import { AGENT_TILE_SIZE } from '@agent-board/daemon/board-layout';
 
 const zone = { id: 'z', x: 1000, y: 1000, width: 800, height: 600 };
@@ -61,7 +61,8 @@ const zoneOf = (id: string, fields: Partial<Zone> = {}): Zone => ({
   spacing: 'normal',
   layoutMode: 'free',
   layoutRule: 'off',
-  handPlaced: [],
+  lanes: null,
+  handPlaced: [], free: [],
   folded: false,
   tracker: null,
   clone: null,
@@ -115,5 +116,21 @@ describe('folderLabel', () => {
     expect(folderLabel('/Users/ada', '/Users/ada')).toBe('~');
     expect(folderLabel('/Users/ada/code/jarvis-api', '/Users/ada')).toBe('jarvis-api');
     expect(folderLabel('/', undefined)).toBe('/');
+  });
+});
+
+describe('inFreeDrop', () => {
+  const lanes = { x: 0, y: 0, width: 600, height: 400 };
+
+  it('is a drop wholly outside the lanes area of a zone on shelves or in clusters', () => {
+    expect(inFreeDrop({ layoutMode: 'shelves', lanes }, { x: 700, y: 40 })).toBe(true);
+    expect(inFreeDrop({ layoutMode: 'clusters', lanes }, { x: 40, y: 500 })).toBe(true);
+    expect(inFreeDrop({ layoutMode: 'shelves', lanes }, { x: 40, y: 40 })).toBe(false);
+  });
+
+  it('is never one in a free zone, one whose lanes fill it, or one on bare board', () => {
+    expect(inFreeDrop({ layoutMode: 'free', lanes }, { x: 700, y: 40 })).toBe(false);
+    expect(inFreeDrop({ layoutMode: 'shelves', lanes: null }, { x: 700, y: 40 })).toBe(false);
+    expect(inFreeDrop(undefined, { x: 700, y: 40 })).toBe(false);
   });
 });

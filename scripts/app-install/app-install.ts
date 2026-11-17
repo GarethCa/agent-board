@@ -136,13 +136,28 @@ export async function installBuilt(options: InstallBuiltOptions, app: AppControl
     throw error;
   }
   log(replaced ? `Replaced ${target} with the new build; the old copy is gone.` : `Installed ${target}.`);
+  await offerReopen(options, wasRunning, () => app.open(target), 'Open it from Applications');
+  return target;
+}
+
+/**
+ * After an install: opens the app with `open` set, asks whether to reopen it if it was running, and otherwise says
+ * how to open it (`openHint`). With `noOpen` it never opens or asks.
+ */
+export async function offerReopen(
+  options: Pick<InstallBuiltOptions, 'open' | 'noOpen' | 'confirm' | 'log'>,
+  wasRunning: boolean,
+  open: () => void,
+  openHint: string,
+): Promise<void> {
+  const { log } = options;
+  const leftClosed = `Left agent-board closed. ${openHint} when you are ready; your sessions kept running in the daemon.`;
   if (options.noOpen) {
-    if (wasRunning) log('Left agent-board closed. Open it from Applications when you are ready; your sessions kept running in the daemon.');
+    if (wasRunning) log(leftClosed);
   } else if (options.open || (wasRunning && (await options.confirm('agent-board was running. Reopen it?')))) {
-    app.open(target);
+    open();
     log('Opened agent-board. Your sessions kept running in the daemon.');
   } else if (wasRunning) {
-    log('Left agent-board closed. Open it from Applications when you are ready; your sessions kept running in the daemon.');
+    log(leftClosed);
   }
-  return target;
 }

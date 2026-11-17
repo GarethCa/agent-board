@@ -3,7 +3,7 @@ import { NodeResizeControl, ResizeControlVariant, type ControlPosition } from '@
 import { shortIssueId, TRACKER_PROVIDERS, type Agent, type ExternalSession, type PullRequest, type Shell } from '@agent-board/daemon/protocol';
 import { paneIds } from '@agent-board/daemon/pane-layout';
 import { Folder, GitBranch, Maximize2, Minimize2, Play, SquareArrowOutUpRight, Trash2 } from 'lucide-react';
-import { useLeaveKeys } from '../keys/escape-hatch';
+import { leaveToTile, useLeaveKeys } from '../keys/escape-hatch';
 import { useExtendedShortcuts } from '../keys/extended-shortcuts';
 import { pressed } from '../keys/registry';
 import { DetailsHandle } from '../session/DetailsHandle';
@@ -12,7 +12,8 @@ import { GateControls } from '../gate/GateControls';
 import { gated } from '../gate/gate-view';
 import { showsShelves } from '../session/agent-sidebar';
 import { SessionBody, type WindowContent } from '../session/SessionBody';
-import { SessionDetails } from '../session/SessionDetails';
+import { SessionDetails, useHomeDir } from '../session/SessionDetails';
+import { tildify } from '../session/live-folder';
 import { SessionName } from '../session/SessionName';
 import { useViewSettingsLoaded } from './view-settings';
 import { useSidebarCollapsed } from '../session/use-sidebar-collapsed';
@@ -137,7 +138,7 @@ function ExpandedTileShown({ id, tile, parent }: TileProps & { parent: ExpandedP
         {content && <IconButton icon={<Maximize2 />} size="sm" aria-label="Maximise" tooltip="Maximise into its session window" onClick={() => maximise(tile)} />}
         {popOut && <IconButton icon={<SquareArrowOutUpRight />} size="sm" aria-label="Pop out" tooltip="Into its own window" onClick={popOut} />}
         {remove && <IconButton icon={<Trash2 />} size="sm" variant="danger" aria-label={remove.label} tooltip={remove.label} onClick={remove.run} />}
-        <IconButton icon={<Minimize2 />} size="sm" variant="secondary" aria-label="Collapse" tooltip="Back to its tile; the session keeps running" onClick={() => collapse(id)} />
+        <IconButton icon={<Minimize2 />} size="sm" variant="secondary" aria-label="Collapse" tooltip="Back to its tile; the session keeps running" onClick={() => leaveToTile(root.current, () => collapse(id))} />
       </header>
       <div className="expanded-tile-body nodrag nowheel nopan">
         {CAPTURE_FRAME !== undefined ? (
@@ -194,11 +195,14 @@ function HeadFacts({
   openLink(url: string): void;
   openPullRequest(agent: Agent, pr: PullRequest): void;
 }) {
-  const where = agent?.branch ?? external?.branch ?? shell?.cwd ?? external?.cwd;
+  const home = useHomeDir();
+  const folder = shell?.cwd ?? external?.cwd;
+  // A folder with its home written as `~`, as the session window's header writes it; its title keeps the full path.
+  const where = agent?.branch ?? external?.branch ?? (folder === undefined ? undefined : tildify(folder, home));
   const facts: ReactNode[] = [];
   if (where !== undefined) {
     facts.push(
-      <span key="where" className="session-window-where" title={agent?.worktree ?? external?.worktree ?? where}>
+      <span key="where" className="session-window-where" title={agent?.worktree ?? external?.worktree ?? folder ?? where}>
         {shell || (external && external.branch === null) ? <Folder aria-hidden /> : <GitBranch aria-hidden />}
         {where}
       </span>,

@@ -25,8 +25,8 @@ export type BoardState =
   // `sessionId`: a Move to Done of that agent's ticket alone, done again as one.
   | { type: 'cleanUp'; undo: CleanUpUndo | null; sessionId?: string }
   // `handPlaced`: for the place a drag left, whether the tile was placed by hand there (undone, a tile that was not is
-  // put back under its zone's layout rule).
-  | { type: 'tile'; move: TileMove; handPlaced?: boolean }
+  // put back under its zone's layout rule). `free`: whether it was free in its zone's free area there.
+  | { type: 'tile'; move: TileMove; handPlaced?: boolean; free?: boolean }
   | { type: 'tileSize'; size: { width: number; height: number } }
   | { type: 'unfolded'; open: boolean }
   | { type: 'name'; target: RenameTarget; name: string }

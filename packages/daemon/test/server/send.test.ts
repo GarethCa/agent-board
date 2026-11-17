@@ -3,6 +3,7 @@
  * agents: delivered once when it is free, kept until it is when it is busy or not up yet, and never lost, a draft at
  * its prompt and a daemon restart included.
  */
+import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { fakeHarnessEnv } from '@agent-board/fake-harness';
 import type { Agent, AgentUpdatedEvent, DaemonEvent, HookEvent } from '../../src/protocol.ts';
@@ -10,7 +11,7 @@ import { connectTestClient, recordEvents, startTestDaemon, tempDataDir, tempRepo
 
 const SIZE = { cols: 120, rows: 40 };
 
-async function sendingDaemon(options: { dataDir?: string; home?: string; noSessionStart?: boolean } = {}) {
+async function sendingDaemon(options: { dataDir?: string; home?: string; noSessionStart?: boolean; queueMidTurn?: boolean } = {}) {
   const daemon = await startTestDaemon({
     ...(options.dataDir === undefined ? {} : { dataDir: options.dataDir }),
     worktreesDir: tempDataDir(),
@@ -20,6 +21,7 @@ async function sendingDaemon(options: { dataDir?: string; home?: string; noSessi
       idleNotifyMs: 200,
       repeat: true,
       ...(options.noSessionStart === true ? { noSessionStart: true } : {}),
+      ...(options.queueMidTurn === true ? { queueMidTurn: true } : {}),
     }),
     submitConfirmMs: 100,
   });
@@ -161,10 +163,7 @@ describe('a message sent to an agent', () => {
     expect(prompts(second.recorder, busy.sessionId).filter((prompt) => prompt.includes('Then add a test'))).toHaveLength(1);
   }, 30_000);
 
-  // Known gap, pinned as it is today: the user's own message mid-turn goes straight into the harness's input queue,
-  // so a daemon stop before that turn ends loses it: it is neither kept to send again nor flagged as never delivered.
-  // Once the daemon keeps it, this fails: then expect it kept or flagged instead.
-  it('from the user mid-turn, is lost across a daemon restart today, neither kept nor flagged', async () => {
+  it('from the user mid-turn, is kept or flagged across a daemon restart, not lost', async () => {
     const dataDir = tempDataDir();
     const home = tempDataDir();
     const first = await sendingDaemon({ dataDir, home });
@@ -174,8 +173,42 @@ describe('a message sent to an agent', () => {
     expect(await first.client.call('agent.answer', { sessionId: busy.sessionId, text: 'Then add a test' })).toMatchObject({ queued: false });
     await first.daemon.stop();
 
+    // Its harness held it in its own queue, which went with it: handed back, for the user to send again.
     const second = await sendingDaemon({ dataDir, home });
     const after = (await second.client.call('agent.list')).find((one) => one.sessionId === busy.sessionId);
-    expect(after).toMatchObject({ state: 'stopped-by-restart', messagesWaiting: 0, undelivered: [] });
+    expect(after).toMatchObject({ state: 'stopped-by-restart', undelivered: [{ what: 'A message', text: 'Then add a test' }] });
+    await second.client.call('session.attach', { sessionId: busy.sessionId });
+    await second.client.call('agent.resume', { sessionId: busy.sessionId });
+    await untilAgent(second.recorder, busy.sessionId, idle);
+    await second.client.call('agent.resendUndelivered', { sessionId: busy.sessionId });
+    await untilPrompt(second.recorder, busy.sessionId, 'Then add a test');
+    expect(prompts(second.recorder, busy.sessionId).filter((prompt) => prompt === 'Then add a test')).toHaveLength(1);
   }, 30_000);
+
+  it('from the user mid-turn, taken at a step of that turn, is not handed back when the daemon stops before it ends', async () => {
+    const dataDir = tempDataDir();
+    const home = tempDataDir();
+    // Claude takes what is typed mid-turn at its next step, writing it to its transcript with no prompt of its own.
+    const first = await sendingDaemon({ dataDir, home, queueMidTurn: true });
+    const busy = await agentAtPrompt(first);
+    await first.client.call('agent.answer', { sessionId: busy.sessionId, text: 'Work slowly in two steps' });
+    await untilAgent(first.recorder, busy.sessionId, (seen) => seen.state === 'running');
+    await first.client.call('agent.answer', { sessionId: busy.sessionId, text: 'Then add a test' });
+    // Its first step's end, where it takes the message; its second runs on as the daemon stops.
+    const step = await first.recorder.waitFor(
+      (e): e is HookEvent => e.type === 'hook' && e.sessionId === busy.sessionId && e.event === 'PostToolUse' && JSON.stringify(e.payload.tool_input).includes('sleep 3'),
+    );
+    const transcript = String(step.payload.transcript_path);
+    const taken = () => readFileSync(transcript, 'utf8').split('\n').filter((line) => line.includes('Then add a test'));
+    await vi.waitFor(() => expect(taken()).toHaveLength(1));
+    await first.daemon.stop();
+
+    const next = await sendingDaemon({ dataDir, home, queueMidTurn: true });
+    expect((await next.client.call('agent.list')).find((one) => one.sessionId === busy.sessionId)).toMatchObject({ state: 'stopped-by-restart', undelivered: [] });
+    await next.client.call('session.attach', { sessionId: busy.sessionId });
+    await next.client.call('agent.resume', { sessionId: busy.sessionId });
+    await untilAgent(next.recorder, busy.sessionId, idle);
+    expect(taken()).toHaveLength(1);
+    expect(prompts(next.recorder, busy.sessionId)).not.toContain('Then add a test');
+  }, 40_000);
 });

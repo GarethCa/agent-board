@@ -98,6 +98,8 @@ Run `pnpm check:pr` before you open a PR, and paste its table into the PR. It di
 
 `pnpm check:local` is the full gate, with its steps running at the same time (the build, lint, typecheck, Markdown lint and knip together, then the unit tests, then the e2e and visual runs once the build passes). knip fails on an unused file, export or dependency: delete it, or, if it is used where knip can't see (electron-builder packages `node-pty` and the xterm addons from the app's own dependencies), say so in `knip.json`. An entry that ends in `!` (`@xterm/headless!`) is ignored only by `pnpm knip --production`: an app test imports that package, but the app needs it as a dependency for the daemon it bundles. `check:local` also runs the Markdown lint (`markdownlint-cli2@0.23.2`). On Linux with no display it runs the end-to-end tests on a virtual display with `scripts/e2e-headless.sh`; install `xvfb`, `openbox` (window tests need a window manager) and Electron's libraries first. A few journeys are macOS-only (the keychain, and the app staying open with no windows) and skip elsewhere.
 
+**On Linux.** You can build, run and test on Linux (x86-64), as above, and `pnpm package` builds a `.deb` and a `.tar.gz` and installs the `.deb` on Debian and Ubuntu ([Linux](docs/install.md#linux)). The packaging lives in `apps/desktop/electron-builder.yml` (its `linux` and `deb` settings) and the install step in `scripts/app-install/linux-install.ts`. The visual baselines are macOS only, so on Linux the visual specs fail for want of them; `pnpm check:local`'s other steps run. `pnpm update:app` is macOS only.
+
 The gate is the `pnpm check:pr` table on the PR, run on the PR's head commit, and a `pnpm check:local` run on `main` after merging.
 
 ## Docs

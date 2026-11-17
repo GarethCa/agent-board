@@ -142,7 +142,7 @@ async function framed(page: Page) {
 test('a zone of about 30 agents on status shelves (at a glance, a stack fanned out, Done shown) and in clusters, in both designs, light and dark', async () => {
   test.setTimeout(6 * 60_000);
   const combos = (['classic', 'simplified'] as const).flatMap((design) => THEMES.map(({ theme, suffix }) => ({ design, theme, name: `${design === 'simplified' ? 'simplified-' : ''}shelves${suffix}` })));
-  needsBaselines(...combos.flatMap(({ name }) => [`${name}-overview`, `${name}-fanned`, `${name}-done`, `${name.replace('shelves', 'clusters')}-overview`]));
+  needsBaselines(...combos.flatMap(({ name }) => [`${name}-overview`, `${name}-fanned`, `${name}-done`, `${name}-lanes`, `${name.replace('shelves', 'clusters')}-overview`]));
   const github = createFakeGitHub({ ...FAKE_GITHUB_STATE, pullRequests: [] });
   const { dir, env } = scratch('output');
   const dataDir = tempDataDir();
@@ -203,9 +203,32 @@ test('a zone of about 30 agents on status shelves (at a glance, a stack fanned o
       await expect.soft(page.locator('.board')).toHaveScreenshot(`${name}-done.png`, SHOT);
       await page.getByTestId('shelf-done').click();
 
+      // Selected, with a lanes area of its own: its dashed edge and corners inside the zone's handles, the rest free.
+      const sized = await page.evaluate(async (id) => (await window.agentBoard.zones.list()).find((zone) => zone.id === id)!, zoneId);
+      const laned = { x: sized.x, y: sized.y, width: sized.width + 480, height: sized.height };
+      await page.evaluate(({ id, laned, lanes }) => window.agentBoard.zones.update(id, { ...laned, lanes }), { id: zoneId, laned, lanes: { x: 0, y: 0, width: sized.width, height: sized.height } });
+      const zoneNode = page.getByTestId('zone');
+      await expect(zoneNode).toHaveAttribute('data-width', String(laned.width));
+      await framed(page);
+      const box = (await zoneNode.boundingBox())!;
+      const across = box.width / laned.width;
+      // On the free area, bare zone: it selects the zone.
+      await page.mouse.click(box.x + (sized.width + 240) * across, box.y + (sized.height / 2) * across);
+      await expect(zoneNode.getByTestId('zone-lanes-area')).toBeVisible();
+      await settle(page);
+      await expect.soft(page.locator('.board')).toHaveScreenshot(`${name}-lanes.png`, SHOT);
+      await page.evaluate(({ id, sized }) => window.agentBoard.zones.update(id, { x: sized.x, y: sized.y, width: sized.width, height: sized.height, lanes: null }), { id: zoneId, sized });
+      await expect(zoneNode).toHaveAttribute('data-width', String(sized.width));
+
       // The same zone in clusters: each ticket's tiles together, what needs you first, the lead pinned top-left. Nothing
       // selected: the jump above selected the agent it came to, which clusters draw as a tile of its own.
-      await page.locator('.react-flow__pane').click({ position: { x: 1220, y: 420 } });
+      // On bare board beside the zone, wherever it is drawn: a click on its well would select it.
+      const well = (await page.getByTestId('zone').boundingBox())!;
+      const bare = await page.evaluate(({ x, y, width, height }) =>
+        [{ x: x + width / 2, y: y + height + 16 }, { x: x - 16, y: y + height / 2 }, { x: x + width + 16, y: y + height / 2 }, { x: x + width / 2, y: y - 16 }]
+          .find((at) => document.elementFromPoint(at.x, at.y)?.classList.contains('react-flow__pane') === true), well);
+      expect(bare, 'bare board beside the zone').toBeDefined();
+      await page.mouse.click(bare!.x, bare!.y);
       await expect(page.locator('.react-flow__node.selected')).toHaveCount(0);
       await page.evaluate((id) => window.agentBoard.zones.configure(id, { layoutMode: 'clusters' }), zoneId);
       await expect(page.getByTestId('clusters')).toHaveCount(1);

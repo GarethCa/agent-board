@@ -4,7 +4,7 @@
 import { statusLine, type Agent, type NeedsYouShows } from '@agent-board/daemon/protocol';
 import { clockTime } from '../board/items/agent-note';
 import { boardMaster } from './master-view';
-import { needsYouEntries } from '../../../shared/needs-you';
+import { isAsk, needsYouEntries } from '../../../shared/needs-you';
 
 /** The most finished agents the digest lists; the rest are counted. */
 export const MAX_DONE_ROWS = 5;
@@ -66,4 +66,4 @@ export function lookedAt(since: number, now: number = Date.now()): string {
  * is still Done.
  */
 export const askingIds = (agents: readonly Agent[], shows: NeedsYouShows): Set<string> =>
-  new Set(needsYouEntries(agents, shows).filter((entry) => entry.kind !== 'turn').map((entry) => entry.agent.sessionId));
+  new Set(needsYouEntries(agents, shows).filter(isAsk).map((entry) => entry.agent.sessionId));

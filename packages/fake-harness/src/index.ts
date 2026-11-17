@@ -11,6 +11,7 @@ export { BOARD_SESSION_VARS, RUN_KNOBS, scrubBoardSessionEnv, scrubBoardEnv } fr
 export { compileCacheGlobalSetup } from './compile-cache.ts';
 export { REPO_GIT_VARS, leakedGitVars, scrubGitEnv, gitGuardGlobalSetup, assertCoreConfigUnchanged, coreConfigOf } from './git-guard.ts';
 export { assertLaunchersUntouched, shimGuardGlobalSetup, snapshotLaunchers } from './shim-guard.ts';
+export { useTempHome } from './home-guard.ts';
 export { runEveryTeardown } from './teardowns.ts';
 export { HARNESS_NAMES, type HarnessName } from './paths.ts';
 export { CODEX_START_SCREENS, type CodexStartScreen } from './codex-screens.ts';

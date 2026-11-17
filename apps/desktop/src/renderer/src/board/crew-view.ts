@@ -1,7 +1,8 @@
 // How the board shows who started whom. An orchestrator's crew is framed beside it, but the frame shows only while the
 // orchestrator is focused: hovered, or selected (so one being dragged keeps it). While a crew is focused its tiles are
 // lit and the board's other agent and shell tiles dim. A crew tile outside its orchestrator's frames carries a "from"
-// chip instead, and hovering the chip focuses the crew too.
+// chip instead, and hovering the chip focuses the crew too. While the user types in an orchestrator's tile, its own
+// selection and the pointer resting on it no longer focus its crew, so the board around it stays bright as they work.
 import { createContext, useEffect, useSyncExternalStore } from 'react';
 import type { CrewFrame } from './crews';
 
@@ -25,6 +26,10 @@ export function crewsOf(sessionId: string, isOrchestrator: boolean, fromId: stri
 }
 
 let hovered: string | undefined;
+/** Whether the hover is over a "from" chip naming the orchestrator, rather than over its own tile. */
+let hoveredChip = false;
+/** The agent (by session id) whose tile holds the keyboard: a field in it, its terminal above all. */
+let typing: string | undefined;
 let selected: ReadonlySet<string> = new Set();
 let focused: ReadonlySet<string> = new Set();
 const listeners = new Set<() => void>();
@@ -33,16 +38,21 @@ const sameSet = (a: ReadonlySet<string>, b: ReadonlySet<string>) => a.size === b
 
 function refocus(): void {
   const next = new Set(selected);
-  if (hovered !== undefined) next.add(hovered);
+  if (typing !== undefined) next.delete(typing);
+  if (hovered !== undefined && (hoveredChip || hovered !== typing)) next.add(hovered);
   if (sameSet(next, focused)) return;
   focused = next;
   markCrewFocus();
   for (const listener of listeners) listener();
 }
 
-/** Focuses the crew of the orchestrator `orchestratorId` while the pointer is over it, or over a chip naming it. */
-export function hoverCrew(orchestratorId: string): void {
+/**
+ * Focuses the crew of the orchestrator `orchestratorId` while the pointer is over its tile, or over a chip naming it.
+ * Over its own tile while the user types there, it doesn't: the pointer rests on the tile they clicked into.
+ */
+export function hoverCrew(orchestratorId: string, over: 'tile' | 'chip' = 'tile'): void {
   hovered = orchestratorId;
+  hoveredChip = over === 'chip';
   refocus();
 }
 
@@ -63,6 +73,16 @@ export function selectCrews(orchestratorIds: Iterable<string>): void {
   const next = new Set(orchestratorIds);
   if (sameSet(next, selected)) return;
   selected = next;
+  refocus();
+}
+
+/**
+ * The agent whose tile holds the keyboard, or undefined once none does: while it is an orchestrator, its crew is
+ * focused only by hovering a chip naming it. The keyboard leaving the tile gives the selection and hover rules back.
+ */
+export function typeInTile(sessionId: string | undefined): void {
+  if (sessionId === typing) return;
+  typing = sessionId;
   refocus();
 }
 

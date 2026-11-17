@@ -300,6 +300,35 @@ describe('fake claude', () => {
     await done;
   });
 
+  it('ask-questions: interrupted at its dialog, it declines the questions as Claude does: no hook, the turn interrupted for tool use, back at its prompt', async () => {
+    await recorder.close();
+    recorder = await startHookRecorder((event) => (event.hook_event_name === 'PermissionRequest' ? new Promise(() => {}) : undefined));
+    const { child, done } = startFake('claude', { scenario: 'ask-questions', args: ['--settings', settings(), 'set up the build'] });
+    const shown = untilStdout(child, '3. Other');
+    await untilEvents(recorder, 'PermissionRequest');
+    await shown;
+
+    child.kill('SIGINT');
+    await untilStdout(child, 'User declined to answer questions');
+    await untilStdout(child, 'Interrupted');
+    const asked = recorder.events.length;
+    child.stdin.write('carry on\n');
+    await untilEvents(recorder, 'Stop');
+    child.stdin.end();
+    await done;
+
+    // Nothing of the declined call's, and no Stop: after its dialog only its idle prompt, then the next prompt's turn.
+    const names = recorder.events.map((event) => event.hook_event_name);
+    expect(names.slice(0, asked)).not.toContain('PostToolUse');
+    expect(names.slice(0, asked)).not.toContain('PostToolUseFailure');
+    expect(names.slice(0, asked)).not.toContain('Stop');
+    expect(names.slice(names.indexOf('PermissionRequest') + 1).filter((name) => name !== 'Notification')[0]).toBe('UserPromptSubmit');
+    const entries = readJsonl(recorder.events[0]!.transcript_path as string);
+    const declined = entries.findIndex((entry) => JSON.stringify(entry).includes('User declined to answer questions'));
+    expect(entries[declined]).toMatchObject({ type: 'user', message: { content: [{ type: 'tool_result', content: 'User declined to answer questions', is_error: true }] } });
+    expect(entries[declined + 1]).toMatchObject({ type: 'user', message: { content: [{ type: 'text', text: '[Request interrupted by user for tool use]' }] } });
+  });
+
   it("ask-questions: a hook's allow with answers in its updatedInput answers the dialog with them", async () => {
     await recorder.close();
     recorder = await startHookRecorder((event) =>
@@ -351,29 +380,30 @@ describe('fake claude', () => {
     expect(recorder.events.find((event) => event.hook_event_name === 'PostToolUse')).toMatchObject({ tool_input: { answers: {} } });
   });
 
-  it('plan-mode: asks to approve its plan with ExitPlanMode, suggesting accept edits, and an allow with that switch starts on it', async () => {
+  it('plan-mode: asks to approve its plan with ExitPlanMode, suggesting auto mode, and an allow with its input and that switch starts on it', async () => {
     await recorder.close();
     recorder = await startHookRecorder((event) =>
       event.hook_event_name === 'PermissionRequest'
-        ? { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow', updatedPermissions: [{ type: 'setMode', mode: 'acceptEdits', destination: 'session' }] } } }
+        ? { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow', updatedInput: event.tool_input, updatedPermissions: [{ type: 'setMode', mode: 'auto', destination: 'session' }] } } }
         : undefined,
     );
     const result = await runFake('claude', { scenario: 'plan-mode', args: ['-p', '--settings', settings(), 'plan a cache'] });
-    expect(result.stdout).toContain('Accepting edits');
+    expect(result.stdout).toContain('1. Yes, and use auto mode');
     expect(result.stdout).toContain('Starting on the plan.');
     expect(recorder.events.find((event) => event.hook_event_name === 'PermissionRequest')).toMatchObject({
       tool_name: 'ExitPlanMode',
       tool_input: { plan: expect.stringContaining('# Add a cache') },
-      permission_suggestions: [{ type: 'setMode', mode: 'acceptEdits', destination: 'session' }],
+      permission_suggestions: [{ type: 'setMode', mode: 'auto', destination: 'session' }],
     });
+    expect(recorder.events.filter((event) => event.hook_event_name === 'Stop').at(-1)).toMatchObject({ permission_mode: 'auto' });
   });
 
-  it('plan-mode: an allow that sets the default mode starts on it approving each edit, and a plain allow leaves it in plan mode', async () => {
+  it('plan-mode: an allow with its input that sets the default mode starts on it approving each edit; one with no switch leaves it in plan mode', async () => {
     const allowing = (updatedPermissions?: object[]) => async () => {
       await recorder.close();
       recorder = await startHookRecorder((event) =>
         event.hook_event_name === 'PermissionRequest'
-          ? { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow', ...(updatedPermissions ? { updatedPermissions } : {}) } } }
+          ? { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow', updatedInput: event.tool_input, ...(updatedPermissions ? { updatedPermissions } : {}) } } }
           : undefined,
       );
       return runFake('claude', { scenario: 'plan-mode', args: ['-p', '--settings', settings(), 'plan a cache'] });
@@ -385,6 +415,31 @@ describe('fake claude', () => {
 
     const plain = await allowing()();
     expect(plain.stdout).toContain('Still in plan mode, so I can make no edits.');
+  });
+
+  it("plan-mode: a hook's allow without the call's input leaves its dialog open, as Claude 2.1.325 does, till a line is typed at it", async () => {
+    await recorder.close();
+    let replied!: () => void;
+    const repliedTo = new Promise<void>((resolve) => (replied = resolve));
+    recorder = await startHookRecorder((event) => {
+      if (event.hook_event_name !== 'PermissionRequest') return undefined;
+      // Once the recorder has written this reply out.
+      setImmediate(replied);
+      return { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow', updatedPermissions: [{ type: 'setMode', mode: 'auto', destination: 'session' }] } } };
+    });
+    const { child, done } = startFake('claude', { scenario: 'plan-mode', args: ['--settings', settings(), 'plan a cache'] });
+    await untilStdout(child, '3. Tell Claude what to change');
+    await repliedTo;
+    // The hook has answered, and the dialog is still up a while after: no PostToolUse, nothing said.
+    await sleep(500);
+    expect(recorder.events.some((event) => event.hook_event_name === 'PostToolUse')).toBe(false);
+    const said = untilStdout(child, 'Starting on the plan.');
+    child.stdin.write('2\n');
+    await said;
+    await untilEvents(recorder, 'Stop');
+    expect(recorder.events.filter((event) => event.hook_event_name === 'Stop').at(-1)).toMatchObject({ permission_mode: 'default' });
+    child.stdin.end();
+    await done;
   });
 
   it('plan-mode: a deny keeps it planning, with what to change', async () => {

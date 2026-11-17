@@ -17,6 +17,15 @@ export interface ZoneResize {
 }
 export const ZoneResizeContext = createContext<ZoneResize>({ start: () => {}, resize: () => true });
 
+/** What the board does as a zone's lanes area is dragged by a corner: its lanes reflow as it goes, and it is saved once let go. */
+export interface ZoneLanes {
+  /** The lanes area as it is now being dragged, or null once the drag is over. */
+  draft(id: string, lanes: ZoneLayout | null): void;
+  /** Saves the lanes area it was let go at. */
+  save(id: string, lanes: ZoneLayout): void;
+}
+export const ZoneLanesContext = createContext<ZoneLanes>({ draft: () => {}, save: () => {} });
+
 /** Why a group with no default repo can't start an agent from an issue: there is no repo to ask for one in. */
 const BIND_FIRST = 'Bind this zone to a repo, or give it a default repo, first';
 /** Why a cloning zone's New agent button does nothing (S2). */

@@ -7,10 +7,12 @@ import {
   type Shell,
   type TileMove,
   type TilePosition,
+  type Zone,
   type ZoneLayout,
 } from '@agent-board/daemon/protocol';
 import { paneIds } from '@agent-board/daemon/pane-layout';
 import { heldByTicket } from '@agent-board/daemon/ticket-tiles';
+import { inFreeArea } from '@agent-board/daemon/shelf-layout';
 import { isItemNode, type ItemNodeType } from './items/items';
 import { expandedRank, type ExpandedTiles } from './expanded';
 import { tileSizeOf, type TileSizes } from './tile-size';
@@ -37,6 +39,12 @@ const TILE_PREFIXES: Record<TileKind, string> = { agent: AGENT_NODE_PREFIX, shel
  * `tileSizeKey`, as its resized size is kept by it.
  */
 export const tileNodeId = (kind: TileKind, id: string): string => tileSizeKey(kind, id);
+
+/** The agent (by session id) a node id is the tile of, or undefined for any other node, or none. */
+export function agentOfTile(nodeId: string | undefined): string | undefined {
+  const subject = nodeId === undefined ? undefined : tileSubject(nodeId);
+  return subject?.kind === 'agent' ? subject.id : undefined;
+}
 
 /** What decides whether a ticket's chat draws as its ticket's card. */
 type CardFields = Pick<Agent, 'startup' | 'undelivered' | 'trustFolder' | 'untypedPrompt' | 'unsent' | 'hooksSilent'>;
@@ -340,9 +348,13 @@ export function withTiles(
     .filter((node) => !isTile(node))
     .map((node) => {
       if (!isZone(node)) return node;
-      // A tile being dragged out doesn't stretch its zone after it.
-      const held = entries.filter((entry) => entry.parentId === node.id && known.get(entry.id)?.dragging !== true).map(rect);
-      return fitToTiles(node, held);
+      // A tile being dragged out doesn't stretch its zone after it. On shelves or in clusters, its layout draws its tiles
+      // (`withShelves`), never where they were saved, so they stretch it neither; but those in its free area, where they
+      // were put, do.
+      const inside = entries.filter((entry) => entry.parentId === node.id && known.get(entry.id)?.dragging !== true);
+      if (!laysOutItsTiles(node.data.zone)) return fitToTiles(node, inside.map(rect));
+      const free = inside.filter((entry) => inFreeArea(node.data.zone, entry.id)).map(rect);
+      return fitToTiles(node, free, inside.length);
     });
 
   const tiles = entries.map((entry): TileNodeType => {
@@ -376,11 +388,27 @@ export function withTiles(
   return [...sized, ...tiles.toSorted((a, b) => (zOf(a) === zOf(b) ? 0 : zOf(a) - zOf(b)))];
 }
 
+/** Whether `zone` lays its tiles out itself, on shelves or in clusters, drawing them away from where they were saved. */
+export const laysOutItsTiles = (zone: Pick<Zone, 'layoutMode'>): boolean => zone.layoutMode === 'shelves' || zone.layoutMode === 'clusters';
+
+/**
+ * `zone` as a resize of it goes on from, once it has started. On shelves or in clusters, at its saved size: a drag of one
+ * edge sets only that edge's side on the node, and its layout, drawn from the node mid-resize, would otherwise keep the
+ * other side from a size an earlier resize left on it after it saved. (Where React Flow starts the resize from is the
+ * measured size `withShelves` hands it.)
+ */
+export const resizesFrom = (zone: ZoneNodeType): ZoneNodeType => {
+  if (!laysOutItsTiles(zone.data.zone)) return zone;
+  const saved = { width: zone.data.zone.width, height: zone.data.zone.height };
+  return { ...zone, ...saved, measured: saved };
+};
+
 /**
  * `zone` at its saved size, grown right and down to hold `tiles` (relative to it) with its spacing's padding, remembering
- * for its resizer the part of the board it must cover and how many tiles it holds.
+ * for its resizer the part of the board it must cover and how many tiles it holds: `tileCount`, which on shelves or in
+ * clusters counts the tiles it isn't grown round too.
  */
-function fitToTiles(zone: ZoneNodeType, tiles: readonly ZoneLayout[]): ZoneNodeType {
+function fitToTiles(zone: ZoneNodeType, tiles: readonly ZoneLayout[], tileCount = tiles.length): ZoneNodeType {
   const { x, y } = zone.position;
   const grid = zoneGrid(zone.data.zone.spacing);
   const { padding } = grid.gaps;
@@ -393,10 +421,10 @@ function fitToTiles(zone: ZoneNodeType, tiles: readonly ZoneLayout[]): ZoneNodeT
   };
   const known = zone.data.covers;
   const same =
-    zone.data.tileCount === tiles.length &&
+    zone.data.tileCount === tileCount &&
     known !== undefined &&
     (['left', 'top', 'right', 'bottom'] as const).every((edge) => known[edge] === covers[edge]);
-  const data = { ...zone.data, covers, tileCount: tiles.length };
+  const data = { ...zone.data, covers, tileCount };
   // Not mid-resize: the resizer works from the size the drag started at and would fight a size changed under it.
   if (zone.resizing === true) return same ? zone : { ...zone, data };
   const layout = layoutOf(zone);

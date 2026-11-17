@@ -157,7 +157,7 @@ for (const { theme, suffix } of THEMES) {
         const gallery = window.getByTestId('quick-ask-dialog-gallery');
         await expect(gallery).toBeVisible();
         // The plan's choices ignore clicks for a moment as they show, drawn dimmed: shot once they take them.
-        for (const choice of await gallery.getByRole('button', { name: 'Yes, approve each edit' }).all()) await expect(choice).toBeEnabled();
+        for (const choice of await gallery.getByRole('button', { name: 'Yes, manually approve edits' }).all()) await expect(choice).toBeEnabled();
         await pinFonts(window);
         await ignorePointer(window);
         await settle(window);

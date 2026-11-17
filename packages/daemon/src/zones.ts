@@ -6,6 +6,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { gateCommandArgv } from './gate-rules.ts';
 import { runGit } from './git.ts';
 import { keyedQueue } from './keyed-queue.ts';
+import { freeTile, lanesInside } from './shelf-layout.ts';
 import { folderPath } from './repo-zone.ts';
 import { finiteNumberParam, invalidParams, oneOf, optionalBooleanParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
 import {
@@ -68,6 +69,11 @@ interface ZoneRow {
   spacing: ArrangeSpacing;
   layout_mode: ZoneLayoutMode;
   layout_rule: ZoneLayoutRule;
+  /** Its lanes area (`Zone.lanes`): all four set, or all NULL for lanes that fill it. */
+  lanes_x: number | null;
+  lanes_y: number | null;
+  lanes_width: number | null;
+  lanes_height: number | null;
   folded: number;
   tracker_provider: TrackerProvider | null;
   tracker_scope: string | null;
@@ -153,15 +159,18 @@ export interface ZoneTable {
   /**
    * After the tile `key` (`agent:<id>`, `shell:<id>`) moved to `zoneId` (null, loose): marks it placed by hand if
    * `byHand` and that zone keeps a layout rule; else drops a mark it had in another zone. Announces each zone whose
-   * marks changed.
+   * marks changed. Its free mark likewise: set if `byHand` put it, at `at` (its place in the zone), in the free area of
+   * a zone on shelves or in clusters, cleared if `byHand` put it anywhere else or it left that zone.
    */
-  tileMoved(key: string, zoneId: string | null, byHand: boolean): void;
+  tileMoved(key: string, zoneId: string | null, byHand: boolean, at: { x: number; y: number } | null, free?: boolean): void;
   /**
    * The tile `key` is in `zoneId` now (null, loose; undefined, gone), however it got there: a mark it had in another
    * zone goes, so it is not pinned again if it comes back. Not announced: a mark counts only while its tile is in its
    * zone, so the zone's list is as it was.
    */
   tileSeen(key: string, zoneId: string | null | undefined): void;
+  /** Drops every free mark in `zoneId` (`Zone.free`), as its lanes come to fill it. Not announced: its caller does. */
+  dropFree(zoneId: string): void;
   /** Drops the marks of `keys` in the zone (all of them without), announcing it if any went. Whether any did. */
   dropHandPlaced(zoneId: string, keys?: readonly string[]): boolean;
 }
@@ -197,6 +206,21 @@ export function createZoneTable(
   const deleteMarkIn = db.prepare('DELETE FROM zone_hand_placed WHERE tile_key = ? AND zone_id = ?');
   const deleteMarkOutside = db.prepare('DELETE FROM zone_hand_placed WHERE tile_key = ? AND zone_id IS NOT ?');
   const deleteMarksIn = db.prepare('DELETE FROM zone_hand_placed WHERE zone_id = ?');
+  // A free mark, as a hand mark: it counts only while its tile is in the zone.
+  const selectFree = db.prepare(
+    `SELECT tile_key FROM zone_free_tiles f WHERE zone_id = ?1 AND (
+       (tile_key LIKE 'agent:%' AND EXISTS (SELECT 1 FROM agents WHERE session_id = substr(f.tile_key, 7) AND zone_id = ?1))
+       OR (tile_key LIKE 'shell:%' AND EXISTS (SELECT 1 FROM shells WHERE id = substr(f.tile_key, 7) AND zone_id = ?1)))
+     ORDER BY placed_at, tile_key`,
+  );
+  const selectFreeMark = db.prepare('SELECT zone_id FROM zone_free_tiles WHERE tile_key = ?');
+  const upsertFree = db.prepare(
+    `INSERT INTO zone_free_tiles (tile_key, zone_id) VALUES (?, ?)
+     ON CONFLICT (tile_key) DO UPDATE SET zone_id = excluded.zone_id, placed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`,
+  );
+  const deleteFree = db.prepare('DELETE FROM zone_free_tiles WHERE tile_key = ?');
+  const deleteFreeOutside = db.prepare('DELETE FROM zone_free_tiles WHERE tile_key = ? AND zone_id IS NOT ?');
+  const deleteFreeIn = db.prepare('DELETE FROM zone_free_tiles WHERE zone_id = ?');
   const insert = db.prepare(
     `INSERT INTO zones (id, repo_root, folder, name, color, x, y, width, height, tracker_provider, tracker_scope,
        tracker_project, clone_repo, clone_path, clone_made_folder, clone_made_owner, spacing, group_folder, trusts_folder)
@@ -245,7 +269,9 @@ export function createZoneTable(
     spacing: row.spacing,
     layoutMode: row.layout_mode,
     layoutRule: row.layout_rule,
+    lanes: rowLanes(row),
     handPlaced: row.layout_rule === 'off' ? [] : (selectHandPlaced.all(row.id) as { tile_key: string }[]).map((mark) => mark.tile_key),
+    free: row.lanes_x === null ? [] : (selectFree.all(row.id) as { tile_key: string }[]).map((mark) => mark.tile_key),
     folded: row.folded === 1,
     tracker:
       row.tracker_provider === null || row.tracker_scope === null
@@ -332,18 +358,36 @@ export function createZoneTable(
       return ZONE_COLORS.reduce((best, color) => ((uses.get(color) ?? 0) < (uses.get(best) ?? 0) ? color : best));
     },
     rememberFolder,
-    tileMoved(key, zoneId, byHand) {
+    tileMoved(key, zoneId, byHand, at, putBack) {
       const was = (selectMark.get(key) as { zone_id: string } | undefined)?.zone_id;
-      const ruled = zoneId === null ? undefined : (selectOne.get(zoneId) as ZoneRow | undefined)?.layout_rule;
+      const row = zoneId === null ? undefined : (selectOne.get(zoneId) as ZoneRow | undefined);
+      const ruled = row?.layout_rule;
       const marks = byHand && ruled !== undefined && ruled !== 'off';
       // A move that isn't the user's (pushed clear, undone, laid out) keeps the mark while the tile stays in its zone.
       if (marks) upsertMark.run(key, zoneId);
       else if (was !== undefined && was !== zoneId) deleteMark.run(key);
       if (was !== undefined && was !== zoneId) announce(was);
       if (zoneId !== null && marks && was !== zoneId) announce(zoneId);
+
+      // Its free mark: set or cleared by where the user put it down, or as an undo puts it back (`putBack`), kept through
+      // any other move in its zone.
+      const freeWas = (selectFreeMark.get(key) as { zone_id: string } | undefined)?.zone_id;
+      const laned = row !== undefined && row.layout_mode !== 'free' && rowLanes(row) !== null;
+      const free = laned && (putBack ?? (byHand && at !== null && freeTile(rowLanes(row), at)));
+      if (free) upsertFree.run(key, zoneId);
+      else if (byHand || putBack !== undefined || freeWas !== zoneId) deleteFree.run(key);
+      const freeNow = (selectFreeMark.get(key) as { zone_id: string } | undefined)?.zone_id;
+      if (freeWas !== freeNow) {
+        if (freeWas !== undefined) announce(freeWas);
+        if (freeNow !== undefined) announce(freeNow);
+      }
     },
     tileSeen(key, zoneId) {
       deleteMarkOutside.run(key, zoneId ?? null);
+      deleteFreeOutside.run(key, zoneId ?? null);
+    },
+    dropFree(zoneId) {
+      deleteFreeIn.run(zoneId);
     },
     dropHandPlaced(zoneId, keys) {
       const changes = keys === undefined ? Number(deleteMarksIn.run(zoneId).changes) : keys.reduce((n, key) => n + Number(deleteMarkIn.run(key, zoneId).changes), 0);
@@ -365,6 +409,7 @@ export function zoneHandlers<Context>(
   onRemoving: (zoneId: string) => void = () => {},
 ): RpcHandlers<ZoneMethods, Context> {
   const updateLayout = db.prepare('UPDATE zones SET x = ?, y = ?, width = ?, height = ? WHERE id = ?');
+  const updateLanes = db.prepare('UPDATE zones SET lanes_x = ?, lanes_y = ?, lanes_width = ?, lanes_height = ? WHERE id = ?');
   const updateName = db.prepare('UPDATE zones SET name = ? WHERE id = ?');
   const updateColor = db.prepare('UPDATE zones SET color = ? WHERE id = ?');
   const updateFillOpacity = db.prepare('UPDATE zones SET fill_opacity = ? WHERE id = ?');
@@ -494,7 +539,17 @@ export function zoneHandlers<Context>(
       const fields = paramsObject(params);
       const id = stringParam(fields, 'id');
       const layout = layoutParams(fields);
-      if (updateLayout.run(layout.x, layout.y, layout.width, layout.height, id).changes === 0) throw noZone(id);
+      const given = fields.lanes === undefined ? undefined : lanesParam(fields);
+      const was = zones.get(id).lanes;
+      updateLayout.run(layout.x, layout.y, layout.width, layout.height, id);
+      // Kept inside the zone, resized under it or given reaching past it.
+      const lanes = given === undefined ? was : given;
+      const kept = lanes === null ? null : lanesInside(lanes, layout);
+      if (given !== undefined || JSON.stringify(kept) !== JSON.stringify(was)) {
+        updateLanes.run(kept?.x ?? null, kept?.y ?? null, kept?.width ?? null, kept?.height ?? null, id);
+      }
+      // Lanes that fill the zone leave it no free area: its tiles are all laid out again, from wherever they are.
+      if (kept === null) zones.dropFree(id);
       return changed(id);
     },
     'zone.configure': (params) => {
@@ -581,6 +636,8 @@ export function zoneHandlers<Context>(
       const layoutMode = fields.layoutMode === undefined ? 'free' : oneOf(fields, 'layoutMode', ZONE_LAYOUT_MODES);
       // A snapshot from before zones kept a rule is of a zone with none.
       const layoutRule = fields.layoutRule === undefined ? 'off' : oneOf(fields, 'layoutRule', ZONE_LAYOUT_RULES);
+      // A snapshot from before zones had lanes areas of their own is of one whose lanes fill it.
+      const lanes = fields.lanes === undefined || fields.lanes === null ? null : lanesInside(lanesParam(fields)!, layout);
       return queue(`zone ${id}`, async () => {
         if (zones.find(id) !== undefined) throw invalidParams(`zone ${id} exists already`);
         // As the setter does; but a folder that has gone since is left out, rather than failing the undo it is for.
@@ -595,6 +652,7 @@ export function zoneHandlers<Context>(
         updateFillOpacity.run(fillOpacity, id);
         updateLayoutMode.run(layoutRule === 'off' ? layoutMode : 'free', id);
         updateLayoutRule.run(layoutRule, id);
+        updateLanes.run(lanes?.x ?? null, lanes?.y ?? null, lanes?.width ?? null, lanes?.height ?? null, id);
         updateBypass.run(optionalBooleanParam(fields, 'codexBypassHookTrust') === false ? 0 : 1, id);
         updateTrustsFolder.run(bound !== null && optionalBooleanParam(fields, 'trustsFolder') === true ? 1 : 0, id);
         updateBoardMcp.run(optionalBooleanParam(fields, 'boardMcp') === false ? 0 : 1, id);
@@ -749,6 +807,22 @@ function layoutParams(fields: Record<string, unknown>): ZoneLayout {
     throw invalidParams(`a zone must be at least ${MIN_ZONE_SIZE.width}×${MIN_ZONE_SIZE.height}`);
   }
   return layout;
+}
+
+/** A zone row's lanes area: null unless all four of its columns are set. */
+function rowLanes(row: ZoneRow): ZoneLayout | null {
+  return row.lanes_x === null || row.lanes_y === null || row.lanes_width === null || row.lanes_height === null
+    ? null
+    : { x: row.lanes_x, y: row.lanes_y, width: row.lanes_width, height: row.lanes_height };
+}
+
+/** A `zone.update`'s `lanes`: a lanes area with a size, relative to the zone, or null for lanes that fill it. */
+function lanesParam(fields: Record<string, unknown>): ZoneLayout | null {
+  if (fields.lanes === null) return null;
+  const lanes = paramsObject(fields.lanes);
+  const area = { x: finiteNumberParam(lanes, 'x'), y: finiteNumberParam(lanes, 'y'), width: finiteNumberParam(lanes, 'width'), height: finiteNumberParam(lanes, 'height') };
+  if (area.width <= 0 || area.height <= 0) throw invalidParams('lanes must have a width and a height');
+  return area;
 }
 
 function alreadyBound(zone: Zone): RpcMethodError {

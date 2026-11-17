@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, type CSSProperties, type MouseEvent } from 'react';
 import { NodeResizer, type NodeProps } from '@xyflow/react';
 import { ClustersView, ShelvesView } from './ShelvesView';
+import { LanesArea } from './LanesArea';
 import { Ellipsis } from 'lucide-react';
 import { leastZoneSize, zoneGrid } from '@agent-board/daemon/board-layout';
 import { MIN_ZONE_SIZE, type ArrangeSpacing } from '@agent-board/daemon/protocol';
@@ -39,7 +40,7 @@ const NO_ROWS: readonly ModelEntry[] = [];
  * many of its agents need the user and a count of the rest. Every control of the Classic zone's tab is in its ⋯ and its
  * right-click menu, from the menu model; a double-click on the name still renames it.
  */
-export function ProjectWell({ data: { zone, tileCount = 0, resizeMin, shelves, clusters, stageBoard }, selected, positionAbsoluteX, positionAbsoluteY, width, height }: NodeProps<ZoneNodeType>) {
+export function ProjectWell({ data: { zone, tileCount = 0, resizeMin, shelves, clusters, fits, lanesArea, stageBoard }, selected, positionAbsoluteX, positionAbsoluteY, width, height }: NodeProps<ZoneNodeType>) {
   const saveLayout = useContext(SaveZoneLayoutContext);
   const resize = useContext(ZoneResizeContext);
   const rows = leastZoneSize(tileCount, { width: width ?? 0, height: height ?? 0 }, zoneGrid(zone.spacing));
@@ -110,11 +111,12 @@ export function ProjectWell({ data: { zone, tileCount = 0, resizeMin, shelves, c
       <CrewFrameBoxes frames={crews} />
       {shelves !== undefined && <ShelvesView zoneId={zone.id} view={shelves} />}
       {clusters !== undefined && <ClustersView zoneId={zone.id} view={clusters} />}
+      {selected && lanesArea !== undefined && <LanesArea zoneId={zone.id} lanes={lanesArea} zone={{ width: width ?? zone.width, height: height ?? zone.height }} />}
       <NodeResizer
-        isVisible={selected && shelves === undefined && clusters === undefined}
+        isVisible={selected}
         color={zone.color}
-        minWidth={Math.max(MIN_ZONE_SIZE.width, least.width)}
-        minHeight={Math.max(MIN_ZONE_SIZE.height, least.height)}
+        minWidth={Math.max(MIN_ZONE_SIZE.width, fits?.width ?? least.width)}
+        minHeight={Math.max(MIN_ZONE_SIZE.height, fits?.height ?? least.height)}
         onResizeStart={() => resize.start(zone.id)}
         shouldResize={(_event, next) => resize.resize(zone.id, next)}
         onResizeEnd={(_event, { x, y, width, height }) => saveLayout(zone.id, { x, y, width, height })}

@@ -318,8 +318,8 @@ export interface ZonesApi {
   checkoutState(path: string): Promise<CheckoutState>;
   /** Shows a folder picker and binds the unbound zone to the picked folder, as a repo or as a new project. */
   bind(id: string, as: ZoneBinding): Promise<BindZoneResult>;
-  /** Moves and resizes a zone. */
-  update(id: string, layout: ZoneLayout): Promise<Zone>;
+  /** Moves and resizes a zone; with `lanes`, sets its lanes area too (null for lanes that fill it). */
+  update(id: string, layout: ZoneLayout & { lanes?: ZoneLayout | null }): Promise<Zone>;
   /** Changes a zone's settings. */
   configure(id: string, settings: Partial<ZoneSettings>): Promise<Zone>;
   /**

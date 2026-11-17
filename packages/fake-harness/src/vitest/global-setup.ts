@@ -1,6 +1,6 @@
 /**
- * Vitest globalSetup: no `AGENT_BOARD_*` from an enclosing board, a throwaway app-data dir, tripwires first on PATH for
- * every worker, git kept off this checkout's repo, and the user's live launchers left alone; fail the run if a guard was hit. Also reaps this worktree's stale
+ * Vitest globalSetup: no `AGENT_BOARD_*` from an enclosing board, a throwaway app-data dir and home, tripwires first on
+ * PATH for every worker, git kept off this checkout's repo, and the user's live launchers left alone; fail the run if a guard was hit. Also reaps this worktree's stale
  * runs and stops this one if whatever started it goes (reap.ts).
  */
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -10,6 +10,7 @@ import { scrubBoardEnv } from '../board-guard.ts';
 import { compileCacheGlobalSetup } from '../compile-cache.ts';
 import { gitGuardGlobalSetup } from '../git-guard.ts';
 import { harnessGuardGlobalSetup } from '../guard.ts';
+import { useTempHome } from '../home-guard.ts';
 import { shimGuardGlobalSetup } from '../shim-guard.ts';
 import { runEveryTeardown } from '../teardowns.ts';
 import { reapStaleRuns, registerRun, stopWhenOrphaned } from './reap.ts';
@@ -26,9 +27,12 @@ export default async function globalSetup(): Promise<() => void> {
   const teardownHarness = harnessGuardGlobalSetup();
   const teardownGit = gitGuardGlobalSetup();
   const teardownShims = shimGuardGlobalSetup();
+  // The real home's ~/.claude and ~/.codex hold the live app's hooks: a fake harness that read them would post to the
+  // user's own board. Every test process, and all it starts, inherits this temp home instead (the fakes refuse the real one).
+  const { restore: restoreHome } = useTempHome();
   const teardown = (): void => {
     try {
-      runEveryTeardown([teardownShims, teardownGit, teardownHarness]);
+      runEveryTeardown([restoreHome, teardownShims, teardownGit, teardownHarness]);
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
       unregister();

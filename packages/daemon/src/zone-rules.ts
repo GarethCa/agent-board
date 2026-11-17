@@ -259,15 +259,20 @@ export function markingHandMoves<Context>(handlers: RpcHandlers<MoveMethods, Con
   // The methods as they are now: the result may take their place in the same object.
   const moves = { ...handlers };
   const byHand = (params: unknown) => (params as { byHand?: unknown } | null)?.byHand === true;
+  // Put back free or not by an undo (`TileMove.free`); undefined, judged by where it is put.
+  const free = (params: unknown) => {
+    const given = (params as { free?: unknown } | null)?.free;
+    return typeof given === 'boolean' ? given : undefined;
+  };
   return {
     'agent.move': async (params, context) => {
       const agent = await moves['agent.move'](params, context);
-      zones.tileMoved(tileSizeKey('agent', agent.sessionId), agent.zoneId, byHand(params));
+      zones.tileMoved(tileSizeKey('agent', agent.sessionId), agent.zoneId, byHand(params), agent.position, free(params));
       return agent;
     },
     'shell.move': async (params, context) => {
       const shell = await moves['shell.move'](params, context);
-      zones.tileMoved(tileSizeKey('shell', shell.id), shell.zoneId, byHand(params));
+      zones.tileMoved(tileSizeKey('shell', shell.id), shell.zoneId, byHand(params), shell.position, free(params));
       return shell;
     },
   };

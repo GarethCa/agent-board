@@ -97,7 +97,7 @@ export function registerZoneIpc(daemon: DaemonLink): void {
     );
     return result.status === 'done' ? { status: 'bound', zone: result.zone } : result;
   });
-  ipcMain.handle(ZONE_IPC.update, (_event, id: string, layout: ZoneLayout) =>
+  ipcMain.handle(ZONE_IPC.update, (_event, id: string, layout: ZoneLayout & { lanes?: ZoneLayout | null }) =>
     daemon.call('zone.update', { id, ...layout }),
   );
   ipcMain.handle(ZONE_IPC.configure, (_event, id: string, settings: Partial<ZoneSettings>) => {

@@ -3,7 +3,7 @@
 import { useCallback, useMemo } from 'react';
 import type { CreateShellTileParams, Shell, Zone, ZoneLayout } from '@agent-board/daemon/protocol';
 import { NEW_AGENT_SIZE } from '@agent-board/daemon/board-layout';
-import { agentStartIn, dropPlace } from './place-session';
+import { agentStartIn, dropPlace, inFreeDrop } from './place-session';
 
 export interface PlaceSessionOptions {
   zones(): Zone[];
@@ -42,7 +42,10 @@ export function usePlaceSession({ zones, zoneLayouts, onShell, onDialog, report 
       if (start.kind === 'refuse') return report('start an agent')(start.reason);
       if (start.kind === 'dialog') return onDialog(zone, position);
       // Its tile is on the board once this answers: what fails after that stays on the tile.
-      window.agentBoard.agents.start({ zoneId: zone!.id, position, prompt: '', ...NEW_AGENT_SIZE }).catch(report('start an agent'));
+      const started = window.agentBoard.agents.start({ zoneId: zone!.id, position, prompt: '', ...NEW_AGENT_SIZE });
+      // Put in a zone's free area, it is the user's own place for it: marked free, so its layout leaves it there.
+      const free = inFreeDrop(zone, position);
+      started.then((sessionId) => (free ? window.agentBoard.agents.move(sessionId, { zoneId: zone!.id, ...position, byHand: true }) : undefined)).catch(report('start an agent'));
     },
     [placeAt, onDialog, report],
   );
@@ -53,9 +56,15 @@ export function usePlaceSession({ zones, zoneLayouts, onShell, onDialog, report 
       const position = { x, y };
       // A loose shell needs its place; one in a zone may have it too.
       const params: CreateShellTileParams = zoneId === null ? { zoneId: null, position } : { zoneId, position };
-      window.agentBoard.shells.create(params).then(onShell, report('start a shell'));
+      const free = inFreeDrop(zones().find((zone) => zone.id === zoneId), position);
+      window.agentBoard.shells
+        .create(params)
+        .then((shell) => {
+          if (free) window.agentBoard.shells.move(shell.id, { zoneId, ...position, byHand: true }).catch(report('start a shell'));
+          onShell(shell);
+        }, report('start a shell'));
     },
-    [zoneLayouts, onShell, report],
+    [zones, zoneLayouts, onShell, report],
   );
 
   return useMemo(() => ({ placeAgent, placeShell }), [placeAgent, placeShell]);

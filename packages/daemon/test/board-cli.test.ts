@@ -278,8 +278,9 @@ describe('who is calling', () => {
 
   it("refuses the app's own daemon under a test, however it was found", async () => {
     const live = daemonPaths(defaultDataDir({ HOME: userInfo().homedir })).socket;
-    // Neither a socket nor a data dir: the CLI would fall back to the app's own daemon, the live board.
-    for (const env of [{}, { AGENT_BOARD_SOCKET: live }]) {
+    // Neither a socket nor a data dir, in the real home (the run's own is a temp one): the CLI would fall back to the
+    // app's own daemon, the live board.
+    for (const env of [{ HOME: userInfo().homedir }, { AGENT_BOARD_SOCKET: live }]) {
       expect(await run(env, 'tree')).toMatchObject({ code: 1, err: expect.stringContaining("refusing the app's own daemon") });
     }
     // A test that swaps HOME still has the real one's daemon refused, and its own fallback is merely not running.

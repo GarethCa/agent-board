@@ -50,7 +50,7 @@ const prompt = (fields: Partial<PermissionPrompt> = {}): PermissionPrompt => ({
 
 const PLAN = '# Add Redis in front of getProduct()\n\n1. Add a `cache.ts` client\n2. Wrap `getProduct()`, 5 min TTL';
 const planPrompt = (fields: Partial<PermissionPrompt> = {}): PermissionPrompt =>
-  prompt({ id: 'p1', toolName: 'ExitPlanMode', toolInput: { plan: PLAN }, questions: null, dialog: null, plan: PLAN, sessionGrant: 'all edits', ...fields });
+  prompt({ id: 'p1', toolName: 'ExitPlanMode', toolInput: { plan: PLAN }, questions: null, dialog: null, plan: PLAN, sessionGrant: 'auto mode', ...fields });
 
 const agent = (permissions: PermissionPrompt[]): Agent => ({ ...galleryAgent('waiting'), sessionId: 's1', name: 'Pick a cache', permissions, ask: null });
 const ACTIONS: QuickAskActions = { answer: () => {}, send: () => {}, toTerminal: () => {} };
@@ -121,17 +121,31 @@ describe("Claude's plan approval (P1)", () => {
     expect(html).toContain('Pick a cache has a plan for you');
     expect(html).toContain('Add Redis in front of getProduct()');
     expect(html).toContain('Read the plan');
-    expect(html).toContain('Yes, auto-accept edits');
-    expect(html).toContain('Yes, approve each edit');
+    expect(html).toContain('Yes, and use auto mode');
+    expect(html).toContain('Yes, manually approve edits');
     expect(html).toContain('No, keep planning…');
     expect(html).toContain('Clear context or bypass permissions:');
     expect(html).not.toContain('ExitPlanMode');
   });
 
-  it('offers auto-accept edits even where Claude suggested no switch, as the daemon sets the mode itself', () => {
+  it('offers auto mode first where Claude suggested no switch, and auto-accept edits where it suggested that', () => {
     const html = row(planPrompt({ sessionGrant: null }));
-    expect(html).toContain('Yes, auto-accept edits');
-    expect(html).toContain('Yes, approve each edit');
+    expect(html).toContain('Yes, and use auto mode');
+    expect(html).toContain('Yes, manually approve edits');
+    const edits = row(planPrompt({ sessionGrant: 'all edits' }));
+    expect(edits).toContain('Yes, auto-accept edits');
+    expect(edits).not.toContain('Yes, and use auto mode');
+  });
+
+  it('keeps its row once answered: sent while Claude takes it, then says so if Claude kept its dialog open', () => {
+    const sent = row(planPrompt({ heldUntil: null, planSent: { sentAt: AT, keptOpen: false } }));
+    expect(sent).toContain('Sent to its dialog. Waiting for Claude to take it.');
+    expect(sent).not.toContain('Yes, and use auto mode');
+    const kept = row(planPrompt({ heldUntil: null, planSent: { sentAt: AT, keptOpen: true } }));
+    expect(kept).toContain('data-testid="plan-kept-open"');
+    expect(kept).toContain('Claude kept its dialog open. Answer it in its terminal.');
+    expect(kept).toContain('Open');
+    expect(kept).not.toContain('Yes, and use auto mode');
   });
 });
 
@@ -155,6 +169,14 @@ describe('on the tile and in the Simplified pane', () => {
     expect(dialog).not.toContain('Allow');
     const plan = renderToStaticMarkup(createElement(PaneDecisions, { agent: agent([planPrompt()]) }));
     expect(plan).toContain('data-kind="claude-plan"');
-    expect(plan).toContain('Yes, auto-accept edits');
+    expect(plan).toContain('Yes, and use auto mode');
+  });
+
+  it('keeps a plan sent from the board above the composer till Claude takes it, and says so if Claude kept its dialog open', () => {
+    const sent = renderToStaticMarkup(createElement(PaneDecisions, { agent: agent([planPrompt({ heldUntil: null, planSent: { sentAt: AT, keptOpen: false } })]) }));
+    expect(sent).toContain('data-kind="claude-plan"');
+    expect(sent).toContain('data-testid="plan-sent"');
+    const kept = renderToStaticMarkup(createElement(PaneDecisions, { agent: agent([planPrompt({ heldUntil: null, planSent: { sentAt: AT, keptOpen: true } })]) }));
+    expect(kept).toContain('data-testid="plan-kept-open"');
   });
 });

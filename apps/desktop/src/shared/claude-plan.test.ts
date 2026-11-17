@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { keepPlanning, PLAN_CHOICES, planGlimpse, planTitle } from './claude-plan';
+import { keepPlanning, planChoices, planGlimpse, planTitle } from './claude-plan';
 
 const PLAN = ['# Add Redis in front of getProduct()', '', '1. Add a `cache.ts` client', '2. Wrap `getProduct()`, 5 min TTL', '3. Bust on write', '4. Tests'].join('\n');
 
@@ -15,11 +15,15 @@ describe("Claude's plan approval", () => {
     expect(planGlimpse('# Short\n\nOne step')).toBe('One step');
   });
 
-  it("offers Claude's two yeses in its dialog's order, auto-accept edits first", () => {
-    expect(PLAN_CHOICES).toEqual([
-      { label: 'Yes, auto-accept edits', decision: { behavior: 'allow', scope: 'session' }, primary: true },
-      { label: 'Yes, approve each edit', decision: { behavior: 'allow' }, primary: false },
+  it("offers Claude's two yeses in its dialog's words and order, auto mode first", () => {
+    expect(planChoices('auto mode')).toEqual([
+      { label: 'Yes, and use auto mode', decision: { behavior: 'allow', scope: 'session' }, primary: true },
+      { label: 'Yes, manually approve edits', decision: { behavior: 'allow' }, primary: false },
     ]);
+  });
+
+  it('offers auto-accept edits first where Claude suggested that for an account without auto mode', () => {
+    expect(planChoices('all edits').map((choice) => choice.label)).toEqual(['Yes, auto-accept edits', 'Yes, manually approve edits']);
   });
 
   it('keeps planning with what to change, or with nothing said', () => {

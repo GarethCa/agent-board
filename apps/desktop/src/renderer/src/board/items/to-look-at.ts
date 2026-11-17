@@ -1,7 +1,7 @@
 // The user's own queue ("To look at"): its items, what kind each is, and the Needs-you rows it shows beside them.
 // They are never copied into the queue: an agent's request stays in Needs you, and the queue reads it live.
 import type { QueueJob } from '@agent-board/daemon/protocol';
-import type { NeedsYouEntry } from '../../../../shared/needs-you';
+import { isAsk, type NeedsYouEntry } from '../../../../shared/needs-you';
 import { askLine } from '../../master/master-view';
 import { KIND_TAGS } from '../../inbox/kind-tags';
 
@@ -27,9 +27,13 @@ export function itemKind(job: Pick<QueueJob, 'link'>): ItemKind {
   return { chip: 'link', head: 'LINK', open: 'Open link' };
 }
 
-/** The Needs-you rows a user's queue shows: those of its zone's agents, or every one for a queue loose on the board. */
+/**
+ * The Needs-you rows a user's queue shows: those of its zone's agents, or every one for a queue loose on the board.
+ * Only what agents ask of the user: an agent that just ended its turn is never one, whatever Needs you shows. Every
+ * count of the queue (its card, its folded icon, the Captain's row, Go through) reads these rows.
+ */
 export const needsInScope = (entries: readonly NeedsYouEntry[], zoneId: string | null): NeedsYouEntry[] =>
-  zoneId === null ? [...entries] : entries.filter((entry) => entry.agent.zoneId === zoneId);
+  entries.filter((entry) => isAsk(entry) && (zoneId === null || entry.agent.zoneId === zoneId));
 
 /** One thing to look at: an agent's request from Needs you, or an item of the queue. */
 export type LookItem = { kind: 'needs'; entry: NeedsYouEntry } | { kind: 'job'; job: QueueJob };

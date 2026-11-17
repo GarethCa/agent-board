@@ -12,13 +12,19 @@ type Waiting = Pick<Agent, 'ask' | 'plan'> & { permissions?: readonly Permission
 export const decisionId = (decision: PaneDecision): string => (decision.kind === 'permission' ? decision.prompt.id : decision.kind === 'ask' ? decision.ask.id : decision.plan.id);
 
 /**
+ * Whether the pane shows `prompt`: while the board holds the harness for it, and once answered from the board while
+ * Claude takes the answer, a question dialog's or a plan's, so the pane says if Claude kept its dialog open.
+ */
+export const inPane = (prompt: PermissionPrompt): boolean => prompt.heldUntil !== null || dialogStatus(prompt) !== 'terminal' || prompt.planSent !== undefined;
+
+/**
  * What `agent` waits on the user for: the permission prompts the board still holds the harness for (oldest first, as
  * their hold runs out and the terminal asks instead; one asking there already is the banner's), with Claude's question
  * dialog the board answers, until its call runs (what became of the answers shows there), then, as the Needs you inbox
  * lists them, its question and its plan still to be decided.
  */
 function pendingDecisions(agent: Waiting): PaneDecision[] {
-  const held = (agent.permissions ?? []).filter((prompt) => prompt.heldUntil !== null || dialogStatus(prompt) !== 'terminal').sort((a, b) => a.requestedAt.localeCompare(b.requestedAt));
+  const held = (agent.permissions ?? []).filter(inPane).sort((a, b) => a.requestedAt.localeCompare(b.requestedAt));
   return [
     ...held.map((prompt): PaneDecision => ({ kind: 'permission', prompt })),
     ...(agent.ask !== null ? [{ kind: 'ask', ask: agent.ask } as const] : []), ...(planPending(agent) ? [{ kind: 'plan', plan: agent.plan } as const] : [])];

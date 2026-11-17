@@ -140,7 +140,8 @@ import { toDone, undoCleanUp, withDoneLines } from './done-lines';
 import { useSpineJoined } from './use-spine-joined';
 import { foldedSessionIds, foldedToast, roomOf, unfoldedToast, unfoldMoves, withFoldedExternals, withFoldedZones } from './fold-zone';
 import { letGoFoldedTerminals } from '../session/TerminalPane';
-import { foldedStack, laidOutTile, pinnedLead, withShelves } from './shelves';
+import { foldedStack, laidOutTile, pinnedLead, withShelves, type LanesDraft } from './shelves';
+import { inFreeArea, lanesInside } from '@agent-board/daemon/shelf-layout';
 import { newStageBoardPlace, stageBoardDropPlace, stageBoardDrops, stageBoardResizes, withStageBoards } from './stage-boards';
 import { ShelvesContext } from './ShelvesView';
 import { useStageLater } from './use-stage-later';
@@ -183,9 +184,9 @@ import { tileOpenAction } from './click-opens';
 import { focusTerminalIn, pulseTile } from './tile-attention';
 import { crewFrames, crewMoves, frameableTiles, landingRects, selectedOrchestrators, withCrewFollowing } from './crews';
 import { restoreViewSettings, setViewSetting, useViewSettings } from './view-settings';
-import { ConnectionCountsContext, edgeCounts, nextConnectionsView, revealedBy, shownEdges, typingInTile, withTethers } from './connections-view';
+import { ConnectionCountsContext, drawnEdges, edgeCounts, nextConnectionsView, shownEdges, typingInTile } from './connections-view';
 import { railOf, withRailSelected } from './rails';
-import { CrewFramesContext, CrewViewContext, selectCrews, type CrewView } from './crew-view';
+import { CrewFramesContext, CrewViewContext, selectCrews, typeInTile, type CrewView } from './crew-view';
 import { AgentNoteLookContext, type AgentNoteLook } from './items/agent-note-look';
 import { isSimplified, useSimplified } from '../design';
 import { agentNoteTethers, isTether, TETHER_EDGE_TYPE } from './items/agent-note-tethers';
@@ -243,12 +244,14 @@ import { TileMenuBoardContext } from './agent-tile-menu';
 import { HandPlacedContext } from './HandPlacedMark';
 import { ClickOpensContext, ShellFoldersContext, TicketViewsContext, TileActionsContext, type ShellFolders, type TileActions, type TileData, type TileNodeType } from './tile';
 import {
+  agentOfTile,
   DRAGGED_TILE_Z_INDEX,
   drawnIn,
   EXTERNAL_NODE_PREFIX,
   isSessionTile,
   isStartTile,
   isZone,
+  laysOutItsTiles,
   layoutOf,
   shellWithPane,
   compactSizeOf,
@@ -276,10 +279,11 @@ import {
   NewShellContext,
   SaveZoneLayoutContext,
   whyNoAgents,
+  ZoneLanesContext,
   ZoneResizeContext,
   ZoneTrackerContext,
 } from './zone-contexts';
-import { ZoneNode } from './ZoneNode';
+import { ZoneNode, type ZoneNodeType } from './ZoneNode';
 import { ZoneTrackerDialog } from './ZoneTrackerDialog';
 import { droppedOnto } from './displace';
 import { DRAG_THRESHOLD, useTileMoves } from './use-tile-moves';
@@ -537,6 +541,8 @@ function BoardView() {
   const typingNow = useRef<string>(undefined);
   const followTyping = useCallback((target: EventTarget | null) => {
     typingNow.current = typingInTile(target);
+    // An orchestrator's tile typed in stops focusing its crew: no dim around it, no crew box.
+    typeInTile(agentOfTile(typingNow.current));
     if (connectionsRef.current !== 'all') setTypingTile(typingNow.current);
   }, []);
   const hoverTile = useCallback((id: string | undefined) => {
@@ -553,7 +559,8 @@ function BoardView() {
   useEffect(() => () => clearTimeout(hoverEnds.current), []);
   useEffect(() => {
     const focusIn = (event: FocusEvent) => followTyping(event.target);
-    const focusOut = (event: FocusEvent) => followTyping(event.relatedTarget);
+    // Focus leaving the window (another app, a session window) keeps its field: it takes the keyboard back on return.
+    const focusOut = (event: FocusEvent) => followTyping(event.relatedTarget ?? (document.hasFocus() ? null : document.activeElement));
     document.addEventListener('focusin', focusIn);
     document.addEventListener('focusout', focusOut);
     return () => {
@@ -570,8 +577,15 @@ function BoardView() {
   const crewView = useMemo<CrewView>(() => ({ framed: new Set(framedKey.split(' ').filter(Boolean)) }), [framedKey]);
   // The selected orchestrators keep their crews focused (framed, lit, the rest dimmed), dragged or not.
   const selectedCrews = selectedOrchestrators(nodes).join(' ');
-  useEffect(() => selectCrews(selectedCrews.split(' ').filter(Boolean)), [selectedCrews]);
-  useEffect(() => () => selectCrews([]), []);
+  useEffect(() => {
+    // Read the keyboard again: a field that went with its tile may have taken it away without saying so.
+    typeInTile(agentOfTile(typingInTile(document.activeElement)));
+    selectCrews(selectedCrews.split(' ').filter(Boolean));
+  }, [selectedCrews]);
+  useEffect(() => () => {
+    selectCrews([]);
+    typeInTile(undefined);
+  }, []);
   const crewBlocks = useMemo(
     () => (crewsKey === '' ? [] : crewsKey.split('\n').map((members) => members.split(' ').map((id) => tileNodeId('agent', id)))),
     [crewsKey],
@@ -819,17 +833,19 @@ function BoardView() {
   // The shelved zones' work on their shelves, and a stage board's on its block, as drawn only: what the user dragged and
   // saved stays as it was.
   const shelves = useShelves();
+  // A zone's lanes area as its corner is dragged: its lanes reflow as it goes.
+  const [lanesDraft, setLanesDraft] = useState<LanesDraft | null>(null);
   const stageLater = useStageLater(shown);
   const shelfLinks = useMemo(() => flow.edges.map((edge) => ({ from: tileNodeId('agent', edge.from), to: tileNodeId('agent', edge.to) })), [flow.edges]);
   const shelved = useMemo(
     () =>
-      withStageBoards(withShelves(shown, { agents, links: shelfLinks, shows: needsYouShows, choice: shelves.choice }), {
+      withStageBoards(withShelves(shown, { agents, links: shelfLinks, shows: needsYouShows, choice: shelves.choice, lanesDraft }), {
         agents,
         links: shelfLinks,
         shows: needsYouShows,
         later: stageLater,
       }),
-    [shown, agents, shelfLinks, needsYouShows, shelves.choice, stageLater],
+    [shown, agents, shelfLinks, needsYouShows, shelves.choice, stageLater, lanesDraft],
   );
   const shelvedRef = useRef(shelved);
   shelvedRef.current = shelved;
@@ -1348,6 +1364,7 @@ function BoardView() {
 
   /** The zone with a layout rule that the tile `nodeId` was placed by hand in, which the rule skips; undefined if none. */
   const handPlacedIn = useCallback((nodeId: string) => nodesRef.current.filter(isZone).find((node) => node.data.zone.handPlaced.includes(nodeId))?.id, []);
+  const freeNow = useCallback((nodeId: string) => nodesRef.current.filter(isZone).some((node) => inFreeArea(node.data.zone, nodeId)), []);
   const spineJoined = useSpineJoined(nodes, agents.length);
   /** The Spine zone and ended agent of the tile `nodeId`, whose ticket can go to Done by hand; undefined for any other tile. */
   const movableToDone = useCallback((nodeId: string) => toDone(nodesRef.current, nodeId, spineJoined.current), [spineJoined]);
@@ -1372,9 +1389,9 @@ function BoardView() {
     (nodeId: string, tile: TileData, move: TileMove, coalesce?: string) => {
       const before = tilePlace(nodeId, tile);
       // A move by hand marks it placed by hand in a zone with a rule: undone, the mark goes back to what it was.
-      if (before !== undefined) history.record([tileMoveStep(nodeId, before, move, handPlacedIn(nodeId))], coalesce);
+      if (before !== undefined) history.record([tileMoveStep(nodeId, before, move, handPlacedIn(nodeId), freeNow(nodeId))], coalesce);
     },
-    [history, tilePlace, handPlacedIn],
+    [history, tilePlace, handPlacedIn, freeNow],
   );
   /** Moves a tile as the user asked, which can be undone. */
   const moveTile = useCallback(
@@ -2125,15 +2142,16 @@ function BoardView() {
    * out again. With `move`, draws it at its new place too: nothing dragged it there.
    */
   const saveZoneLayout = useCallback(
-    (id: string, layout: ZoneLayout, { move = false, record = true }: { move?: boolean; record?: boolean } = {}) => {
+    (id: string, layout: ZoneLayout, { move = false, record = true, lanes }: { move?: boolean; record?: boolean; lanes?: ZoneLayout | null } = {}) => {
       const zone = nodesRef.current.filter(isZone).find((node) => node.id === id)?.data.zone;
       const before = savedZoneLayouts.current.get(id) ?? (zone && { x: zone.x, y: zone.y, width: zone.width, height: zone.height });
       if (record && before !== undefined) history.record([[historyKey.zone(id), { type: 'zone', layout: before }, { type: 'zone', layout }]]);
       savedZoneLayouts.current.set(id, layout);
-      window.agentBoard.zones.update(id, layout).catch(report("save the zone's layout"));
+      window.agentBoard.zones.update(id, lanes === undefined ? layout : { ...layout, lanes }).catch(report("save the zone's layout"));
       // The node may still have a dragged size: set this one while the tiles are laid out again.
+      const withLanes = (node: ZoneNodeType): ZoneNodeType => (lanes === undefined ? node : { ...node, data: { ...node.data, zone: { ...node.data.zone, lanes } } });
       setNodes((current) =>
-        laidOut(current.map((node) => (isZone(node) && node.id === id ? withSavedLayout(node, layout, { move }) : node))),
+        laidOut(current.map((node) => (isZone(node) && node.id === id ? withSavedLayout(withLanes(node), layout, { move }) : node))),
       );
     },
     [report, setNodes, laidOut, history],
@@ -2149,12 +2167,24 @@ function BoardView() {
         width: Math.max(resized.width, MIN_ZONE_SIZE.width, (covers?.right ?? -Infinity) - resized.x),
         height: Math.max(resized.height, MIN_ZONE_SIZE.height, (covers?.bottom ?? -Infinity) - resized.y),
       };
-      saveZoneLayout(id, layout);
+      // Resized from its left or top, its lanes area stays where it was on the board, as its free tiles do: never moved
+      // over them.
+      const before = nodesRef.current.filter(isZone).find((node) => node.id === id)?.data.zone;
+      const lanes = before?.lanes ?? null;
+      const shifted =
+        lanes === null || before === undefined || (before.x === layout.x && before.y === layout.y)
+          ? undefined
+          : lanesInside({ ...lanes, x: lanes.x + before.x - layout.x, y: lanes.y + before.y - layout.y }, layout);
+      saveZoneLayout(id, layout, { lanes: shifted });
       // Its tiles where the resize packed them; and resized from its left or top, its origin moved and React Flow kept
       // what is in it where it was on the board. Save their places in the zone's new terms.
+      const zone = nodesRef.current.filter(isZone).find((node) => node.id === id);
+      // On shelves or in clusters, its layout draws its tiles: their saved places stay as they were, but in its free area.
+      const laidOut = zone !== undefined && laysOutItsTiles(zone.data.zone);
       for (const node of nodesRef.current) {
         if (node.parentId !== id) continue;
         if (isSessionTile(node)) {
+          if (laidOut && !inFreeArea(zone.data.zone, node.id)) continue;
           const stored = subjectOf(node.data).position;
           const at = packed?.get(node.id) ?? node.position;
           if (stored?.x !== at.x || stored?.y !== at.y) moveTile(node.id, node.data, { zoneId: id, ...at });
@@ -2165,6 +2195,27 @@ function BoardView() {
       }
     },
     [moveTile, itemActions, finishResize, saveZoneLayout],
+  );
+
+  // A zone's lanes area, sized by its own corners, saved. Its tiles stay as they were: those in its lanes are laid out in
+  // the new area, and those the user put in its free area (`Zone.free`) stay where they were put, wherever it goes.
+  const zoneLanes = useMemo(
+    () => ({
+      draft: (id: string, lanes: ZoneLayout | null) => setLanesDraft(lanes === null ? null : { zoneId: id, lanes }),
+      save: (id: string, lanes: ZoneLayout) => {
+        const zone = nodesRef.current.filter(isZone).find((node) => node.id === id)?.data.zone;
+        if (zone === undefined) return;
+        const width = Math.max(zone.width, lanes.x + lanes.width);
+        const height = Math.max(zone.height, lanes.y + lanes.height);
+        // Back to filling the zone, it has no lanes area of its own.
+        const now = lanes.x <= 0 && lanes.y <= 0 && lanes.width >= width && lanes.height >= height ? null : lanes;
+        window.agentBoard.zones.update(id, { x: zone.x, y: zone.y, width, height, lanes: now }).catch(report("save the zone's lanes area"));
+        setNodes((current) =>
+          current.map((node) => (isZone(node) && node.id === id ? { ...node, data: { ...node.data, zone: { ...node.data.zone, width, height, lanes: now } } } : node)),
+        );
+      },
+    }),
+    [report, setNodes],
   );
 
   /** Moves each of `tiles` that `positions` puts elsewhere there, in `zoneId` (null: loose), as the user asked. */
@@ -3454,12 +3505,8 @@ function BoardView() {
   const hiddenKey = drawn.flatMap((node) => (node.hidden === true ? [node.id] : [])).join('\n');
   const edges = useMemo(() => {
     const hidden = new Set(hiddenKey.split('\n').filter(Boolean));
-    // The tethers wait for View › Show Tethers: each of their ends says whose it is without them.
-    const tethered = withTethers(allEdges, tethers);
-    const shown = hidden.size === 0 ? tethered : tethered.filter((edge) => !hidden.has(edge.source) && !hidden.has(edge.target));
-    if (connections === 'all') return shown;
-    return shownEdges(shown, connections, revealedBy(hoveredTile, typingTile));
-  }, [allEdges, tethers, connections, hoveredTile, typingTile, hiddenKey]);
+    return drawnEdges(allEdges, { tethers, connections, hidden, hovered: hoveredTile, typing: typingTile });
+  },[allEdges, tethers, connections, hoveredTile, typingTile, hiddenKey]);
   /** In a capture window, what it draws: its zone and what is in it, and the edges between those (capture-mode.ts). */
   const captured = useMemo(() => {
     if (CAPTURE_FRAME === undefined) return undefined;
@@ -3645,6 +3692,7 @@ function BoardView() {
         <DropTargetContext value={dropTarget}>
           <SaveZoneLayoutContext value={saveLayout}>
             <ZoneResizeContext value={zoneResize}>
+              <ZoneLanesContext value={zoneLanes}>
               <NewShellContext value={newShell}>
                 <NewAgentContext value={newAgentInZone}>
                   <ZoneTrackerContext value={setTrackerZone}>
@@ -3715,8 +3763,10 @@ function BoardView() {
                                 if (kept.connectors.size > 0) setSelectedConnectors((current) => new Set([...current, ...kept.connectors]));
                               }}
                               nodeTypes={nodeTypes}
-                              // A press that moves less than this is a click.
+                              // A press that moves less than this is a click, and selects what it was on: with no
+                              // click distance, a press that wobbled a pixel neither dragged nor selected.
                               nodeDragThreshold={DRAG_THRESHOLD}
+                              nodeClickDistance={DRAG_THRESHOLD}
                               onNodeDragStart={(event, _node, dragged) => {
                                 // Where each was saved, for a tile dropped on a stage board, which keeps that place.
                                 dragFrom.current = new Map(dragged.flatMap((node) => {
@@ -3943,6 +3993,7 @@ function BoardView() {
                   </ZoneTrackerContext>
                 </NewAgentContext>
               </NewShellContext>
+              </ZoneLanesContext>
             </ZoneResizeContext>
           </SaveZoneLayoutContext>
         </DropTargetContext>

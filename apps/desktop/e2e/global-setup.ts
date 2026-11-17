@@ -1,4 +1,12 @@
-import { compileCacheGlobalSetup, gitGuardGlobalSetup, harnessGuardGlobalSetup, runEveryTeardown, scrubBoardEnv, shimGuardGlobalSetup } from '@agent-board/fake-harness';
+import {
+  compileCacheGlobalSetup,
+  gitGuardGlobalSetup,
+  harnessGuardGlobalSetup,
+  runEveryTeardown,
+  scrubBoardEnv,
+  shimGuardGlobalSetup,
+  useTempHome,
+} from '@agent-board/fake-harness';
 import { createFakeGitHub } from '@agent-board/tracker/testing';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
@@ -21,6 +29,9 @@ export default function globalSetup(): () => Promise<void> {
   const teardownGit = gitGuardGlobalSetup();
   // Nor may an app under test point the user's live ~/.agent-board/bin launchers at this checkout's build.
   const teardownShims = shimGuardGlobalSetup();
+  // Nor read the user's ~/.claude or ~/.codex, whose settings hold the live app's hooks: the app, its daemon and all
+  // they start get a throwaway home.
+  const { restore: restoreHome } = useTempHome();
   const dataDir = tempDataDir();
   process.env.AGENT_BOARD_DATA_DIR = dataDir;
   // No app under test reaches the real Linear or the user's keychain: tests that need them pass a fixture server and
@@ -39,6 +50,7 @@ export default function globalSetup(): () => Promise<void> {
     await terminate(left);
     await removeDataDir(dataDir);
     runEveryTeardown([
+      restoreHome,
       teardownGuard,
       teardownGit,
       teardownShims,

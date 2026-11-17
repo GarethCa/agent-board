@@ -1,7 +1,7 @@
 import { FIRST_PROMPT, type Agent } from '@agent-board/daemon/protocol';
 import { AGENT_TILE_SIZE } from '@agent-board/daemon/board-layout';
 import { GLANCE_STATES } from './glance-tile';
-import { PORTHOLE_TILES } from './PortholeTileGallery';
+import { PORTHOLE_TILES, REVIEWER_LONG, WORKING_REVIEWER } from './PortholeTileGallery';
 import { ShelfTile } from './ShelfTile';
 
 const PEEK_ROOM = { paddingTop: 'var(--space-4-5)' };
@@ -21,7 +21,7 @@ const UNSENT: Agent = { ...PORTHOLE_TILES.idle.agent, sessionId: 'shelf-unsent',
 
 /**
  * An agent's tile in the Shelf design in each glance state, at rest and on hover: the same agents the Porthole gallery
- * draws, so the two designs can be set side by side. Then one with the most to fit in the tile's fixed size, and one with a prompt row in its line's place.
+ * draws, so the two designs can be set side by side. Then a reviewer at work, one with a two-line name, one with the most to fit in the tile's fixed size, and one with a prompt row in its line's place.
  */
 export function ShelfTileGallery() {
   return (
@@ -37,6 +37,16 @@ export function ShelfTileGallery() {
           </div>
         );
       })}
+      <div style={PEEK_ROOM} data-testid="shelf-tile-reviewer-working">
+        <div style={AGENT_TILE_SIZE}>
+          <ShelfTile id="shelf-reviewer-working" selected={false} agent={{ ...WORKING_REVIEWER.agent, sessionId: 'shelf-reviewer-working' }} implementer={WORKING_REVIEWER.implementer} />
+        </div>
+      </div>
+      <div style={PEEK_ROOM} data-testid="shelf-tile-reviewer-long">
+        <div style={AGENT_TILE_SIZE}>
+          <ShelfTile id="shelf-reviewer-long" selected={false} agent={{ ...REVIEWER_LONG, sessionId: 'shelf-reviewer-long' }} implementer={WORKING_REVIEWER.implementer} />
+        </div>
+      </div>
       <div style={PEEK_ROOM} data-testid="shelf-tile-long">
         <div style={AGENT_TILE_SIZE}>
           <ShelfTile id="shelf-long" selected={false} agent={LONG} repo={LONG_REPO} />

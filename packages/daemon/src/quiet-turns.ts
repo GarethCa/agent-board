@@ -1,5 +1,5 @@
 // The safety net under a Claude agent's turn ending: its Stop hook lost, it would show working at its prompt for good.
-import { closeSync, fstatSync, openSync, readSync } from 'node:fs';
+import { closeSync, fstatSync, openSync, readSync, statSync } from 'node:fs';
 import { open, type FileHandle } from 'node:fs/promises';
 import type { Clock } from './clock.ts';
 import { readStartupScreen } from './startup-screen.ts';
@@ -60,6 +60,32 @@ export function readTranscriptTailSync(path: string, maxBytes = TRANSCRIPT_TAIL_
     const read = readSync(fd, buffer, 0, buffer.length, start);
     const lines = buffer.subarray(0, read).toString('utf8').split('\n');
     return (start > 0 ? lines.slice(1) : lines).filter((line) => line !== '');
+  } catch {
+    return [];
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+/** The size of the file at `path` now, as a mark to read what is added after it from (`readTranscriptFromSync`). */
+export function transcriptSizeSync(path: string): number | undefined {
+  try {
+    return statSync(path).size;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The lines of the file at `path` from byte `start` to its end, read at once; none if it can't be read. */
+export function readTranscriptFromSync(path: string, start: number): string[] {
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, 'r');
+    const { size } = fstatSync(fd);
+    if (size <= start) return [];
+    const buffer = Buffer.alloc(size - start);
+    const read = readSync(fd, buffer, 0, buffer.length, start);
+    return buffer.subarray(0, read).toString('utf8').split('\n').filter((line) => line !== '');
   } catch {
     return [];
   } finally {

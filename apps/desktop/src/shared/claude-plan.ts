@@ -34,14 +34,17 @@ export interface PlanChoice {
 }
 
 /**
- * Claude's choices the hook can give, in its dialog's order: Yes, auto-accept edits, then Yes, approve each edit. Both
- * are offered whatever Claude suggested, as the daemon's reply sets the mode each goes on in (`planReply`). No, keep
- * planning is drawn on its own, as it takes what to change.
+ * Claude's choices the hook can give, in its dialog's words and order, for a plan whose first yes grants `sessionGrant`
+ * (the daemon's words for the mode Claude suggested): Yes, and use auto mode, or Yes, auto-accept edits where Claude's
+ * account has no auto mode (`'all edits'`), then Yes, manually approve edits. The daemon's reply sets the mode each
+ * goes on in (`planReply`). No, keep planning is drawn on its own, as it takes what to change.
  */
-export const PLAN_CHOICES: readonly PlanChoice[] = [
-  { label: 'Yes, auto-accept edits', decision: { behavior: 'allow', scope: 'session' }, primary: true },
-  { label: 'Yes, approve each edit', decision: { behavior: 'allow' }, primary: false },
-];
+export function planChoices(sessionGrant: string | null): readonly PlanChoice[] {
+  return [
+    { label: sessionGrant === 'all edits' ? 'Yes, auto-accept edits' : 'Yes, and use auto mode', decision: { behavior: 'allow', scope: 'session' }, primary: true },
+    { label: 'Yes, manually approve edits', decision: { behavior: 'allow' }, primary: false },
+  ];
+}
 
 /** No, keep planning: a deny that carries what to change, if the user said. */
 export function keepPlanning(words: string): PermissionDecision {

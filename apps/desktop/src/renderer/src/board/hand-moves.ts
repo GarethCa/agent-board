@@ -43,10 +43,11 @@ export function layoutChoiceStep(zoneId: string, was: ZoneLayoutChoice, choice: 
 
 /**
  * The step of the user moving the tile `nodeId` from `before` to `move`. A move by hand records whether the tile was
- * placed by hand before it (`markedIn`, the zone it is marked in, if any), so that an undo puts the mark back as it was.
+ * placed by hand before it (`markedIn`, the zone it is marked in, if any), and whether it was free in its zone's free
+ * area (`wasFree`), so that an undo puts both marks back as they were.
  */
-export function tileMoveStep(nodeId: string, before: TileMove, move: TileMove, markedIn: string | undefined): Change {
-  const marked = move.byHand === true ? { handPlaced: markedIn !== undefined } : {};
+export function tileMoveStep(nodeId: string, before: TileMove, move: TileMove, markedIn: string | undefined, wasFree = false): Change {
+  const marked = move.byHand === true ? { handPlaced: markedIn !== undefined, free: wasFree } : {};
   return [historyKey.tile(nodeId), { type: 'tile', move: historyPlace(before), ...marked }, { type: 'tile', move }];
 }
 
@@ -56,11 +57,13 @@ export type TileStepAction = { kind: 'move'; move: TileMove } | { kind: 'followR
 /**
  * What putting the tile back to `state` does, the tile now marked placed by hand in `markedIn` (if any). A tile that
  * was not placed by hand, back in the zone it is marked in, is put back under the rule; one that was is moved there
- * by hand again, so it is marked as it was even if the move it undoes took it out of that zone.
+ * by hand again, so it is marked as it was even if the move it undoes took it out of that zone. One whose step says
+ * whether it was free goes back free or not as it was, whatever its place says.
  */
 export function tileStepAction(state: Extract<BoardState, { type: 'tile' }>, markedIn: string | undefined): TileStepAction {
   if (state.handPlaced === false && markedIn !== undefined && markedIn === state.move.zoneId) return { kind: 'followRule', zoneId: markedIn };
-  return { kind: 'move', move: state.handPlaced === true ? { ...state.move, byHand: true } : state.move };
+  const move = state.handPlaced === true ? { ...state.move, byHand: true } : state.move;
+  return { kind: 'move', move: state.free === undefined ? move : { ...move, free: state.free } };
 }
 
 /**

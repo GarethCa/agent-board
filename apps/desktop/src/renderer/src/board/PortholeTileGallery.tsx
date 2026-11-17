@@ -35,6 +35,15 @@ export const PORTHOLE_TILES: Record<GlanceState, { agent: Agent; implementer?: T
   scheduled: { agent: { ...galleryAgent('scheduled'), name: 'Nightly fitness report' } },
 };
 
+/** A reviewer at work: the state word says Working, so its mark beside its name is what says it reviews. */
+export const WORKING_REVIEWER: { agent: Agent; implementer: Agent } = {
+  agent: { ...galleryAgent('running'), sessionId: 'porthole-reviewer-working', name: 'Review login redirect', reviewOf: 'gallery-running', issue: ISSUE, pullRequests: [PR('open', 'pending')], status: line('Reading the redirect handler and its tests') },
+  implementer: PORTHOLE_TILES.review.implementer!,
+};
+
+/** A reviewer at work whose name takes two lines: its eye still follows its word, clear of the corner its buttons take. */
+export const REVIEWER_LONG: Agent = { ...WORKING_REVIEWER.agent, sessionId: 'porthole-reviewer-long', name: 'Review the dev server restart under launchd' };
+
 // Each shot takes in the subagents perched on the tile's top edge.
 const PERCH_ROOM = { paddingTop: 'var(--space-4-5)' };
 
@@ -49,7 +58,7 @@ const LONG: Agent = {
 };
 const LONG_REPO = 'desktop-companion-workbench';
 
-/** An agent's tile in the Porthole design in each glance state, then one with the most to fit: the gallery shows them, at rest and on hover. */
+/** An agent's tile in the Porthole design in each glance state, then two reviewers at work (one with a two-line name) and one with the most to fit: the gallery shows them, at rest and on hover. */
 export function PortholeTileGallery() {
   return (
     <div className="tile-gallery" data-testid="porthole-tile-gallery">
@@ -63,6 +72,16 @@ export function PortholeTileGallery() {
           </div>
         );
       })}
+      <div style={PERCH_ROOM} data-testid="porthole-tile-reviewer-working">
+        <div style={AGENT_TILE_SIZE}>
+          <PortholeTile id="porthole-reviewer-working" selected={false} agent={WORKING_REVIEWER.agent} implementer={WORKING_REVIEWER.implementer} />
+        </div>
+      </div>
+      <div style={PERCH_ROOM} data-testid="porthole-tile-reviewer-long">
+        <div style={AGENT_TILE_SIZE}>
+          <PortholeTile id="porthole-reviewer-long" selected={false} agent={REVIEWER_LONG} implementer={WORKING_REVIEWER.implementer} />
+        </div>
+      </div>
       <div style={PERCH_ROOM} data-testid="porthole-tile-long">
         <div style={AGENT_TILE_SIZE}>
           <PortholeTile id="porthole-long" selected={false} agent={LONG} repo={LONG_REPO} />

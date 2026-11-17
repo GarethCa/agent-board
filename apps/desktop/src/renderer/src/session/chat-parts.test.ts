@@ -105,7 +105,7 @@ describe("Claude's plan approval in the chat's live actions", () => {
     requestedAt: START,
     heldUntil: '2026-10-10T11:00:00.000Z',
     asksInTerminal: true,
-    sessionGrant: 'all edits',
+    sessionGrant: 'auto mode',
     questions: null,
     dialog: null,
     plan: PLAN,
@@ -117,28 +117,38 @@ describe("Claude's plan approval in the chat's live actions", () => {
 
   test('offers Claude’s choices in its words, never Allow and Deny, and points to its terminal for the rest', () => {
     const html = actions(planPrompt());
-    expect(html).toContain('Yes, auto-accept edits');
-    expect(html).toContain('Yes, approve each edit');
+    expect(html).toContain('Yes, and use auto mode');
+    expect(html).toContain('Yes, manually approve edits');
     expect(html).toContain('No, keep planning…');
     expect(html).toContain('Clear context or bypass permissions:');
     expect(html).not.toContain('Allow');
     expect(html).not.toContain('Deny');
   });
 
+  test('once answered, says it was sent, then sends the user to its terminal if Claude kept its dialog open', () => {
+    const sent = actions(planPrompt({ heldUntil: null, planSent: { sentAt: START, keptOpen: false } }));
+    expect(sent).toContain('Sent to its dialog. Waiting for Claude to take it.');
+    expect(sent).not.toContain('Yes, and use auto mode');
+    const kept = actions(planPrompt({ heldUntil: null, planSent: { sentAt: START, keptOpen: true } }));
+    expect(kept).toContain('Claude kept its dialog open: answer in the terminal');
+    expect(kept).not.toContain('Yes, and use auto mode');
+  });
+
   test('the status line folds them to one Answer plan, as an ask’s is one Answer', () => {
     const html = actions(planPrompt(), true);
     expect(html).toContain('Answer plan');
-    expect(html).not.toContain('auto-accept');
+    expect(html).not.toContain('auto mode');
     expect(html).not.toContain('Allow');
   });
 
   /** `PlanChoices` drawn at `step`, with every call it makes recorded, and a way to press its controls by their words. */
-  const choices = (step: PlanStep, words = '') => {
+  const choices = (step: PlanStep, words = '', sessionGrant: string | null = 'auto mode') => {
     const calls = { step: [] as PlanStep[], decide: [] as PermissionDecision[], terminal: 0 };
     const tree = PlanChoices({
       step,
       words,
       busy: false,
+      sessionGrant,
       onStep: (next) => calls.step.push(next),
       onWords: () => {},
       onDecide: (decision) => calls.decide.push(decision),
@@ -160,13 +170,19 @@ describe("Claude's plan approval in the chat's live actions", () => {
 
   test('each choice sends its own decision', () => {
     const view = choices('choices');
-    view.press('Yes, auto-accept edits');
-    view.press('Yes, approve each edit');
+    view.press('Yes, and use auto mode');
+    view.press('Yes, manually approve edits');
     expect(view.calls.decide).toEqual([{ behavior: 'allow', scope: 'session' }, { behavior: 'allow' }]);
     view.press('No, keep planning…');
     expect(view.calls.step).toEqual(['changing']);
     view.press('in its terminal');
     expect(view.calls.terminal).toBe(1);
+  });
+
+  test('the first yes accepts edits where Claude suggested that, as an account without auto mode has it', () => {
+    const view = choices('choices', '', 'all edits');
+    view.press('Yes, auto-accept edits');
+    expect(view.calls.decide).toEqual([{ behavior: 'allow', scope: 'session' }]);
   });
 
   test('Answer plan unfolds the choices', () => {

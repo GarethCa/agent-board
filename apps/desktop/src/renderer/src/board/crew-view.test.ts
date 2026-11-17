@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { crewLit, crewsOf, focusedCrews, hoverCrew, leaveCrew, selectCrews } from './crew-view';
+import { crewLit, crewsOf, focusedCrews, hoverCrew, leaveCrew, selectCrews, typeInTile } from './crew-view';
 
 /** The board's root element, as `markCrewFocus` marks it. */
 function fakeRoot() {
@@ -15,6 +15,7 @@ function fakeRoot() {
 }
 
 afterEach(() => {
+  typeInTile(undefined);
   selectCrews([]);
   leaveCrew('lead');
   leaveCrew('sub');
@@ -59,6 +60,51 @@ describe('the crew focus', () => {
     selectCrews(['lead']);
     hoverCrew('lead');
     expect(focusedCrews()).toBe(before);
+  });
+});
+
+describe('typing in an orchestrator\'s tile', () => {
+  it('stops a selected orchestrator focusing its crew while the keyboard is in its tile, and gives it back after', () => {
+    selectCrews(['lead']);
+    typeInTile('lead');
+    expect(focusedCrews().size).toBe(0);
+    typeInTile(undefined);
+    expect([...focusedCrews()]).toEqual(['lead']);
+  });
+
+  it('keeps the crew unfocused while the pointer rests on the tile being typed in', () => {
+    selectCrews(['lead']);
+    hoverCrew('lead');
+    typeInTile('lead');
+    expect(focusedCrews().size).toBe(0);
+    leaveCrew('lead');
+    hoverCrew('lead');
+    expect(focusedCrews().size).toBe(0);
+  });
+
+  it("still focuses the crew from a chip naming it, and another orchestrator's crew on hover or selection", () => {
+    selectCrews(['lead', 'sub']);
+    typeInTile('lead');
+    expect([...focusedCrews()]).toEqual(['sub']);
+    hoverCrew('lead', 'chip');
+    expect([...focusedCrews()].toSorted()).toEqual(['lead', 'sub']);
+    leaveCrew('lead');
+    expect([...focusedCrews()]).toEqual(['sub']);
+  });
+
+  it('leaves the focus alone while typing in a tile that leads no crew', () => {
+    selectCrews(['lead']);
+    typeInTile('worker');
+    expect([...focusedCrews()]).toEqual(['lead']);
+  });
+
+  it("clears the board's dim mark while typing in the only focused orchestrator", () => {
+    const root = fakeRoot();
+    vi.stubGlobal('document', { documentElement: root });
+    selectCrews(['lead']);
+    expect(root.attributes.has('data-crew-focus')).toBe(true);
+    typeInTile('lead');
+    expect(root.attributes.has('data-crew-focus')).toBe(false);
   });
 });
 

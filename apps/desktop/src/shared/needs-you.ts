@@ -45,6 +45,9 @@ export function needsYouEntries(agents: readonly Agent[], shows: NeedsYouShows):
   return entries.sort((a, b) => a.since.localeCompare(b.since));
 }
 
+/** Whether `entry` is something its agent asks of the user: anything but an agent that only ended its turn. */
+export const isAsk = (entry: NeedsYouEntry): boolean => entry.kind !== 'turn';
+
 /** Why a row is in the Simplified design's list: a needs-you request, changes ready to accept, or a problem. */
 export type NeedsYouRowKind = NeedsYouKind | 'accept' | 'problem';
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { historyPlace, layoutChoiceStep, nudgeMove, resizeMove, tileMoveStep, tileStepAction, zoneTidy, cleanUpMessage, movedToDoneMessage } from './hand-moves';
+import type { BoardState } from './editing/use-history';
 
 describe('the user moving a tile by hand', () => {
   it('counts a nudge as a move by hand', () => {
@@ -57,10 +58,18 @@ describe('the history of a tile moved by hand', () => {
     const move = { zoneId: 'z1', x: 9, y: 9, byHand: true };
     expect(tileMoveStep('agent:a', before, move, undefined)).toEqual([
       'tile:agent:a',
-      { type: 'tile', move: { zoneId: 'z1', x: 0, y: 0 }, handPlaced: false },
+      { type: 'tile', move: { zoneId: 'z1', x: 0, y: 0 }, handPlaced: false, free: false },
       { type: 'tile', move },
     ]);
-    expect(tileMoveStep('agent:a', before, move, 'z1')[1]).toEqual({ type: 'tile', move: { zoneId: 'z1', x: 0, y: 0 }, handPlaced: true });
+    expect(tileMoveStep('agent:a', before, move, 'z1')[1]).toEqual({ type: 'tile', move: { zoneId: 'z1', x: 0, y: 0 }, handPlaced: true, free: false });
+  });
+
+  it('records whether the tile was free before a move by hand, and puts it back free or not as it was', () => {
+    const into = tileMoveStep('agent:a', before, { zoneId: 'z1', x: 900, y: 40, byHand: true }, undefined, false)[1]!;
+    const outOf = tileMoveStep('agent:a', before, { zoneId: 'z1', x: 40, y: 40, byHand: true }, undefined, true)[1]!;
+    // Undoing a drag into the free area takes the mark off, at whatever place it had; undoing one out of it puts it back.
+    expect(tileStepAction(into as Extract<BoardState, { type: 'tile' }>, undefined)).toEqual({ kind: 'move', move: { zoneId: 'z1', x: 0, y: 0, free: false } });
+    expect(tileStepAction(outOf as Extract<BoardState, { type: 'tile' }>, undefined)).toEqual({ kind: 'move', move: { zoneId: 'z1', x: 0, y: 0, free: true } });
   });
 
   it('records no mark for a move not by hand', () => {
