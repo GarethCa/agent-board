@@ -28,6 +28,28 @@ export function shownEdges(edges: readonly Edge[], mode: ConnectionsView, reveal
   return edges.filter((edge) => edge.selected === true || revealed.has(edge.source) || revealed.has(edge.target) || (mode === 'handoffs' && isFlowEdge(edge)));
 }
 
+/** What the board draws of what it would draw, as it stands: the view the board is in and the tiles in it. */
+export interface DrawnEdgesView {
+  /** View › Show Tethers. */
+  tethers: boolean;
+  connections: ConnectionsView;
+  /** The nodes folded out of sight (a shelved zone's stacks): no line to one is drawn. */
+  hidden: ReadonlySet<string>;
+  hovered: string | undefined;
+  typing: string | undefined;
+}
+
+/**
+ * The edges the board draws: the tethers first wait for View › Show Tethers (each of their ends says whose it is
+ * without them), then a line to a hidden node goes, then the connections view, where hovering a tile shows its own
+ * lines. So hovering never brings back a tether the setting keeps off.
+ */
+export function drawnEdges(edges: readonly Edge[], { tethers, connections, hidden, hovered, typing }: DrawnEdgesView): Edge[] {
+  const tethered = withTethers(edges, tethers);
+  const shown = hidden.size === 0 ? tethered : tethered.filter((edge) => !hidden.has(edge.source) && !hidden.has(edge.target));
+  return shownEdges(shown, connections, revealedBy(hovered, typing));
+}
+
 /**
  * The tiles whose own edges show while some are hidden: the one under the pointer, unless it is the one being typed in
  * (`typing`). Selecting a tile or clicking into it shows none of them, so typing in an expanded tile keeps the board calm.

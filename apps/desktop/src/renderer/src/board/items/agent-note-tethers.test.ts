@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { BoardItem } from '@agent-board/daemon/protocol';
 import { AGENT_NODE_PREFIX } from '../tiles';
 import { itemNode } from './items';
+import { drawnEdges, tethersShownFrom, withTethers } from '../connections-view';
 import { agentNoteTethers, isTether, TETHER_EDGE_TYPE } from './agent-note-tethers';
 
 const note = (id: string, sessionId: string, kind: BoardItem['kind'] = 'agent-note'): BoardItem => ({
@@ -48,6 +49,21 @@ describe('agentNoteTethers', () => {
   it("ties a plan card to its agent's tile", () => {
     const card: BoardItem = { ...note('p1', 'a1'), kind: 'plan', data: { agent: { sessionId: 'a1', name: 'a', harness: 'claude', role: null }, title: 'Plan' } };
     expect(agentNoteTethers([itemNode(card), tile('a1')]).map((edge) => [edge.source, edge.target])).toEqual([['item:p1', `${AGENT_NODE_PREFIX}a1`]]);
+  });
+
+  it("draws a plan's or a document's line to its agent only with View › Show Tethers on: the card names its agent on its face", () => {
+    const shown = { agent: { sessionId: 'a1', name: 'a', harness: 'claude', role: null }, title: 'Plan' };
+    const plan: BoardItem = { ...note('p1', 'a1'), kind: 'plan', data: shown };
+    const doc: BoardItem = { ...note('d1', 'a1'), kind: 'document', data: shown };
+    const tethers = agentNoteTethers([itemNode(plan), itemNode(doc), tile('a1')]);
+
+    expect(tethers.map((edge) => edge.source)).toEqual(['item:p1', 'item:d1']);
+    expect(withTethers(tethers, tethersShownFrom(undefined))).toEqual([]);
+    // Hovering the agent shows only the lines the setting lets through.
+    const hovering = { connections: 'handoffs', hidden: new Set<string>(), hovered: `${AGENT_NODE_PREFIX}a1`, typing: undefined } as const;
+    expect(drawnEdges(tethers, { ...hovering, tethers: false })).toEqual([]);
+    expect(drawnEdges(tethers, { ...hovering, tethers: true })).toEqual(tethers);
+    expect(withTethers(tethers, true)).toEqual(tethers);
   });
 
   it("ties an agent's to-do list to its agent's tile, and the user's own list to none", () => {

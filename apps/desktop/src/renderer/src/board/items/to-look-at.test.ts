@@ -26,4 +26,13 @@ describe("the user's queue", () => {
     expect(lookCount(2, needsInScope(needs, 'api'))).toBe(3);
     expect(needsLine(needs[0]!)).toEqual({ tag: 'asks', line: 'Keep the old cursor param?' });
   });
+
+  it('never shows or counts an agent that only ended its turn, whatever Needs you shows', () => {
+    const idle = { ...asking('impl-7', 'api'), kind: 'turn' } as NeedsYouEntry;
+    const flagged = { ...asking('impl-8', 'api'), kind: 'flagged' } as NeedsYouEntry;
+    const needs = needsInScope([idle, flagged], 'api');
+    expect(needs.map((entry) => entry.agent.sessionId)).toEqual(['impl-8']);
+    expect(needsInScope([idle], null)).toEqual([]);
+    expect(lookCount(0, needs)).toBe(1);
+  });
 });

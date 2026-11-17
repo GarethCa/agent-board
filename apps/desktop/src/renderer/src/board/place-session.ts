@@ -2,6 +2,7 @@
 import type { IssueCardData, Zone, ZoneLayout } from '@agent-board/daemon/protocol';
 import { placeOnBoard } from './items/items';
 import { AGENT_TILE_SIZE } from '@agent-board/daemon/board-layout';
+import { freeTile } from '@agent-board/daemon/shelf-layout';
 import { whyNoAgents } from './zone-contexts';
 
 /** The grid a dropped tile's corner snaps to, px. */
@@ -58,4 +59,12 @@ export function issueStartIn(issue: Pick<IssueCardData, 'provider' | 'id'>, zone
   const from = trackerZoneFor(issue, zones, zone);
   if (from === undefined) return { kind: 'refuse', reason: `No zone on the board takes issues from ${issueScope(issue)}` };
   return { kind: 'dialog', zone, issueZoneId: from.id };
+}
+
+/**
+ * Whether a tile put down at `position` in `zone` lands in its free area: on shelves or in clusters, wholly outside its
+ * lanes area. Put there by the user, it is marked free (a move by hand), and stays where it was put.
+ */
+export function inFreeDrop(zone: Pick<Zone, 'layoutMode' | 'lanes'> | undefined, position: { x: number; y: number }): boolean {
+  return zone !== undefined && zone.layoutMode !== 'free' && freeTile(zone.lanes, position);
 }

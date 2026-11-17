@@ -183,6 +183,11 @@
   color: var(--shelf-problem-ink);
 }
 
+/* A reviewer's eye after its word: in the band's own ink where the band is filled, so it reads on amber and red. */
+.shelf-tile-band:is([data-level='2'], [data-level='3']) .tile-reviewer-mark {
+  color: inherit;
+}
+
 .shelf-tile-glyph {
   flex: none;
 }

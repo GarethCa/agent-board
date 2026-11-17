@@ -100,6 +100,37 @@ export interface AfterTurn extends WaitingMessage {
   settled(started: boolean, why?: string): void;
 }
 
+/** A message typed into an agent's turn under way, for its harness to take up after it: as it was sent, and by whom. */
+interface InTurnMessage {
+  text: string;
+  /** The agent that sent it, told if it is handed back; none for the user's own. */
+  from?: string;
+}
+
+/**
+ * A message typed into an agent's turn, held in its harness's own queue until the harness takes it up, as `submits`
+ * (the line it submits, as `promptHolds` reads it): what the harness has taken as prompts since it was typed
+ * (`taken`, read from its transcript, none to read without one), and how many of the agent's turns have ended since.
+ */
+interface HeldMessage {
+  message: InTurnMessage;
+  submits: string;
+  taken?: () => string[];
+  turnsEnded: number;
+}
+
+/** A message held in a turn whose harness hasn't taken it up by the end of the turn after: long taken some way unseen. */
+const HELD_TURNS = 2;
+
+/** The tags round a block Claude folded, as its transcript keeps them: the block's text is the message. */
+const FOLDED_TAG = /<\/?pasted_content id="[^"<>]*">/g;
+
+/**
+ * Whether the prompt a harness took holds `submits`, word for word: is it, or is one of several queued that went up as
+ * one, so a short message is not in any prompt with its word in.
+ */
+const promptHolds = (prompt: string, submits: string) => submits !== '' && ` ${withoutTabs(oneLine(prompt.replace(FOLDED_TAG, '\n')))} `.includes(` ${submits} `);
+
 /** What a message waiting for an agent's turn to end is, as its store keeps it. */
 export interface WaitingMessage {
   text: string;
@@ -231,6 +262,12 @@ interface DeliveryOptions<Row extends DeliveryRow> {
    */
   undelivered(sessionId: string, what: string, text: string, reason: string, from?: string): void;
   /**
+   * Marks the agent's transcript now, for what its harness takes as prompts from here on: a reader of the prompts
+   * written to it since, each read at once, as a daemon shutting down needs. Undefined with no transcript to mark:
+   * a message held in its turn then can't be seen taken up at a step of it, only by its `UserPromptSubmit`.
+   */
+  promptsFromNow?(sessionId: string): (() => string[]) | undefined;
+  /**
    * What was typed at the agent's prompt (`what`) was given up on, no Enter starting a turn on it, and why: the user is
    * told, as only their Send or Clear moves it on (in its terminal, with `inTerminal`, as the board's Send refuses a
    * prompt they typed at); or, with no `what`, the agent's prompt holds nothing unsent now.
@@ -254,8 +291,9 @@ interface DeliveryOptions<Row extends DeliveryRow> {
  * user sends or clears by hand, and nothing more is typed onto it. Anything typed mid-turn (an answer, or another
  * whose agent started a turn while it was typed) gets one Enter, which the harness queues for after the turn: the turn's end then waits for it to start a turn of its own, as for any other.
  * Pressing Enter again rests on Enter at an empty prompt doing nothing in either harness, as it does in Claude Code and
- * Codex today: a turn whose hook is late is never started twice. Telling an answer queued mid-turn was taken up rests
- * on its `UserPromptSubmit` firing when the harness takes it up, mid-turn or after. Counts the hand-offs each agent has
+ * Codex today: a turn whose hook is late is never started twice. An answer queued mid-turn is taken up with a
+ * `UserPromptSubmit` once the turn ends, or, in Claude, at a step of the turn, with only its transcript to say so: one
+ * not seen taken up as its session ends is handed back (`held`). Counts the hand-offs each agent has
  * still landing.
  */
 export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptions<Row>) {
@@ -319,9 +357,17 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
   /**
    * Per agent, what was typed and submitted mid-turn (the last of it as one line, `text`, and how many there were), for
    * its harness to take up once that turn ends, and in how many lines, until it does: a `UserPromptSubmit` with it, or
-   * the turn's end.
+   * the turn's end. The user's own keys at the prompt end it too, as what is there is then theirs.
    */
   const queued = new Map<string, { what: string; lines: number; text: string; count: number }>();
+  /**
+   * Per agent, the messages typed into its turn (`answer`) that its harness holds in its own queue and hasn't been seen
+   * taking up, oldest first. Each is let go once a prompt the harness takes holds it (`UserPromptSubmit`, or, read from
+   * its transcript, Claude's taking it at a step of the turn), or it is left at the prompt unsent, or the turn after
+   * ends without it (`HELD_TURNS`). The user's keys at the prompt leave them be: the harness's queue is still there.
+   * The queue goes with the harness, so a session that ends first hands them back (`handBackInTurn`).
+   */
+  const held = new Map<string, HeldMessage[]>();
   /**
    * Agents whose unsent message is one queued in a turn the user interrupted: Codex's own `Interrupt` hook, and a `Stop`
    * the harness had fired before the interrupt reached it, landing after, are no news that it was taken. Held until
@@ -483,9 +529,17 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
    * Types `line` at the agent's prompt once its turn in the queue comes, and submits it once it has landed, so it isn't
    * taken as a pasted line; `what` names it if it is never sent. Types nothing while the prompt holds a message never
    * sent, or `stillReady` says why not now (the agent went to work meanwhile): it says why instead, never losing the
-   * line by throwing. With `midTurn`, as for the user's answers, a turn under way takes it as queued (`pressEnter`).
+   * line by throwing. With `midTurn`, as for the user's answers, a turn under way takes it as queued (`pressEnter`):
+   * given as the message it is, it is held until its harness takes it up (`held`), and handed back if its session ends
+   * first.
    */
-  const typeInput = (sessionId: string, line: string, what: string, stillReady: () => string | undefined = () => undefined, midTurn = false) =>
+  const typeInput = (
+    sessionId: string,
+    line: string,
+    what: string,
+    stillReady: () => string | undefined = () => undefined,
+    midTurn: boolean | InTurnMessage = false,
+  ) =>
     inTurn(sessionId, () => typeNow(sessionId, line, what, stillReady, { midTurn }));
 
   /**
@@ -497,10 +551,12 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
     line: string,
     what: string,
     stillReady: () => string | undefined,
-    { midTurn = false, retries = SUBMIT_RETRIES }: { midTurn?: boolean; retries?: number } = {},
+    { midTurn = false, retries = SUBMIT_RETRIES }: { midTurn?: boolean | InTurnMessage; retries?: number } = {},
   ): Promise<Typed> => {
     const reason = unsent.has(sessionId) ? UNSENT_REASON : stillReady();
     if (reason !== undefined) return { typed: false, reason };
+    // Marked before it is typed: a harness may take it up as soon as it is submitted.
+    const taken = typeof midTurn === 'object' ? options.promptsFromNow?.(sessionId) : undefined;
     await typeAndSettle(sessionId, line);
     // Measured at Claude, where Ctrl-U clears one wrapped row; not at Codex, which keeps its count by lines.
     const lines = getRow(sessionId)?.harness === 'claude' ? promptRows(line) : line.split('\r').length;
@@ -510,12 +566,11 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
     const queue = () => {
       inTurn = true;
       const before = queued.get(sessionId);
-      queued.set(sessionId, {
-        what: before?.what ?? what,
-        lines: (before?.lines ?? 0) + lines,
-        text: oneLine(submittedText(line)),
-        count: (before?.count ?? 0) + 1,
-      });
+      const text = oneLine(submittedText(line));
+      queued.set(sessionId, { what: before?.what ?? what, lines: (before?.lines ?? 0) + lines, text, count: (before?.count ?? 0) + 1 });
+      if (typeof midTurn !== 'object') return;
+      const message: HeldMessage = { message: midTurn, submits: withoutTabs(text), turnsEnded: 0, ...(taken === undefined ? {} : { taken }) };
+      held.set(sessionId, [...(held.get(sessionId) ?? []), message]);
     };
     const sent = await pressEnter(
       sessionId,
@@ -587,6 +642,8 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
     const kept = queued.get(sessionId);
     if (kept === undefined) return;
     queued.delete(sessionId);
+    // Left at its prompt as unsent: the user's to send or clear now.
+    held.delete(sessionId);
     options.log(`${kept.what} queued at ${sessionId} was ${why} with its turn`);
     // The user's own interrupt is theirs to follow up; a rate limit is not.
     setUnsent(sessionId, kept, why === 'rate-limited' ? RATE_LIMITED_REASON : undefined);
@@ -785,6 +842,63 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
     }
   };
 
+  /** Whether the agent's transcript says its harness took up the message held in its turn: read now, at once. */
+  const heldTaken = (sessionId: string, one: HeldMessage): boolean => {
+    try {
+      return one.taken?.().some((prompt) => promptHolds(prompt, one.submits)) ?? false;
+    } catch (error) {
+      options.log(`could not read ${sessionId}'s transcript for a message held in its turn: ${(error as Error).message}`);
+      return false;
+    }
+  };
+
+  /** Sets the messages still held in the agent's turn, of those it held (`held`). */
+  const keepHeld = (sessionId: string, left: HeldMessage[]) => {
+    if (left.length > 0) held.set(sessionId, left);
+    else held.delete(sessionId);
+  };
+
+  /**
+   * The agent's turn ended: lets go of the messages held in it that its harness took up at a step of it (as Claude
+   * does, with no `UserPromptSubmit`), and of those held since the turn before, taken up some way unseen.
+   */
+  const heldAtTurnEnd = (sessionId: string) => {
+    const messages = held.get(sessionId);
+    if (messages === undefined) return;
+    keepHeld(
+      sessionId,
+      messages.filter((one) => {
+        if (heldTaken(sessionId, one)) return false;
+        one.turnsEnded += 1;
+        if (one.turnsEnded < HELD_TURNS) return true;
+        options.log(`a message held in ${sessionId}'s turn was not seen taken up by the end of the turn after: let go`);
+        return false;
+      }),
+    );
+  };
+
+  /**
+   * Hands back the messages typed into the agent's turn that its harness hasn't taken up (`held`), its queue gone with
+   * its session or the daemon, as not delivered (`undelivered`), each to whoever sent it: never lost unsaid. One its
+   * transcript shows taken up is in the agent's conversation already, and stays there: handed back, it would go twice.
+   */
+  const handBackInTurn = (sessionId: string, reason: string) => {
+    const messages = held.get(sessionId) ?? [];
+    held.delete(sessionId);
+    for (const one of messages) {
+      if (heldTaken(sessionId, one)) {
+        options.log(`a message held in ${sessionId}'s turn is in its transcript, taken up: not handed back`);
+        continue;
+      }
+      const { text, from } = one.message;
+      try {
+        options.undelivered(sessionId, 'A message', text, reason, from);
+      } catch (error) {
+        options.log(`could not keep a message for ${sessionId}, never delivered: ${(error as Error).message}`);
+      }
+    }
+  };
+
   /** `answer`, telling `trail` of each step but a refusal, which `answer` tells it of. */
   const answerWith = async (sessionId: string, text: string, paste: boolean, trail: SendTrail | undefined, from?: string): Promise<Answered> => {
     // A pause under way ends first: the message then wakes the agent, never typed into a terminal that is going.
@@ -830,7 +944,7 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
       if (reason === undefined) trail?.('typing at its prompt');
       return reason;
     };
-    const typed = await typeInput(sessionId, line, 'A message', whyNot, true);
+    const typed = await typeInput(sessionId, line, 'A message', whyNot, { text, ...(from === undefined ? {} : { from }) });
     if (typed.typed) trailTyped(trail, typed);
     if (typed.typed && !typed.sent) return { queued: false, unsent: typed.why ?? UNSENT_REASON };
     if (typed.typed) return typed.inTurn === true ? { queued: false, inTurn: true } : { queued: false };
@@ -851,12 +965,14 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
    * Hands back everything still queued for agents not up yet and not being typed (`undelivered`), as the daemon
    * closes: kept, it is shown once the daemon is back, where the queue itself would go with the daemon's memory. Call
    * before the database closes. One that can't be kept is logged, never holding up the rest. What waits for a turn to
-   * end stays in its store (`waiting`), for the next daemon to type; without a store, it is handed back too. A
-   * scheduled run held as the user typed is given up on, its clock told.
+   * end stays in its store (`waiting`), for the next daemon to type; without a store, it is handed back too. So is a
+   * message held in a turn and not taken up (`held`): its harness's queue goes with the daemon. A scheduled
+   * run held as the user typed is given up on, its clock told.
    */
   const handBackQueued = () => {
     for (const sessionId of [...heldRuns.keys()]) giveUpRun(sessionId, 'the daemon shut down first');
     if (options.waiting === undefined) for (const sessionId of [...afterTurn.keys()]) handBackAfterTurn(sessionId, CLOSED_IN_TURN_REASON);
+    for (const sessionId of [...held.keys()]) handBackInTurn(sessionId, CLOSED_IN_TURN_REASON);
     const items = [...queuedItems];
     queuedItems.clear();
     for (const { sessionId, what, text, trail, from } of items) {
@@ -894,6 +1010,7 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
       unsent.delete(sessionId);
       sending.delete(sessionId);
       queued.delete(sessionId);
+      held.delete(sessionId);
       interruptedWith.delete(sessionId);
     },
 
@@ -917,9 +1034,12 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
      * The agent's harness submitted `prompt` (its `UserPromptSubmit`): what was queued mid-turn has been taken up if the
      * prompt is it, or, of several queued in one turn (which may go up as one), ends with the last. Another while the
      * agent works is the turn under way's own, its hook late, as a just-started agent's is; one at its prompt is a
-     * turn of its own, the user's, so what was queued is gone or in it.
+     * turn of its own, the user's, so what was queued is gone or in it. Each message held in the turn (`held`) is let
+     * go once a prompt holds it, one at a time as a harness may take them.
      */
     promptSubmitted(sessionId: string, prompt: unknown) {
+      const holding = held.get(sessionId);
+      if (holding !== undefined) keepHeld(sessionId, typeof prompt === 'string' ? holding.filter((one) => !promptHolds(prompt, one.submits)) : []);
       const kept = queued.get(sessionId);
       if (kept === undefined) return;
       const submitted = typeof prompt === 'string' ? withoutTabs(oneLine(prompt)) : undefined;
@@ -933,12 +1053,15 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
      * start a turn of its own now: it gets as long as Enter does to, then Enter is pressed as for anything else typed,
      * and it is kept as unsent if no turn starts at a prompt holding only it. Without, it is kept as unsent at once,
      * with no Enter (`cutShort`): an interrupted turn (the user cut it short, and Send or Clear is theirs), or a rate
-     * limited one, whose harness may show a menu of what to do about it, where Enter would pick one.
+     * limited one, whose harness may show a menu of what to do about it, where Enter would pick one. The messages held
+     * in the turn stay held until a prompt shows them taken up (`heldAtTurnEnd`), or Enter leaves them unsent.
      */
     turnEnded(sessionId: string, pressable: boolean, why = 'interrupted') {
+      heldAtTurnEnd(sessionId);
       const kept = queued.get(sessionId);
       if (kept === undefined) return;
       if (!pressable) return cutShort(sessionId, why);
+      const heldThen = held.get(sessionId) ?? [];
       inTurn(sessionId, async () => {
         // Taken up already (`promptSubmitted`).
         if (queued.get(sessionId) !== kept) return;
@@ -950,6 +1073,8 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
           if (now !== 'at-prompt') return true;
           options.log(`${kept.what} queued at ${sessionId} was typed at its prompt but not sent: ${whyGaveUp(now)}`);
           setUnsent(sessionId, kept, whyGaveUp(now));
+          // Unsent at its prompt: the user's to send or clear now.
+          keepHeld(sessionId, (held.get(sessionId) ?? []).filter((one) => !heldThen.includes(one)));
           return false;
         });
       }).catch((error: unknown) => options.log(`pressing Enter on ${kept.what} queued at ${sessionId} failed: ${(error as Error).message}`));
@@ -1032,7 +1157,8 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
 
     /**
      * The agent's session ended (`byShutdown`, as the daemon shuts down): its prompt, and what was typed at it, went
-     * with it.
+     * with it. A message held in its turn, in its harness's own queue and not taken up, is handed back
+     * (`handBackInTurn`).
      */
     ended(sessionId: string, byShutdown = false) {
       submitting.get(sessionId)?.();
@@ -1048,6 +1174,7 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
         handBackAfterTurn(sessionId, byShutdown ? CLOSED_IN_TURN_REASON : 'its session ended before its turn did');
       }
       queued.delete(sessionId);
+      handBackInTurn(sessionId, byShutdown ? CLOSED_IN_TURN_REASON : 'its session ended before its turn took it up');
       interruptedWith.delete(sessionId);
       setUnsent(sessionId, undefined);
     },

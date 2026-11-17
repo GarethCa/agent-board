@@ -14,13 +14,15 @@ const T0 = new Date('2026-10-09T10:00:00.000Z');
 function holds() {
   const changed: string[] = [];
   const dropped: string[] = [];
+  const closed: string[] = [];
   const permissions = createPermissionHolds({
     holdMs: HOLD_MS,
     askingHoldMs: ASKING_HOLD_MS,
     onChange: (sessionId) => changed.push(sessionId),
     onAnswersDropped: (sessionId) => dropped.push(sessionId),
+    onDialogClosed: (sessionId, requestId) => closed.push(`${sessionId}:${requestId}`),
   });
-  return { permissions, changed, dropped };
+  return { permissions, changed, dropped, closed };
 }
 
 const open = () => new AbortController().signal;
@@ -357,6 +359,44 @@ describe("Claude's question tool", () => {
     for (const sessionId of ['s1', 's2', 's3']) expect(permissions.prompts(sessionId)).toEqual([expect.objectContaining({ heldUntil: null, dialog: null })]);
   });
 
+  it("says its dialog closed when Claude hangs up its hook before the answers are sent, never when its hold only lapses", async () => {
+    const { permissions, closed } = holds();
+    const abort = new AbortController();
+    const reply = permissions.hold('s1', askQuestion(), abort.signal, true);
+    const id = permissions.prompts('s1')[0]!.id;
+
+    abort.abort();
+    expect(await settled(reply)).toEqual({ value: undefined });
+    expect(closed).toEqual([`s1:${id}`]);
+    // It stays listed, no longer held, until its call runs or the turn ends.
+    expect(permissions.prompts('s1')).toEqual([expect.objectContaining({ id, heldUntil: null })]);
+
+    // Hung up before it was even held: the same.
+    const early = new AbortController();
+    early.abort();
+    void permissions.hold('s0', askQuestion(), early.signal, true);
+    expect(closed).toEqual([`s1:${id}`, `s0:${permissions.prompts('s0')[0]!.id}`]);
+    closed.pop();
+
+    const lapsing = new AbortController();
+    void permissions.hold('s2', askQuestion(), lapsing.signal, true);
+    await vi.advanceTimersByTimeAsync(ASKING_HOLD_MS);
+    lapsing.abort();
+    // A permission's hang-up is no dialog closing.
+    const plain = new AbortController();
+    void permissions.hold('s3', request(), plain.signal, true);
+    plain.abort();
+    // Nor one after the board sent the answers.
+    const sent = new AbortController();
+    void permissions.hold('s4', askQuestion(), sent.signal, true);
+    const sentId = permissions.prompts('s4')[0]!.id;
+    permissions.answerQuestion('s4', sentId, 0, { option: 0 });
+    permissions.sendAnswers('s4', sentId);
+    sent.abort();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(closed).toEqual([`s1:${id}`]);
+  });
+
   it('can be neither allowed nor denied from the board, only answered', async () => {
     const { permissions } = holds();
     const reply = permissions.hold('s1', askQuestion(), open(), true);
@@ -524,34 +564,84 @@ describe("Claude's question tool", () => {
 });
 
 describe("Claude's plan tool", () => {
-  it('holds its call as a permission, with its plan to read and the switch to accept edits it offers', async () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(T0);
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it('holds its call as a permission, with its plan to read and the mode Claude suggested for its first yes', async () => {
     const { permissions } = holds();
     const plan = '# Add a cache\n\n1. Add a client';
-    const reply = permissions.hold('s1', request({ tool_name: 'ExitPlanMode', tool_input: { plan }, permission_suggestions: [{ type: 'setMode', mode: 'acceptEdits', destination: 'session' }] }), open(), true);
+    const reply = permissions.hold('s1', request({ tool_name: 'ExitPlanMode', tool_input: { plan }, permission_suggestions: [{ type: 'setMode', mode: 'auto', destination: 'session' }] }), open(), true);
     const [prompt] = permissions.prompts('s1');
-    expect(prompt).toMatchObject({ toolName: 'ExitPlanMode', plan, sessionGrant: 'all edits', questions: null, dialog: null });
+    expect(prompt).toMatchObject({ toolName: 'ExitPlanMode', plan, sessionGrant: 'auto mode', questions: null, dialog: null });
     expect(promptCounts(permissions.prompts('s1'))).toEqual({ pending: 1, questions: 0 });
 
     expect(permissions.decide('s1', prompt!.id, { behavior: 'deny', message: 'Use the LRU first' })).toBe(true);
     expect(await reply).toEqual(permissionReply({ behavior: 'deny', message: 'Use the LRU first' }));
   });
 
-  it('approves it always saying the mode to go on in, whatever Claude suggested, so it never stays in plan mode', async () => {
-    const mode = (reply: unknown) => (reply as { hookSpecificOutput: { decision: { behavior: string; updatedPermissions?: unknown } } }).hookSpecificOutput.decision;
-    for (const suggestions of [[{ type: 'setMode', mode: 'acceptEdits', destination: 'session' }], [], undefined]) {
-      const { permissions } = holds();
-      const fields = { tool_name: 'ExitPlanMode', tool_input: { plan: '# Plan' }, ...(suggestions === undefined ? {} : { permission_suggestions: suggestions }) };
-      const auto = permissions.hold('s1', request(fields), open(), true);
-      const first = permissions.prompts('s1')[0]!;
-      // Auto-accept edits is offered whether or not Claude suggested it: the reply sets it.
-      expect(first.sessionGrant).toBe('all edits');
-      expect(permissions.decide('s1', first.id, { behavior: 'allow', scope: 'session' })).toBe(true);
-      expect(mode(await auto)).toEqual({ behavior: 'allow', updatedPermissions: [{ type: 'setMode', mode: 'acceptEdits', destination: 'session' }] });
+  it('approves it with its input, as Claude needs, always saying the mode to go on in, so it never stays in plan mode', async () => {
+    const decision = (reply: unknown) => (reply as { hookSpecificOutput: { decision: Record<string, unknown> } }).hookSpecificOutput.decision;
+    const input = { plan: '# Plan', planFilePath: '/home/me/.claude/plans/plan.md' };
+    const setMode = (mode: string) => [{ type: 'setMode', mode, destination: 'session' }];
+    // Claude's first yes goes on in the mode it suggested: auto mode, or accepting edits where its account has no auto
+    // mode; auto mode, its first yes, where it suggested neither.
+    const cases: { suggestions: object[] | undefined; mode: string; grant: string }[] = [
+      { suggestions: setMode('auto'), mode: 'auto', grant: 'auto mode' },
+      { suggestions: setMode('acceptEdits'), mode: 'acceptEdits', grant: 'all edits' },
+      { suggestions: setMode('bypassPermissions'), mode: 'auto', grant: 'auto mode' },
+      { suggestions: [], mode: 'auto', grant: 'auto mode' },
+      { suggestions: undefined, mode: 'auto', grant: 'auto mode' },
+    ];
+    for (const { suggestions, mode, grant } of cases) {
+      const fields = { tool_name: 'ExitPlanMode', tool_input: input, ...(suggestions === undefined ? {} : { permission_suggestions: suggestions }) };
+      const first = holds().permissions;
+      const session = first.hold('s1', request(fields), open(), true);
+      const prompt = first.prompts('s1')[0]!;
+      expect(prompt.sessionGrant).toBe(grant);
+      expect(first.decide('s1', prompt.id, { behavior: 'allow', scope: 'session' })).toBe(true);
+      // Claude's plan dialog takes an allow only with the call's input (its `updatedInput`); a bare allow leaves it open.
+      expect(decision(await session)).toEqual({ behavior: 'allow', updatedInput: input, updatedPermissions: setMode(mode) });
 
-      const each = permissions.hold('s1', request(fields), open(), true);
-      expect(permissions.decide('s1', permissions.prompts('s1')[0]!.id, { behavior: 'allow' })).toBe(true);
-      expect(mode(await each)).toEqual({ behavior: 'allow', updatedPermissions: [{ type: 'setMode', mode: 'default', destination: 'session' }] });
+      const second = holds().permissions;
+      const each = second.hold('s1', request(fields), open(), true);
+      expect(second.decide('s1', second.prompts('s1')[0]!.id, { behavior: 'allow' })).toBe(true);
+      expect(decision(await each)).toEqual({ behavior: 'allow', updatedInput: input, updatedPermissions: setMode('default') });
     }
+  });
+
+  it('keeps its row once answered until Claude moves on, and says so if Claude kept its dialog open', async () => {
+    const { permissions, changed } = holds();
+    const fields = { tool_name: 'ExitPlanMode', tool_input: { plan: '# Plan' } };
+    void permissions.hold('s1', request(fields), open(), true);
+    const id = permissions.prompts('s1')[0]!.id;
+    expect(permissions.decide('s1', id, { behavior: 'allow' })).toBe(true);
+    // Answered, but not yet taken: the row stays, still a permission, read only, and can't be answered twice.
+    expect(permissions.prompts('s1')).toMatchObject([{ id, heldUntil: null, planSent: { sentAt: T0.toISOString(), keptOpen: false } }]);
+    expect(promptCounts(permissions.prompts('s1'))).toEqual({ pending: 1, questions: 0 });
+    expect(permissions.decide('s1', id, { behavior: 'deny' })).toBe(false);
+    // A notification is Claude's dialog still up, not Claude moving on.
+    expect(permissions.afterHook('s1', hook('Notification', { notification_type: 'permission_prompt' }))).toBe(false);
+    await vi.advanceTimersByTimeAsync(DIALOG_TAKE_MS);
+    expect(permissions.prompts('s1')).toMatchObject([{ id, planSent: { keptOpen: true } }]);
+    expect(changed).toEqual(['s1']);
+    // Answered in the terminal at last: its call runs, and the row goes.
+    expect(permissions.afterHook('s1', hook('PostToolUse', { tool_name: 'ExitPlanMode', tool_input: { plan: '# Plan', planFilePath: '/p.md' } }))).toBe(true);
+    expect(permissions.prompts('s1')).toEqual([]);
+  });
+
+  it('goes once answered at any later hook of its asker, as Claude carries on after a no without running the call', async () => {
+    const { permissions, changed } = holds();
+    void permissions.hold('s1', request({ tool_name: 'ExitPlanMode', tool_input: { plan: '# Plan' } }), open(), true);
+    expect(permissions.decide('s1', permissions.prompts('s1')[0]!.id, { behavior: 'deny', message: 'Use shields.io' })).toBe(true);
+    // A subagent's hook is not the asker's.
+    expect(permissions.afterHook('s1', hook('PreToolUse', { tool_name: 'Write', ...inSubagent('a1') }))).toBe(false);
+    expect(permissions.afterHook('s1', hook('PreToolUse', { tool_name: 'Write' }))).toBe(true);
+    expect(permissions.prompts('s1')).toEqual([]);
+    await vi.advanceTimersByTimeAsync(DIALOG_TAKE_MS);
+    expect(changed).toEqual([]);
   });
 
   it("has no plan to read where its input has none, nor for any other tool", () => {

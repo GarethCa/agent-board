@@ -23,7 +23,7 @@ import { continuesOnCredits, type Agent, type Harness, type PermissionDecision, 
 import { Button, ErrorText } from '../ui';
 import { useAction } from '../use-action';
 import { toolSummary } from '../../../shared/needs-you';
-import { keepPlanning, PLAN_CHOICES, planTitle } from '../../../shared/claude-plan';
+import { keepPlanning, planChoices, planTitle } from '../../../shared/claude-plan';
 import { duration, editCounts, msBetween, startLiveClock, pastedParts, runOpen, toolKind, toolLine, type RunsMode, type ToolCall, type ToolKind } from './chat';
 import type { SenderLook } from './agent-message';
 import type { LiveState } from './chat-live';
@@ -278,7 +278,15 @@ export function LiveActions({ agent, live, onOpenPlan, onShowTerminal, compact =
       const decide = (behavior: 'allow' | 'deny') => run(() => window.agentBoard.agents.decidePermission(sessionId, prompt.id, { behavior }));
       // Claude's question dialog is answered in the pane or Needs you, never with Allow; else in its terminal.
       actions =
-        prompt.heldUntil === null || prompt.questions !== null ? (
+        prompt.planSent?.keptOpen === false ? (
+          <span className="quick-ask-note" data-testid="plan-sent">
+            Sent to its dialog. Waiting for Claude to take it.
+          </span>
+        ) : prompt.planSent?.keptOpen === true ? (
+          <Button size="xs" variant="ghost" data-testid="plan-kept-open" onClick={onShowTerminal}>
+            Claude kept its dialog open: answer in the terminal
+          </Button>
+        ) : prompt.heldUntil === null || prompt.questions !== null ? (
           <Button size="xs" variant="ghost" onClick={onShowTerminal}>
             Answer in the terminal
           </Button>
@@ -389,6 +397,8 @@ interface PlanChoicesProps {
   step: PlanStep;
   words: string;
   busy: boolean;
+  /** What the first yes grants, in the daemon's words (`planChoices`). */
+  sessionGrant: string | null;
   onStep(step: PlanStep): void;
   onWords(words: string): void;
   onDecide(decision: PermissionDecision): void;
@@ -401,7 +411,7 @@ interface PlanChoicesProps {
  * for the status line's room, it is one Answer plan, as an ask's is one Answer. No, keep planning… opens a field for what
  * to change; Return sends it, Escape goes back.
  */
-export function PlanChoices({ step, words, busy, onStep, onWords, onDecide, onShowTerminal }: PlanChoicesProps) {
+export function PlanChoices({ step, words, busy, sessionGrant, onStep, onWords, onDecide, onShowTerminal }: PlanChoicesProps) {
   if (step === 'folded') {
     return (
       <Button size="xs" onClick={() => onStep('choices')}>
@@ -439,7 +449,7 @@ export function PlanChoices({ step, words, busy, onStep, onWords, onDecide, onSh
       <Button size="xs" variant="ghost" disabled={busy} onClick={() => onStep('changing')}>
         No, keep planning…
       </Button>
-      {PLAN_CHOICES.toReversed().map((choice) => (
+      {planChoices(sessionGrant).toReversed().map((choice) => (
         <Button key={choice.label} size="xs" variant={choice.primary ? 'primary' : 'secondary'} disabled={busy} onClick={() => onDecide(choice.decision)}>
           {choice.label}
         </Button>
@@ -459,7 +469,7 @@ function PlanActions({ sessionId, prompt, busy, run, compact, onShowTerminal }: 
   const [step, setStep] = useState<PlanStep>(compact ? 'folded' : 'choices');
   const [words, setWords] = useState('');
   const decide = (decision: PermissionDecision) => run(() => window.agentBoard.agents.decidePermission(sessionId, prompt.id, decision));
-  return <PlanChoices step={step} words={words} busy={busy} onStep={setStep} onWords={setWords} onDecide={decide} onShowTerminal={onShowTerminal} />;
+  return <PlanChoices step={step} words={words} busy={busy} sessionGrant={prompt.sessionGrant} onStep={setStep} onWords={setWords} onDecide={decide} onShowTerminal={onShowTerminal} />;
 }
 
 /** A live state's actions, if it has any: the kinds that wait on the user, or that the user can move on. */

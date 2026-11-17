@@ -7,7 +7,7 @@
  * meanwhile is not a leak, so a change that names neither is let through.
  */
 import { readFileSync } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -28,7 +28,7 @@ function read(path: string): string | undefined {
 }
 
 /** The live files' text in `home`'s `.agent-board`, by path; undefined for one that isn't there. */
-export function snapshotLaunchers(home: string = homedir()): Snapshot {
+export function snapshotLaunchers(home: string = userInfo().homedir): Snapshot {
   return new Map(LAUNCHERS.map((name) => [join(home, '.agent-board', name), read(join(home, '.agent-board', name))]));
 }
 
@@ -52,8 +52,8 @@ export function assertLaunchersUntouched(before: Snapshot, forbidden: readonly s
   }
 }
 
-/** Vitest/Playwright globalSetup body: snapshots the live launchers and fails the run at teardown if a test leaked into them. */
-export function shimGuardGlobalSetup(checkout: string = CHECKOUT, home: string = homedir()): () => void {
+/** Vitest/Playwright globalSetup body: snapshots the live launchers (in the account's own home, whatever `$HOME` says) and fails the run at teardown if a test leaked into them. */
+export function shimGuardGlobalSetup(checkout: string = CHECKOUT, home: string = userInfo().homedir): () => void {
   const before = snapshotLaunchers(home);
   return () => assertLaunchersUntouched(before, [checkout, tmpdir()]);
 }

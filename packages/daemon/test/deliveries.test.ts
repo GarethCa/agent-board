@@ -75,6 +75,8 @@ function setup(rows: Row[], notReady?: string, waiting?: WaitingStore, draftHeld
    * throws, as a finalized statement does.
    */
   const database = { closed: false, readsAfterClose: 0 };
+  /** The prompts the agents' transcript records their harness taking, oldest first. */
+  const transcript: string[] = [];
   const read = () => {
     if (!database.closed) return;
     database.readsAfterClose += 1;
@@ -109,6 +111,10 @@ function setup(rows: Row[], notReady?: string, waiting?: WaitingStore, draftHeld
     undelivered: (sessionId, what, text, reason, from) =>
       void undelivered.push(`${sessionId} ${what}: ${text} (${reason})${from === undefined ? '' : ` from ${from}`}`),
     notSent: (...args) => void notSent.push(args),
+    promptsFromNow() {
+      const mark = transcript.length;
+      return () => transcript.slice(mark);
+    },
     log: () => {},
     clock,
     submitConfirmMs: 1_000,
@@ -140,7 +146,7 @@ function setup(rows: Row[], notReady?: string, waiting?: WaitingStore, draftHeld
     database.closed = true;
   };
 
-  return { deliveries, writes, relaunches, announced, undelivered, notSent, prompt, shown, ready, failing, database, clock, advance, land, closeDaemon };
+  return { deliveries, writes, relaunches, announced, undelivered, notSent, prompt, shown, ready, failing, database, transcript, clock, advance, land, closeDaemon };
 }
 
 describe('a long message at a Claude prompt', () => {
@@ -1083,13 +1089,120 @@ describe('an answer queued mid-turn', () => {
     expect(writes.at(-1)).toEqual(['a', '\x15\x7f\x15']);
   });
 
-  it('is forgotten when the session ends', async () => {
-    const { deliveries, advance, prompt } = await queuedAnswer();
+  it('is forgotten when the session ends, and handed back: it went with its harness, never taken up', async () => {
+    const { deliveries, advance, prompt, undelivered } = await queuedAnswer();
     deliveries.ended('a');
     deliveries.turnEnded('a', true);
     prompt.now = 'at-prompt';
     await advance(20_000);
     expect(deliveries.unsent('a')).toBeUndefined();
+    expect(undelivered).toEqual(['a A message: and the tests (its session ended before its turn took it up)']);
+  });
+
+  it('is handed back, each one, when the daemon shuts down before the turn takes them up', async () => {
+    const { deliveries, advance, undelivered, closeDaemon } = await queuedAnswer('first');
+    const second = deliveries.answer('a', 'second');
+    await advance(2_000);
+    await second;
+    deliveries.ended('a', true);
+    closeDaemon();
+    const reason = 'the daemon shut down before its turn ended';
+    expect(undelivered).toEqual([`a A message: first (${reason})`, `a A message: second (${reason})`]);
+  });
+
+  it('is handed back to the agent that sent it, as the daemon closes with its session still up', async () => {
+    const { deliveries, advance, prompt, shown, undelivered, closeDaemon } = setup([row('from', { name: 'planner' }), row('a')]);
+    prompt.now = 'working';
+    shown.state = 'running';
+    const answered = deliveries.answer('a', 'Then lint', false, undefined, 'from');
+    await advance(2_000);
+    await answered;
+    closeDaemon();
+    expect(undelivered).toEqual(['a A message: Then lint (the daemon shut down before its turn ended) from from']);
+  });
+
+  it('is not handed back once its harness has taken it up', async () => {
+    const { deliveries, undelivered, closeDaemon } = await queuedAnswer();
+    deliveries.promptSubmitted('a', 'and the tests');
+    deliveries.ended('a', true);
+    closeDaemon();
+    expect(undelivered).toEqual([]);
+  });
+
+  it('is not handed back once its transcript shows it taken at a step of the turn, with no prompt of its own', async () => {
+    const shutDown = await queuedAnswer();
+    shutDown.transcript.push('and the tests');
+    shutDown.deliveries.ended('a', true);
+    shutDown.closeDaemon();
+    expect(shutDown.undelivered).toEqual([]);
+
+    const stopped = await queuedAnswer();
+    stopped.transcript.push('and the tests');
+    stopped.deliveries.ended('a');
+    expect(stopped.undelivered).toEqual([]);
+  });
+
+  it('is handed back when only a prompt from before it was typed is the same', async () => {
+    const each = setup([row('a')]);
+    each.transcript.push('and the tests');
+    each.prompt.now = 'working';
+    each.shown.state = 'running';
+    const answered = each.deliveries.answer('a', 'and the tests');
+    await each.advance(2_000);
+    await answered;
+    each.deliveries.ended('a', true);
+    each.closeDaemon();
+    expect(each.undelivered).toEqual(['a A message: and the tests (the daemon shut down before its turn ended)']);
+  });
+
+  it('is handed back without the one of several its harness took up on its own', async () => {
+    const { deliveries, advance, undelivered, closeDaemon } = await queuedAnswer('first');
+    const second = deliveries.answer('a', 'second');
+    await advance(2_000);
+    await second;
+    deliveries.promptSubmitted('a', 'first');
+    deliveries.ended('a', true);
+    closeDaemon();
+    expect(undelivered).toEqual(['a A message: second (the daemon shut down before its turn ended)']);
+  });
+
+  it('is handed back after the user pressed Enter or Ctrl-U in its terminal: its harness still held it', async () => {
+    for (const keys of ['more\r', '\x15']) {
+      const { deliveries, undelivered, closeDaemon } = await queuedAnswer();
+      deliveries.typed('a', keys);
+      deliveries.ended('a', true);
+      closeDaemon();
+      expect(undelivered).toEqual(['a A message: and the tests (the daemon shut down before its turn ended)']);
+    }
+  });
+
+  it('is handed back when the daemon shuts down after its turn ended, before a turn of its own was seen', async () => {
+    const { deliveries, advance, undelivered, closeDaemon } = await queuedAnswer();
+    deliveries.turnEnded('a', true);
+    await advance(100);
+    deliveries.ended('a', true);
+    closeDaemon();
+    expect(undelivered).toEqual(['a A message: and the tests (the daemon shut down before its turn ended)']);
+  });
+
+  it('is let go, never handed back, once it is left unsent at its prompt, or a turn after its own ends without it', async () => {
+    const unsent = await queuedAnswer();
+    unsent.deliveries.turnEnded('a', true);
+    unsent.prompt.now = 'at-prompt';
+    await unsent.advance(20_000);
+    expect(unsent.deliveries.unsent('a')).toBe('A message');
+    unsent.deliveries.ended('a', true);
+    unsent.closeDaemon();
+    expect(unsent.undelivered).toEqual([]);
+
+    const unseen = await queuedAnswer();
+    unseen.deliveries.turnEnded('a', true);
+    unseen.deliveries.turnSeen('a');
+    await unseen.advance(2_000);
+    unseen.deliveries.turnEnded('a', true);
+    unseen.deliveries.ended('a', true);
+    unseen.closeDaemon();
+    expect(unseen.undelivered).toEqual([]);
   });
 });
 

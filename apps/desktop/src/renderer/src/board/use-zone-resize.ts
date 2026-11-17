@@ -4,7 +4,7 @@ import type { ZoneLayout } from '@agent-board/daemon/protocol';
 import type { Rect } from '../geometry';
 import { isItemNode } from './items/items';
 import { AGENT_TILE_SIZE, packTiles, PERCH_ROOM, zoneGrid, type ZoneGrid } from '@agent-board/daemon/board-layout';
-import { holdsTiles, isSessionTile, isZone, layoutOf, sizeOfNode, type BoardNode } from './tiles';
+import { holdsTiles, isSessionTile, isZone, layoutOf, laysOutItsTiles, resizesFrom, sizeOfNode, type BoardNode } from './tiles';
 import { isDefaultSize } from './tile-size';
 import type { ZoneResize } from './zone-contexts';
 
@@ -51,7 +51,10 @@ export function useZoneResize({ nodesRef, setNodes, onNodesChange }: ZoneResizeO
         const zone = nodesRef.current.filter(isZone).find((node) => node.id === id);
         if (zone === undefined) return;
         const last = layoutOf(zone);
-        const children = nodesRef.current.filter((node) => node.parentId === id);
+        // On shelves or in clusters its layout draws its tiles, and reflows them to the new size itself: none to pack.
+        const laidOut = laysOutItsTiles(zone.data.zone);
+        if (laidOut) setNodes((current) => current.map((node) => (node.id === id && isZone(node) ? resizesFrom(node) : node)));
+        const children = nodesRef.current.filter((node) => node.parentId === id && !(laidOut && isSessionTile(node)));
         resizing.current = {
           id,
           last,

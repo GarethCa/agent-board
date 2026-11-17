@@ -15,6 +15,8 @@ for (const { theme, suffix } of THEMES) {
     needsBaselines(
       ...GLANCE_STATES.map((state) => `shelf-tile-${state}${suffix}`),
       ...HOVERED.map((state) => `shelf-tile-${state}-hover${suffix}`),
+      `shelf-tile-reviewer-working${suffix}`,
+      `shelf-tile-reviewer-long${suffix}`,
       `shelf-tile-long${suffix}`,
       `shelf-tile-unsent${suffix}`,
       `shelf-tile-needs-icons${suffix}`,
@@ -23,8 +25,8 @@ for (const { theme, suffix } of THEMES) {
     const { app, window } = await launchGallery(dataDir, theme);
     try {
       const gallery = window.getByTestId('shelf-tile-gallery');
-      // One per state, one with a name on two lines and long tags, and one with a prompt row.
-      await expect(gallery.getByTestId('agent-tile')).toHaveCount(GLANCE_STATES.length + 2);
+      // One per state, two reviewers at work (one with a two-line name), one with a name on two lines and long tags, and one with a prompt row.
+      await expect(gallery.getByTestId('agent-tile')).toHaveCount(GLANCE_STATES.length + 4);
       await pinFonts(window);
       const letPointer = await ignorePointer(window);
       await settle(window);
@@ -34,6 +36,17 @@ for (const { theme, suffix } of THEMES) {
         await expect(tile.getByTestId('tile-controls')).toHaveCSS('opacity', '0');
         await expect.soft(tile).toHaveScreenshot(`shelf-tile-${state}${suffix}.png`, SHOT);
       }
+      // A reviewer's mark follows its word in the band, in every state, at work too, where the word says Working; no other agent has one.
+      await expect(window.getByTestId('shelf-tile-review').getByTestId('tile-band').getByRole('img', { name: 'Reviewer' })).toBeVisible();
+      const working = window.getByTestId('shelf-tile-reviewer-working');
+      await expect(working.getByTestId('agent-tile')).toHaveAttribute('data-glance', 'working');
+      await expect(working.getByRole('img', { name: 'Reviewer' })).toBeVisible();
+      await expect(window.getByTestId('shelf-tile-working').getByTestId('tile-reviewer-mark')).toHaveCount(0);
+      await expect.soft(working).toHaveScreenshot(`shelf-tile-reviewer-working${suffix}.png`, SHOT);
+      // A two-line name leaves it in the band, never in the corner its buttons take.
+      const reviewerLong = window.getByTestId('shelf-tile-reviewer-long');
+      await expect(reviewerLong.getByTestId('tile-band').getByRole('img', { name: 'Reviewer' })).toBeVisible();
+      await expect.soft(reviewerLong).toHaveScreenshot(`shelf-tile-reviewer-long${suffix}.png`, SHOT);
       // Its name on two lines leaves its line one, and its tags and band stay in the tile's fixed size.
       const long = window.getByTestId('shelf-tile-long');
       const meta = await long.getByTestId('tile-meta').boundingBox();

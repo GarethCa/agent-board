@@ -6,7 +6,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Agent, AgentState, Zone } from '@agent-board/daemon/protocol';
-import { focusedCrews, hoverCrew, leaveCrew, selectCrews } from './crew-view';
+import { focusedCrews, hoverCrew, leaveCrew, selectCrews, typeInTile } from './crew-view';
 import { selectedOrchestrators } from './crews';
 import { HybridTile } from './HybridTile';
 import { galleryAgent } from './TileGallery';
@@ -43,6 +43,7 @@ function root(agent: Agent, from?: TileData['from'], crew?: number): string {
 const dimmed = (tile: string) => /class="[^"]*\bhybrid-tile-agent\b/.test(tile) && !tile.includes('data-crew-lit');
 
 afterEach(() => {
+  typeInTile(undefined);
   leaveCrew(LEAD.sessionId);
   selectCrews([]);
 });
@@ -102,6 +103,17 @@ describe('the crew-focus dim', () => {
     expect(dimmed(root(ticketChat('idle'), LEAD))).toBe(false);
     selectCrews(selectedOrchestrators(board()));
     expect(focusedCrews().size).toBe(0);
+  });
+
+  it("lets go of a selected orchestrator's crew while the user types in its tile, so nothing dims, and focuses it again after", () => {
+    selectCrews(selectedOrchestrators(select(board(), `agent:${LEAD.sessionId}`)));
+    hoverCrew(LEAD.sessionId);
+    typeInTile(LEAD.sessionId);
+    expect(focusedCrews().size).toBe(0);
+    expect(root(plain('running'), LEAD)).not.toContain('data-crew-lit');
+    typeInTile(undefined);
+    expect([...focusedCrews()]).toEqual([LEAD.sessionId]);
+    expect(dimmed(root(plain('running'), LEAD))).toBe(false);
   });
 
   it("leaves a selected ticket chat that has a helper lit: it leads its helpers' crew, and is in it", () => {

@@ -24,7 +24,7 @@ export function PortholeTile(props: GlanceTileProps) {
   );
 }
 
-function PortholeFace({ face, status, look, name, menu, expand, prompt, action, times, repo, tags, extras, fitted }: GlanceParts) {
+function PortholeFace({ face, status, look, name, reviewer, menu, expand, prompt, action, times, repo, tags, extras, fitted }: GlanceParts) {
   const style = useCharacterStyle();
   const tone = portholeWordTone(face.state);
   const line = glanceLine(face.line, face.state);
@@ -42,8 +42,12 @@ function PortholeFace({ face, status, look, name, menu, expand, prompt, action, 
         </span>
         <span className="porthole-about">
           <span className="porthole-name">{name}</span>
-          <span className="porthole-word" data-testid="tile-state" data-tone={tone}>
-            {word}
+          {/* Its state word, then a reviewer's mark: one line, clear of the corner its buttons take on hover. */}
+          <span className="porthole-state">
+            <span className="porthole-word" data-testid="tile-state" data-tone={tone}>
+              {word}
+            </span>
+            {reviewer}
           </span>
         </span>
       </div>

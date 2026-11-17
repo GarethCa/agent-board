@@ -500,6 +500,50 @@ kbd {
   pointer-events: none;
 }
 
+/* A selected zone's lanes area: a dashed edge round the part its shelves or clusters are laid out in, inside the zone's
+   own edge, with a handle at each corner that sizes it alone. The rest of the zone is free. */
+.zone-lanes-area {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1.5px dashed var(--zone-color);
+  border-radius: var(--radius-lg);
+  pointer-events: none;
+}
+
+.zone-lanes-handle {
+  position: absolute;
+  width: var(--space-2-5);
+  height: var(--space-2-5);
+  border: 1.5px solid var(--zone-color);
+  border-radius: var(--radius-xs);
+  background: var(--surface);
+  pointer-events: auto;
+}
+
+.zone-lanes-handle[data-corner='top-left'] {
+  top: var(--space-2);
+  left: var(--space-2);
+  cursor: nwse-resize;
+}
+
+.zone-lanes-handle[data-corner='top-right'] {
+  top: var(--space-2);
+  right: var(--space-2);
+  cursor: nesw-resize;
+}
+
+.zone-lanes-handle[data-corner='bottom-left'] {
+  bottom: var(--space-2);
+  left: var(--space-2);
+  cursor: nesw-resize;
+}
+
+.zone-lanes-handle[data-corner='bottom-right'] {
+  right: var(--space-2);
+  bottom: var(--space-2);
+  cursor: nwse-resize;
+}
+
 /* Each shelf a faint column of its own, so the four read apart even zoomed out: told by form, never by colour (orange is
    only for what needs you). To do's cards are dashed and flat (not started), Doing's raised, Waiting's rows sunken and
    flat, Done's chips. */
@@ -1092,16 +1136,24 @@ kbd {
 }
 
 /* The snowflake, by its name: in its state's ink, at the size of the head's other marks. */
-.tile-frost-mark {
+/* A reviewer's eye after its state word on a glance tile shares its shape and size, in the review ink. */
+:is(.tile-frost-mark, .tile-reviewer-mark) {
   display: inline-flex;
   flex: none;
   align-items: center;
+}
+
+:is(.tile-frost-mark, .tile-reviewer-mark) svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+}
+
+.tile-frost-mark {
   color: var(--frost-mark);
 }
 
-.tile-frost-mark svg {
-  width: var(--icon-sm);
-  height: var(--icon-sm);
+.tile-reviewer-mark {
+  color: var(--review-mark);
 }
 
 .hybrid-tile-agent[data-state='hibernated'] .hybrid-tile-icon {
@@ -3754,6 +3806,13 @@ kbd {
   font-weight: var(--weight-bold);
   line-height: var(--leading-snug);
   letter-spacing: normal;
+}
+
+/* Its state word and a reviewer's eye after it, on one line. */
+.porthole-state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-25);
 }
 
 .porthole-word {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentAsk, PermissionPrompt, PlanSummary } from '@agent-board/daemon/protocol';
-import { decisionId, deferDecision, deferredDecision, deferredDecisions, paneDecision, showsStepsStrip, subscribeDeferred } from './pane-decision';
+import { decisionId, deferDecision, deferredDecision, deferredDecisions, inPane, paneDecision, showsStepsStrip, subscribeDeferred } from './pane-decision';
 
 const ask: AgentAsk = {
   id: 'ask-1',
@@ -47,6 +47,14 @@ describe('paneDecision: a permission prompt', () => {
   it('is never one asking in the terminal now, which the banner above sends the user to', () => {
     expect(paneDecision({ ask: null, plan: null, permissions: [prompt('p1', null)] })).toBeUndefined();
     expect(paneDecision({ ask, plan: null, permissions: [prompt('p1', null)] })?.kind).toBe('ask');
+  });
+
+  it('keeps a plan answered from the board till Claude takes it, so the pane says if Claude kept its dialog open', () => {
+    const sent: PermissionPrompt = { ...prompt('plan', null), toolName: 'ExitPlanMode', toolInput: { plan: '# Plan' }, plan: '# Plan', planSent: { sentAt: '2026-10-31T09:00:05Z', keptOpen: false } };
+    expect(paneDecision({ ask, plan: null, permissions: [sent] })).toEqual({ kind: 'permission', prompt: sent });
+    // The banner that sends the user to the terminal stays away while the pane shows every prompt.
+    expect(inPane(sent)).toBe(true);
+    expect(inPane(prompt('p1', null))).toBe(false);
   });
 
   it('passes to the next prompt once one is put off, and decisionId names it by its prompt', () => {

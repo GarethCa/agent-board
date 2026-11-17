@@ -11,7 +11,7 @@ import { zoneNode, type ZoneNodeType } from './ZoneNode';
 const T0 = '2026-01-05T09:00:00.000Z';
 
 const zone = (id: string, layoutMode: Zone['layoutMode']): Zone =>
-  ({ id, kind: 'unbound', name: id, x: 0, y: 0, width: 720, height: 480, spacing: 'normal', layoutMode, repoRoot: null }) as Zone;
+  ({ id, kind: 'unbound', name: id, x: 0, y: 0, width: 720, height: 480, spacing: 'normal', layoutMode, repoRoot: null, lanes: null }) as Zone;
 
 function agent(sessionId: string, fields: Partial<Agent> = {}): Agent {
   return {
@@ -84,6 +84,47 @@ describe('withShelves', () => {
     expect(node.height).toBe(Math.max(480, view.size.height));
   });
 
+  it('lays its shelves out at the width it is being resized to, and says the least size they fit', () => {
+    const resizing = (width: number) =>
+      board().map((node) => (node.id === 'z' ? ({ ...node, width, resizing: true } as BoardNode) : node));
+    const wide = shelvesOf(withShelves(resizing(1600), { agents, links: [], shows: 'explicit', choice: none }));
+    const narrow = shelvesOf(withShelves(resizing(720), { agents, links: [], shows: 'explicit', choice: none }));
+    // Wide, the four shelves sit in one row; narrower, they stack in two.
+    expect(new Set(wide.shelves.map((shelf) => shelf.y)).size).toBe(1);
+    expect(new Set(narrow.shelves.map((shelf) => shelf.y)).size).toBe(2);
+    // Let go, it lays out at its saved width again.
+    const saved = shelvesOf(withShelves(board(), { agents, links: [], shows: 'explicit', choice: none }));
+    expect(saved.shelves).toEqual(narrow.shelves);
+    // As narrow as its shelves go, and as tall as they are at that width.
+    const drawn = byId(withShelves(resizing(1600), { agents, links: [], shows: 'explicit', choice: none }), 'z') as ZoneNodeType;
+    expect(drawn.data.fits).toEqual({ width: expect.any(Number), height: wide.size.height });
+    expect(drawn.data.fits!.width).toBeLessThanOrEqual(narrow.size.width);
+    expect(drawn.width).toBe(1600);
+  });
+
+  it('let go, is drawn from its saved size, not from a size the resizer left on its node after the size it saved', () => {
+    const left = board().map((node) => (node.id === 'z' ? ({ ...node, width: 1500, height: 2000, measured: { width: 1500, height: 2000 } } as BoardNode) : node));
+    const drawn = byId(withShelves(left, { agents, links: [], shows: 'explicit', choice: none }), 'z') as ZoneNodeType;
+    const saved = byId(withShelves(board(), { agents, links: [], shows: 'explicit', choice: none }), 'z') as ZoneNodeType;
+    expect({ width: drawn.width, height: drawn.height }).toEqual({ width: saved.width, height: saved.height });
+    expect(drawn.width).toBeLessThan(1500);
+    // Measured at it too: React Flow resizes from the measured size it is handed, and one edge keeps the other side's.
+    expect(drawn.measured).toEqual({ width: drawn.width, height: drawn.height });
+    // Neither selected nor being resized, its resizer doesn't show: no second layout for its least size.
+    expect(drawn.data.fits).toBeUndefined();
+    const selected = board().map((node) => (node.id === 'z' ? ({ ...node, selected: true } as BoardNode) : node));
+    expect((byId(withShelves(selected, { agents, links: [], shows: 'explicit', choice: none }), 'z') as ZoneNodeType).data.fits).toBeDefined();
+  });
+
+  it('lays its clusters out at the width it is being resized to too', () => {
+    const clustered = (width: number) =>
+      board().map((node) => (node.id === 'z' ? ({ ...zoneNode(zone('z', 'clusters')), width, resizing: true } as BoardNode) : node));
+    const drawn = byId(withShelves(clustered(1400), { agents, links: [], shows: 'explicit', choice: none }), 'z') as ZoneNodeType;
+    expect(drawn.data.clusters).toBeDefined();
+    expect(drawn.width).toBe(1400);
+    expect(drawn.data.fits!.height).toBe(drawn.data.clusters!.size.height);
+  });
+
   it('leaves a free zone, and every saved place, as they were', () => {
     const before = board();
     const drawn = withShelves(before, { agents, links: [], shows: 'explicit', choice: none });
@@ -104,6 +145,69 @@ describe('withShelves', () => {
     const freed = withShelves(board(), { agents, links: [], shows: 'explicit', choice: { ...none, freed: new Set(['lead']) } });
     expect(byId(freed, 'agent:lead').hidden).toBe(true);
     expect(shelvesOf(freed).stacks.map((stack) => stack.key).sort()).toEqual(['agent:lead', 'agent:worker']);
+  });
+});
+
+describe('a lanes area of its own', () => {
+  const lanes = { x: 100, y: 50, width: 720, height: 480 };
+  /** Zone `z` 1400 wide with its lanes area, the shell put in its free area (`free`) and the rest in its lanes. */
+  const withLanes = (fields: Partial<ZoneNodeType> = {}, free = ['shell:s1']): BoardNode[] =>
+    board().map((node) => {
+      if (node.id === 'z') return { ...zoneNode({ ...zone('z', 'shelves'), width: 1400, height: 700, lanes, free }), ...fields } as BoardNode;
+      if (node.id === 'shell:s1') return tile('shell:s1', 1000, 600);
+      if (node.id === 'agent:worker') return tile('agent:worker', 200, 200);
+      return node;
+    });
+  const draw = (nodes: BoardNode[], lanesDraft: { zoneId: string; lanes: typeof lanes } | null = null) =>
+    withShelves(nodes, { agents, links: [], shows: 'explicit', choice: none, lanesDraft });
+
+  it('lays its lanes out inside it, from its corner, and leaves a tile in the free area where it was put', () => {
+    const drawn = draw(withLanes());
+    expect(byId(drawn, 'agent:lead')).toMatchObject({ position: { x: 100 + 20, y: 50 + 44 }, draggable: false });
+    expect(shelvesOf(drawn).origin).toEqual({ x: 100, y: 50 });
+    // The shell keeps its place, draggable, in no lane.
+    expect(byId(drawn, 'shell:s1')).toMatchObject({ position: { x: 1000, y: 600 }, draggable: true });
+    expect(shelvesOf(drawn).head.map((place) => place.key)).not.toContain('shell:s1');
+    // Its lanes are as wide as its lanes area, not the zone.
+    expect(shelvesOf(drawn).shelves).toEqual(shelvesOf(draw(board())).shelves);
+    expect(laidOutTile(byId(drawn, 'shell:s1') as TileNodeType, drawn)).toBe(false);
+    expect(laidOutTile(byId(drawn, 'agent:lead') as TileNodeType, drawn)).toBe(true);
+  });
+
+  it('lays out a tile it was never told is free, wherever it was saved or slotted: a new one, say', () => {
+    // Saved outside the lanes area, left of it where a new tile is slotted, or right of it, but never put there.
+    for (const at of [{ x: 20, y: 44 }, { x: 1000, y: 600 }]) {
+      const drawn = draw(withLanes({}, []).map((node) => (node.id === 'shell:s1' ? tile('shell:s1', at.x, at.y) : node)));
+      expect(shelvesOf(drawn).head.map((place) => place.key)).toContain('shell:s1');
+      expect(laidOutTile(byId(drawn, 'shell:s1') as TileNodeType, drawn)).toBe(true);
+    }
+    // Marked free, it stays where it was put, even inside where the lanes area has grown to since.
+    const swallowed = draw(withLanes({}, ['shell:s1']).map((node) => (node.id === 'shell:s1' ? tile('shell:s1', 300, 200) : node)));
+    expect(byId(swallowed, 'shell:s1')).toMatchObject({ position: { x: 300, y: 200 }, draggable: true });
+    // And the lanes filling the zone again lay it out.
+    const filled = draw(withLanes().map((node) => (node.id === 'z' ? ({ ...zoneNode({ ...zone('z', 'shelves'), width: 1400, height: 700, free: ['shell:s1'] }) } as BoardNode) : node)));
+    expect(shelvesOf(filled).head.map((place) => place.key)).toContain('shell:s1');
+  });
+
+  it('selected, says where its lanes area is drawn and the least it can go, and holds it in the zone', () => {
+    const drawn = byId(draw(withLanes({ selected: true })), 'z') as ZoneNodeType;
+    const view = drawn.data.shelves!;
+    expect(drawn.data.lanesArea).toEqual({
+      area: { ...lanes, width: Math.max(720, view.size.width), height: Math.max(480, view.size.height) },
+      fits: { width: expect.any(Number), height: view.size.height },
+    });
+    expect(drawn.data.fits!.width).toBeGreaterThanOrEqual(lanes.x + drawn.data.lanesArea!.area.width);
+    expect(drawn.data.fits!.height).toBeGreaterThanOrEqual(lanes.y + drawn.data.lanesArea!.area.height);
+    // Filling the zone, its lanes area is the zone.
+    const plain = byId(draw(board().map((node) => (node.id === 'z' ? ({ ...node, selected: true } as BoardNode) : node))), 'z') as ZoneNodeType;
+    expect(plain.data.lanesArea!.area).toEqual({ x: 0, y: 0, width: plain.width, height: plain.height });
+  });
+
+  it('reflows its lanes as its lanes area is dragged', () => {
+    const wide = draw(withLanes(), { zoneId: 'z', lanes: { x: 0, y: 0, width: 1400, height: 480 } });
+    expect(new Set(shelvesOf(wide).shelves.map((shelf) => shelf.y)).size).toBe(1);
+    expect(shelvesOf(wide).origin).toEqual({ x: 0, y: 0 });
+    expect(new Set(shelvesOf(draw(withLanes())).shelves.map((shelf) => shelf.y)).size).toBe(2);
   });
 });
 

@@ -53,6 +53,12 @@ export interface PermissionHoldsOptions {
    * allow but not its answers, so it carries on as if the user had answered nothing. The prompt is gone; tell the user.
    */
   onAnswersDropped?(sessionId: string): void;
+  /**
+   * Claude hung up the hook of question prompt `requestId` before the board sent its answers: its own dialog closed.
+   * Answered in its terminal, its call's `PostToolUse` settles the prompt; declined there (Esc), no hook ever comes, and
+   * only its transcript says its turn ended. The prompt stays, no longer held, until one of them says which.
+   */
+  onDialogClosed?(sessionId: string, requestId: string): void;
 }
 
 export interface PermissionHolds {
@@ -105,7 +111,7 @@ interface Held {
   suggestions: object[];
   /** Answers the hook; gone once it has been answered. */
   reply: ((reply: HookReply) => void) | undefined;
-  /** Once its answers are sent: says Claude kept its dialog open if its call hasn't run by then. */
+  /** Once its answers are sent, or its plan answered: says Claude kept its dialog open if it hasn't moved on by then. */
   keptOpenTimer?: ReturnType<typeof setTimeout>;
   /** The answers the board sent, by question, as its `updatedInput.answers`. */
   sent?: Record<string, string>;
@@ -208,20 +214,38 @@ export function permissionReply(decision: PermissionDecision, suggestions: reado
   return { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: answer } };
 }
 
+/** The modes a plan dialog's first yes can go on in: auto mode, or accepting edits where an account has no auto mode. */
+const PLAN_SESSION_MODES = ['auto', 'acceptEdits'];
+
 /**
- * The reply to Claude's plan approval (`PLAN_TOOL`) that carries `decision`, whatever Claude suggested: its approval
- * always says the mode to go on in, as its own dialog's choices do, so the agent never stays in plan mode, where it
- * makes no edits. Allowing for the session is its "Yes, auto-accept edits" (`acceptEdits`); a plain allow is "Yes,
- * approve each edit" (`default`); a deny keeps it planning.
+ * The mode Claude's plan dialog's first yes goes on in: the one Claude suggested with the request ("Yes, and use auto
+ * mode" where its account has auto mode, else "Yes, auto-accept edits"), and auto mode, its first yes in 2.1.325, where
+ * it suggested neither.
  */
-function planReply(decision: PermissionDecision): Record<string, unknown> {
-  if (decision.behavior === 'deny') return permissionReply(decision);
-  const mode = decision.scope === 'session' ? 'acceptEdits' : 'default';
-  return { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow', updatedPermissions: [{ type: 'setMode', mode, destination: 'session' }] } } };
+function planSessionMode(suggestions: readonly object[]): string {
+  for (const suggestion of suggestions) {
+    const { type, mode } = suggestion as Record<string, unknown>;
+    if (type === 'setMode' && typeof mode === 'string' && PLAN_SESSION_MODES.includes(mode)) return mode;
+  }
+  return 'auto';
 }
 
-/** What allowing a plan approval for the session grants: auto-accepting edits, which its reply sets itself (`planReply`). */
-const PLAN_GRANT = 'all edits';
+/** What a plan approval's first yes grants, in words, for its button (`planSessionMode`). */
+const planGrant = (suggestions: readonly object[]): string => (planSessionMode(suggestions) === 'acceptEdits' ? 'all edits' : 'auto mode');
+
+/**
+ * The reply to Claude's plan approval (`PLAN_TOOL`) that carries `decision`. Claude's plan dialog takes an allow only
+ * with the call's input as its `updatedInput`, as its question dialog does; a bare allow leaves the dialog open. The
+ * allow always says the mode to go on in, as its own dialog's choices do, so the agent never stays in plan mode, where
+ * it makes no edits: allowing for the session is its first yes (`planSessionMode`), a plain allow "Yes, manually
+ * approve edits" (`default`). A deny keeps it planning.
+ */
+function planReply(decision: PermissionDecision, input: unknown, suggestions: readonly object[]): Record<string, unknown> {
+  if (decision.behavior === 'deny') return permissionReply(decision);
+  const mode = decision.scope === 'session' ? planSessionMode(suggestions) : 'default';
+  const updatedInput = typeof input === 'object' && input !== null ? input : {};
+  return { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow', updatedInput, updatedPermissions: [{ type: 'setMode', mode, destination: 'session' }] } } };
+}
 
 /** What the harness's rule for `suggestion` allows, in words for a button; undefined where it can't be worded. */
 function grantOf(suggestion: Record<string, unknown>): string | undefined {
@@ -316,14 +340,14 @@ export function createPermissionHolds(options: PermissionHoldsOptions): Permissi
             requestedAt: new Date(now).toISOString(),
             heldUntil: new Date(now + holdMs).toISOString(),
             asksInTerminal,
-            sessionGrant: payload.tool_name === PLAN_TOOL ? PLAN_GRANT : sessionGrantOf(suggestions),
+            sessionGrant: payload.tool_name === PLAN_TOOL ? planGrant(suggestions) : sessionGrantOf(suggestions),
             questions,
             dialog,
             plan: planOf(payload),
           },
           reply: (reply) => {
             clearTimeout(timer);
-            signal.removeEventListener('abort', lapse);
+            signal.removeEventListener('abort', hungUp);
             resolve(reply);
           },
         };
@@ -334,10 +358,16 @@ export function createPermissionHolds(options: PermissionHoldsOptions): Permissi
           if (!closed) options.onChange(sessionId);
         };
         const timer = setTimeout(lapse, holdMs);
+        // The harness hanging up a question its dialog asks too: that dialog has closed, one way or another.
+        const hungUp = () => {
+          const asking = entry.reply !== undefined && dialog !== null;
+          lapse();
+          if (asking && !closed) options.onDialogClosed?.(sessionId, entry.prompt.id);
+        };
         sessions.set(sessionId, [...(sessions.get(sessionId) ?? []), entry]);
         if (questions !== null && dialog === null) answer(entry, undefined);
-        else if (signal.aborted) lapse();
-        else signal.addEventListener('abort', lapse, { once: true });
+        else if (signal.aborted) hungUp();
+        else signal.addEventListener('abort', hungUp, { once: true });
       });
     },
 
@@ -348,8 +378,20 @@ export function createPermissionHolds(options: PermissionHoldsOptions): Permissi
       if (entry?.reply === undefined || entry.prompt.questions !== null) return false;
       // Allowing for the session needs what the harness suggested; without it the request stays held.
       if (decision.behavior === 'allow' && decision.scope === 'session' && entry.prompt.sessionGrant === null) return false;
-      answer(entry, entry.prompt.toolName === PLAN_TOOL ? planReply(decision) : permissionReply(decision, entry.suggestions));
-      settle(sessionId, (held) => held === entry);
+      if (entry.prompt.toolName !== PLAN_TOOL) {
+        answer(entry, permissionReply(decision, entry.suggestions));
+        settle(sessionId, (held) => held === entry);
+        return true;
+      }
+      // A plan's row stays until Claude moves on from its dialog (`afterHook`): a dialog it kept open needs its terminal.
+      answer(entry, planReply(decision, entry.prompt.toolInput, entry.suggestions));
+      entry.prompt = { ...entry.prompt, planSent: { sentAt: new Date().toISOString(), keptOpen: false } };
+      entry.keptOpenTimer = setTimeout(() => {
+        const sent = entry.prompt.planSent;
+        if (closed || !(sessions.get(sessionId) ?? []).includes(entry) || sent === undefined) return;
+        entry.prompt = { ...entry.prompt, planSent: { ...sent, keptOpen: true } };
+        options.onChange(sessionId);
+      }, options.dialogTakeMs ?? DIALOG_TAKE_MS);
       return true;
     },
 
@@ -396,6 +438,9 @@ export function createPermissionHolds(options: PermissionHoldsOptions): Permissi
         const { prompt } = entry;
         if ((prompt.subagent?.id ?? null) !== from) return false;
         if (typeof event === 'string' && TURN_BOUNDARIES.has(event)) return true;
+        // A plan answered from the board: Claude's dialog holds up its asker, so any hook of its but a notification (one
+        // tells of the dialog still up) shows Claude moved on, whether it ran the call (a yes) or carried on planning (a no).
+        if (prompt.planSent !== undefined) return event !== 'Notification';
         // The call ran: it succeeded (`PostToolUse`) or failed (Claude's `PostToolUseFailure`). A question call's input
         // comes back with its answers added, and its asker has one dialog up at a time, so its tool alone tells it.
         if ((event !== 'PostToolUse' && event !== 'PostToolUseFailure') || payload.tool_name !== prompt.toolName) return false;

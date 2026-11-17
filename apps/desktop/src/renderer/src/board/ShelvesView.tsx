@@ -154,7 +154,7 @@ export const ShelvesView = memo(function ShelvesView({ zoneId, view }: { zoneId:
   // The agents on Doing that need you, as the Needs-you pill counts them.
   const needYou = view.stacks.filter((stack) => stack.stage === 'doing').flatMap((stack) => stack.agents).filter((agent) => needsUser(agent, shows)).length;
   return (
-    <div className="shelves" data-testid="shelves" data-open={view.open !== null || undefined}>
+    <div className="shelves" data-testid="shelves" data-open={view.open !== null || undefined} style={{ left: view.origin.x, top: view.origin.y }}>
       {view.shelves.map((shelf) => (
         <div key={shelf.stage} className="shelf-column" data-testid="shelf" data-stage={shelf.stage} style={place(shelf)}>
           <div className="shelf-heading">
@@ -196,7 +196,7 @@ export const ShelvesView = memo(function ShelvesView({ zoneId, view }: { zoneId:
 export const ClustersView = memo(function ClustersView({ zoneId, view }: { zoneId: string; view: ClusterView }) {
   const { toggleDone } = useContext(ShelvesContext);
   return (
-    <div className="shelves" data-testid="clusters">
+    <div className="shelves" data-testid="clusters" style={{ left: view.origin.x, top: view.origin.y }}>
       <HeadPins head={view.head} />
       {view.clusters
         .filter((cluster) => cluster.placed)

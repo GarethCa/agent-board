@@ -77,7 +77,7 @@ Light and dark themes, a first-run setup that checks your tools, and much more: 
 
 ## Install
 
-agent-board installs from source, on macOS (Apple silicon or Intel). You need:
+agent-board installs from source, on macOS (Apple silicon or Intel) or Linux (x86-64). You need:
 
 - [Node.js](https://nodejs.org) 24 or later, and pnpm 11: `npm install -g pnpm@11`.
 - `git`.
@@ -95,6 +95,8 @@ pnpm package
 
 `pnpm package` builds an unsigned macOS app and installs it as `~/Applications/agent-board.app`, replacing any earlier copy. If agent-board is running, it quits it first and asks whether to reopen it; your sessions keep running in the daemon. A failed build never removes the app you have. `pnpm package --no-install` only builds.
 
+On Linux, `pnpm package` builds a `.deb` and a `.tar.gz`, and on Debian or Ubuntu installs the `.deb` with `sudo apt-get`, in `/opt/agent-board` with `agent-board` on your `PATH`. Elsewhere, unpack the tar.gz and run `agent-board` in it. Linux is newer than macOS: [Linux](docs/install.md#linux) says what doesn't work there yet.
+
 Then open it: a short first-run flow checks your tools and tours the board. The [quick start](docs/quick-start.md) walks you through your first zone and agent.
 
 ## Update
@@ -103,7 +105,7 @@ Then open it: a short first-run flow checks your tools and tours the board. The 
 pnpm update:app
 ```
 
-Run it in your clone whenever you want the latest release (if the command is missing, `git pull` once first). It fast-forwards the clone, rebuilds and reinstalls the app, and prints the old and new versions. It never runs by itself.
+Run it in your clone whenever you want the latest release (if the command is missing, `git pull` once first). It is macOS only for now: on Linux, run `git pull`, `pnpm install` and `pnpm package`. It fast-forwards the clone, rebuilds and reinstalls the app, and prints the old and new versions. It never runs by itself.
 
 - It refuses, and changes nothing, if the clone has uncommitted changes or has diverged from `origin`.
 - If the build fails, the app you have stays installed.
@@ -116,7 +118,7 @@ Flags such as `--no-launch` and `--install-dir` are in [docs/install.md](docs/in
 - **No keys, no tokens of its own.** It starts your own `claude` and `codex` through your login shell, with their own logins, settings and models. It never sees an Anthropic or OpenAI key, and there is no proxy between you and the CLIs.
 - **No terminal scraping.** Each session reports its state through the CLIs' own hooks, to a daemon on your machine. Nothing leaves your machine except what your CLIs and `gh` already send.
 - **Nothing approved for you.** Permission prompts wait for you. An edge condition's command only starts after you approve that exact command.
-- **Where things live.** Your data is in `~/Library/Application Support/agent-board`, and each agent's worktree is under `~/.agent-board/worktrees/`. Linear keys are kept in the macOS Keychain.
+- **Where things live.** Your data is in `~/Library/Application Support/agent-board` (`~/.config/agent-board` on Linux), and each agent's worktree is under `~/.agent-board/worktrees/`. Linear keys are kept in the macOS Keychain (on Linux, your desktop's keyring).
 
 ## More
 

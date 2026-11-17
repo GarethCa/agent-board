@@ -2259,7 +2259,8 @@ describe('the needs-you inbox', () => {
   });
 
   it("clears Claude's questions once answered in its terminal, refusing an answer from the board after", async () => {
-    const { client, recorder } = await agentDaemon('ask-questions');
+    const logged: string[] = [];
+    const { client, recorder } = await agentDaemon('ask-questions', { log: (line) => logged.push(line) });
     const zone = await addZone(client, tempRepo());
     const agent = await spawnAttached(client, zone.id, 'Set up the build');
 
@@ -2272,6 +2273,31 @@ describe('the needs-you inbox', () => {
     const ref = { sessionId: agent.sessionId, requestId: asking.permissions[0]!.id };
     await expect(client.call('agent.answerQuestion', { ...ref, index: 0, answer: { option: 0 } })).rejects.toMatchObject({ code: AGENT_ERROR.permissionGone });
     await expect(client.call('agent.sendAnswers', ref)).rejects.toMatchObject({ code: AGENT_ERROR.permissionGone });
+    // Its dialog closing hung up the hook too, yet its call ran: no decline is read into that.
+    await new Promise((resolve) => setTimeout(resolve, 3_200));
+    expect(logged.filter((line) => line.includes('declined'))).toEqual([]);
+  });
+
+  it("clears Claude's questions, and moves the agent to idle, once they are declined in its terminal (Esc), which ends its turn with no hook", async () => {
+    const { client, recorder } = await agentDaemon('ask-questions');
+    const zone = await addZone(client, tempRepo());
+    const agent = await spawnAttached(client, zone.id, 'Set up the build');
+
+    const asking = await untilAgent(recorder, agent.sessionId, (a) => a.permissions.length > 0);
+    await recorder.waitForText(agent.sessionId, '3. Other');
+    const declined = recorder.events.length;
+    // The fake takes Ctrl-C at its dialog as Claude takes Esc there; written as keys, not the board's interrupt.
+    await client.call('session.write', { sessionId: agent.sessionId, data: '\x03' });
+    await recorder.waitForText(agent.sessionId, 'User declined to answer questions');
+    const idle = await untilAgent(recorder, agent.sessionId, (a) => a.permissions.length === 0 && a.state === 'idle', declined);
+    expect(idle.flag).toBeNull();
+    const ref = { sessionId: agent.sessionId, requestId: asking.permissions[0]!.id };
+    await expect(client.call('agent.answerQuestion', { ...ref, index: 0, answer: { option: 0 } })).rejects.toMatchObject({ code: AGENT_ERROR.permissionGone });
+
+    // Back at its prompt: its next turn runs as any other.
+    const next = recorder.events.length;
+    await client.call('session.write', { sessionId: agent.sessionId, data: 'carry on\r' });
+    await untilAgent(recorder, agent.sessionId, (a) => a.state === 'idle' && a.lastMessage?.includes('carry on') === true, next);
   });
 
   it("says Claude kept its dialog open when its call doesn't run after the answers were sent, until its terminal answers", async () => {
@@ -2318,17 +2344,25 @@ describe('the needs-you inbox', () => {
   });
 
   describe("Claude's plan approval", () => {
-    it('holds it as a permission with its plan to read, and allowing with the switch it offers accepts edits', async () => {
+    it('holds it as a permission with its plan to read, and its first yes leaves plan mode for auto mode, its row kept till Claude moves on', async () => {
       const { client, recorder } = await agentDaemon('plan-mode');
       const zone = await addZone(client, tempRepo());
       const agent = await spawnAttached(client, zone.id, 'Add a cache');
 
       const asking = await untilAgent(recorder, agent.sessionId, (a) => a.permissions.length > 0);
       expect(asking.state).toBe('needs-permission');
-      expect(asking.permissions[0]).toMatchObject({ toolName: 'ExitPlanMode', plan: expect.stringContaining('# Add a cache'), sessionGrant: 'all edits', questions: null });
+      expect(asking.permissions[0]).toMatchObject({ toolName: 'ExitPlanMode', plan: expect.stringContaining('# Add a cache'), sessionGrant: 'auto mode', questions: null });
+      const sent = recorder.events.length;
       await client.call('agent.decidePermission', { sessionId: agent.sessionId, requestId: asking.permissions[0]!.id, behavior: 'allow', scope: 'session' });
+      // Sent, not yet taken: the row stays, read only, and the agent still waits on it.
+      const answered = await untilAgent(recorder, agent.sessionId, (a) => a.permissions.length === 0 || a.permissions[0]!.planSent !== undefined, sent);
+      expect(answered.state).toBe('needs-permission');
+      expect(answered.permissions[0]).toMatchObject({ id: asking.permissions[0]!.id, heldUntil: null, planSent: { keptOpen: false } });
       await recorder.waitForText(agent.sessionId, 'Starting on the plan.');
-      expect(recorder.screenText(agent.sessionId)).toContain('Accepting edits');
+      await untilAgent(recorder, agent.sessionId, (a) => a.permissions.length === 0, sent);
+      expect(recorder.screenText(agent.sessionId)).toContain('Auto mode on');
+      expect(recorder.screenText(agent.sessionId)).not.toContain('Still in plan mode');
+      expect(recorder.screenText(agent.sessionId)).not.toContain('Accepting edits');
     });
 
     it('approving each edit takes it out of plan mode, so it starts', async () => {
@@ -2341,6 +2375,7 @@ describe('the needs-you inbox', () => {
       await recorder.waitForText(agent.sessionId, 'Starting on the plan.');
       expect(recorder.screenText(agent.sessionId)).not.toContain('Still in plan mode');
       expect(recorder.screenText(agent.sessionId)).not.toContain('Accepting edits');
+      expect(recorder.screenText(agent.sessionId)).not.toContain('Auto mode on');
     });
 
     it("keeps planning with what to change, when it's denied with a message", async () => {

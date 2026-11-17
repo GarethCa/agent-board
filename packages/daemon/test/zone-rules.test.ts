@@ -16,7 +16,7 @@ import { connectTestClient, recordEvents, startTestDaemon, tempDataDir, tempRepo
 // A zone's layout rule, kept: what sets a zone off to be laid out again, the engine that does it, and the rule on a
 // real daemon.
 
-const zone = (fields: Partial<Zone> = {}) => ({ id: 'z1', name: 'web', layoutRule: 'lanes', layoutMode: 'free', spacing: 'normal', width: 1200, folded: false, handPlaced: [], ...fields }) as Zone;
+const zone = (fields: Partial<Zone> = {}) => ({ id: 'z1', name: 'web', layoutRule: 'lanes', layoutMode: 'free', spacing: 'normal', width: 1200, folded: false, handPlaced: [], free: [], ...fields }) as Zone;
 const agent = (fields: Partial<Agent> = {}) =>
   ({ sessionId: 's1', name: 'impl', zoneId: 'z1', issue: null, role: null, reviewOf: null, reviews: null, spawnedBy: null, orphanedFrom: null, ticket: null, ticketChat: false, branch: '', endedAt: null, state: 'idle', shellSessionId: null, shellHarness: null, position: { x: 0, y: 0 }, ...fields }) as Agent;
 
@@ -208,7 +208,7 @@ describe('a zone with a rule, on the daemon', () => {
 
   it('keeps the rule apart from the views, and through a snapshot', async () => {
     const { client, web } = await ruleDaemon();
-    expect(web).toMatchObject({ layoutRule: 'off', layoutMode: 'free', handPlaced: [] });
+    expect(web).toMatchObject({ layoutRule: 'off', layoutMode: 'free', handPlaced: [], free: [] });
     await client.call('zone.configure', { id: web.id, layoutMode: 'shelves' });
     // A rule sets the zone free of its view; a view sets the rule off.
     expect(await client.call('zone.configure', { id: web.id, layoutRule: 'lanes' })).toMatchObject({ layoutRule: 'lanes', layoutMode: 'free' });
@@ -261,7 +261,7 @@ describe('a zone with a rule, on the daemon', () => {
     await expect(client.call('orchestrator.arrange', { zoneId: web.id, layout: 'grid' })).rejects.toThrow(/web keeps the Lanes rule: set it free first \(zone layout free\) to arrange it another way/);
     await client.call('agent.move', { sessionId: second.sessionId, zoneId: web.id, x: 700, y: 480, byHand: true });
     const free = await client.call('orchestrator.zoneLayout', { zoneId: web.id, mode: 'free' });
-    expect(free).toMatchObject({ layoutRule: 'off', layoutMode: 'free', handPlaced: [] });
+    expect(free).toMatchObject({ layoutRule: 'off', layoutMode: 'free', handPlaced: [], free: [] });
     await expect(client.call('zone.followRule', { id: web.id, tiles: [] })).rejects.toThrow(/web keeps no layout rule/);
     // Off, a drag marks nothing.
     await client.call('agent.move', { sessionId: first.sessionId, zoneId: web.id, x: 40, y: 480, byHand: true });
@@ -506,13 +506,54 @@ describe('a zone with a rule, on the daemon', () => {
     expect((await zoneOf(client, web.id)).handPlaced).toEqual([`agent:${tile.sessionId}`]);
   });
 
+  it("marks a tile free only as the user puts it wholly outside a laid-out zone's lanes area, and keeps it free wherever the area goes", async () => {
+    const { client, web } = await ruleDaemon();
+    const tile = await client.call('agent.spawn', { zoneId: web.id, name: 'impl', ...SIZE });
+    const key = `agent:${tile.sessionId}`;
+    const layout = { x: web.x, y: web.y, width: web.width, height: web.height };
+    await client.call('zone.configure', { id: web.id, layoutMode: 'shelves' });
+    await client.call('zone.update', { id: web.id, ...layout, lanes: { x: 0, y: 0, width: 500, height: 400 } });
+    const free = async () => (await zoneOf(client, web.id)).free;
+    // Not the user's: a tile slotted or spawned outside the lanes is still laid out.
+    await client.call('agent.move', { sessionId: tile.sessionId, zoneId: web.id, x: 700, y: 40 });
+    expect(await free()).toEqual([]);
+    // Over the lanes' edge, part of it would lie on them.
+    await client.call('agent.move', { sessionId: tile.sessionId, zoneId: web.id, x: 400, y: 40, byHand: true });
+    expect(await free()).toEqual([]);
+    await client.call('agent.move', { sessionId: tile.sessionId, zoneId: web.id, x: 700, y: 40, byHand: true });
+    expect(await free()).toEqual([key]);
+    // The lanes area grown over it, it stays free; a move that isn't the user's keeps it so.
+    await client.call('zone.update', { id: web.id, ...layout, lanes: { x: 0, y: 0, width: 1100, height: 400 } });
+    await client.call('agent.move', { sessionId: tile.sessionId, zoneId: web.id, x: 720, y: 40 });
+    expect(await free()).toEqual([key]);
+    // Put back in the lanes, it is laid out again.
+    await client.call('agent.move', { sessionId: tile.sessionId, zoneId: web.id, x: 40, y: 40, byHand: true });
+    expect(await free()).toEqual([]);
+    // Lanes that fill the zone again leave it no free area.
+    await client.call('zone.update', { id: web.id, ...layout, lanes: { x: 0, y: 0, width: 500, height: 400 } });
+    await client.call('agent.move', { sessionId: tile.sessionId, zoneId: web.id, x: 700, y: 40, byHand: true });
+    expect(await free()).toEqual([key]);
+    await client.call('zone.update', { id: web.id, ...layout, lanes: null });
+    await client.call('zone.update', { id: web.id, ...layout, lanes: { x: 0, y: 0, width: 500, height: 400 } });
+    expect(await free()).toEqual([]);
+    // Undone or redone, it goes back free or not as it was, whatever its place says.
+    await client.call('agent.move', { sessionId: tile.sessionId, zoneId: web.id, x: 40, y: 40, free: true });
+    expect(await free()).toEqual([key]);
+    await client.call('agent.move', { sessionId: tile.sessionId, zoneId: web.id, x: 700, y: 40, free: false });
+    expect(await free()).toEqual([]);
+    // In a free zone, nothing is.
+    await client.call('zone.configure', { id: web.id, layoutMode: 'free' });
+    await client.call('agent.move', { sessionId: tile.sessionId, zoneId: web.id, x: 700, y: 60, byHand: true });
+    expect(await free()).toEqual([]);
+  });
+
   it('forgets the mark of a tile seen in another zone, or gone, so it is not pinned again when it comes back', () => {
     const db = new DatabaseSync(':memory:');
     migrate(db);
     db.exec("INSERT INTO zones (id, repo_root, folder, name, color, x, y, width, height, layout_rule) VALUES ('z', '/code/app', '', 'app', '#4c6ef5', 0, 0, 300, 200, 'lanes')");
     const zones = createZoneTable(db, () => {}, () => undefined, '/repos', '/groups');
     const marks = () => (db.prepare('SELECT tile_key, zone_id FROM zone_hand_placed ORDER BY tile_key').all() as { tile_key: string; zone_id: string }[]).map((row) => `${row.tile_key}@${row.zone_id}`);
-    for (const key of ['agent:a', 'agent:b', 'shell:s']) zones.tileMoved(key, 'z', true);
+    for (const key of ['agent:a', 'agent:b', 'shell:s']) zones.tileMoved(key, 'z', true, null);
     expect(marks()).toEqual(['agent:a@z', 'agent:b@z', 'shell:s@z']);
     // Still in its zone, it keeps the mark; elsewhere, loose or gone, it loses it.
     zones.tileSeen('agent:a', 'z');

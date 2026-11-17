@@ -127,7 +127,7 @@ const claudePrompt = (fields: Partial<PermissionPrompt>): PermissionPrompt => ({
 });
 const dialogPrompt = (questions: PromptQuestion[], dialog: Partial<PromptDialog> = {}) =>
   claudePrompt({ questions, toolInput: { questions }, dialog: { answers: questions.map(() => null), sentAt: null, keptOpen: false, ...dialog } }) as DialogPrompt;
-const PLAN_PROMPT = claudePrompt({ id: 'gallery-plan', toolName: 'ExitPlanMode', toolInput: { plan: PLAN }, plan: PLAN, sessionGrant: 'all edits' });
+const PLAN_PROMPT = claudePrompt({ id: 'gallery-plan', toolName: 'ExitPlanMode', toolInput: { plan: PLAN }, plan: PLAN, sessionGrant: 'auto mode' });
 const PLANNER: Agent = { ...galleryAgent('waiting'), sessionId: 'gallery-planner', name: 'Pick a cache', permissions: [PLAN_PROMPT], ask: null, muted: false };
 
 /** Claude's own dialog, open beside its tile at a question (`at`), as the board can answer it. */
@@ -166,14 +166,16 @@ export function QuickAskDialogGallery() {
         </figure>
       ))}
       {[
-        { name: 'Plan approval', read: false },
-        { name: 'Plan approval: the plan read', read: true },
-      ].map(({ name, read }) => (
+        { name: 'Plan approval', read: false, prompt: PLAN_PROMPT },
+        { name: 'Plan approval: the plan read', read: true, prompt: PLAN_PROMPT },
+        { name: 'Plan approval: sent', read: false, prompt: { ...PLAN_PROMPT, heldUntil: null, planSent: { sentAt: AT, keptOpen: false } } },
+        { name: 'Plan approval: kept open', read: false, prompt: { ...PLAN_PROMPT, heldUntil: null, planSent: { sentAt: AT, keptOpen: true } } },
+      ].map(({ name, read, prompt }) => (
         <figure key={name} className="gallery-quick-ask-cell">
           {/* As a row of Needs you, in its popover. */}
           <PopoverPreview className="gallery-quick-ask-plan" aria-label={name}>
             <div className="inbox-item">
-              <PlanPromptRow agent={PLANNER} prompt={PLAN_PROMPT} plan={PLAN} onOpen={() => {}} read={read} />
+              <PlanPromptRow agent={PLANNER} prompt={prompt} plan={PLAN} onOpen={() => {}} read={read} />
             </div>
           </PopoverPreview>
           <figcaption>{name}</figcaption>

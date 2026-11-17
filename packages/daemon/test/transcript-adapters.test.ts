@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import type { ChatEntry } from '../src/protocol.ts';
 import { markSender } from '../src/sender-marker.ts';
-import { createTranscriptParser } from '../src/transcript-adapters.ts';
+import { createTranscriptParser, promptsIn } from '../src/transcript-adapters.ts';
 
 const fixtures = new URL('../../../fixtures/', import.meta.url);
 
@@ -314,5 +314,22 @@ describe('the Codex adapter', () => {
     const future = JSON.stringify({ ...meta, payload: { ...meta.payload, cli_version: '1.0.0' } });
     expect(parse('codex', [future, ...codex.slice(1)])).toEqual({ entries: [], unsupported: 'Codex 1.0.0 rollouts are not supported yet' });
     expect(parse('codex', codex.slice(1)).unsupported).toBe('the rollout does not start with its session line');
+  });
+});
+
+describe('the prompts a line of a transcript records its harness taking', () => {
+  test("Claude's: a user entry's text, or a message it took at a step of a turn; never its tool results or replies", () => {
+    expect(promptsIn('claude', JSON.stringify({ type: 'user', message: { role: 'user', content: 'Add a test' } }))).toEqual(['Add a test']);
+    expect(promptsIn('claude', JSON.stringify({ type: 'user', message: { content: [{ type: 'text', text: 'one' }, { type: 'tool_result', tool_use_id: 't', content: 'out' }] } }))).toEqual(['one']);
+    expect(promptsIn('claude', JSON.stringify({ type: 'attachment', attachment: { type: 'queued_command', prompt: 'Then lint', commandMode: 'prompt' } }))).toEqual(['Then lint']);
+    expect(promptsIn('claude', JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'Done.' }] } }))).toEqual([]);
+    expect(promptsIn('claude', JSON.stringify({ type: 'attachment', attachment: { type: 'todo' } }))).toEqual([]);
+  });
+
+  test("Codex's: a user message, read from the middle of a rollout; a line cut through is none", () => {
+    const message = { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Add a test' }] } };
+    expect(promptsIn('codex', JSON.stringify(message))).toEqual(['Add a test']);
+    expect(promptsIn('codex', JSON.stringify({ ...message, payload: { ...message.payload, role: 'assistant' } }))).toEqual([]);
+    expect(promptsIn('codex', '{"type":"response_it')).toEqual([]);
   });
 });

@@ -92,13 +92,18 @@ function matches(matcher: string | undefined, value: string | undefined, syntax:
   return new RegExp(matcher).test(value);
 }
 
-/** Runs every hook for `event` whose matcher accepts `matchValue`, in parallel, and returns their JSON outputs. */
+/**
+ * Runs every hook for `event` whose matcher accepts `matchValue`, in parallel, and returns their JSON outputs. `hangUp`
+ * aborting ends any still running, with no output from them, as Claude hangs up a PermissionRequest hook once its own
+ * dialog has closed.
+ */
 export async function runHooks(
   config: HooksConfig,
   event: string,
   matchValue: string | undefined,
   payload: Record<string, unknown>,
   options: HookRunOptions,
+  hangUp?: AbortSignal,
 ): Promise<HookOutput[]> {
   const handlers = (config[event] ?? [])
     .filter((group) => matches(group.matcher, matchValue, options.matcherSyntax))
@@ -109,8 +114,8 @@ export async function runHooks(
     handlers.map((handler) => {
       const seconds = handler.timeout ?? limits?.defaultSeconds ?? options.defaultTimeoutSeconds;
       const timeoutMs = Math.min(seconds, limits?.maxSeconds ?? Infinity) * 1000;
-      if (handler.type === 'command' && handler.command) return runCommand(handler, body, timeoutMs, options);
-      if (handler.type === 'http' && handler.url && options.supportsHttp && !options.httpSkippedEvents?.includes(event)) return runHttp(handler, body, timeoutMs, options);
+      if (handler.type === 'command' && handler.command) return runCommand(handler, body, timeoutMs, options, hangUp);
+      if (handler.type === 'http' && handler.url && options.supportsHttp && !options.httpSkippedEvents?.includes(event)) return runHttp(handler, body, timeoutMs, options, hangUp);
       return Promise.resolve(undefined);
     }),
   );
@@ -127,7 +132,7 @@ export async function runStatusLine(command: string, input: Record<string, unkno
  * shell; a surviving grandchild would otherwise hold stdout open and block the session. Exit code 2 (blocking) is
  * not modelled: no scenario needs a hook to block a tool, a prompt or a stop yet.
  */
-function runCommand(handler: HookHandler, body: string, timeoutMs: number, options: HookRunOptions): Promise<HookOutput | undefined> {
+function runCommand(handler: HookHandler, body: string, timeoutMs: number, options: HookRunOptions, hangUp?: AbortSignal): Promise<HookOutput | undefined> {
   const spawnOptions = { cwd: options.cwd, env: options.env, detached: true };
   const child = handler.args
     ? spawn(handler.command!, handler.args, spawnOptions)
@@ -138,26 +143,33 @@ function runCommand(handler: HookHandler, body: string, timeoutMs: number, optio
   child.stdin.on('error', () => {});
   child.stdin.end(body);
   return new Promise((resolve) => {
-    const timer = setTimeout(() => {
+    const kill = () => {
       try {
         process.kill(-child.pid!, 'SIGKILL');
       } catch {
         // already gone
       }
       resolve(undefined);
-    }, timeoutMs);
-    child.on('error', () => {
+    };
+    const timer = setTimeout(kill, timeoutMs);
+    const done = () => {
       clearTimeout(timer);
+      hangUp?.removeEventListener('abort', kill);
+    };
+    if (hangUp?.aborted) kill();
+    else hangUp?.addEventListener('abort', kill, { once: true });
+    child.on('error', () => {
+      done();
       resolve(undefined);
     });
     child.on('close', (code) => {
-      clearTimeout(timer);
+      done();
       resolve(code === 0 ? parseJsonObject(stdout) : undefined);
     });
   });
 }
 
-async function runHttp(handler: HookHandler, body: string, timeoutMs: number, options: HookRunOptions): Promise<HookOutput | undefined> {
+async function runHttp(handler: HookHandler, body: string, timeoutMs: number, options: HookRunOptions, hangUp?: AbortSignal): Promise<HookOutput | undefined> {
   const allowed = new Set(handler.allowedEnvVars ?? []);
   const headers: Record<string, string> = { 'content-type': 'application/json' };
   for (const [name, value] of Object.entries(handler.headers ?? {})) {
@@ -167,7 +179,7 @@ async function runHttp(handler: HookHandler, body: string, timeoutMs: number, op
     });
   }
   try {
-    const response = await fetch(handler.url!, { method: 'POST', headers, body, signal: AbortSignal.timeout(timeoutMs) });
+    const response = await fetch(handler.url!, { method: 'POST', headers, body, signal: hangUp === undefined ? AbortSignal.timeout(timeoutMs) : AbortSignal.any([AbortSignal.timeout(timeoutMs), hangUp]) });
     if (!response.ok) return undefined;
     return parseJsonObject(await response.text());
   } catch {
@@ -196,6 +208,21 @@ export function permissionDecision(outputs: HookOutput[]): PermissionDecision {
   if (behaviours.includes('deny')) return 'deny';
   if (behaviours.includes('allow')) return 'allow';
   return undefined;
+}
+
+/**
+ * The decision Claude's plan dialog (`ExitPlanMode`) takes from its hooks, as Claude 2.1.325 does: a deny, or an allow
+ * that carries the call's input (`updatedInput`). A bare allow is no decision: the dialog stays up for the user.
+ */
+export function planDecision(outputs: HookOutput[]): PermissionDecision {
+  const decision = permissionDecision(outputs);
+  if (decision !== 'allow') return decision;
+  const withInput = outputs.some((output) => {
+    const specific = output.hookSpecificOutput as { decision?: { behavior?: string; updatedInput?: unknown } } | undefined;
+    const input = specific?.decision?.updatedInput;
+    return specific?.decision?.behavior === 'allow' && typeof input === 'object' && input !== null && !Array.isArray(input);
+  });
+  return withInput ? 'allow' : undefined;
 }
 
 /** The answers an allow of a question-tool call carries (`updatedInput.answers`), by question; none without them. */

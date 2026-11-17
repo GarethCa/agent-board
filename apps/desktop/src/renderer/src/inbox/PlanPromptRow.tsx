@@ -1,13 +1,38 @@
 // Claude's plan approval (its plan tool's permission prompt) in Needs you, the Captain's panel and the Simplified pane,
 // in Claude's own words (P1). Each button answers its held hook as the same choice in Claude's dialog would.
 import { useState } from 'react';
-import type { Agent, PermissionPrompt } from '@agent-board/daemon/protocol';
+import { SquareArrowOutUpRight } from 'lucide-react';
+import type { Agent, PermissionPrompt, PlanSent } from '@agent-board/daemon/protocol';
 import { Button, ErrorText } from '../ui';
 import { Markdown } from '../session/Markdown';
-import { keepPlanning, PLAN_CHOICES, planGlimpse, planTitle } from '../../../shared/claude-plan';
+import { keepPlanning, planChoices, planGlimpse, planTitle } from '../../../shared/claude-plan';
 import { usePermissionDecision } from './permission-decision';
 
 const openLink = (url: string) => void window.agentBoard.trackers.openLink(url).catch(() => undefined);
+
+/**
+ * What became of a plan answered from the board (`PermissionPrompt.planSent`): sent, while Claude takes it; or kept
+ * open, when Claude hasn't moved on from its dialog, which its terminal must answer then.
+ */
+function PlanSentNote({ sent, onOpen }: { sent: PlanSent; onOpen: (() => void) | undefined }) {
+  if (!sent.keptOpen) {
+    return (
+      <p className="quick-ask-note" data-testid="plan-sent">
+        Sent to its dialog. Waiting for Claude to take it.
+      </p>
+    );
+  }
+  return (
+    <p className="quick-ask-note" data-testid="plan-kept-open" data-bad>
+      Claude kept its dialog open. Answer it in its terminal.
+      {onOpen !== undefined && (
+        <Button size="xs" variant="ghost" icon={<SquareArrowOutUpRight />} onClick={onOpen}>
+          Open
+        </Button>
+      )}
+    </p>
+  );
+}
 
 /**
  * "‹agent› has a plan for you": its title and first lines, Read the plan to show it all, read only, and Claude's
@@ -41,7 +66,9 @@ export function PlanPromptRow({ agent, prompt, plan, onOpen, read = false }: { a
       <Button size="sm" variant="ghost" className="inbox-item-expand" aria-expanded={all} onClick={() => setAll(!all)}>
         {all ? 'Show less' : 'Read the plan'}
       </Button>
-      {prompt.heldUntil === null ? (
+      {prompt.planSent !== undefined ? (
+        <PlanSentNote sent={prompt.planSent} onOpen={onOpen} />
+      ) : prompt.heldUntil === null ? (
         <p className="inbox-item-note">Asking in its terminal now: open it to answer.</p>
       ) : changing ? (
         <>
@@ -66,7 +93,7 @@ export function PlanPromptRow({ agent, prompt, plan, onOpen, read = false }: { a
       ) : (
         <>
           <div className="inbox-item-actions">
-            {PLAN_CHOICES.map((choice) => (
+            {planChoices(prompt.sessionGrant).map((choice) => (
               <Button key={choice.label} size="sm" variant={choice.primary ? 'primary' : 'secondary'} disabled={off} onClick={() => decide(choice.decision)}>
                 {choice.label}
               </Button>

@@ -425,7 +425,7 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
               className="hybrid-tile-from"
               data-testid="from-chip"
               title={`Started by ${from.name}`}
-              onMouseEnter={() => hoverCrew(from.sessionId)}
+              onMouseEnter={() => hoverCrew(from.sessionId, 'chip')}
               onMouseLeave={() => leaveCrew(from.sessionId)}
             >
               ↳ from {from.name}

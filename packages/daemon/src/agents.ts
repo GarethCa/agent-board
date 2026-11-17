@@ -68,7 +68,17 @@ import { folderPath, repoZoneOf } from './repo-zone.ts';
 import { RpcMethodError, type RpcHandlers } from './rpc.ts';
 import type { SessionHost } from './sessions.ts';
 import { createBackgroundCommands } from './background-commands.ts';
-import { createQuietTurns, QUIET_TURN_MS, readTranscriptTail, showsIdlePrompt, turnEndedInTranscript } from './quiet-turns.ts';
+import { promptsIn } from './transcript-adapters.ts';
+import {
+  createQuietTurns,
+  QUIET_TURN_MS,
+  readTranscriptFromSync,
+  readTranscriptTail,
+  showsIdlePrompt,
+  transcriptSizeSync,
+  turnEndedInTranscript,
+  turnInterruptedInTranscript,
+} from './quiet-turns.ts';
 import { createSubagentStore, subagentsAfterExit } from './subagents.ts';
 import { oneLine, submitsDraft } from './terminal-input.ts';
 import { flagLeadOf, isTicketChatKind } from './ticket-tiles.ts';
@@ -117,6 +127,9 @@ const BRANCH_HOOKS = new Set(['SessionStart', 'UserPromptSubmit', 'PostToolUse',
 
 /** How long after typing `/effort` at an agent its `UserPromptSubmit` for it is still known as that, not a prompt. */
 const EFFORT_ECHO_MS = 60_000;
+
+/** How long after Claude's question dialog closed, each look after the last, its transcript is read for a decline. */
+const DECLINE_LOOKS_MS = [200, 800, 2000];
 
 /** The agent's own hooks that begin a turn, or end one with no `Stop` after them (`onTurnBoundary`). */
 const TURN_BOUNDARIES: ReadonlySet<unknown> = new Set(['UserPromptSubmit', 'StopFailure', 'Interrupt', 'SessionEnd']);
@@ -312,6 +325,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       flags.set(sessionId, { id: ++lastFlagId, reason: ANSWERS_DROPPED_FLAG, at: new Date().toISOString(), via: null, forUser: true });
       announce(sessionId);
     },
+    onDialogClosed: (sessionId, requestId) => lookForDecline(sessionId, requestId),
   });
   /** What times the agent host's own waits: the system clock by default. */
   const clock = options.clock ?? systemClock;
@@ -877,6 +891,13 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     draftHeldFor: hookStates.draftHeldFor,
     announce: (sessionId) => announce(sessionId),
     undelivered: (sessionId, what, text, reason, from) => keepUndelivered(sessionId, what, text, reason, from),
+    promptsFromNow(sessionId) {
+      const row = getRow(sessionId);
+      const path = row?.transcript_path ?? null;
+      const start = path === null ? undefined : transcriptSizeSync(path);
+      if (row === undefined || path === null || start === undefined) return undefined;
+      return () => readTranscriptFromSync(path, start).flatMap((line) => promptsIn(row.harness, line));
+    },
     waiting: waitingStore,
     notSent: (sessionId, what, why, inTerminal) => flagNotSent(sessionId, what, why, inTerminal),
     log: options.log,
@@ -924,6 +945,42 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     deliveries.turnEnded(sessionId, true);
     options.onTurnCut?.(sessionId, 'its turn ended with no word from its harness');
     save(now, 'idle', subagentsAfterExit(subagents.of(sessionId), 'idle', new Date()), true);
+  };
+  /**
+   * The agent's turn was interrupted, by the board or in its terminal: it is over now. Claude fires no hook for an
+   * interrupted turn, and the subagents and prompts went with it, and the call it waited on the user in, whether or not
+   * its harness cancels it.
+   */
+  const endInterruptedTurn = (sessionId: string) => {
+    permissions.drop(sessionId);
+    options.asks?.drop(sessionId);
+    hookStates.interrupted(sessionId);
+    deliveries.turnEnded(sessionId, false);
+    options.onTurnCut?.(sessionId, 'its turn was interrupted');
+    save(getRow(sessionId)!, 'idle', subagentsAfterExit(subagents.of(sessionId), 'idle', new Date()), true);
+  };
+  /**
+   * Claude's question dialog closed with the prompt still up (`onDialogClosed`): unless its call's `PostToolUse` comes,
+   * the user declined the questions there (Esc), which ends Claude's turn with no hook. Its transcript then says the
+   * user interrupted it for tool use: looked for each of `DECLINE_LOOKS_MS` after, as Claude writes it, and on it the
+   * turn ends as an interrupt from the board would end it.
+   */
+  const lookForDecline = (sessionId: string, requestId: string, look = 0) => {
+    const asking = () => permissions.prompts(sessionId).some((prompt) => prompt.id === requestId);
+    clock.setTimer(() => {
+      const row = getRow(sessionId);
+      if (row === undefined || row.ended_at !== null || row.transcript_path === null || !asking()) return;
+      void readTranscriptTail(row.transcript_path).then((lines) => {
+        const now = getRow(sessionId);
+        if (now === undefined || now.ended_at !== null || !asking()) return;
+        if (!turnInterruptedInTranscript(lines)) {
+          if (look + 1 < DECLINE_LOOKS_MS.length) lookForDecline(sessionId, requestId, look + 1);
+          return;
+        }
+        options.log(`agent ${sessionId}'s questions were declined in its terminal, which ended its turn: moved to idle`);
+        endInterruptedTurn(sessionId);
+      });
+    }, DECLINE_LOOKS_MS[look]!);
   };
   const startupLines = createStartupLines(options.sessions, (sessionId) => hookStates.isStarting(sessionId), (sessionId) => announce(sessionId));
   const spawns = createAgentSpawns({
@@ -1600,14 +1657,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       if (!isMidTurn(agent)) throw invalidParams(`${agent.name} has no turn under way to interrupt`);
       options.log(`interrupting agent ${sessionId} for ${why}`);
       sessions.write(sessionId, INTERRUPT_KEY);
-      // The turn is over now: Claude fires no hook for an interrupted turn, and the subagents and prompts went with it,
-      // and the call it waited on the user in, whether or not its harness cancels it.
-      permissions.drop(sessionId);
-      options.asks?.drop(sessionId);
-      hookStates.interrupted(sessionId);
-      deliveries.turnEnded(sessionId, false);
-      options.onTurnCut?.(sessionId, 'its turn was interrupted');
-      save(getRow(sessionId)!, 'idle', subagentsAfterExit(subagents.of(sessionId), 'idle', new Date()), true);
+      endInterruptedTurn(sessionId);
       return get(sessionId)!;
     },
 

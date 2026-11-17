@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.6.30 (2026-11-17)
+
+- Size a zone's lanes area on its own, with a free area outside it that Arrange leaves alone
+- Questions declined in Claude's terminal (Esc) clear their row and move the agent to idle
+- One click on a zone's well selects it, and zones on shelves or in clusters resize with their layout reflowing
+- A plan's yeses use Claude's own words, carry its input, and a plan sent from the board stays till Claude takes it
+- Tests run on a temp home, and the fake harnesses refuse the real ~/.claude and ~/.codex
+- A list card's peek closes on a press anywhere on the board, a zone's empty body too
+- The user's queue never shows turn-ends, only what agents ask of you
+- Typing in a selected orchestrator's tile stops the crew dim and hides its crew box
+- The Linux install quits only this user's app (filter /proc by real uid)
+- A user's message typed into a busy agent's turn is handed back, not lost, when the daemon stops
+- A small review mark on every reviewer's Porthole and Shelf tile
+- The plan and doc cards' dashed line is off by default (Show Tethers); pin it in a unit test
+- The app builds and installs on Linux with pnpm package
+
 ## v0.6.29 (2026-11-16)
 
 - Making prefabs, easier: a prefab's own board, Save as prefab…, Settings › Prefabs, + agent ▾

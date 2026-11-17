@@ -3,7 +3,7 @@ import { existsSync, readFileSync, writeFileSync, writeSync, mkdirSync } from 'n
 import { constants } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
-import { runHooks, runStatusLine, permissionDecision, permissionUpdates, hookAnswers, denyMessage, type HooksConfig, type HookRunOptions, type HookOutput } from './hooks.ts';
+import { runHooks, runStatusLine, permissionDecision, planDecision, permissionUpdates, hookAnswers, denyMessage, type HooksConfig, type HookRunOptions, type HookOutput } from './hooks.ts';
 import { execFile, spawnSync } from 'node:child_process';
 import { McpClient, type McpServerConfig, type McpToolResult } from './mcp.ts';
 import type { HarnessName } from './paths.ts';
@@ -159,6 +159,8 @@ export interface Transcript {
   turnComplete(turnId: string, lastMessage: string): void;
   /** A message the user typed while a turn ran, taken at one of its steps (Claude's `queued_command`). */
   queuedPrompt?(text: string): void;
+  /** The user interrupted the turn at a tool call's dialog (Claude's `[Request interrupted by user for tool use]`). */
+  interruptedForToolUse?(): void;
 }
 
 /** Everything that differs between the fake claude and the fake codex, named for the behaviour it switches. */
@@ -242,6 +244,9 @@ const SESSION_SCOPED = new Set(['SessionStart', 'SessionEnd']);
 /** Claude's tool that asks the user to approve its plan before it leaves plan mode. */
 export const PLAN_TOOL = 'ExitPlanMode';
 
+/** Claude's plan dialog, as Claude 2.1.325 draws it. */
+const PLAN_DIALOG = 'Would you like to proceed?\n❯ 1. Yes, and use auto mode\n  2. Yes, manually approve edits\n  3. Tell Claude what to change\n';
+
 /** How long a session answered on its trust screen with `slow-prompt` shows a line of its own before its prompt. */
 const SLOW_PROMPT_MS = 1_000;
 /** How long a session answered on its trust screen with `slow-redraw` leaves it drawn after Enter. */
@@ -275,6 +280,9 @@ const PASTE_FOLD_BREAKS = 3;
 
 /** What Claude writes for a folded paste, with its two line breaks before and one after, as 2.1.318 does (`foldPastes`). */
 const FOLDED_PASTE = /\n\n<pasted_content id="([0-9a-f]+)">\n([\s\S]*?)\n<\/pasted_content id="\1">\n/g;
+
+/** What Claude records, and shows, for questions the user declined at its dialog (Esc). */
+const DECLINED_QUESTIONS = 'User declined to answer questions';
 
 /** Unwinds a turn the user interrupted (Ctrl-C). */
 class TurnInterrupted extends Error {
@@ -587,7 +595,9 @@ export class FakeSession {
    * `FAKE_HARNESS_QUESTIONS_KEEP_DIALOG=1`: the hook's answer is dropped and the dialog stays up for a typed line, as a
    * Claude that took no answers from its hook would. `FAKE_HARNESS_QUESTIONS_DROP_ANSWERS=1`: the hook's allow closes
    * the dialog but the call runs with no answers, as a Claude that took the allow and not its `updatedInput` would.
-   * Returns the answers, by question, or undefined if the session's input ended.
+   * Interrupted at its dialog (Ctrl-C; Esc in Claude 2.1.325, which the fake's line reader can't take alone) it declines
+   * them, as Claude does: it hangs up its hook, records the call as declined and the turn as interrupted for tool use,
+   * fires no hook, and is back at its prompt. Returns the answers, by question, or undefined if the session's input ended.
    */
   async askQuestions(questions: { question: string; header: string; options: { label: string; description: string }[]; multiSelect: boolean }[]): Promise<Record<string, string> | undefined> {
     const id = toolUseId();
@@ -596,15 +606,29 @@ export class FakeSession {
     this.dialect.transcript.toolUse(id, name, input);
     this.print(`● ${name}(${JSON.stringify(input)})\n`);
     await this.fire('PreToolUse', { tool_name: name, tool_input: input, tool_use_id: id });
-    const hook = this.fireBeside('PermissionRequest', { tool_name: name, tool_input: input, ...(this.dialect.permissionSuggestions ? { permission_suggestions: [] } : {}) });
+    const hangUp = new AbortController();
+    const hook = this.fireBeside('PermissionRequest', { tool_name: name, tool_input: input, ...(this.dialect.permissionSuggestions ? { permission_suggestions: [] } : {}) }, hangUp.signal);
     for (const { header, question, options } of questions) {
       this.printLines([`${header === '' ? '' : `[${header}] `}${question}`, ...options.map((option, index) => `  ${index + 1}. ${option.label}`), `  ${options.length + 1}. Other`]);
     }
     this.print('Answer: ');
-    const first = process.env.FAKE_HARNESS_QUESTIONS_KEEP_DIALOG === '1' ? { line: await this.readLine() } : await this.hookOrLine(hook);
+    let first: Awaited<ReturnType<FakeSession['hookOrLine']>>;
+    try {
+      first = process.env.FAKE_HARNESS_QUESTIONS_KEEP_DIALOG === '1' ? { line: await this.readLine() } : await this.hookOrLine(hook);
+    } catch (error) {
+      if (error instanceof TurnInterrupted) {
+        hangUp.abort();
+        this.dialect.transcript.toolResult(id, DECLINED_QUESTIONS, true);
+        this.dialect.transcript.interruptedForToolUse?.();
+        this.print(`\n  ⎿ ${DECLINED_QUESTIONS}\n`);
+      }
+      throw error;
+    }
     let answers: Record<string, string>;
     if ('line' in first) {
       if (first.line === undefined) return undefined;
+      // Answered in its terminal: its dialog has closed, so its hook, if still running, is hung up.
+      hangUp.abort();
       const typed = first.line.trim();
       answers = Object.fromEntries(questions.map(({ question, options }) => [question, options[Number(typed) - 1]?.label ?? typed]));
     } else answers = process.env.FAKE_HARNESS_QUESTIONS_DROP_ANSWERS === '1' ? {} : hookAnswers(first.outputs);
@@ -1205,8 +1229,8 @@ export class FakeSession {
     const fields: Record<string, unknown> = { ...inside, tool_name: name, tool_input: input };
     // Claude suggests the rule its "don't ask again" would add; `FAKE_HARNESS_PERMISSION_SUGGESTIONS=1` has the fake do too.
     if (this.dialect.permissionSuggestions) {
-      // Its plan dialog offers to accept edits from then on, as Claude's does.
-      fields.permission_suggestions = name === PLAN_TOOL ? [{ type: 'setMode', mode: 'acceptEdits', destination: 'session' }] :
+      // Its plan dialog offers auto mode from then on, as its first yes does.
+      fields.permission_suggestions = name === PLAN_TOOL ? [{ type: 'setMode', mode: 'auto', destination: 'session' }] :
         process.env.FAKE_HARNESS_PERMISSION_SUGGESTIONS === '1'
           ? [{ type: 'addRules', rules: [typeof input.command === 'string' ? { toolName: name, ruleContent: input.command } : { toolName: name }], behavior: 'allow', destination: 'localSettings' }]
           : [];
@@ -1215,17 +1239,20 @@ export class FakeSession {
     // hook's later answer is dropped, and it is left running, as Claude leaves it. Codex, and Claude for a subagent, ask
     // only once the hook has said nothing.
     const alongside = this.dialect.harness === 'claude' && inside === undefined;
+    // Claude's plan dialog takes a hook's allow only with the call's input (`planDecision`); any other call, any allow.
+    const decide = this.dialect.harness === 'claude' && name === PLAN_TOOL ? planDecision : permissionDecision;
     const hook = alongside ? this.fireBeside('PermissionRequest', fields) : this.fire('PermissionRequest', fields);
     if (alongside) await this.showPermissionPrompt(name, input);
-    const first = alongside ? await this.hookOrLine(hook) : { outputs: await hook };
+    const first = alongside ? await this.hookOrLine(hook, decide) : { outputs: await hook };
     if ('outputs' in first) {
-      const decision = permissionDecision(first.outputs);
+      const decision = decide(first.outputs);
       this.denyMessage = decision === 'deny' ? denyMessage(first.outputs) : undefined;
       const setMode = decision === 'allow' ? permissionUpdates(first.outputs).find((update) => update.type === 'setMode' && typeof update.mode === 'string') : undefined;
       // A `setMode` update switches its permission mode, as approving a plan does; a plain allow leaves it as it was.
       if (setMode !== undefined) {
         this.mode = setMode.mode;
         if (setMode.mode === 'acceptEdits') this.print('  ⎿ Accepting edits\n');
+        if (setMode.mode === 'auto') this.print('  ⎿ Auto mode on\n');
       } else if (decision === 'allow' && permissionUpdates(first.outputs).some((update) => update.destination === 'session')) {
         this.allowedForSession.add(name);
         this.print(`  ⎿ Allowed ${name} for the session\n`);
@@ -1235,15 +1262,26 @@ export class FakeSession {
     }
     const answer = 'line' in first ? first.line : await this.readLine();
     if (answer === undefined) return false;
-    const allowed = this.dialect.demo ? demo.allowsInDemo(this.dialect.harness, answer) : /^y(es)?$/i.test(answer.trim());
-    // Its plan dialog's yes leaves plan mode, approving each edit.
-    if (allowed && name === PLAN_TOOL && this.mode === 'plan') this.mode = 'default';
-    return allowed;
+    if (name === PLAN_TOOL && this.dialect.harness === 'claude' && !this.dialect.demo) return this.planAnswer(answer);
+    return this.dialect.demo ? demo.allowsInDemo(this.dialect.harness, answer) : /^y(es)?$/i.test(answer.trim());
+  }
+
+  /**
+   * A line typed at Claude's plan dialog: 1 is "Yes, and use auto mode", 2 (or y) "Yes, manually approve edits", which
+   * leave plan mode; anything else is "Tell Claude what to change", which keeps it planning.
+   */
+  private planAnswer(answer: string): boolean {
+    const typed = answer.trim();
+    const mode = typed === '1' ? 'auto' : typed === '2' || /^y(es)?$/i.test(typed) ? 'default' : undefined;
+    if (mode === undefined) return false;
+    if (this.mode === 'plan') this.mode = mode;
+    return true;
   }
 
   /** Draws the harness's own permission prompt, and tells its hooks so (Claude's `permission_prompt`). */
   private async showPermissionPrompt(name: string, input: Record<string, unknown>): Promise<void> {
     if (this.dialect.demo) this.printLines(demo.permissionPrompt(this.dialect.harness, input, this.dialect.cwd));
+    else if (name === PLAN_TOOL && this.dialect.harness === 'claude') this.print(PLAN_DIALOG);
     else this.print(`Do you want to allow ${name}? (y/n) `);
     if (this.dialect.notificationEvents) {
       await this.fire('Notification', {
@@ -1258,8 +1296,8 @@ export class FakeSession {
    * The hook's answer or a line typed at the prompt, whichever comes first. A hook that says nothing leaves the prompt
    * to the line. A line not yet read when the hook answers stays for the next reader.
    */
-  private async hookOrLine(hook: Promise<HookOutput[]>): Promise<{ outputs: HookOutput[] } | { line: string | undefined }> {
-    const said = hook.then((outputs) => (permissionDecision(outputs) ? { outputs } : new Promise<never>(() => {})));
+  private async hookOrLine(hook: Promise<HookOutput[]>, decide = permissionDecision): Promise<{ outputs: HookOutput[] } | { line: string | undefined }> {
+    const said = hook.then((outputs) => (decide(outputs) ? { outputs } : new Promise<never>(() => {})));
     this.nextLine ??= this.lines.next();
     const first = await this.untilInterrupted(Promise.race([said, this.nextLine.then(() => 'line' as const)]));
     return first === 'line' ? { line: await this.readLine() } : first;
@@ -1275,7 +1313,7 @@ export class FakeSession {
     this.printLines(box === 'spinner' ? [SPINNER_LINE, '', ...drawPromptBox()] : drawPromptBox());
   }
 
-  private async fire(event: string, fields: Record<string, unknown>, interruptible = true): Promise<HookOutput[]> {
+  private async fire(event: string, fields: Record<string, unknown>, interruptible = true, hangUp?: AbortSignal): Promise<HookOutput[]> {
     const payload: Record<string, unknown> = {
       session_id: this.dialect.sessionId,
       transcript_path: this.dialect.transcript.path,
@@ -1290,13 +1328,16 @@ export class FakeSession {
     Object.assign(payload, fields);
     const field = MATCH_FIELD[event];
     const matchValue = field === undefined ? undefined : String(payload[field]);
-    const running = runHooks(this.dialect.hooks, event, matchValue, payload, this.dialect.hookOptions);
+    const running = runHooks(this.dialect.hooks, event, matchValue, payload, this.dialect.hookOptions, hangUp);
     return interruptible ? this.untilInterrupted(running) : running;
   }
 
-  /** Fires `event`'s hooks without waiting on them, as Claude runs a PermissionRequest hook beside its own prompt. */
-  private fireBeside(event: string, fields: Record<string, unknown>): Promise<HookOutput[]> {
-    return this.fire(event, fields, false).catch(() => []);
+  /**
+   * Fires `event`'s hooks without waiting on them, as Claude runs a PermissionRequest hook beside its own prompt; `hangUp`
+   * ends them, as Claude ends that hook once its prompt has closed.
+   */
+  private fireBeside(event: string, fields: Record<string, unknown>, hangUp?: AbortSignal): Promise<HookOutput[]> {
+    return this.fire(event, fields, false, hangUp).catch(() => []);
   }
 
   private print(text: string): void {

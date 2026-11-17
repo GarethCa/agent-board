@@ -29,6 +29,8 @@ import { gated } from '../gate/gate-view';
 import { errorMessage } from '../../../shared/errors';
 import type { AttachState } from './TerminalPane';
 import { dropKey } from './shell-moves';
+import { useHomeDir } from './SessionDetails';
+import { tildify } from './live-folder';
 import { tokenNumber } from '../theme';
 import { clampFrame, defaultFrame, EDGES, fromFractions, resizeFrame, toFractions, type Bounds, type Edge, type Frame, type SavedFrame } from '../windows/window-frame';
 
@@ -102,7 +104,9 @@ function SessionWindowShown({ content, title, placement, onClose, onDelete, onMi
   const [detailsCollapsed, setDetailsCollapsed] = useSidebarCollapsed(shelves, root);
   const shows = useNeedsYouShows();
   const name = agent?.name ?? shell?.name ?? title;
-  const where = agent?.branch ?? shell?.cwd;
+  const home = useHomeDir();
+  // A shell's folder with its home written as `~`, as the details write it; its title keeps the full path.
+  const where = agent?.branch ?? (shell === undefined ? undefined : tildify(shell.cwd, home));
   const rounds = roundsOf(useReviews(), content.kind === 'session' ? content.sessionId : '');
   const [tab, setTab] = useState<WindowTab>('terminal');
   // Asked for (from its tile or its reviewer's), it opens on its Review tab, now and whenever asked again: even with its
@@ -224,7 +228,7 @@ function SessionWindowShown({ content, title, placement, onClose, onDelete, onMi
         {nav && <NavCount nav={nav} />}
         {/* The shelves' footer says its branch: while they show, the header doesn't say it too. */}
         {where !== undefined && (!shelves || detailsCollapsed) && (
-          <span className="session-window-where" title={agent?.worktree ?? where}>
+          <span className="session-window-where" title={agent?.worktree ?? shell?.cwd ?? where}>
             {agent && <GitBranch aria-hidden />}
             {where}
           </span>

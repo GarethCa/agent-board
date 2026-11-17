@@ -204,6 +204,14 @@ describe('layoutShelves', () => {
     expect(shown.size.height).toBeGreaterThanOrEqual(layout.size.height);
   });
 
+  it('never lays its shelves out wider than the zone, at any width it can be resized to: from the least they fit in', () => {
+    const least = layoutShelves(input([], { width: 0 })).size.width;
+    for (let width = least; width <= 2400; width += 1) {
+      expect(layoutShelves(input([], { width })).size.width, `at ${width}`).toBeLessThanOrEqual(width);
+      for (const row of shelfRows(width, 20)) for (const shelf of row) expect(shelf.width).toBeGreaterThanOrEqual(MIN_SHELF_WIDTHS[shelf.stage]);
+    }
+  });
+
   it('keeps to a narrower zone: To do and Doing above Waiting and Done in two columns, the zone no wider', () => {
     const layout = layoutShelves(input(crew(), { pinned: new Set(['lead']), width: 840 }));
     const [todo, doing, waiting, done] = layout.shelves;

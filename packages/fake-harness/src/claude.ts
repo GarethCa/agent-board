@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { hasFlag, listFlag, parseArgs, stringFlag, type FlagSpec } from './args.ts';
 import { ConfigError, mergeHooks, parseHooksJson, readHooksFile, validateMatchers, type HooksConfig } from './hooks.ts';
+import { refuseRealConfigDir } from './home-guard.ts';
 import { appendJsonl, readJsonlFile } from './jsonl.ts';
 import { parseClaudeMcpConfig, type McpServerConfig } from './mcp.ts';
 import type { ConversationMessage, Invocation, Transcript } from './session.ts';
@@ -32,6 +33,7 @@ export function claudeInvocation(argv: string[], env: NodeJS.ProcessEnv, cwd: st
   if (hasFlag(args, '-v', '--version')) return { reply: `${CLAUDE_VERSION} (Claude Code)` };
   if (args.positionals[0] === 'auth' && args.positionals[1] === 'status') return authStatus(env);
   const configDir = env.CLAUDE_CONFIG_DIR ?? join(env.HOME ?? homedir(), '.claude');
+  refuseRealConfigDir('claude', configDir, env);
   const resumeId = stringFlag(args, '--resume', '-r');
   const sessionId = resumeId ?? stringFlag(args, '--session-id') ?? randomUUID();
   const model = stringFlag(args, '--model') ?? 'claude-opus-5';
@@ -174,6 +176,10 @@ class ClaudeTranscript implements Transcript {
       type: 'attachment',
       attachment: { type: 'queued_command', prompt: text, source_uuid: randomUUID(), delivery_id: randomUUID(), commandMode: 'prompt', origin: { kind: 'human' }, timestamp: now() },
     });
+  }
+
+  interruptedForToolUse(): void {
+    this.append({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: '[Request interrupted by user for tool use]' }] } });
   }
 
   assistantText(text: string): void {

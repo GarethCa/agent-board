@@ -4,8 +4,8 @@
 // are drawn: no tile's saved place is read for it or written by it, so a zone set back to free shows as it was.
 // Pure and deterministic, so the same board always draws the same way, whatever order it is listed in.
 import { lanesOf, LANE_SLOTS, type ArrangeLink } from './board-arrange.ts';
-import { CHIP_SIZE, isClosed, PERCH_ROOM, tileSizeKey, zoneGrid, type Point, type Size } from './board-layout.ts';
-import { needsYouKind, type Agent, type AgentState, type ArrangeSpacing, type NeedsYouShows } from './protocol.ts';
+import { AGENT_TILE_SIZE, CHIP_SIZE, isClosed, PERCH_ROOM, tileSizeKey, zoneGrid, type Point, type Size } from './board-layout.ts';
+import { needsYouKind, type Agent, type AgentState, type ArrangeSpacing, type NeedsYouShows, type ZoneLayout } from './protocol.ts';
 import { workTilesOf } from './work-units.ts';
 
 /** The shelves, left to right. */
@@ -137,17 +137,34 @@ const SHELF_WEIGHTS: Record<ShelfStage, number> = { todo: 1, doing: 2, waiting: 
 export function shelfRows(width: number, padding: number): { stage: ShelfStage; width: number }[][] {
   const room = width - 2 * padding;
   const fits = (stages: readonly ShelfStage[]) => stages.reduce((sum, stage) => sum + MIN_SHELF_WIDTHS[stage], 0) + (stages.length - 1) * SHELF_GAP <= room;
-  const shared = (row: readonly ShelfStage[]) => {
-    const share = room - (row.length - 1) * SHELF_GAP;
-    const weights = row.reduce((sum, stage) => sum + SHELF_WEIGHTS[stage], 0);
-    return row.map((stage) => ({ stage, width: Math.max(MIN_SHELF_WIDTHS[stage], Math.floor((share * SHELF_WEIGHTS[stage]) / weights)) }));
+  // The room by weight; a shelf whose share is under its least width gets its least, and the rest share what is left,
+  // so the row is never wider than the room it is given, if its least widths fit in it.
+  const shared = (row: readonly ShelfStage[], least: (stage: ShelfStage) => number = (stage) => MIN_SHELF_WIDTHS[stage]) => {
+    const widths = new Map<ShelfStage, number>();
+    let share = room - (row.length - 1) * SHELF_GAP;
+    for (;;) {
+      const open = row.filter((stage) => !widths.has(stage));
+      const weights = open.reduce((sum, stage) => sum + SHELF_WEIGHTS[stage], 0);
+      const under = open.filter((stage) => Math.floor((share * SHELF_WEIGHTS[stage]) / weights) < least(stage));
+      if (under.length === 0) {
+        for (const stage of open) widths.set(stage, Math.floor((share * SHELF_WEIGHTS[stage]) / weights));
+        break;
+      }
+      for (const stage of under) {
+        widths.set(stage, least(stage));
+        share -= least(stage);
+      }
+      if (under.length === open.length) break;
+    }
+    return row.map((stage) => ({ stage, width: widths.get(stage)! }));
   };
   if (fits(SHELF_STAGES)) return [shared(SHELF_STAGES)];
-  // Two rows on the same two columns: Waiting under To do, Done under Doing.
-  const top = shared(['todo', 'doing']);
-  const columns = top.map((shelf, at) => Math.max(shelf.width, MIN_SHELF_WIDTHS[at === 0 ? 'waiting' : 'done']));
+  // Two rows on the same two columns: Waiting under To do, Done under Doing, each column as wide as both need.
+  const below: Partial<Record<ShelfStage, ShelfStage>> = { todo: 'waiting', doing: 'done' };
+  const top = shared(['todo', 'doing'], (stage) => Math.max(MIN_SHELF_WIDTHS[stage], MIN_SHELF_WIDTHS[below[stage]!]));
+  const columns = top.map((shelf) => shelf.width);
   return [
-    top.map((shelf, at) => ({ ...shelf, width: columns[at]! })),
+    top,
     [
       { stage: 'waiting', width: columns[0]! },
       { stage: 'done', width: columns[1]! },
@@ -464,4 +481,32 @@ export function layoutClusters(input: Omit<ShelfInput, 'footOf' | 'open'>): Clus
     for (const cluster of done) place(cluster, input.doneShown);
   }
   return { head, clusters, doneLine, size: { width: Math.max(right, headRight) + padding, height: bottom + padding } };
+}
+
+/**
+ * `lanes` (a zone's lanes area, relative to it) kept inside a zone of `size`: no wider or taller than it, and moved in
+ * where it reaches past an edge.
+ */
+export function lanesInside(lanes: ZoneLayout, size: Size): ZoneLayout {
+  const width = Math.min(lanes.width, size.width);
+  const height = Math.min(lanes.height, size.height);
+  return { x: Math.max(0, Math.min(lanes.x, size.width - width)), y: Math.max(0, Math.min(lanes.y, size.height - height)), width, height };
+}
+
+/**
+ * Whether a tile put down at `at` (its top-left, relative to its zone) is in the zone's free area: wholly outside its
+ * lanes area `lanes`, at a tile's size, so none of it lies over the lanes. Never while its lanes fill it (null).
+ */
+export function freeTile(lanes: ZoneLayout | null | undefined, at: Point, size: { width: number; height: number } = AGENT_TILE_SIZE): boolean {
+  // Undefined from a daemon from before zones had lanes areas of their own.
+  if (lanes === null || lanes === undefined) return false;
+  return at.x + size.width <= lanes.x || at.y + size.height <= lanes.y || at.x >= lanes.x + lanes.width || at.y >= lanes.y + lanes.height;
+}
+
+/**
+ * Whether the tile `key` is in its zone's free area: marked so (`Zone.free`) while the zone has a lanes area of its own.
+ */
+export function inFreeArea(zone: { lanes?: ZoneLayout | null; free?: readonly string[] }, key: string): boolean {
+  // Undefined from a daemon from before zones had lanes areas of their own.
+  return zone.lanes !== null && zone.lanes !== undefined && zone.free?.includes(key) === true;
 }

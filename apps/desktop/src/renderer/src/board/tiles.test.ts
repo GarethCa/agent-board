@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent, AgentStart, ExternalSession, Shell, TilePosition, Zone } from '@agent-board/daemon/protocol';
 import { AGENT_TILE_SIZE, CHIP_SIZE, freeTileSlot, tileSlot, ZONE_PADDING } from '@agent-board/daemon/board-layout';
-import { drawnIn, drawsAsTicket, DRAGGED_TILE_Z_INDEX, EXPANDED_DRAG_HANDLE, holdsTiles, savedMove, savedPlace, shellWithPane, tileNodeId, tileSubject, withTiles, type BoardNode } from './tiles';
+import { agentOfTile, drawnIn, drawsAsTicket, DRAGGED_TILE_Z_INDEX, EXPANDED_DRAG_HANDLE, holdsTiles, resizesFrom, savedMove, savedPlace, shellWithPane, tileNodeId, tileSubject, withTiles, type BoardNode } from './tiles';
 import { EXPANDED_SIZE, expandTile } from './expanded';
 import type { TileNodeType } from './tile';
 import { itemNode } from './items/items';
@@ -198,6 +198,25 @@ describe('withTiles', () => {
     expect(grown!.width).toBe(far.x + AGENT_TILE_SIZE.width + ZONE_PADDING);
     expect(grown!.height).toBeGreaterThan(far.y + AGENT_TILE_SIZE.height);
     expect(grown!.data.covers).toMatchObject({ right: grown!.width, bottom: grown!.height, left: far.x - ZONE_PADDING });
+  });
+
+  it("never grows a zone on shelves or in clusters round its tiles' saved places: its layout draws them, and it keeps the size it was resized to", () => {
+    const far = { x: 900, y: 500, z: 1 };
+    for (const layoutMode of ['shelves', 'clusters'] as const) {
+      const laidOut = zoneNode({ ...zone('z').data.zone, layoutMode });
+      const [kept] = withTiles([laidOut], [agent('a', 'z', far)], [], []) as ZoneNodeType[];
+      expect(kept).toMatchObject({ width: 800, height: 300 });
+      // Counting the tile all the same.
+      expect(kept!.data.tileCount).toBe(1);
+    }
+  });
+
+  it('starts a resize of a zone on shelves or in clusters from its saved size, not a size a resize of one edge left on its node', () => {
+    const stale = { ...zoneNode({ ...zone('z').data.zone, layoutMode: 'shelves' }), width: 1249, height: 900, measured: { width: 1249, height: 900 } };
+    expect(resizesFrom(stale)).toMatchObject({ width: 800, height: 300, measured: { width: 800, height: 300 } });
+    // A free zone resizes from the size it is drawn at, grown round its tiles or not.
+    const free = { ...zone('z'), width: 1249, height: 900 };
+    expect(resizesFrom(free)).toBe(free);
   });
 
   it('grows a zone only as far as its tiles need now: grown round where they were, it shrinks back to its own size once they move in', () => {
@@ -458,5 +477,14 @@ describe('withTiles: ticket tiles', () => {
   it('never folds a ticket chat to a chip, however it ended', () => {
     const ended = { ...chat(), endedAt: '2026-01-01T00:00:00Z', state: 'done', shellSessionId: null, shellHarness: null } as Agent;
     expect(tile(withTiles([zone('z')], [ended], [], []), 'agent:chat').data.folded).toBeUndefined();
+  });
+});
+
+describe('agentOfTile', () => {
+  it("reads the agent from an agent tile's node id, and none from a shell's, another node or no node", () => {
+    expect(agentOfTile(tileNodeId('agent', 'lead'))).toBe('lead');
+    expect(agentOfTile(tileNodeId('shell', 'lead'))).toBeUndefined();
+    expect(agentOfTile('zone:z')).toBeUndefined();
+    expect(agentOfTile(undefined)).toBeUndefined();
   });
 });

@@ -9,6 +9,6 @@ The fake `claude` and `codex` (`bin/`) every test runs instead of the real CLIs.
 | Scripted runs | `scenarios.ts` (pick one with `FAKE_HARNESS_SCENARIO`), `demo-scenarios.ts`, `demo.ts` |
 | Screens copied from the real TUIs | `trust-screen.ts`, `rate-limit-menu.ts`, `codex-screens.ts` |
 | Hooks and what they send | `hooks.ts`, `recorder.ts`, `tool-output.ts`, `jsonl.ts` |
-| Guards that keep tests off the real CLIs and the real board | `guard.ts`, `board-guard.ts`, `git-guard.ts`, `shim-guard.ts` (the live `~/.agent-board` launchers), `teardowns.ts`, `processes.ts`, `paths.ts` |
+| Guards that keep tests off the real CLIs and the real board | `guard.ts`, `board-guard.ts`, `git-guard.ts`, `shim-guard.ts` (the live `~/.agent-board` launchers), `home-guard.ts` (a temp home for the run; the fakes refuse the real `~/.claude` and `~/.codex`), `teardowns.ts`, `processes.ts`, `paths.ts` |
 
 A new scenario goes in `scenarios.ts`, with a test in `test/`.

@@ -28,6 +28,7 @@ import {
 } from './zone-contexts';
 import type { ClusterView, ShelfView } from './shelves';
 import { ClustersView, ShelvesView } from './ShelvesView';
+import { LanesArea } from './LanesArea';
 import { ZoneTodoBadge } from './items/ZoneTodoBadge';
 import { useMenuBarSection } from '../keys/menu-bar-bridge';
 import {
@@ -35,6 +36,7 @@ import {
   TRACKER_PROVIDERS,
   type ArrangeSpacing,
   type Zone,
+  type ZoneLayout,
 } from '@agent-board/daemon/protocol';
 
 /**
@@ -61,10 +63,21 @@ export type ZoneNodeType = Node<
     resizeMin?: { width?: number; height?: number };
     /** Grown for now round an expanded tile and the tiles it pushed aside: no snap target meanwhile. */
     grown?: true;
-    /** A shelved zone's shelves, as drawn (`withShelves`): it is drawn at least big enough for them, and not resized by hand. */
+    /** A shelved zone's shelves, as drawn (`withShelves`): it is drawn at least big enough for them. */
     shelves?: ShelfView;
     /** A zone in clusters' outlines and labels, as drawn (`withShelves`). */
     clusters?: ClusterView;
+    /**
+     * On shelves or in clusters, the least size what it holds is laid out in (`withShelves`): as narrow as it goes, and
+     * as tall as it is at the zone's width; only while it is selected or being resized. Resized by hand, it goes no
+     * smaller.
+     */
+    fits?: { width: number; height: number };
+    /**
+     * On shelves or in clusters, while it is selected or being resized (`withShelves`): its lanes area as drawn, relative
+     * to it, and the least size its lanes need, which its corner handles go no smaller than.
+     */
+    lanesArea?: { area: ZoneLayout; fits: { width: number; height: number } };
     /** Whether it holds its stage board, as drawn (`withStageBoards`). */
     stageBoard?: true;
   },
@@ -134,7 +147,7 @@ export function zoneNode(zone: Zone): ZoneNodeType {
 
 /** A zone under Classic: a tinted region with a labelled tab. */
 function ClassicZone({
-  data: { zone, tileCount = 0, resizeMin, shelves, clusters, stageBoard },
+  data: { zone, tileCount = 0, resizeMin, shelves, clusters, fits, lanesArea, stageBoard },
   selected,
   positionAbsoluteX,
   positionAbsoluteY,
@@ -349,13 +362,14 @@ function ClassicZone({
       <CrewFrameBoxes frames={crews} />
       {shelves !== undefined && <ShelvesView zoneId={zone.id} view={shelves} />}
       {clusters !== undefined && <ClustersView zoneId={zone.id} view={clusters} />}
+      {selected && lanesArea !== undefined && <LanesArea zoneId={zone.id} lanes={lanesArea} zone={{ width: width ?? zone.width, height: height ?? zone.height }} />}
       <NodeResizer
-        // Grown round an expanded tile, it resizes from the size it is drawn at, and saves the size it is let go at. A
-        // shelved zone is as big as its shelves.
-        isVisible={selected && shelves === undefined && clusters === undefined}
+        // Grown round an expanded tile, it resizes from the size it is drawn at, and saves the size it is let go at. On
+        // shelves or in clusters, what it holds reflows as it goes, and it goes no smaller than that fits.
+        isVisible={selected}
         color={zone.color}
-        minWidth={Math.max(MIN_ZONE_SIZE.width, least.width)}
-        minHeight={Math.max(MIN_ZONE_SIZE.height, least.height)}
+        minWidth={Math.max(MIN_ZONE_SIZE.width, fits?.width ?? least.width)}
+        minHeight={Math.max(MIN_ZONE_SIZE.height, fits?.height ?? least.height)}
         onResizeStart={() => resize.start(zone.id)}
         // Shrinking past its tiles packs them inward as it goes, and stops once they fit no tighter.
         shouldResize={(_event, next) => resize.resize(zone.id, next)}

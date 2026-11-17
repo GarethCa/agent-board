@@ -5,10 +5,9 @@ import { tmpdir } from 'node:os';
 import { basename, delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
 import { scrubBoardSessionEnv } from './board-guard.ts';
 import { leakedGitVars, scrubGitEnv } from './git-guard.ts';
-import { fakeBinDir, HARNESS_NAMES } from './paths.ts';
+import { fakeBinDir, GUARD_DIR_ENV, GUARD_DIR_PREFIX, HARNESS_NAMES } from './paths.ts';
 
 const fakeBinReal = realpathSync(fakeBinDir);
-const GUARD_DIR_ENV = 'AGENT_BOARD_HARNESS_GUARD_DIR';
 /** What execvp and sh fall back to when the environment has no PATH. */
 const DEFAULT_PATH = '/usr/bin:/bin:/usr/sbin:/sbin';
 
@@ -27,7 +26,7 @@ export interface HarnessGuard {
  * and exits 127; `assertClean()` at teardown then fails the run even if the caller swallowed the error.
  */
 export function installHarnessGuard(env: NodeJS.ProcessEnv = process.env): HarnessGuard {
-  const tripwireDir = realpathSync(mkdtempSync(join(tmpdir(), 'agent-board-harness-guard-')));
+  const tripwireDir = realpathSync(mkdtempSync(join(tmpdir(), GUARD_DIR_PREFIX)));
   const log = join(tripwireDir, 'hits.log');
   writeFileSync(log, '');
   for (const name of HARNESS_NAMES) {
@@ -56,7 +55,7 @@ export function installHarnessGuard(env: NodeJS.ProcessEnv = process.env): Harne
       const found = hits();
       rmSync(tripwireDir, { recursive: true, force: true });
       if (found.length > 0) {
-        throw new Error(`agent-board harness guard: tests tried to run a real harness:\n  ${found.join('\n  ')}`);
+        throw new Error(`agent-board harness guard: tests tried to run a real harness, or a fake one on the real home's config:\n  ${found.join('\n  ')}`);
       }
     },
   };

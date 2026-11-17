@@ -71,6 +71,30 @@ test('an orchestrator in any zone starts two workers: their crew frame shows whi
     await expect(frame).toHaveCSS('opacity', '0');
     await expect(stranger).toHaveCSS('opacity', '1');
 
+    // Expanded in place and selected, it still focuses its crew. While the keyboard is in its terminal, typing, the
+    // crew lets go: no dim round it and no frame, though the pointer rests on it. The keyboard back on the board, its
+    // selection focuses the crew again. (The board draws only the tiles in view, so this reads the board's mark.)
+    const board = window.locator('html');
+    await tileAction(lead, 'Expand in place');
+    const expanded = window.getByTestId('expanded-tile');
+    await expect(expanded).toHaveCount(1);
+    const head = expanded.locator('.expanded-tile-head');
+    await head.click();
+    await expect(board).toHaveAttribute('data-crew-focus');
+    await expanded.getByTestId('session-terminal').click();
+    await expect.poll(() => window.evaluate(() => document.activeElement?.closest('.xterm') !== null)).toBe(true);
+    await expect(board).not.toHaveAttribute('data-crew-focus');
+    await expect(frame).toHaveCSS('opacity', '0');
+    await head.click();
+    await expect(board).toHaveAttribute('data-crew-focus');
+    await expanded.getByRole('button', { name: 'Collapse', exact: true }).click();
+    await expect(lead).toBeVisible();
+    // Unselected, and the pointer off it: the tile collapses back under the pointer, whose hover would focus the crew.
+    await window.keyboard.press('Escape');
+    await expect(window.locator('.react-flow__node.selected')).toHaveCount(0);
+    await window.mouse.move(1, 1);
+    await expect(board).not.toHaveAttribute('data-crew-focus');
+
     // The View popover has no crew row now; its Tethers switch is off by default and saved, as Settings shows.
     await window.getByRole('button', { name: 'View', exact: true }).click();
     const view = window.getByRole('dialog', { name: 'View', exact: true });

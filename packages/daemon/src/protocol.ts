@@ -170,10 +170,23 @@ export interface Zone {
    */
   layoutRule: ZoneLayoutRule;
   /**
+   * On shelves or in clusters, the part of it they are laid out in, relative to its top-left, and always inside it; the
+   * rest of the zone is its free area, where each tile stays where it was put and nothing arranges it. Null for lanes
+   * that fill the zone, until it is first set.
+   */
+  lanes: ZoneLayout | null;
+  /**
    * The tiles in it placed by hand while it keeps a rule, by key (`agent:<session id>`, `shell:<id>`): the
    * rule leaves each where it was put, until it is put back under the rule (`zone.followRule`). Empty while it keeps none.
    */
   handPlaced: string[];
+  /**
+   * The tiles in its free area, outside `lanes`, by key (`agent:<session id>`, `shell:<id>`): each the user put there,
+   * drawn where it was put and never laid out, wherever the lanes area goes later. A tile is marked as the user puts it
+   * down outside the lanes area (a move `byHand`), and unmarked as they put it down inside it or it leaves the zone; a
+   * tile slotted or spawned in the zone never is. Empty while its lanes fill it.
+   */
+  free: string[];
   /**
    * Whether it is folded to a chip while it is not needed (`zone.fold`). Its place and size stay as they were, so
    * unfolding puts it back exactly; its agents were paused when it folded, and unfolding wakes none unless asked.
@@ -210,12 +223,12 @@ export type ZoneSnapshot = Pick<
   Zone,
   'id' | 'name' | 'color' | 'fillOpacity' | 'x' | 'y' | 'width' | 'height' | 'codexBypassHookTrust' | 'boardMcp' | 'gateCommand' | 'tracker' | 'defaultRepo'
 > &
-  Partial<Pick<Zone, 'repoRoot' | 'folder' | 'spacing' | 'groupFolder' | 'trustsFolder' | 'layoutMode' | 'layoutRule'>>;
+  Partial<Pick<Zone, 'repoRoot' | 'folder' | 'spacing' | 'groupFolder' | 'trustsFolder' | 'layoutMode' | 'layoutRule' | 'lanes'>>;
 
 /** What `zone.restore` needs to make `zone` again: the fields of a `ZoneSnapshot`, and no others. */
 export function zoneSnapshot(zone: ZoneSnapshot): ZoneSnapshot {
-  const { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, gateCommand, tracker, defaultRepo, repoRoot, folder, spacing, groupFolder, trustsFolder, layoutMode, layoutRule } = zone;
-  return { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, gateCommand, tracker, defaultRepo, repoRoot, folder, spacing, groupFolder, trustsFolder, layoutMode, layoutRule };
+  const { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, gateCommand, tracker, defaultRepo, repoRoot, folder, spacing, groupFolder, trustsFolder, layoutMode, layoutRule, lanes } = zone;
+  return { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, gateCommand, tracker, defaultRepo, repoRoot, folder, spacing, groupFolder, trustsFolder, layoutMode, layoutRule, lanes };
 }
 
 /**
@@ -1616,6 +1629,11 @@ export interface TileMove {
    * rule, the tile is marked placed by hand (`Zone.handPlaced`), and the rule leaves it where it was put.
    */
   byHand?: boolean;
+  /**
+   * Put back by an undo or redo: whether it goes back marked free in its zone (`Zone.free`), as it was, whatever its
+   * place says. Without it, a move by hand is marked free by where it is put down.
+   */
+  free?: boolean;
 }
 
 /** The agent CLI a session runs. */
@@ -2695,6 +2713,18 @@ export interface PermissionPrompt {
   dialog: PromptDialog | null;
   /** For a call of Claude's plan tool (`PLAN_TOOL`), the plan it asks the user to approve, in Markdown; else null. */
   plan: string | null;
+  /**
+   * For a plan prompt the board answered: when, and whether Claude kept its dialog open. The prompt stays, read only,
+   * until Claude moves on from its dialog; absent until the board answers it.
+   */
+  planSent?: PlanSent;
+}
+
+/** A plan prompt the board answered (`PermissionPrompt.planSent`). */
+export interface PlanSent {
+  sentAt: string;
+  /** Answered, but Claude had moved on from its dialog by none of its hooks `DIALOG_TAKE_MS` later: its terminal must answer. */
+  keptOpen: boolean;
 }
 
 /** Claude Code's tool that asks the user questions with options; its PermissionRequest is its dialog, not a permission. */
@@ -2704,8 +2734,9 @@ export const QUESTION_TOOL = 'AskUserQuestion';
 export const PLAN_TOOL = 'ExitPlanMode';
 
 /**
- * How long after the board sends a question prompt's answers its call must run (its `PostToolUse`) before the board
- * says Claude kept its dialog open (`PromptDialog.keptOpen`), and the user answers in its terminal.
+ * How long after the board sends a question prompt's answers its call must run (its `PostToolUse`), or after it answers
+ * a plan prompt Claude must move on, before the board says Claude kept its dialog open (`PromptDialog.keptOpen`,
+ * `PlanSent.keptOpen`), and the user answers in its terminal.
  */
 export const DIALOG_TAKE_MS = 15_000;
 
@@ -5192,8 +5223,12 @@ export interface DaemonMethods {
    * `invalidParams` for an unknown or bound zone, or a `path` that is not absolute or not in a git repo.
    */
   'zone.setDefaultRepo': { params: { id: string; path: string | null }; result: Zone };
-  /** Moves and resizes a zone. Fails with `invalidParams` for an unknown id or a size under `MIN_ZONE_SIZE`. */
-  'zone.update': { params: { id: string } & ZoneLayout; result: Zone };
+  /**
+   * Moves and resizes a zone, and with `lanes` sets its lanes area (`Zone.lanes`; null for lanes that fill it), which is
+   * kept inside it. Fails with `invalidParams` for an unknown id, a size under `MIN_ZONE_SIZE`, or a lanes area with no
+   * size.
+   */
+  'zone.update': { params: { id: string } & ZoneLayout & { lanes?: ZoneLayout | null }; result: Zone };
   /**
    * Removes a zone that has nothing in it. Fails with `invalidParams` for an unknown id, or a zone that still has agents.
    * No app surface calls it: the app deletes a zone with `zone.dissolve`. It stays as the daemon's own seam, which its

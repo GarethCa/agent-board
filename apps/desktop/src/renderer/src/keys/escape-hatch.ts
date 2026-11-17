@@ -204,6 +204,26 @@ export function followEscapeHatch(): void {
 }
 
 /**
+ * Minimises or collapses a session window or an expanded tile (`leave`) with the focus on its tile, which stays on the
+ * board as it goes (a window of joined tabs: its button in the dock), so the board's keys reach the tile after: Esc
+ * unselects it. Its keys and its Collapse button both leave it this way, as a button that goes with it drops the focus.
+ */
+export function leaveToTile(surface: HTMLElement | null, leave: () => void): void {
+  const tile = surface && tileOf(surface);
+  if (tile) focus(tile);
+  leave();
+  // The board draws the tile again as it goes (an expanded tile's node moves in the board's order), which can drop
+  // its focus: given back once it has drawn, unless it has gone somewhere else meanwhile. A tabs window's dock button
+  // is only drawn once it is minimised.
+  requestAnimationFrame(() => {
+    const active = document.activeElement;
+    if (active !== null && active !== document.body) return;
+    const target = tile?.isConnected ? tile : surface && dockItemOf(surface);
+    if (target) focus(target);
+  });
+}
+
+/**
  * How a session window or an expanded tile is left from the keyboard: Esc with the focus in it (not in its terminal or
  * a field), or ⌘Esc from anywhere in it. `leave` minimises or collapses it; the focus goes to its tile first, which
  * stays on the board as the window or the expanded tile goes (a window of joined tabs: its button in the dock). Without
@@ -214,18 +234,7 @@ export function useLeaveKeys(root: RefObject<HTMLElement | null>, leave: (() => 
     const surface = root.current;
     const draft = surface && unsavedIn(surface);
     if (draft) return backToDraft(draft);
-    const tile = surface && tileOf(surface);
-    if (tile) focus(tile);
-    leave?.();
-    // The board draws the tile again as it goes (an expanded tile's node moves in the board's order), which can drop
-    // its focus: given back once it has drawn, unless it has gone somewhere else meanwhile. A tabs window's dock button
-    // is only drawn once it is minimised.
-    requestAnimationFrame(() => {
-      const active = document.activeElement;
-      if (active !== null && active !== document.body) return;
-      const target = tile?.isConnected ? tile : surface && dockItemOf(surface);
-      if (target) focus(target);
-    });
+    leaveToTile(surface, () => leave?.());
   };
   const latest = useRef(run);
   latest.current = run;

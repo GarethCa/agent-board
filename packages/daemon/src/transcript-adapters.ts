@@ -263,6 +263,34 @@ function codexMessage(payload: Json): ChatEntry[] {
 }
 
 /**
+ * The prompts one line of a transcript records the harness taking, each whole as it went in: a Claude `user` entry's
+ * text, or a `queued_command` it took at a step of a turn under way; a Codex user `message`. Read with no version
+ * check, as from the middle of a transcript: what isn't one of them, or isn't JSON at all, is none.
+ */
+export function promptsIn(harness: Harness, line: string): string[] {
+  let entry: unknown;
+  try {
+    entry = JSON.parse(line);
+  } catch {
+    return [];
+  }
+  if (!isObject(entry)) return [];
+  if (harness === 'codex') {
+    const payload = entry.payload;
+    return entry.type === 'response_item' && isObject(payload) && payload.type === 'message' && payload.role === 'user' ? [blockText(payload.content)] : [];
+  }
+  if (entry.type === 'attachment') {
+    const attachment = entry.attachment;
+    return isObject(attachment) && attachment.type === 'queued_command' && typeof attachment.prompt === 'string' ? [attachment.prompt] : [];
+  }
+  if (entry.type !== 'user' || !isObject(entry.message)) return [];
+  const content = entry.message.content;
+  if (typeof content === 'string') return [content];
+  if (!Array.isArray(content)) return [];
+  return content.flatMap((block) => (isObject(block) && block.type === 'text' && typeof block.text === 'string' ? [block.text] : []));
+}
+
+/**
  * Whether a Codex call's output says it failed: its `exec` script failed, or the user stopped it, or its command's
  * `exit_code` (in the script's text, or the metadata of an older `shell` call's JSON) wasn't 0.
  */

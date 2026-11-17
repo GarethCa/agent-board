@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { draftTab, nextRegion, REGION_ORDER, unsavedIn } from './escape-hatch';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { draftTab, leaveToTile, nextRegion, REGION_ORDER, unsavedIn } from './escape-hatch';
 
 describe('F6 through the regions', () => {
   it('goes terminal, tabs, details, message box, header, then the board, as browsers and editors cycle theirs', () => {
@@ -45,5 +45,38 @@ describe('the tab a draft is in', () => {
     expect(draftTab(marked(''))).toBeUndefined();
     expect(draftTab(marked(null))).toBeUndefined();
     expect(draftTab(marked(JSON.stringify({ kind: 'terminal', sessionId: 's1' })))).toBeUndefined();
+  });
+});
+
+describe('collapsing an expanded tile', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** An expanded tile drawn in its board node, which takes the focus. */
+  function expanded(log: string[]) {
+    const node = { isConnected: true, hasAttribute: () => true, matches: () => true, focus: () => log.push('focus tile') };
+    const surface = { matches: (selector: string) => selector === '.expanded-tile', closest: () => node, dataset: {} };
+    return { node, surface: surface as unknown as HTMLElement };
+  }
+
+  it('puts the focus on its tile before it collapses, so Esc then reaches the tile and unselects it', () => {
+    const log: string[] = [];
+    const frames: (() => void)[] = [];
+    vi.stubGlobal('requestAnimationFrame', (frame: () => void) => frames.push(frame));
+    const { node, surface } = expanded(log);
+    vi.stubGlobal('document', { activeElement: node, body: {} });
+    leaveToTile(surface, () => log.push('collapse'));
+    for (const frame of frames) frame();
+    expect(log).toEqual(['focus tile', 'collapse']);
+  });
+
+  it('gives the focus back to its tile once it has drawn, if the collapse dropped it', () => {
+    const log: string[] = [];
+    const frames: (() => void)[] = [];
+    vi.stubGlobal('requestAnimationFrame', (frame: () => void) => frames.push(frame));
+    const body = {};
+    vi.stubGlobal('document', { activeElement: body, body });
+    leaveToTile(expanded(log).surface, () => log.push('collapse'));
+    for (const frame of frames) frame();
+    expect(log).toEqual(['focus tile', 'collapse', 'focus tile']);
   });
 });

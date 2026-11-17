@@ -165,10 +165,13 @@ const scripts: Record<FakeScenario, Script> = {
 
   /**
    * Plans in plan mode and asks the user to approve its plan with Claude's `ExitPlanMode`, which needs permission and
-   * suggests switching to accept edits. Approved out of plan mode (a hook's allow with a `setMode` update, or a yes
-   * typed at its dialog): `Starting on the plan.` (after `⎿ Accepting edits` when the allow switched to that). A hook's
-   * plain allow leaves it in plan mode, where it can make no edits: `Still in plan mode, so I can make no edits.`.
-   * Denied: `Keeping on planning: <message>.` (Codex has no plan mode and only says so.)
+   * suggests switching to auto mode. Its dialog, as Claude 2.1.325 draws it, offers `1. Yes, and use auto mode`,
+   * `2. Yes, manually approve edits` and `3. Tell Claude what to change`, and takes a hook's allow only with the call's
+   * input (`updatedInput`): a bare allow leaves the dialog open for a typed line. Approved out of plan mode (a hook's
+   * allow with its input and a `setMode` update, or 1, 2 or y typed at its dialog): `Starting on the plan.` (after
+   * `⎿ Accepting edits` when the allow switched to that). An allow with its input and no switch leaves it in plan mode,
+   * where it can make no edits: `Still in plan mode, so I can make no edits.`. Denied, or anything else typed:
+   * `Keeping on planning: <message>.` (Codex has no plan mode and only says so.)
    */
   async 'plan-mode'(session, prompt) {
     await session.submit(prompt);
@@ -493,8 +496,9 @@ const scripts: Record<FakeScenario, Script> = {
    * idle prompt, as a gate runs in its background, then writes its handover and runs `agent-board handoff`.
    * `Work until interrupted` says so and holds the turn open until the user interrupts it, `Work until interrupted, Stop in flight` then
    * fires its `Stop` too, after the interrupt;
-   * `Work slowly` runs `sleep 5`; `Work slowly, then fail` and `Work slowly, then hit the rate limit` run it, then
-   * fail the turn (Claude's StopFailure: `server_error`, `rate_limit`);
+   * `Work slowly` runs `sleep 5`; `Work slowly in two steps` runs `sleep 3`, then `sleep 10`, a step to take up what was
+   * typed meanwhile between them (`queueMidTurn`); `Work slowly, then fail` and `Work slowly, then hit the rate limit`
+   * run `sleep 5`, then fail the turn (Claude's StopFailure: `server_error`, `rate_limit`);
    * `Ask permission` plays `permission`; `Run: ‹command› | ‹what it is for›` asks to run that command and says whether it ran; `Think, then send a subagent` thinks a step and plays `subagent`; `Ask: …`, `Plan: …`, `Flag: …`, `Doc: …` and `Pins: …` and `Remind: …` play `ask-plan`; `Hit the rate limit` plays `rate-limit`. Any other prompt is a worker's:
    * it writes `.agent-board/handover.md` in its shell and ends on `STATUS: done`.
    */
@@ -649,6 +653,12 @@ const scripts: Record<FakeScenario, Script> = {
     }
     if (prompt === 'Work slowly') {
       await session.runShell('sleep 5');
+      await session.say('Slow work done.');
+      return session.stop();
+    }
+    if (prompt === 'Work slowly in two steps') {
+      await session.runShell('sleep 3');
+      await session.runShell('sleep 10');
       await session.say('Slow work done.');
       return session.stop();
     }

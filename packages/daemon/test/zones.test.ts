@@ -112,6 +112,34 @@ describe('zones over the socket', () => {
     expect(await client.call('zone.list')).toEqual([moved]);
   });
 
+  it('sets a zone\'s lanes area, keeps it inside the zone as it is resized, and clears it back to lanes that fill the zone', async () => {
+    const client = await connectTestClient(await startTestDaemon());
+    const zone = await client.call('zone.add', { path: tempRepo(), ...at });
+    expect(zone.lanes).toBeNull();
+    const layout = { x: zone.x, y: zone.y, width: 900, height: 600 };
+
+    const laned = await client.call('zone.update', { id: zone.id, ...layout, lanes: { x: 40, y: 20, width: 500, height: 400 } });
+    expect(laned.lanes).toEqual({ x: 40, y: 20, width: 500, height: 400 });
+    // A resize that leaves out `lanes` keeps them.
+    expect((await client.call('zone.update', { id: zone.id, ...layout, x: 10 })).lanes).toEqual(laned.lanes);
+    // Shrunk under them, they are moved in and made to fit.
+    const shrunk = await client.call('zone.update', { id: zone.id, ...layout, width: 450, height: 300 });
+    expect(shrunk.lanes).toEqual({ x: 0, y: 0, width: 450, height: 300 });
+    // Given reaching past it, they are kept inside.
+    expect((await client.call('zone.update', { id: zone.id, ...layout, lanes: { x: 700, y: 0, width: 400, height: 100 } })).lanes).toEqual({ x: 500, y: 0, width: 400, height: 100 });
+    expect((await client.call('zone.list'))[0]!.lanes).toEqual({ x: 500, y: 0, width: 400, height: 100 });
+
+    // Removed and undone, it comes back with them.
+    const kept = (await client.call('zone.list'))[0]!;
+    await client.call('zone.remove', { id: zone.id });
+    expect((await client.call('zone.restore', zoneSnapshot(kept))).lanes).toEqual({ x: 500, y: 0, width: 400, height: 100 });
+
+    expect((await client.call('zone.update', { id: zone.id, ...layout, lanes: null })).lanes).toBeNull();
+    for (const lanes of [{ x: 0, y: 0, width: 0, height: 100 }, { x: 0, y: 0, width: 100 }, 'all']) {
+      await expect(client.call('zone.update', { id: zone.id, ...layout, lanes: lanes as never })).rejects.toMatchObject({ code: RPC_ERROR.invalidParams });
+    }
+  });
+
   it("turns Codex's hook-trust bypass off and on for a zone: on by default", async () => {
     const client = await connectTestClient(await startTestDaemon());
     const zone = await client.call('zone.add', { path: tempRepo(), ...at });

@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { hasFlag, listFlag, parseArgs, stringFlag, type FlagSpec } from './args.ts';
 import { ConfigError, mergeHooks, readHooksFile, validateMatchers, type HooksConfig, type MatcherGroup } from './hooks.ts';
+import { refuseRealConfigDir } from './home-guard.ts';
 import { codexMcpServers } from './mcp.ts';
 import { parseTomlValue } from './toml.ts';
 import { appendJsonl, readJsonlFile } from './jsonl.ts';
@@ -49,6 +50,7 @@ export function codexInvocation(argv: string[], env: NodeJS.ProcessEnv, processC
   const resumeId = subcommand === 'resume' && !hasFlag(args, '--last') ? args.positionals.shift() : undefined;
   const cwd = stringFlag(args, '-C', '--cd') ?? processCwd;
   const codexHome = env.CODEX_HOME ?? join(env.HOME ?? homedir(), '.codex');
+  refuseRealConfigDir('codex', codexHome, env);
   const sessionId = resumeId ?? randomUUID();
   const model = stringFlag(args, '-m', '--model') ?? 'gpt-5-codex';
   const warnings: string[] = [];
