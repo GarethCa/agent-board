@@ -2,6 +2,7 @@
 // starts, and theirs. The chat runs the ticket's loop; a helper's questions and flags go to it, whoever started the helper.
 // Pure, for the app's window too.
 import { isOrchestratorRole, REVIEWER_ROLES, TICKET_CHAT_KINDS, type Agent, type BoxRect, type CrewPrefab, type PrefabMember, type TicketChatKind } from './protocol.ts';
+import { graphOf } from './prefab-graph.ts';
 
 /** Whether `agent` is a helper of a ticket tile. */
 export const isHelper = (agent: Pick<Agent, 'ticket'>): boolean => typeof agent.ticket === 'string';
@@ -55,7 +56,7 @@ export function withTicketChat(prefab: CrewPrefab, kind: TicketChatKind): CrewPr
     const asChat = isOrchestratorRole(chat.role) ? { ...chat, role: 'implementer' } : chat;
     // The chat takes its first builder's place; any other builder stays a helper.
     const first = prefab.members.find(builds);
-    return { ...prefab, ticketChat: kind, members: prefab.members.filter((each) => each !== first).map((each) => (each === chat ? asChat : each)) };
+    return withGraph({ ...prefab, ticketChat: kind, members: prefab.members.filter((each) => each !== first).map((each) => (each === chat ? asChat : each)) });
   }
   const asLead = chat.role === 'implementer' || chat.role === null ? { ...chat, role: 'orchestrator' } : chat;
   const members = prefab.members.map((each) => (each === chat ? asLead : each));
@@ -64,8 +65,11 @@ export function withTicketChat(prefab: CrewPrefab, kind: TicketChatKind): CrewPr
     const builder: PrefabMember = { id: 'build', role: 'implementer', name: 'builder', harness: chat.harness, model: chat.model, effort: chat.effort, template: null, subagents: [], starts: 'lead' };
     members.splice(at === -1 ? members.length : at, 0, builder);
   }
-  return { ...prefab, ticketChat: kind, members };
+  return withGraph({ ...prefab, ticketChat: kind, members });
 }
+
+/** `prefab` with its graph made again from when its members start, when changing those left its lines stale. */
+const withGraph = (prefab: CrewPrefab): CrewPrefab => ({ ...prefab, ...graphOf(prefab) });
 
 /** The tiles' sizes on a ticket's own board, the gap between them, and the wider gap they keep from its notes and cards. */
 export const TICKET_MEMBER_SIZE = {

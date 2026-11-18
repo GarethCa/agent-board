@@ -272,6 +272,12 @@ const staysPut = (me: Orchestrator, agent: Agent): boolean =>
   me.agent !== null && agent.sessionId !== me.agent.sessionId && startedByHand(agent);
 
 /**
+ * Whether a layout `me` runs leaves `agent`'s tile where it is: one pinned expanded, whoever lays it out, the user and
+ * a zone's rule too, and nothing moves it by name either; else as `staysPut`. What is laid out goes round it.
+ */
+const keptInPlace = (me: Orchestrator, agent: Agent): boolean => agent.pinnedExpanded || staysPut(me, agent);
+
+/**
  * Who lays a zone out by its rule: on the user's side, as the board's own Tidy is, whoever's change set it off; named
  * as the rule in the activity log, which it writes to only when it moved something.
  */
@@ -887,7 +893,7 @@ export function layoutHandlers<Context extends BoardConnection>({
   const mayMove = (me: Orchestrator, board: Board, placed: Placed): boolean =>
     placed.kind === 'item'
       ? access.madeByCrew(me, madeBy(itemMadeBy, placed.id))
-      : placed.kind === 'shell' || (placed.kind === 'agent' && !staysPut(me, board.agents.find((each) => each.sessionId === placed.id)!));
+      : placed.kind === 'shell' || (placed.kind === 'agent' && !keptInPlace(me, board.agents.find((each) => each.sessionId === placed.id)!));
 
   /**
    * Where something of `size` goes in `zone` (or loose, with none) for `place`: at `at` on the grid column nearest it, in
@@ -1430,7 +1436,7 @@ export function layoutHandlers<Context extends BoardConnection>({
   const crewOf = (me: Orchestrator, board: Board, zone: Zone): ArrangeTile[] => {
     const staged = stagedIn(board, zone.id);
     const agentsHere = board.agents.filter(
-      (agent) => agent.zoneId === zone.id && !heldByTicket(agent, board.agents) && !staysPut(me, agent) && !staged.has(tileSizeKey('agent', agent.sessionId)),
+      (agent) => agent.zoneId === zone.id && !heldByTicket(agent, board.agents) && !keptInPlace(me, agent) && !staged.has(tileSizeKey('agent', agent.sessionId)),
     );
     return [
       ...workTilesOf(board.agents, agentsHere, me.agent?.sessionId, board.sizes),
@@ -2074,6 +2080,9 @@ export function layoutHandlers<Context extends BoardConnection>({
         const from = target.kind === 'item' ? ((await findItem(target.id, connection))?.ticket ?? null) : null;
         const placed = movable(await boardAt(board, from), target);
         entry.on = { id: placed.id, name: placed.name };
+        if (placed.kind === 'agent' && board.agents.find((each) => each.sessionId === placed.id)?.pinnedExpanded === true) {
+          throw invalidParams(`${placed.name} is pinned expanded, and stays where it is: unpin it to move it`);
+        }
         const ticket = await ticketOfPlace(board, place, from, connection);
         if (ticket !== from) {
           if (target.kind !== 'item') {
@@ -2136,12 +2145,17 @@ export function layoutHandlers<Context extends BoardConnection>({
         const arrange = async (): Promise<BoardArrangeResult> => {
           const board = await readBoard();
           const loose = placedOf(board).filter((each) => each.zoneId === null);
+          // A tile pinned expanded stays where it is, and so does the zone it is in: the rest go round them.
+          const pinned = board.agents.filter((agent) => agent.pinnedExpanded);
+          const pinnedKeys = new Set(pinned.map((agent) => tileSizeKey('agent', agent.sessionId)));
+          const pinnedZones = new Set(pinned.map((agent) => agent.zoneId).filter((id) => id !== null));
+          const rooms = zoneRooms(board);
           // Its agents and shells; an external session's tile stays put, as the notes, shapes and text do.
-          const tiles = loose.filter((each) => each.kind === 'agent' || each.kind === 'shell');
+          const tiles = loose.filter((each) => (each.kind === 'agent' && !pinnedKeys.has(each.key)) || each.kind === 'shell');
           const arranged = arrangeBoard(
-            zoneRooms(board),
+            rooms.filter((room) => !pinnedZones.has(room.id)),
             tiles.map((each) => ({ id: each.key, ...each.rect })),
-            loose.filter((each) => !tiles.includes(each)).map(takenBy),
+            [...loose.filter((each) => !tiles.includes(each)).map(takenBy), ...rooms.filter((room) => pinnedZones.has(room.id))],
           );
           const zones = board.zones.flatMap((zone) => {
             const at = arranged.zones.get(zone.id);

@@ -34,6 +34,16 @@ const STARTING_MAX_MS = 60_000;
  */
 export const DRAFT_HOLD_MS = 5 * 60_000;
 
+/**
+ * How long after its turn ends a line the user sent the agent mid-turn holds back what others send it. Claude takes
+ * that line up soon after its `Stop`, as a prompt of its own, and anything typed meanwhile joins it; or it took it at a
+ * step of the turn already, with no hook to say so. Past this, the board takes it for the latter.
+ */
+export const USER_QUEUE_HOLD_MS = 10_000;
+
+/** Why nothing others send is typed at an agent the user sent a line mid-turn, before a prompt takes it up. */
+export const USER_QUEUED_REASON = 'you sent it a line in its turn, still to be taken up';
+
 /** What turning hooks into an agent's state reads of its row. */
 export interface HookStateRow {
   session_id: string;
@@ -55,6 +65,10 @@ interface HookStateOptions<Row extends HookStateRow> {
   startingMaxMs?: number;
   /** How long a draft holds back what others send the agent: `DRAFT_HOLD_MS` by default. */
   draftHoldMs?: number;
+  /** How long after its turn a line the user sent mid-turn holds back what others send the agent: `USER_QUEUE_HOLD_MS` by default. */
+  userQueueHoldMs?: number;
+  /** A line the user sent the agent mid-turn holds back what others send it no longer, no prompt having taken it up. */
+  userQueueLapsed?(sessionId: string): void;
   /** Whether a command the agent left running in the background still runs. */
   onCommand?(sessionId: string): boolean;
   /** Whether a first prompt waits to be typed at the agent once its session is up, not given on its command line. */
@@ -125,9 +139,11 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
   const drafts = new Map<string, Draft & { at: number }>();
   /**
    * Agents the user submitted a draft to mid-turn, until their next prompt: the harness holds it for after the turn,
-   * and Escape, interrupting the turn, puts it back at the prompt as their draft.
+   * and Escape, interrupting the turn, puts it back at the prompt as their draft. Nothing others send is typed at the
+   * agent meanwhile, where it would join that line (`whyNotReady`). Once the turn has ended, each has what cancels the
+   * timer that lets it go (`USER_QUEUE_HOLD_MS`).
    */
-  const queuedByUser = new Set<string>();
+  const queuedByUser = new Map<string, (() => void) | undefined>();
   /**
    * Agents whose latest permission request has been settled (answered in the terminal or the turn moved on): a
    * `permission_prompt` notification then is the late echo of that prompt, not a new one.
@@ -136,6 +152,25 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
   const clock = options.clock ?? systemClock;
   const startingMaxMs = options.startingMaxMs ?? STARTING_MAX_MS;
   const draftHoldMs = options.draftHoldMs ?? DRAFT_HOLD_MS;
+  const userQueueHoldMs = options.userQueueHoldMs ?? USER_QUEUE_HOLD_MS;
+  /** Forgets the line the user sent the agent mid-turn: a prompt took it up, Escape put it back, or the agent went. */
+  const dropQueued = (sessionId: string) => {
+    queuedByUser.get(sessionId)?.();
+    queuedByUser.delete(sessionId);
+  };
+  /**
+   * The turn the user sent the agent a line in has ended: the line holds back what others send it for
+   * `userQueueHoldMs` more at most, its own prompt, as it is taken up, ending that sooner.
+   */
+  const queueTurnEnded = (sessionId: string) => {
+    if (!queuedByUser.has(sessionId) || queuedByUser.get(sessionId) !== undefined) return;
+    const lapse = () => {
+      queuedByUser.delete(sessionId);
+      options.log?.(`agent ${sessionId}: the line the user sent mid-turn was never seen taken up as a prompt, so it holds nothing back`);
+      options.userQueueLapsed?.(sessionId);
+    };
+    queuedByUser.set(sessionId, clock.setTimer(lapse, userQueueHoldMs));
+  };
   /**
    * How much longer the user's draft at the agent's prompt holds back what others send it: none left once
    * `draftHoldMs` has passed since their last key there; undefined with no draft there.
@@ -276,6 +311,12 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
 
     draftHeldFor,
 
+    /** Whether a line the user sent the agent mid-turn is still to be taken up as a prompt of its own (`queuedByUser`). */
+    isUserQueued: (sessionId: string) => queuedByUser.has(sessionId),
+
+    /** The agent's turn was seen to end with no hook of its own (`quiet-turns`): a line the user sent in it lapses soon. */
+    turnEndedQuietly: (sessionId: string) => queueTurnEnded(sessionId),
+
     /** Whether the agent's session has yet to send its first hook, with a first prompt queued. */
     isStarting: (sessionId: string) => starting.has(sessionId),
 
@@ -320,6 +361,8 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
      * Why a scheduled run can't start in the live agent now, or undefined if it can. With `evenAsking`, as for a hand-off,
      * a last message asking you something doesn't stop it: what's typed is the agent's next input either way. A draft
      * at its prompt stops it; without `lapsedDrafts`, as for a message others sent, only one still held (`draftHeldFor`).
+     * So does a line the user sent it mid-turn, still to be taken up (`queuedByUser`). Asked at its prompt with no end
+     * of that turn heard, it starts that hold's lapse, as no word of the end may ever come.
      */
     whyNotReady(row: Row, evenAsking = false, lapsedDrafts = true): string | undefined {
       const sessionId = row.session_id;
@@ -332,6 +375,12 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
         return waiting ? WAITING_FOR_YOU : STILL_WORKING;
       }
       if (askingYou) return WAITING_FOR_YOU;
+      if (queuedByUser.has(sessionId)) {
+        // A turn whose end the board never heard (a lost `Stop`, no idle prompt seen) is over all the same: the
+        // hold's lapse starts now, once.
+        queueTurnEnded(sessionId);
+        return USER_QUEUED_REASON;
+      }
       if (drafts.has(sessionId) && (lapsedDrafts || (draftHeldFor(sessionId) ?? 0) > 0)) return 'you were typing in its terminal';
       return undefined;
     },
@@ -361,7 +410,7 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
         interrupted.delete(sessionId);
         noMessage.delete(sessionId);
         drafts.delete(sessionId);
-        queuedByUser.delete(sessionId);
+        dropQueued(sessionId);
       } else if (interrupted.has(sessionId) && isStaleAfterInterrupt(payload)) return undefined;
       const settled = permissions.afterHook(sessionId, payload);
       // Claude asks in its terminal while the agent's own request is held; a subagent's dialog may wait on its hook first.
@@ -429,6 +478,12 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
       const finalMessage = payload.last_assistant_message;
       const ended = payload.hook_event_name === 'Stop' && payload.agent_id === undefined && typeof finalMessage === 'string';
       if (ended) options.recordFinal(sessionId, finalMessage);
+      // Its turn is over: the line the user sent in it is taken up soon, if it wasn't at a step.
+      const ownTurnOver =
+        payload.hook_event_name === 'Stop' ||
+        payload.hook_event_name === 'StopFailure' ||
+        (payload.hook_event_name === 'Notification' && payload.notification_type === 'idle_prompt');
+      if (ownTurnOver && payload.agent_id === undefined) queueTurnEnded(sessionId);
       save(row, state, next, unsilenced || ended || settled || reply !== undefined || lastMessage !== previousMessage || compactingSince !== wasCompacting);
       if (ended) options.finished(sessionId, finalMessage);
       return reply;
@@ -437,21 +492,28 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
     /**
      * Notes what the user typed at the agent's prompt: a draft, until it is submitted or cleared. Given its `row`, keys
      * answering something up over its prompt (a permission prompt, a question, a rate limit's menu) type nothing there.
+     * `cols`, its terminal's width, says how long a line fits on one row of its prompt, all of which Ctrl-U clears.
      */
-    typed(sessionId: string, data: string, row?: Row) {
+    typed(sessionId: string, data: string, row?: Row, cols?: number) {
       if (row !== undefined && overPrompt(row)) return;
       const draft = drafts.get(sessionId);
       // Mid-turn the user types a draft too, key by key, before the Enter that queues it.
-      if (row !== undefined && promptUnderDraft(row) === 'working' && submitsDraft(draft !== undefined, data)) queuedByUser.add(sessionId);
+      if (row !== undefined && promptUnderDraft(row) === 'working' && submitsDraft(draft, data, cols)) {
+        // Another line sent in the same turn joins the first in the harness's queue.
+        if (!queuedByUser.has(sessionId)) queuedByUser.set(sessionId, undefined);
+      }
       const restored = queuedByUser.has(sessionId) && pressesEscape(data);
-      if (restored) queuedByUser.delete(sessionId);
-      const next = restored ? { length: undefined } : draftAfter(draft, data);
+      if (restored) dropQueued(sessionId);
+      const next = restored ? { length: undefined } : draftAfter(draft, data, cols);
       if (next === undefined) drafts.delete(sessionId);
       else drafts.set(sessionId, { ...next, at: clock.now() });
     },
 
     /** The agent's turn was interrupted: hooks still landing from its work are stale until its next prompt. */
     interrupted(sessionId: string) {
+      // A line the user sent in the turn is no longer waiting for one. No draft is made of it: Claude may have taken it
+      // at a step already, and a draft the prompt never had would hold hand-offs and runs till the user pressed a key.
+      dropQueued(sessionId);
       interrupted.add(sessionId);
       noMessage.add(sessionId);
       compacting.delete(sessionId);
@@ -470,7 +532,7 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
       startFailed.delete(sessionId);
       lastMessages.delete(sessionId);
       drafts.delete(sessionId);
-      queuedByUser.delete(sessionId);
+      dropQueued(sessionId);
     },
 
     /** The agent's process exited. Its tile still shows what it last said. */
@@ -483,7 +545,7 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
       interrupted.delete(sessionId);
       waitsAtPrompt.delete(sessionId);
       drafts.delete(sessionId);
-      queuedByUser.delete(sessionId);
+      dropQueued(sessionId);
       compacting.delete(sessionId);
     },
 
@@ -497,7 +559,7 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
       noMessage.delete(sessionId);
       waitsAtPrompt.delete(sessionId);
       drafts.delete(sessionId);
-      queuedByUser.delete(sessionId);
+      dropQueued(sessionId);
       lastMessages.delete(sessionId);
     },
   };

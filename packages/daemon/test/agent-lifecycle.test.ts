@@ -137,6 +137,7 @@ function setup(
     },
     repoZone: () => (options.zone === undefined ? undefined : (options.zone as ZoneRow)),
     announce: (sessionId) => void events.push(`announce ${sessionId}`),
+    settled: () => {},
     setState: (sessionId, state) => db.prepare('UPDATE agents SET state = ? WHERE session_id = ?').run(state, sessionId),
     unsee: (sessionId) => db.prepare('UPDATE agents SET seen = 0 WHERE session_id = ?').run(sessionId),
     launch(spec) {

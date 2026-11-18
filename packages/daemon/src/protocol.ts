@@ -2033,6 +2033,12 @@ export interface Agent {
   /** Whether the user muted its OS notifications. It still counts in the needs-you inbox. */
   muted: boolean;
   /**
+   * Whether its tile is pinned expanded (`agent.setPinnedExpanded`): it stays expanded where it is, at its size, and
+   * opens again by itself whenever its tile is back. Nothing collapses, moves or resizes it until it is unpinned, and
+   * Arrange and other expanded tiles go round it. Dropped once it is closed (`isClosed`).
+   */
+  pinnedExpanded: boolean;
+  /**
    * Whether the user has opened its session since it last began asking (`agent.markSeen`): its current ask is read, so it
    * stops counting towards the badge, the dock and the menu bar, and its tile drops the needs-you look. The next time it
    * works, or a new permission prompt comes, it is cleared and the agent needs the user again.
@@ -3666,8 +3672,8 @@ export interface ExternalResumePlan {
 /** Longest description kept from a session's task or first prompt; tiles show only its start anyway. */
 export const MAX_DESCRIPTION_LENGTH = 500;
 
-/** Longest status summary an agent can set: a line or two on its tile. */
-export const MAX_STATUS_LENGTH = 200;
+/** Longest status summary an agent can set: all of it shows on its tile, the text shrinking to fit. */
+export const MAX_STATUS_LENGTH = 120;
 
 /** Longest purpose an agent can set (`Agent.purpose`): one short line in ⌘K. */
 export const MAX_PURPOSE_LENGTH = 80;
@@ -3967,6 +3973,8 @@ export const ORCHESTRATOR_ACTIONS = [
   'send',
   'interrupt',
   'effort',
+  'pin-expanded',
+  'unpin-expanded',
   'role',
   'continue',
   'restart',
@@ -4008,6 +4016,10 @@ export const ORCHESTRATOR_ACTIONS = [
   'remove-clock-template',
   'stop-crew',
   'crew-round',
+  'crew-go-on',
+  'crew-send-back',
+  'crew-go-on-without',
+  'crew-restore',
   'set-status',
   'hold',
   'release',
@@ -4367,10 +4379,13 @@ export function isWaitState(value: unknown): value is WaitState {
  * it flagged its orchestrator (`Agent.flag`), its turn failed, it was rate-limited, it was paused (by whom: no end,
  * as a message wakes it), its session ended, or a pull request was opened from its branch. Its idle prompt (Claude's
  * `idle_prompt`, idle to waiting a minute after a turn) is none, and a turn that ends finished is only `finished`.
- * A running crew (`Crew`) adds two of its builder's: a review `round` started, and the crew stopped (`crew-stopped`,
- * saying why).
+ * A running crew (`Crew`) adds four of its builder's: a loop gate's `round` started (`gate` names it), the crew
+ * started waiting (`crew-waiting`: a wait-for-all member for the rest of its inputs, a loop gate with a timeout for
+ * its deciders, Your OK for the user, or a merge for the members sharing the crew worktree), a change there outside a
+ * member's own paths or a move of the crew branch the board didn't make (`crew-clash`), and the crew stopped
+ * (`crew-stopped`, saying why).
  */
-export const CREW_EVENT_KINDS = ['turn-ended', 'finished', 'needs-you', 'not-sent', 'flagged', 'failed', 'rate-limited', 'paused', 'ended', 'pr-opened', 'round', 'crew-stopped'] as const;
+export const CREW_EVENT_KINDS = ['turn-ended', 'finished', 'needs-you', 'not-sent', 'flagged', 'failed', 'rate-limited', 'paused', 'ended', 'pr-opened', 'round', 'crew-waiting', 'crew-clash', 'crew-stopped'] as const;
 export type CrewEventKind = (typeof CREW_EVENT_KINDS)[number];
 
 export interface CrewEvent {
@@ -4389,6 +4404,8 @@ export interface CrewEvent {
    * `removed`), a pull request's number and URL.
    */
   detail: string | null;
+  /** For a crew's `round` or `crew-waiting`, the loop gate (its id in the prefab) it is of, if any. */
+  gate?: string;
 }
 
 /** What `orchestrator.wait`'s `since` takes: a crew event's cursor (`<run>.<n>`), `now` or `all`. */
@@ -4693,8 +4710,91 @@ export interface PrefabMember {
    * built-in role's template is each zone's), checked as an orchestrator's prompt is.
    */
   template: string | null;
+  /**
+   * When it starts, as the board runs a crew today: derived from the prefab's lines when it is read (a line from the
+   * prompt, a lead line, or else at the builder's hand-off). Changing it makes the prefab's lines stale, and its file
+   * is then written from these (`prefabFile`).
+   */
   starts: PrefabStart;
   subagents: PrefabSubagent[];
+  /** Its member brief: what kind of agent it is, free text it starts with before the task. Absent for none. */
+  brief?: string;
+  /** How it takes the work its lines bring: all of a round's at once (the default), or each as it comes. */
+  join?: PrefabJoin;
+  /** Minutes a wait-for-all member waits before it goes on without what is missing, 5 to 480. Absent for none. */
+  timeout?: number;
+  /** A fresh agent each round (`true`), or the same one. Absent for its role's default: fresh for a reviewer. */
+  fresh?: boolean;
+  /** Which branch it works on. Absent for its role's default (`defaultWorks`): its own for a maker, else the crew's. */
+  works?: PrefabWorks;
+  /** Its own paths in a shared crew worktree, normalised (`prefab-paths.ts`). Absent unless it shares one. */
+  writes?: string[];
+}
+
+/** How a member takes its inputs: wait for all of a round's, or each as it comes. */
+export const PREFAB_JOINS = ['all', 'each'] as const;
+export type PrefabJoin = (typeof PREFAB_JOINS)[number];
+
+/** Which branch a member works on: one of its own, or the crew branch. Only a maker may have its own. */
+export const PREFAB_WORKS = ['own', 'crew'] as const;
+export type PrefabWorks = (typeof PREFAB_WORKS)[number];
+
+/** The roles that make: each may work on a branch of its own. Every other role is a non-maker. */
+export const MAKER_ROLES: readonly string[] = ['implementer', 'spike'];
+
+/** Whether `role` is a maker's (an implementer or a spike), in any case. */
+export const isMakerRole = (role: string | null): boolean => role !== null && MAKER_ROLES.includes(role.toLowerCase());
+
+/** The branch a member of `role` works on when its prefab doesn't say. */
+export const defaultWorks = (role: string | null): PrefabWorks => (isMakerRole(role) ? 'own' : 'crew');
+
+/** Whether a member of `role` is a fresh agent each round when its prefab doesn't say: a reviewer is. */
+export const defaultFresh = (role: string | null): boolean => REVIEWER_ROLES.includes(role as never);
+
+/** A new loop gate's limit, what it does there, and its timeout in minutes. */
+export const DEFAULT_GATE_CAP = 5;
+export const DEFAULT_GATE_AT_CAP = 'ask';
+export const DEFAULT_GATE_TIMEOUT = 30;
+/** A timeout's bounds, in minutes: 5 minutes to 8 hours. */
+export const MIN_PREFAB_TIMEOUT = 5;
+export const MAX_PREFAB_TIMEOUT = 480;
+/** The most rounds a loop gate of a set number of rounds goes. */
+export const MAX_GATE_ROUNDS = 20;
+
+/** The kinds of prefab input: Your prompt, Your OK, a queue, a ticket, a clock, and an end. */
+export const PREFAB_INPUT_KINDS = ['prompt', 'user', 'queue', 'ticket', 'clock', 'end'] as const;
+export type PrefabInputKind = (typeof PREFAB_INPUT_KINDS)[number];
+
+/**
+ * A prefab input: what in a prefab's graph is neither a member nor a loop gate. Work comes from `prompt`, `queue`,
+ * `ticket` and `clock`; it waits at `user` (Your OK) for the user's Go on; it stops at an `end`, ready to merge or done.
+ */
+export type PrefabInput =
+  | { id: string; kind: 'prompt' | 'user' | 'queue' | 'ticket' }
+  | { id: string; kind: 'clock'; schedule: string; line: string }
+  | { id: string; kind: 'end'; as: 'ready' | 'done' };
+
+/**
+ * A loop gate: after the members that decide, it sends work back along its one `again` line to the loop's head, or on
+ * along its `done` lines. Until its deciders say done (`done`), at most `cap` rounds (null for no limit), then it asks
+ * (`ask`) or goes on (`on`); or a set number of rounds (`rounds`). `timeout` minutes, or null, before a missing word
+ * counts as again.
+ */
+export type PrefabGate =
+  | { id: string; rule: 'done'; cap: number | null; atCap: 'ask' | 'on'; timeout: number | null }
+  | { id: string; rule: 'rounds'; rounds: number; timeout: number | null };
+
+/**
+ * A prefab line: how work goes from one member, input or loop gate to another. A line out of a loop gate is its `again`
+ * or `done` way; `carries` says what a member's line takes (its hand-off, or a decider's review); a `lead` line is the
+ * lead starting a member, drawn but not routed. Lines are the prefab's routing, never board edges.
+ */
+export interface PrefabLine {
+  from: string;
+  to: string;
+  carries?: 'handoff' | 'review';
+  way?: 'again' | 'done';
+  lead?: true;
 }
 
 
@@ -4709,7 +4809,10 @@ export interface CrewPrefab {
   icon: string;
   /** What it is for, in a line. */
   purpose: string;
-  /** Review rounds before the crew stops and asks the user, 1 to `MAX_REVIEW_CAP`. */
+  /**
+   * Review rounds before the crew stops and asks the user, as the board runs a crew today: derived from its first loop
+   * gate when it is read (`DEFAULT_PREFAB_ROUND_LIMIT` with none, `MAX_REVIEW_CAP` for one with no limit).
+   */
   roundLimit: number;
   /**
    * How a crew from it is drawn at first: one card, or a tile for each member. Or `ticket`: its first member starts as a
@@ -4723,6 +4826,13 @@ export interface CrewPrefab {
    */
   ticketChat?: TicketChatKind;
   members: PrefabMember[];
+  /**
+   * Its graph: its inputs, loop gates and the lines between them and its members, as its file (version 2) holds them.
+   * Absent on a prefab built from its members' `starts`, whose file is then written from those.
+   */
+  inputs?: PrefabInput[];
+  gates?: PrefabGate[];
+  lines?: PrefabLine[];
 }
 
 /** The key of the prompt's place among a prefab's places: never an agent's id, which starts with a letter or digit. */
@@ -4742,6 +4852,37 @@ export interface LibraryPrefab extends CrewPrefab {
   places?: PrefabPlaces;
 }
 
+/** The most a `.crew.json` file may be, in bytes: one imported, or a draft's. */
+export const MAX_PREFAB_FILE_BYTES = 1_000_000;
+/** At most this many prefab drafts wait for the user at once: an agent can't fill the database with them. */
+export const MAX_PREFAB_DRAFTS = 50;
+/** At most this many assumptions a draft carries, each in a line of at most `MAX_ASSUMPTION_LENGTH`. */
+export const MAX_DRAFT_ASSUMPTIONS = 20;
+export const MAX_ASSUMPTION_LENGTH = 300;
+/** The longest description of a crew the user may give a drafter. */
+export const MAX_CREW_DESCRIPTION_LENGTH = 4000;
+
+/** One thing a drafter assumed that the user didn't say, in a line, and the id of what in the prefab it is about (a member, input or loop gate), if one. */
+export interface PrefabAssumption {
+  text: string;
+  about: string | null;
+}
+
+/**
+ * A crew prefab an agent drafted (`board.draftPrefab`), waiting for the user to open, save or delete it: kept until
+ * then, with no expiry, and never in the library until the user saves it.
+ */
+export interface PrefabDraft {
+  id: string;
+  prefab: CrewPrefab;
+  assumptions: PrefabAssumption[];
+  /** Who drafted it: its tile and its name then. */
+  drafter: { tileId: string; name: string };
+  /** Whether opening it closes its drafter: an agent started only to draft (`prefabDraft.describe`). */
+  closesDrafter: boolean;
+  createdAt: string;
+}
+
 /** What starting a prefab did: the agents it started, and the members that start later, with when. */
 export interface PrefabStarted {
   prefab: string;
@@ -4758,9 +4899,10 @@ export interface PrefabStarted {
 /**
  * Why a running crew stopped: every reviewer of its round approved with no blocker open (`ready-to-merge`), its round
  * limit was reached with changes still asked for (`round-limit`), the user or an orchestrator stopped it (`stopped`),
- * its builder's pull request was merged, so its agents were closed (`merged`), or its builder is gone (`builder-gone`).
+ * its builder's pull request was merged, so its agents were closed (`merged`), its builder is gone (`builder-gone`), or
+ * its work reached a Done end, so its agents were closed (`done`). A limit is any loop gate's that asks at its cap.
  */
-export const CREW_STOPS = ['ready-to-merge', 'round-limit', 'stopped', 'merged', 'builder-gone'] as const;
+export const CREW_STOPS = ['ready-to-merge', 'round-limit', 'stopped', 'merged', 'builder-gone', 'done'] as const;
 export type CrewStop = (typeof CREW_STOPS)[number];
 
 /** A reviewer a running crew started, in the round it reviews. */
@@ -4777,10 +4919,12 @@ export interface CrewReviewer {
 }
 
 /**
- * A crew started from a prefab with reviewers that start at its builder's hand-off. The board runs its loop: at each
- * hand-off it starts that round's reviewers on the builder's branch, and once each has left a review it stops at ready
- * to merge, or hands the reviews back to the builder for the next round, up to its round limit. It passes on only what
- * its agents wrote, and approves, merges and draws nothing.
+ * A crew started from a prefab with members after its first, or a Your OK. The board runs its graph: each member's
+ * hand-off goes along its lines, to the members after it (a wait-for-all member taking them as one), a loop gate whose
+ * deciders' words send it back or on, a Your OK that waits for the user, or an end. For the built-ins: at each hand-off
+ * it starts that round's reviewers on the builder's branch, and once each has left a review it stops at ready to merge,
+ * or hands the reviews back to the builder for the next round, up to its round limit. It passes on only what its agents
+ * wrote, and approves, merges and draws nothing.
  */
 export interface Crew {
   /** Its id, which `crew:<id>` names. */
@@ -4789,9 +4933,11 @@ export interface Crew {
   zoneId: string | null;
   /** The orchestrator that started it, whose crew its reviewers join; null for the user. */
   startedBy: string | null;
-  /** Its builder's session. */
+  /** Its builder's session: its first member's, on the line from Your prompt. */
   builder: string;
+  /** Its first loop gate's round; 1 with none. */
   round: number;
+  /** Its first loop gate's limit: 0 for a gate with no limit, or none. */
   roundLimit: number;
   /** Whose turn it is: the builder's, the round's reviewers', or no one's once it stopped. */
   phase: 'building' | 'reviewing' | 'stopped';
@@ -4801,6 +4947,58 @@ export interface Crew {
   startedAt: string;
   stoppedAt: string | null;
   reviewers: CrewReviewer[];
+  /** Its loop gates, in its prefab's order: absent from a daemon before the board ran graphs. */
+  gates?: CrewGate[];
+  /** What it waits for now: a wait-for-all member's inputs, a loop gate's deciders, or the user at Your OK. */
+  waiting?: CrewWait[];
+  /** Changes in its crew worktree outside the paths of the member that made them, while open. */
+  clashes?: CrewClash[];
+  /** The last record of its crew worktree's uncommitted work, which Restore puts back; absent for none. */
+  record?: CrewRecord;
+}
+
+/**
+ * A change in a shared crew worktree outside its maker's paths: `by` changed `path`, which is `owner`'s (null: in
+ * nobody's paths). It stays open until the owner hands off after it, or, in nobody's paths, until it is gone.
+ */
+export interface CrewClash {
+  path: string;
+  /** The member that made it, null when the board can't tell. */
+  by: string | null;
+  owner: string | null;
+  at: string;
+}
+
+/** A record of a crew worktree's uncommitted work: when, at what, and the files it held. */
+export interface CrewRecord {
+  at: string;
+  /** What it was taken before: a member's turn, or its hand-off. */
+  why: string;
+  files: number;
+}
+
+/** A running crew's loop gate: its round and limit (null for none), and since when its round is under way. */
+export interface CrewGate {
+  /** Its id in the prefab. */
+  id: string;
+  round: number;
+  limit: number | null;
+  /** When the round's work first reached a decider; null between rounds. */
+  openedAt: string | null;
+}
+
+/**
+ * A wait in a running crew: at a wait-for-all `member` for the rest of its inputs, at a loop `gate` for its deciders'
+ * words, at a Your OK (`user`) for the user's Go on or Send back, or a `merge` into the crew worktree, at the member
+ * it is for, for the members mid-turn there. `at` is its id in the prefab; `missing` names what hasn't come (the user,
+ * at Your OK); `until` is when it goes on without them, or null for no timeout.
+ */
+export interface CrewWait {
+  kind: 'member' | 'gate' | 'user' | 'merge';
+  at: string;
+  since: string;
+  missing: string[];
+  until: string | null;
 }
 
 /** The most member rows a crew card grows for: a larger crew's rows scroll. */
@@ -5489,6 +5687,11 @@ export interface DaemonMethods {
   /** Mutes the agent's OS notifications, or unmutes them. Fails with `invalidParams` for an unknown agent. */
   'agent.setMuted': { params: SessionRef & { muted: boolean }; result: Agent };
   /**
+   * Pins the agent's tile expanded, or unpins it (`Agent.pinnedExpanded`). Fails with `invalidParams` for an unknown
+   * agent, and for a pin of one that is closed (`isClosed`), which has nothing left to show.
+   */
+  'agent.setPinnedExpanded': { params: SessionRef & { pinned: boolean }; result: Agent };
+  /**
    * Sets the agent's reasoning effort (`Agent.effort`), which it is started with from now on, and resolves with it and
    * when it takes it (`applies`). A live Claude agent takes it as the user would give it: `/effort <level>` typed at its
    * prompt between turns, now if it is at its prompt with nothing typed there, else once its turn ends and it is
@@ -5596,6 +5799,8 @@ export interface DaemonMethods {
    * takes it: now, once its turn ends, or when next started.
    */
   'orchestrator.setEffort': { params: { token?: string; sessionId: string; effort: Effort }; result: { agent: Agent; applies: EffortApplies } };
+  /** Pins the agent's tile expanded, or unpins it (`agent.setPinnedExpanded`, as the tile's Pin expanded does). Logged as `pin-expanded` or `unpin-expanded`. */
+  'orchestrator.pinExpanded': { params: { token?: string; sessionId: string; pinned: boolean }; result: Agent };
   /** Sets a ticket's watches (`ticket.setWatches`): of the ticket its chat or a helper `sessionId` names. */
   'orchestrator.setWatches': { params: { token?: string; sessionId: string } & TicketWatchChange; result: { agent: Agent } };
   /**
@@ -5820,6 +6025,25 @@ export interface DaemonMethods {
    * name of its own).
    */
   'orchestrator.savePrefab': { params: { token?: string; text: string; replace?: boolean; places?: PrefabPlaces }; result: LibraryPrefab };
+  /**
+   * Drafts a crew prefab for the user, from its `.crew.json` file's text, checked as `parsePrefab` reads an imported
+   * file, with the caller's assumptions (each a line, or a line and the id it is about). The draft is kept until the
+   * user opens or deletes it, and `prefabDraft.added` tells the app; nothing is saved, started or changed. At most
+   * `MAX_PREFAB_DRAFTS` wait at once. Any agent may call it, for itself.
+   */
+  'board.draftPrefab': { params: { token: string; text: string; assumptions?: unknown[] }; result: PrefabDraft };
+  /** The prefab drafts waiting for the user, oldest first, and any this release can't read, by id with why, to delete. The user's alone. */
+  'prefabDraft.list': { params: Record<string, never>; result: { drafts: PrefabDraft[]; unreadable: { id: string; reason: string }[] } };
+  /** Opens a draft for the user: the draft, and its drafter closed if it was started only to draft it. It stays a draft until saved or deleted. The user's alone. */
+  'prefabDraft.open': { params: { id: string }; result: PrefabDraft };
+  /** Deletes a draft, saved or discarded. The user's alone. */
+  'prefabDraft.remove': { params: { id: string }; result: null };
+  /**
+   * Asks an agent to draft a crew prefab from `description`: the agent `drafter` (a session id) by a message, which
+   * carries on with its own work after; without, a new agent (Claude, Sonnet) in `zoneId`, which closes once its
+   * draft is opened. The user's alone.
+   */
+  'prefabDraft.describe': { params: { description: string; drafter?: string; zoneId?: string }; result: { sessionId: string; name: string; started: boolean } };
   /** Removes a saved crew prefab. A built-in can't be removed; one with no such name fails. */
   'orchestrator.removePrefab': { params: { token?: string; name: string }; result: null };
   /**
@@ -5856,6 +6080,27 @@ export interface DaemonMethods {
    * its builder, as any other round's.
    */
   'orchestrator.crewRound': { params: { token?: string; crewId: string }; result: Crew };
+  /**
+   * The user's Go on at a crew's Your OK: what waits there goes on along its lines, with the user's note if they gave
+   * one. `input` names the Your OK, when more than one waits. The user's alone: an agent's call is refused.
+   */
+  'orchestrator.crewGoOn': { params: { crewId: string; input?: string; note?: string }; result: Crew };
+  /**
+   * The user's Send back at a crew's Your OK: their note goes to the agent whose work waits there, typed at its prompt,
+   * and the crew waits for its next hand-off. The user's alone.
+   */
+  'orchestrator.crewSendBack': { params: { crewId: string; input?: string; note: string }; result: Crew };
+  /**
+   * The user's Go on without, at a crew's wait-for-all member (`member`) or loop gate: it goes on now with what came,
+   * naming what is missing, as at its timeout. The user's alone.
+   */
+  'orchestrator.crewGoOnWithout': { params: { crewId: string; member: string }; result: Crew };
+  /**
+   * The user's Restore: puts back in a crew's shared worktree the uncommitted work a member's git may have wiped, from
+   * the newest record that holds work the worktree no longer has: each such file, and none changed or new since. The
+   * user's alone, while the crew runs.
+   */
+  'orchestrator.crewRestore': { params: { crewId: string }; result: Crew };
   /**
    * The orchestrators' activity log, newest first: `orchestratorId`'s alone if given, at most `limit`
    * (`DEFAULT_ACTIVITY_LIMIT`) lines, older than the line `before` (an id) if given, for the page after one read. Every
@@ -6487,6 +6732,8 @@ export const BOARD_CALLER_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMet
   'board.readTodos',
   'board.changeTodo',
   'board.openPullRequest',
+  // Only a draft for the user to open: nothing saved, started or changed.
+  'board.draftPrefab',
   'orchestrator.activity',
   'usage.get',
 ]);
@@ -6505,6 +6752,7 @@ export const ORCHESTRATOR_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMet
   'orchestrator.read',
   'orchestrator.interrupt',
   'orchestrator.setEffort',
+  'orchestrator.pinExpanded',
   'orchestrator.setWatches',
   'orchestrator.giveRole',
   'orchestrator.continueOnCredits',
@@ -6756,6 +7004,18 @@ export interface ClockTemplateRemovedEvent {
 }
 
 
+/** Sent to every client when an agent drafts a crew prefab. */
+export interface PrefabDraftAddedEvent {
+  type: 'prefabDraft.added';
+  draft: PrefabDraft;
+}
+
+/** Sent to every client when a prefab draft is deleted. */
+export interface PrefabDraftRemovedEvent {
+  type: 'prefabDraft.removed';
+  id: string;
+}
+
 /** Sent to every client when a connector is created or changed. */
 export interface ConnectorUpdatedEvent {
   type: 'connector.updated';
@@ -6924,6 +7184,8 @@ export type DaemonEvent =
   | SettingsUpdatedEvent
   | UsageUpdatedEvent
   | OrchestratorActivityEvent
+  | PrefabDraftAddedEvent
+  | PrefabDraftRemovedEvent
   | CaptureRequestedEvent;
 
 export const EVENT_METHOD = 'event';

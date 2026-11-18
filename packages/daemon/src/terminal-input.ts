@@ -21,8 +21,14 @@ const KEY_SEQUENCE = /^(?:\x1b\[[0-?]*[ -/]*[@-~]|\x1bO[\s\S]|\x1b[\s\S]?)/;
 /** Up, with or without a modifier: at a prompt it puts an earlier line from its history there. */
 const RECALL = /^\x1b(?:\[(?:1;\d+)?|O)A$/;
 
-/** Keys that end the line being typed: Enter submits it, Ctrl-C and Ctrl-U clear it. */
-const LINE_ENDED = /^[\r\x03\x15]$/;
+/** Keys that end the line being typed: Enter submits it, Ctrl-C clears it. */
+const LINE_ENDED = /^[\r\x03]$/;
+
+/**
+ * Ctrl-U, which the app sends for ⌘⌫ too: it clears the line up to the cursor, and only the wrapped row the cursor is
+ * on, so a draft of several lines (Shift+Enter, a paste), or one line long enough to wrap, keeps those before it.
+ */
+const CLEAR_LINE = '\x15';
 
 /** Ctrl-Y yanks text cut earlier back to the prompt, and Ctrl-V pastes an image there. */
 const PUTS_AT_PROMPT = /^[\x19\x16]$/;
@@ -57,7 +63,8 @@ function keysOf(data: string): Key[] {
 
 /**
  * The user's line at a prompt, as far as their keys tell: how many characters it holds, or `undefined` once the board
- * can't tell (a line recalled, the cursor moved, a word deleted), when it is held a draft until Enter, Ctrl-C or Ctrl-U.
+ * can't tell (a line recalled, the cursor moved, a word deleted, a second line begun), when it is held a draft until
+ * Enter or Ctrl-C. Ctrl-U ends only one it can count: one line, typed with the cursor at its end, on one row.
  */
 export interface Draft {
   length: number | undefined;
@@ -69,20 +76,42 @@ const UNSURE: Draft = { length: undefined };
 const grown = (draft: Draft | undefined, by: number): Draft =>
   draft === undefined ? { length: by } : { length: draft.length === undefined ? undefined : draft.length + by };
 
-/** The draft at a prompt after `key`, given the one before it. */
-function draftAfterKey(draft: Draft | undefined, key: Key): Draft | undefined {
+/**
+ * The columns of each row a prompt keeps for its own marks, not the user's text: Claude's `> ` and its box's sides,
+ * taken widely, with room to spare, as a row taken too wide leaves text behind.
+ */
+const PROMPT_MARGIN = 8;
+
+/**
+ * Whether a line of `length` characters, typed with the cursor at its end, sits on one row of a prompt `cols` wide
+ * (the narrowest a tile's terminal is taken to be, unknown): Ctrl-U clears only the cursor's wrapped row.
+ */
+const fitsOneRow = (length: number, cols = NARROWEST_PROMPT_COLUMNS): boolean => length < cols - PROMPT_MARGIN;
+
+/**
+ * The draft at a prompt after `key`, given the one before it. With `clearsAll`, Ctrl-U clears any draft, as the user's
+ * say over what is there (`draftAfterInput`); else only one the board can count, on one row of a prompt `cols` wide
+ * (`CLEAR_LINE`).
+ */
+function draftAfterKey(draft: Draft | undefined, key: Key, clearsAll = false, cols?: number): Draft | undefined {
   switch (key.kind) {
     case 'report':
       return draft;
     case 'text':
       return grown(draft, 1);
     case 'paste':
-      return key.text === '' ? draft : grown(draft, [...key.text].length);
+      if (key.text === '') return draft;
+      // A paste of several lines leaves the cursor on the last of them.
+      return /[\r\n]/.test(key.text) ? UNSURE : grown(draft, [...key.text].length);
     case 'sequence':
       // Any other moves the cursor or edits the line: what is left there, the board can't tell.
       return RECALL.test(key.key) || draft !== undefined ? UNSURE : undefined;
     case 'control':
       if (LINE_ENDED.test(key.key)) return undefined;
+      if (key.key === CLEAR_LINE) {
+        if (draft === undefined || clearsAll) return undefined;
+        return draft.length !== undefined && fitsOneRow(draft.length, cols) ? undefined : UNSURE;
+      }
       if (key.key === '\x7f' || key.key === '\b') {
         if (draft?.length === undefined) return draft;
         return draft.length > 1 ? { length: draft.length - 1 } : undefined;
@@ -94,16 +123,21 @@ function draftAfterKey(draft: Draft | undefined, key: Key): Draft | undefined {
 
 /**
  * The user's draft at the prompt after `data` is written to the terminal, given the one before it: typed or pasted
- * text, or a line recalled from history (Up), starts one; Enter, Ctrl-C or Ctrl-U ends it, and so does deleting each
- * character typed with Backspace, unless the cursor moved or the line was edited otherwise first.
+ * text, or a line recalled from history (Up), starts one; Enter or Ctrl-C ends it, and so do Ctrl-U and deleting each
+ * character typed with Backspace, unless the cursor moved, a second line was begun or the line was edited otherwise
+ * first, or the line wraps onto a second row of its prompt, `cols` wide. Ctrl-U then leaves a draft: it clears only the
+ * cursor's row, up to the cursor.
  */
-export const draftAfter = (draft: Draft | undefined, data: string): Draft | undefined => keysOf(data).reduce(draftAfterKey, draft);
+export const draftAfter = (draft: Draft | undefined, data: string, cols?: number): Draft | undefined =>
+  keysOf(data).reduce<Draft | undefined>((before, key) => draftAfterKey(before, key, false, cols), draft);
 
 /**
  * Whether the user has a draft at the prompt after `data` is written to the terminal, given whether they had one
- * before (`draftAfter`, its length unknown): so only Enter, Ctrl-C or Ctrl-U ends one.
+ * before (`draftAfter`, its length unknown): so only Enter, Ctrl-C or Ctrl-U ends one, as the user's own say over
+ * what is there.
  */
-export const draftAfterInput = (drafting: boolean, data: string): boolean => draftAfter(drafting ? UNSURE : undefined, data) !== undefined;
+export const draftAfterInput = (drafting: boolean, data: string): boolean =>
+  keysOf(data).reduce<Draft | undefined>((draft, key) => draftAfterKey(draft, key, true), drafting ? UNSURE : undefined) !== undefined;
 
 /** Whether `data` written to a terminal presses a key: anything but the focus and mouse reports a terminal sends of itself. */
 export const pressesKeys = (data: string): boolean => keysOf(data).some((key) => key.kind !== 'report');
@@ -120,14 +154,15 @@ export function endsInEnter(data: string): boolean {
 }
 
 /**
- * Whether `data` written at the prompt presses Enter on a draft: one the user had before it (`drafting`), or one it
- * starts before that Enter (`draftAfter`). Ctrl-C and Ctrl-U clear a draft first.
+ * Whether `data` written at the prompt presses Enter on a draft: one the user had before it (`drafting`: whether they
+ * had one, or the draft itself), or one it starts before that Enter (`draftAfter`). Ctrl-C clears a draft first, and
+ * so does Ctrl-U one the board can count on one row of a prompt `cols` wide.
  */
-export function submitsDraft(drafting: boolean, data: string): boolean {
-  let draft: Draft | undefined = drafting ? UNSURE : undefined;
+export function submitsDraft(drafting: boolean | Draft | undefined, data: string, cols?: number): boolean {
+  let draft: Draft | undefined = typeof drafting === 'object' ? drafting : drafting === true ? UNSURE : undefined;
   for (const key of keysOf(data)) {
     if (key.kind === 'control' && key.key === '\r' && draft !== undefined) return true;
-    draft = draftAfterKey(draft, key);
+    draft = draftAfterKey(draft, key, false, cols);
   }
   return false;
 }

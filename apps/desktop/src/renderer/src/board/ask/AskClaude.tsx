@@ -16,6 +16,7 @@ import { shapeData } from '../items/text-style';
 import { shapeWords } from '../items/shapes/sections';
 import { isSessionTile, isZone, repoName, type BoardNode } from '../tiles';
 import { isTyping } from '../../keys/typing';
+import { expandedTrace } from '../expanded-trace';
 import { answerSpots, captureZoom, selectionAsk, selectionSummary, type DiagramObject, type SelectionAsk } from './selection-diagram';
 
 /** What the popover asks to begin with. */
@@ -190,6 +191,7 @@ function AskClaudePopover({
     document.documentElement.classList.add(CAPTURING);
     for (const element of marked) element.classList.add(CAPTURED);
     try {
+      expandedTrace.noteView('askCapture');
       await setViewport({ x: CAPTURE_MARGIN - bounds.x * zoom, y: CAPTURE_MARGIN - bounds.y * zoom, zoom });
       await painted();
       const rect = { x: pane.left + CAPTURE_MARGIN, y: pane.top + CAPTURE_MARGIN, width: bounds.width * zoom, height: bounds.height * zoom };
@@ -197,6 +199,7 @@ function AskClaudePopover({
     } finally {
       for (const element of marked) element.classList.remove(CAPTURED);
       document.documentElement.classList.remove(CAPTURING);
+      expandedTrace.noteView('askCaptureBack');
       await setViewport(before);
     }
   };

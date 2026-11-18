@@ -1048,6 +1048,26 @@ describe('Claude agents', () => {
     await expect(client.call('agent.markSeen', { sessionId: 'nope' })).rejects.toMatchObject({ code: RPC_ERROR.invalidParams });
   });
 
+  it('pins and unpins it expanded, kept across a daemon restart; never an unknown agent, nor without a boolean', async () => {
+    const dataDir = tempDataDir();
+    const first = await agentDaemon('output', { dataDir });
+    const zone = await addZone(first.client, tempRepo());
+    const agent = await first.client.call('agent.spawn', { zoneId: zone.id, prompt: 'Go', ...SIZE });
+    expect(agent.pinnedExpanded).toBe(false);
+
+    expect((await first.client.call('agent.setPinnedExpanded', { sessionId: agent.sessionId, pinned: true })).pinnedExpanded).toBe(true);
+    await untilAgent(first.recorder, agent.sessionId, (known) => known.pinnedExpanded);
+    await first.daemon.stop();
+    const second = await agentDaemon('output', { dataDir });
+    expect((await second.client.call('agent.list'))[0]?.pinnedExpanded).toBe(true);
+    expect((await second.client.call('agent.setPinnedExpanded', { sessionId: agent.sessionId, pinned: false })).pinnedExpanded).toBe(false);
+    const refused = { code: RPC_ERROR.invalidParams };
+    await expect(second.client.call('agent.setPinnedExpanded', { sessionId: 'nope', pinned: true })).rejects.toMatchObject(refused);
+    await expect(
+      second.client.call('agent.setPinnedExpanded', { sessionId: agent.sessionId, pinned: 'yes' as unknown as boolean }),
+    ).rejects.toMatchObject(refused);
+  });
+
   it('refuses to mute an unknown agent, or without a boolean', async () => {
     const { client } = await agentDaemon('output');
     const zone = await addZone(client, tempRepo());
@@ -1899,6 +1919,65 @@ describe('an agent that exited', () => {
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(existsSync(screen)).toBe(false);
     expect((await client.call('session.list')).map((session) => session.id)).not.toContain(shellId);
+  });
+
+  it('keeps its pin expanded while its shell is open, and drops it once the shell exits: a closed agent can be pinned no more', async () => {
+    const { client, agent } = await exitedAgent();
+    const shellId = agent.shellSessionId!;
+    expect((await client.call('agent.setPinnedExpanded', { sessionId: agent.sessionId, pinned: true })).pinnedExpanded).toBe(true);
+
+    await client.call('session.write', { sessionId: shellId, data: 'exit\r' });
+
+    const now = async () => (await client.call('agent.list')).find((each) => each.sessionId === agent.sessionId)!;
+    await expect.poll(async () => { const a = await now(); return { shell: a.shellSessionId, pinned: a.pinnedExpanded }; }).toEqual({ shell: null, pinned: false });
+    await expect(client.call('agent.setPinnedExpanded', { sessionId: agent.sessionId, pinned: true })).rejects.toMatchObject({
+      code: RPC_ERROR.invalidParams,
+      message: expect.stringContaining('is closed'),
+    });
+    // Unpinning one is no harm.
+    expect((await client.call('agent.setPinnedExpanded', { sessionId: agent.sessionId, pinned: false })).pinnedExpanded).toBe(false);
+  });
+
+  it('drops its pin when it is closed paused, or exits with no folder for a shell to open in', async () => {
+    const { client, recorder } = await agentDaemon('waiting');
+    const zone = await addZone(client, tempRepo());
+    const spawnIdle = async () => {
+      const agent = await client.call('agent.spawn', { zoneId: zone.id, prompt: 'Pick a database', ...SIZE });
+      await recorder.waitFor((e): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'Stop');
+      expect((await client.call('agent.setPinnedExpanded', { sessionId: agent.sessionId, pinned: true })).pinnedExpanded).toBe(true);
+      return agent;
+    };
+
+    // Paused, it keeps its pin; closed paused, it never settles an exit, and drops it.
+    const paused = await spawnIdle();
+    await client.call('agent.pause', { sessionId: paused.sessionId });
+    expect((await untilAgent(recorder, paused.sessionId, (a) => a.state === 'hibernated')).pinnedExpanded).toBe(true);
+    await client.call('agent.stop', { sessionId: paused.sessionId });
+    await untilAgent(recorder, paused.sessionId, (a) => a.state !== 'hibernated' && !a.pinnedExpanded);
+
+    // Its folder gone, its pane drops into no shell, which nothing else would announce.
+    const homeless = await spawnIdle();
+    rmSync(homeless.cwd, { recursive: true, force: true });
+    await client.call('session.write', { sessionId: homeless.sessionId, data: '\x04' });
+    const closed = await untilAgent(recorder, homeless.sessionId, (a) => a.endedAt !== null && !a.pinnedExpanded);
+    expect(closed.shellSessionId).toBeNull();
+  });
+
+  it('drops the pin of an agent that closed as the daemon stopped, when it starts again', async () => {
+    const dataDir = tempDataDir();
+    const first = await agentDaemon('waiting', { dataDir });
+    const zone = await addZone(first.client, tempRepo());
+    const agent = await first.client.call('agent.spawn', { zoneId: zone.id, prompt: 'Pick a database', ...SIZE });
+    await first.recorder.waitFor((e): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'Stop');
+    await first.client.call('agent.setPinnedExpanded', { sessionId: agent.sessionId, pinned: true });
+    await first.daemon.stop();
+    // As an exit that landed while the daemon closed leaves it: ended by itself, its pane never settled into a shell.
+    const db = new DatabaseSync(daemonPaths(dataDir).database);
+    db.prepare('UPDATE sessions SET stopped_by_restart = 0 WHERE id = ?').run(agent.sessionId);
+    db.close();
+
+    const second = await agentDaemon('waiting', { dataDir, home: first.home });
+    expect((await second.client.call('agent.list')).find((a) => a.sessionId === agent.sessionId)).toMatchObject({ pinnedExpanded: false, shellSessionId: null });
   });
 
   it('ends its shell with it when it is deleted', async () => {

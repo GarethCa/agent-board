@@ -433,16 +433,6 @@ kbd {
   text-align: center;
 }
 
-/* Its crew lit while the orchestrator is focused: hovered or selected, or a chip naming it hovered. */
-.hybrid-tile-agent[data-crew-lit] {
-  box-shadow: var(--shadow-tile), 0 0 0 var(--space-1) var(--crew-halo);
-}
-
-/* While a crew is focused, the board's agent and shell tiles outside it dim. Notes, clocks and other items don't. */
-:root[data-crew-focus] .react-flow__node .hybrid-tile-agent:not([data-crew-lit]) {
-  opacity: 0.4;
-}
-
 /* "↳ from <orchestrator>" on an agent an orchestrator started, or one outside its crew frame. */
 .hybrid-tile-from {
   flex: none;
@@ -455,41 +445,10 @@ kbd {
   cursor: default;
 }
 
-/* An orchestrator's crew: a dashed frame round the agents it started, beside it, labelled on its top edge. */
-.crew-frame {
-  position: absolute;
-  box-sizing: border-box;
-  border: 1.5px dashed var(--crew-edge);
-  border-radius: var(--radius-xl);
-  pointer-events: none;
-  /* There, for its geometry, but shown only while its orchestrator is focused. */
-  opacity: 0;
-  transition: opacity var(--motion-fast) var(--ease-out);
-}
-
-.crew-frame[data-focused] {
-  opacity: 1;
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .crew-frame,
   .hybrid-tile-agent {
     transition: none;
   }
-}
-
-.crew-frame-label {
-  position: absolute;
-  top: calc(-1 * var(--space-2));
-  left: var(--space-2);
-  padding: 0 var(--space-1-25);
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--zone-color) var(--zone-fill-mix), var(--surface));
-  color: var(--accent-ink);
-  font-size: var(--font-size-2xs);
-  font-weight: var(--weight-bold);
-  line-height: var(--space-4);
-  white-space: nowrap;
 }
 
 /* A shelved zone's shelves, under its tiles: a caps heading per shelf, a calm card per stack on To do and Doing, a
@@ -1692,8 +1651,8 @@ kbd {
 }
 
 /* Finished tiers: a tile whose turn is over and asks nothing lies flat; a done one also steps back. Only its own shadow
-   goes: the Captain's, an orchestrator's and a lit crew's halos are drawn in box-shadow too, and stay. */
-.hybrid-tile-agent[data-flat]:not([data-orchestrator], [data-master], [data-crew-lit]) {
+   goes: the Captain's and an orchestrator's halos are drawn in box-shadow too, and stay. */
+.hybrid-tile-agent[data-flat]:not([data-orchestrator], [data-master]) {
   box-shadow: none;
 }
 
@@ -3714,9 +3673,10 @@ kbd {
  * pull request and age along the foot. No buttons at rest: hover or focus shows Expand and More in a tray in its corner
  * and its one action in the age's place. It looks the same at every zoom.
  */
+/* Its name, then its robot beside its line, then its foot: 8 from the name to the line, at least 8 from the line down. */
 .porthole-tile.hybrid-tile-agent {
   justify-content: flex-start;
-  gap: var(--space-1-25);
+  gap: var(--space-2);
   padding: var(--space-2-5) var(--space-3-5);
   border: none;
   border-radius: var(--radius-glance);
@@ -3725,17 +3685,18 @@ kbd {
   outline-color: transparent;
 }
 
-/* Done, it sits flat: no shadow, a hairline round it. A drop, a hand-off or its crew's halo still shows over it. */
-.porthole-tile.hybrid-tile-agent[data-glance='done']:not([data-drop-over], [data-job-drop], [data-handoff], [data-crew-lit], [data-orchestrator]) {
+/* Done, it sits flat: no shadow, a hairline round it. A drop, a hand-off or an orchestrator's halo still shows over it. */
+.porthole-tile.hybrid-tile-agent[data-glance='done']:not([data-drop-over], [data-job-drop], [data-handoff], [data-orchestrator]) {
   box-shadow: none;
   outline: 1px solid var(--border);
 }
 
-.porthole-head {
+/* Its robot's window beside its line, as a chat's avatar sits by what it says. */
+.porthole-body {
   display: flex;
-  align-items: center;
-  gap: var(--space-2-5);
-  min-height: var(--porthole-size);
+  align-items: flex-start;
+  gap: var(--space-3);
+  min-width: 0;
 }
 
 .porthole-port {
@@ -3782,35 +3743,31 @@ kbd {
   height: var(--space-4);
 }
 
-.porthole-about {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--space-1);
-  min-width: 0;
-}
-
 .porthole-name {
   display: flex;
   align-items: center;
   gap: var(--space-1);
-  max-width: 100%;
+  min-width: 0;
 }
 
-/* One size whatever its length, a step under the mock's, on up to two lines. */
+/* One size whatever its length, on one line, cut short with an ellipsis. */
 .porthole-tile .hybrid-tile-name {
+  display: block;
   min-width: 0;
-  padding-inline-end: var(--space-1);
+  overflow: hidden;
   font-size: var(--font-size-md-plus);
   font-weight: var(--weight-bold);
   line-height: var(--leading-snug);
   letter-spacing: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  -webkit-line-clamp: none;
 }
 
-/* Its state word and a reviewer's eye after it, on one line. */
+/* Its state word and a reviewer's eye after it, first in the foot, never cut short. */
 .porthole-state {
   display: inline-flex;
+  flex: none;
   align-items: center;
   gap: var(--space-1-25);
 }
@@ -3857,24 +3814,115 @@ kbd {
   color: var(--glance-problem-ink);
 }
 
-/* Up to two lines, in the room a two-line name leaves: fitted to the whole lines that fit. */
-.porthole-now {
-  display: -webkit-box;
-  flex: 0 1 auto;
-  min-height: 0;
-  overflow: hidden;
+/* A glance tile's line: the whole of it in a fixed box, its text a step smaller as it gets longer (use-shrinking-line.ts
+   sets the size of each step). Past the smallest it is clamped, with its full text in its tooltip. */
+.glance-line {
+  display: block;
+  flex: none;
+  height: var(--glance-line-box);
+  min-width: 0;
+  overflow: clip;
+  overflow-clip-margin: var(--space-0-5);
   color: var(--text-soft);
   font-size: var(--font-size-md);
   line-height: var(--space-4-5);
   overflow-wrap: anywhere;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
 }
 
-/* A command it asks to run, as the command. */
-.porthole-now[data-command] {
+.glance-line[data-command] {
   font-family: var(--font-mono);
   font-size: var(--font-size-sm);
+  line-height: var(--glance-line-tight);
+}
+
+.glance-line[data-over] {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+}
+
+/* Beside its robot, the line takes the rest of the row (after .glance-line, whose flex it overrides). */
+.glance-line.porthole-line {
+  flex: 1 1 0;
+}
+
+/* A foot's corner: its age, and its action laid in the same cell, so the cell is as wide as the wider of them and the
+   chips give way before they reach the action. A long age shortens to the action's width, with an ellipsis. */
+:is(.porthole-corner, .shelf-tile-corner) {
+  position: relative;
+  display: grid;
+  flex: 0 1 auto;
+  grid-template-columns: auto;
+  align-items: center;
+  justify-items: end;
+  min-width: 0;
+  margin-inline-start: auto;
+}
+
+:is(.porthole-corner, .shelf-tile-corner) > * {
+  grid-area: 1 / 1;
+}
+
+.porthole-corner {
+  grid-template-rows: 100%;
+  height: var(--space-5);
+}
+
+/* At rest its action, hidden, stands out of the cell's way, so the age and the chips have the room. Shown (hover, focus,
+   selection, an open ask or menu), it takes the cell: the cell never shrinks below it, and the age takes the action's
+   width, not its own, shortening to it with an ellipsis. */
+:is(.porthole-action, .shelf-tile-act) {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  translate: 0 -50%;
+}
+
+.porthole-tile:is(:hover, :focus-within) .porthole-action,
+.react-flow__node.selected .porthole-tile .porthole-action,
+.porthole-action:has([data-state='open']),
+.shelf-tile:is(:hover, :focus-within) .shelf-tile-act,
+.react-flow__node.selected .shelf-tile .shelf-tile-act,
+.shelf-tile-act:has([data-state='open']) {
+  position: static;
+  translate: none;
+}
+
+.porthole-tile:is(:hover, :focus-within) .porthole-corner:has(> .porthole-action),
+.react-flow__node.selected .porthole-tile .porthole-corner:has(> .porthole-action),
+.porthole-corner:has(> .porthole-action [data-state='open']),
+.shelf-tile:is(:hover, :focus-within) .shelf-tile-corner:has(> .shelf-tile-act),
+.react-flow__node.selected .shelf-tile .shelf-tile-corner:has(> .shelf-tile-act),
+.shelf-tile-corner:has(> .shelf-tile-act [data-state='open']) {
+  flex-shrink: 0;
+}
+
+.porthole-tile:is(:hover, :focus-within) .porthole-corner:has(> .porthole-action) > .porthole-age,
+.react-flow__node.selected .porthole-tile .porthole-corner:has(> .porthole-action) > .porthole-age,
+.shelf-tile:is(:hover, :focus-within) .shelf-tile-corner:has(> .shelf-tile-act) > .shelf-tile-age,
+.react-flow__node.selected .shelf-tile .shelf-tile-corner:has(> .shelf-tile-act) > .shelf-tile-age {
+  width: 0;
+  min-width: 100%;
+  text-align: end;
+}
+
+@media (hover: none) {
+  :is(.porthole-action, .shelf-tile-act) {
+    position: static;
+    translate: none;
+  }
+
+  :is(.porthole-corner:has(> .porthole-action), .shelf-tile-corner:has(> .shelf-tile-act)) {
+    flex-shrink: 0;
+  }
+}
+
+/* In a full foot or band, its crew's flags and its other jobs give way too, so the corner stays inside it (scoped under
+   .glance-tile to win over the later rule that keeps them whole elsewhere). */
+.glance-tile :is(.porthole-meta, .shelf-tile-band) :is(.glance-tile-crew-flags, .glance-tile-more) {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .porthole-meta {
@@ -3886,7 +3934,11 @@ kbd {
   margin-top: auto;
 }
 
+/* Its chips shorten before its state word does, never past a few characters, clipped at their edge so they never run under the next. */
 .porthole-meta .ui-chip {
+  flex: 0 1 auto;
+  min-width: var(--space-7);
+  overflow: hidden;
   border-radius: var(--radius-pill);
 }
 
@@ -3899,14 +3951,17 @@ kbd {
 }
 
 .glance-tile .glance-tile-repo {
-  flex-shrink: 1;
+  flex: 0 1000 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .porthole-age {
-  margin-inline-start: auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: var(--muted);
   font-size: var(--font-size-xs);
   font-variant-numeric: tabular-nums;
@@ -3945,11 +4000,9 @@ kbd {
   height: var(--icon-sm);
 }
 
-/* Its one action, in its foot's corner, over the age: filled when it wants the user, quiet otherwise. */
+/* Its one action, in its foot's corner in the age's place: filled when it wants the user, quiet otherwise. */
 .porthole-action {
-  position: absolute;
-  right: var(--space-3);
-  bottom: var(--space-2-5);
+  display: flex;
 }
 
 .porthole-action .ui-button[data-size='xs'] {
@@ -3977,6 +4030,12 @@ kbd {
 .porthole-tile:has(.porthole-action):is(:hover, :focus-within) .porthole-age,
 .react-flow__node.selected .porthole-tile:has(.porthole-action) .porthole-age {
   visibility: hidden;
+}
+
+/* With its action showing, its PR chip gives way so the ticket keeps its room; the PR is still in its menu. */
+.porthole-tile:has(.porthole-action):is(:hover, :focus-within) .porthole-meta .ui-chip[data-mono],
+.react-flow__node.selected .porthole-tile:has(.porthole-action) .porthole-meta .ui-chip[data-mono] {
+  display: none;
 }
 
 @media (hover: none) {
@@ -4833,6 +4892,31 @@ kbd {
 
 .react-flow__node.dragging .expanded-tile-head {
   cursor: grabbing;
+}
+
+/* Pinned expanded: it stays where it is, so its header is no handle, and its pin says why. */
+.expanded-tile[data-pinned] .expanded-tile-head {
+  cursor: default;
+}
+
+.expanded-tile-head .expanded-tile-pin {
+  display: none;
+}
+
+.expanded-tile-head:is(:hover, :focus-within) .expanded-tile-pin {
+  display: inline-flex;
+}
+
+@media (hover: none) {
+  .expanded-tile-head .expanded-tile-pin {
+    display: inline-flex;
+  }
+}
+
+/* Pinned, the header's pin is shown on, in the accent: the button unpins it. */
+.expanded-tile-head .ui-icon-button.expanded-tile-unpin {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .expanded-tile-body {

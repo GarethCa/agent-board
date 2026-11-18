@@ -184,7 +184,7 @@ function sectionBody(home: SettingsHome, onError: OnError): ReactNode {
 const TEXT_ENTRY: ReadonlySet<string> = new Set(['text', 'search', 'url', 'email', 'number', 'password', 'tel']);
 
 /**
- * The Settings window: a sidebar of seven groups, each opening to list its sections, and a page per group with each
+ * The Settings window: a sidebar of groups, each opening to list its sections, and a page per group with each
  * section's controls in a box under its heading. A section in the sidebar opens its group's page scrolled to it. The
  * window opens on the pane it was asked for (`initial`, from Settings… elsewhere in the app), else the one it last
  * showed, and shows another whenever it is asked again while open.
@@ -275,7 +275,7 @@ export function SettingsWindow({ initial }: { initial: string }) {
           const expanded = open.has(each.id);
           const sections = drawnSections(each, simplified);
           return (
-            <div key={each.id} className="settings-group" data-open={expanded}>
+            <div key={each.id} className="settings-group" data-group={each.id} data-open={expanded}>
               <button
                 type="button"
                 className="settings-group-head"
@@ -339,7 +339,7 @@ const count = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
 function FoundSections({ hits, query, onPick }: { hits: readonly SettingsHit[]; query: string; onPick(pane: SettingsPane): void }) {
   if (hits.length === 0) return <p className="settings-search-empty">No settings match.</p>;
   return SETTINGS_GROUPS.filter((group) => hits.some((hit) => hit.group === group)).map((group) => (
-    <div key={group.id} className="settings-group" data-open>
+    <div key={group.id} className="settings-group" data-group={group.id} data-open>
       <div className="settings-group-head" data-found>
         {GROUP_ICONS[group.id]}
         <span>{group.name}</span>

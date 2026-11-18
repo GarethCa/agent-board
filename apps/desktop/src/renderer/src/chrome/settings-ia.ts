@@ -1,8 +1,16 @@
-// Where every setting lives in the Settings window: eight groups in its sidebar, each a page of sections, and every
+// Where every setting lives in the Settings window: the groups in its sidebar, each a page of sections, and every
 // control in exactly one section. The window draws its sidebar and headings from here; searching settings reads the
 // same table, so a control that moves is still found by its label.
 
-export type SettingsGroupId = 'general' | 'board' | 'agents' | 'prefabs' | 'alerts' | 'usage' | 'accounts' | 'advanced';
+export type SettingsGroupId =
+  | 'general'
+  | 'board'
+  | 'agents'
+  | 'prefabs'
+  | 'alerts'
+  | 'usage'
+  | 'accounts'
+  | 'advanced';
 
 export interface SettingsSection {
   id: string;

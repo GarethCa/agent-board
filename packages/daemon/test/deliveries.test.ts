@@ -50,7 +50,13 @@ function memoryStore(): WaitingStore & { rows: KeptWaiting[] } {
  * Deliveries over the agents `rows`, on a fake clock, recording what is written, relaunched and announced. Each prompt
  * stands where `prompt` says.
  */
-function setup(rows: Row[], notReady?: string, waiting?: WaitingStore, draftHeldFor?: (sessionId: string) => number | undefined) {
+function setup(
+  rows: Row[],
+  notReady?: string,
+  waiting?: WaitingStore,
+  draftHeldFor?: (sessionId: string) => number | undefined,
+  userQueued?: (sessionId: string) => boolean,
+) {
   const writes: [string, string][] = [];
   const relaunches: { sessionId: string; prompt: string | undefined; why: string; codexSessionId: string | null | undefined }[] = [];
   const announced: { sessionId: string; handingOff: boolean }[] = [];
@@ -120,6 +126,7 @@ function setup(rows: Row[], notReady?: string, waiting?: WaitingStore, draftHeld
     submitConfirmMs: 1_000,
     ...(waiting === undefined ? {} : { waiting }),
     ...(draftHeldFor === undefined ? {} : { draftHeldFor }),
+    ...(userQueued === undefined ? {} : { userQueued }),
   });
 
   /** Moves the fake clock on by `ms` a millisecond at a time, letting what waits on each timer run before the next. */
@@ -1746,6 +1753,14 @@ describe('the user typing in an agent terminal', () => {
       ['a', '\r'],
     ]);
     expect(heard).toEqual(['typing', 'true']);
+  });
+
+  it('counts the user at the prompt while a line they sent mid-turn waits to be taken up, keys or none', () => {
+    const queued = { now: true };
+    const { deliveries } = setup([row('a')], undefined, undefined, undefined, () => queued.now);
+    expect(deliveries.userTyping('a')).toBe(true);
+    queued.now = false;
+    expect(deliveries.userTyping('a')).toBe(false);
   });
 
   it('holds what others send at a draft only as long as it is held, then tells clients again, so what waits is typed', async () => {

@@ -11,10 +11,16 @@ describe('submitsDraft', () => {
   it('is not Enter at an empty prompt or on a screen, nor a draft cleared before its Enter, nor text left unsent', () => {
     expect(submitsDraft(false, '\r')).toBe(false);
     expect(submitsDraft(false, '\rSay hi')).toBe(false);
-    expect(submitsDraft(true, '\x15\r')).toBe(false);
+    expect(submitsDraft({ length: 4 }, '\x15\r')).toBe(false);
+    expect(submitsDraft(false, 'Say hi\x15\r')).toBe(false);
     expect(submitsDraft(true, '\x03')).toBe(false);
     expect(submitsDraft(false, '\x1b[B\r')).toBe(false);
     expect(submitsDraft(false, '\x1b[200~one\rtwo\r\x1b[201~')).toBe(false);
+  });
+
+  it('is Enter after Ctrl-U on a draft the board can\'t count, which may leave some of it', () => {
+    expect(submitsDraft(true, '\x15\r')).toBe(true);
+    expect(submitsDraft(false, 'one\x1b\rtwo\x15\r')).toBe(true);
   });
 
   it('is Enter on a line recalled from history', () => {
@@ -64,14 +70,45 @@ describe('draftAfter', () => {
     expect(draftAfter(typed, '\x1b[200~ there\x1b[201~')).toEqual({ length: 8 });
   });
 
-  it('holds a draft it can no longer count until Enter, Ctrl-C or Ctrl-U: the cursor moved, a word deleted, a line recalled', () => {
+  it('holds a draft it can no longer count until Enter or Ctrl-C: the cursor moved, a word deleted, a line recalled', () => {
     for (const data of ['\x1b[D', '\x01', '\x17', '\x1b\x7f', '\t', '\x1b[3~']) {
       const unsure = draftAfter({ length: 2 }, data);
       expect(unsure, JSON.stringify(data)).toEqual({ length: undefined });
       expect(draftAfter(unsure, '\x7f\x7f\x7f')).toEqual({ length: undefined });
-      expect(draftAfter(unsure, '\x15')).toBeUndefined();
+      // Ctrl-U clears only up to the cursor, on its own line: what is left there, the board can't tell.
+      expect(draftAfter(unsure, '\x15')).toEqual({ length: undefined });
+      expect(draftAfter(unsure, '\x03')).toBeUndefined();
+      expect(draftAfter(unsure, '\r')).toBeUndefined();
     }
     expect(draftAfter(undefined, '\x1b[A\x7f')).toEqual({ length: undefined });
+  });
+
+  it('clears with Ctrl-U a draft of one line typed with the cursor at its end', () => {
+    expect(draftAfter({ length: 2 }, '\x15')).toBeUndefined();
+    expect(draftAfter(undefined, 'one line\x15')).toBeUndefined();
+    expect(draftAfter(undefined, '\x1b[200~pasted\x1b[201~\x15')).toBeUndefined();
+  });
+
+  it('keeps a line too long for one row of its prompt through Ctrl-U, which clears only the row the cursor is on', () => {
+    // 80 columns: a prompt's marks take some of each row.
+    expect(draftAfter({ length: 60 }, '\x15', 80)).toBeUndefined();
+    expect(draftAfter({ length: 71 }, '\x15', 80)).toBeUndefined();
+    expect(draftAfter({ length: 72 }, '\x15', 80)).toEqual({ length: undefined });
+    expect(draftAfter({ length: 150 }, '\x15', 80)).toEqual({ length: undefined });
+    // Enter on what is left of it sends that.
+    expect(submitsDraft({ length: 150 }, '\x15\r', 80)).toBe(true);
+    expect(submitsDraft({ length: 40 }, '\x15\r', 80)).toBe(false);
+    // Its width unknown, the prompt is taken to be a narrow one.
+    expect(draftAfter({ length: 11 }, '\x15')).toBeUndefined();
+    expect(draftAfter({ length: 30 }, '\x15')).toEqual({ length: undefined });
+  });
+
+  it('keeps a draft of several lines through Ctrl-U, which clears only the last of them (Shift+Enter, ⌘⌫)', () => {
+    expect(draftAfter(undefined, 'first\x1b\r\x1b\rsecond\x15')).toEqual({ length: undefined });
+    expect(draftAfter(undefined, 'first\x1b\r\x1b\r\x15')).toEqual({ length: undefined });
+    const pasted = draftAfter(undefined, '\x1b[200~one\rtwo\x1b[201~');
+    expect(pasted).toEqual({ length: undefined });
+    expect(draftAfter(pasted, '\x15')).toEqual({ length: undefined });
   });
 
   it('starts one on a yank or an image pasted at the prompt', () => {

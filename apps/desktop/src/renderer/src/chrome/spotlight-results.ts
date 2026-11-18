@@ -22,7 +22,8 @@ export type SpotlightSubject =
   | { kind: 'web'; url: string }
   | { kind: 'setting'; pane: string }
   | { kind: 'action'; action: SpotlightAction }
-  | { kind: 'crew'; prefab: string | null }
+  /** A crew from the prefab named, the library with none, or with `describe`, Describe a crew. */
+  | { kind: 'crew'; prefab: string | null; describe?: true }
   | { kind: 'filter'; prefix: FilterPrefix };
 
 /** A pull request a row opens: by its repo and number, and its page. */
@@ -310,14 +311,15 @@ export const newAgentLeads = (groups: readonly SpotlightGroup[]): boolean => !gr
 /** The prefabs whose name, or what it is for, holds `wanted`, and the library: `crew` alone finds them all. */
 function crewRows(wanted: string, prefabs: NonNullable<SpotlightSources['prefabs']>): SpotlightRow[] {
   const found: { score: number; row: SpotlightRow }[] = [];
-  const consider = (key: string, prefab: string | null, name: string, sub: string, also: string) => {
+  const consider = (key: string, prefab: string | null, name: string, sub: string, also: string, describe = false) => {
     const named = fuzzyMatch(wanted, name, true);
     const other = fuzzyMatch(wanted, also, true);
     const score = Math.max(named?.score ?? 0, (other?.score ?? 0) * FIELD_WEIGHTS.also);
-    if (score > 0) found.push({ score, row: { key, subject: { kind: 'crew', prefab }, name, sub, marks: named?.positions ?? [] } });
+    if (score > 0) found.push({ score, row: { key, subject: describe ? { kind: 'crew', prefab, describe } : { kind: 'crew', prefab }, name, sub, marks: named?.positions ?? [] } });
   };
   for (const { name, purpose } of prefabs) consider(`crew:${name}`, name, name, purpose, `crew prefab ${purpose}`);
   consider('crew-library', null, 'Crew library', 'Every crew prefab, to start, edit or make one', 'prefab team');
+  consider('crew-describe', null, 'Describe a crew…', 'An agent drafts a crew prefab from what you say', 'prefab draft team write', true);
   return found.sort((a, b) => b.score - a.score).map(({ row }) => row);
 }
 

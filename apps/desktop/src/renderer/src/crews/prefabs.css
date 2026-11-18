@@ -40,6 +40,10 @@ body:has(.prefab-board) .ui-toasts {
   fill: var(--warning);
 }
 
+.prefab-arrow-loop {
+  fill: var(--prefab);
+}
+
 .prefab-board-canvas {
   position: relative;
   flex: 1;
@@ -87,15 +91,42 @@ body:has(.prefab-board) .ui-toasts {
   margin-left: var(--space-1);
 }
 
+/* The canvas foot: the dock, the drawing hint and the sentence, in one column, so the dock rides up as the sentence wraps. */
+.prefab-board-foot {
+  position: absolute;
+  right: var(--space-4);
+  bottom: var(--island-inset);
+  left: var(--space-4);
+  z-index: var(--layer-chrome);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  pointer-events: none;
+}
+
+.prefab-board-foot > * {
+  pointer-events: auto;
+}
+
 /* + Agent and Fit, at the foot of the canvas, over the sentence. */
 .prefab-board-dock {
-  position: absolute;
-  bottom: calc(var(--island-inset) + var(--space-9));
-  left: 50%;
-  z-index: var(--layer-chrome);
   height: var(--island-height);
   padding: 0 var(--space-1-5);
-  translate: -50% 0;
+}
+
+.prefab-board-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+  text-align: center;
+}
+
+.prefab-board-dock-label {
+  padding: 0 var(--space-1-5);
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-bold);
 }
 
 .prefab-kind-face {
@@ -107,11 +138,6 @@ body:has(.prefab-board) .ui-toasts {
 
 /* The board in words, under it. */
 .prefab-board-sentence {
-  position: absolute;
-  right: var(--space-4);
-  bottom: var(--island-inset);
-  left: var(--space-4);
-  z-index: var(--layer-chrome);
   display: flex;
   justify-content: center;
   align-items: center;
@@ -121,7 +147,6 @@ body:has(.prefab-board) .ui-toasts {
   font-size: var(--font-size-sm);
   line-height: var(--leading-snug);
   text-align: center;
-  pointer-events: none;
 }
 
 .prefab-board-sentence > svg {
@@ -136,10 +161,11 @@ body:has(.prefab-board) .ui-toasts {
   font-weight: var(--weight-semibold);
 }
 
-/* Your prompt: a pill, where the crew starts. */
-.prefab-prompt {
+/* An input: a pill where work comes from (Your prompt, a queue, a ticket, a clock), waits (Your OK), or stops (an end). */
+.prefab-board-pill {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: var(--space-1-5);
   box-sizing: border-box;
   width: 100%;
@@ -149,20 +175,110 @@ body:has(.prefab-board) .ui-toasts {
   border-radius: var(--radius-pill);
   background: var(--raised);
   box-shadow: var(--shadow-tile);
-  color: var(--text);
+  color: var(--text-soft);
   font-size: var(--font-size-sm);
-  font-weight: var(--weight-semibold);
+  font-weight: var(--weight-bold);
+  white-space: nowrap;
   cursor: grab;
 }
 
-.prefab-prompt > svg {
+.prefab-board-pill > svg {
+  flex: none;
   width: var(--icon-sm);
   height: var(--icon-sm);
-  color: var(--accent-ink);
 }
 
-.prefab-prompt[data-selected] {
+.prefab-board-pill[data-kind='prompt'] {
   border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+/* Your OK: the needs-you amber, as the crew waits for you here. */
+.prefab-board-pill[data-kind='user'] {
+  border-color: var(--state-waiting);
+  background: var(--state-waiting-soft);
+  color: var(--state-waiting-ink);
+}
+
+.prefab-board-pill[data-kind='end'] {
+  padding-left: var(--space-4);
+  border-color: var(--success);
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.prefab-board-pill[data-selected] {
+  outline: var(--glance-ring-width) solid var(--accent);
+  outline-offset: var(--space-0-5);
+}
+
+.prefab-board-pill[data-warn] {
+  border-color: var(--warning);
+  border-style: dashed;
+}
+
+/* A loop gate: a pink diamond that asks "Again?", its rule on a chip above it. */
+.prefab-gate {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+}
+
+.prefab-gate-diamond {
+  position: absolute;
+  inset: 0;
+  border: var(--prefab-gate-edge) solid var(--prefab);
+  border-radius: var(--radius-sm);
+  background: var(--prefab-soft);
+  box-shadow: var(--shadow-tile);
+  rotate: 45deg;
+  scale: 0.72;
+}
+
+.prefab-gate[data-selected] .prefab-gate-diamond {
+  outline: var(--glance-ring-width) solid var(--accent);
+  outline-offset: var(--space-0-5);
+}
+
+.prefab-gate[data-warn] .prefab-gate-diamond {
+  border-color: var(--warning);
+  border-style: dashed;
+  outline: var(--glance-ring-width) solid var(--warning);
+  outline-offset: var(--space-0-5);
+}
+
+.prefab-gate-word {
+  position: relative;
+  color: var(--prefab-ink);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-heavy);
+}
+
+.prefab-gate-rule {
+  position: absolute;
+  bottom: calc(100% + var(--space-1));
+  left: 50%;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-0-5) var(--space-2);
+  border: var(--prefab-chip-edge) solid var(--prefab-edge);
+  border-radius: var(--radius-pill);
+  background: var(--prefab-soft);
+  color: var(--prefab-ink);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-bold);
+  white-space: nowrap;
+  translate: -50% 0;
+}
+
+.prefab-gate-rule > svg {
+  width: var(--icon-xs);
+  height: var(--icon-xs);
 }
 
 /* An agent: the board's own tile, filling its node. */
@@ -177,7 +293,117 @@ body:has(.prefab-board) .ui-toasts {
   outline: var(--glance-ring-width) solid var(--accent);
 }
 
-.react-flow__node.dragging :is(.prefab-agent, .prefab-prompt) {
+/* What an agent does with more than one line in: a badge over its top-left corner. */
+.prefab-join {
+  position: absolute;
+  top: calc(var(--space-3) * -1);
+  left: var(--space-2-5);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-0-5) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--raised);
+  box-shadow: var(--shadow-tile);
+  color: var(--text-soft);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-heavy);
+  white-space: nowrap;
+}
+
+/* A loop gate's, under its diamond, where its again line leaves it. */
+.prefab-join.prefab-gate-wait {
+  /* Right of the again line, which leaves from the diamond's foot. */
+  top: calc(100% + var(--space-1));
+  left: calc(50% + var(--space-2));
+}
+
+.prefab-join[data-join='each'] {
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.prefab-join > svg {
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+}
+
+/* Its brief, in its words, where the tile's line goes. */
+.prefab-brief {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text-soft);
+  font-style: italic;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+/* The branch it works on, where that matters. */
+.prefab-branch {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  margin-left: auto;
+  gap: var(--space-0-5);
+  padding: 0 var(--space-1-5);
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+  white-space: nowrap;
+}
+
+.prefab-branch[data-works='crew'] {
+  background: var(--surface);
+  color: var(--text-soft);
+}
+
+/* The tile's foot never runs past its edge, under a line's label or the next tile. Its start word says what starts
+ * the agent, so its tags shorten first, far faster, and the word only once they are short. */
+.prefab-agent :is(.porthole-meta, .shelf-tile-meta) {
+  overflow: hidden;
+}
+
+.prefab-agent .porthole-state {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.prefab-agent .porthole-word {
+  min-width: 0;
+}
+
+.prefab-agent :is(.porthole-meta, .shelf-tile-meta) > .ui-tag {
+  flex: 0 100 auto;
+  min-width: var(--space-6);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.prefab-word {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.prefab-branch > svg {
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+}
+
+/* An again line comes in under its agent: that dot shows only while a line is drawn. */
+.react-flow__handle.prefab-handle-back {
+  opacity: 0;
+}
+
+.react-flow.connecting .react-flow__handle.prefab-handle-back,
+.react-flow__handle.prefab-handle-back.connected {
+  opacity: 1;
+}
+
+.react-flow__node.dragging :is(.prefab-agent, .prefab-board-pill, .prefab-gate) {
   cursor: grabbing;
 }
 
@@ -197,6 +423,17 @@ body:has(.prefab-board) .ui-toasts {
 .prefab-line {
   stroke: var(--muted);
   stroke-width: var(--flow-edge-width);
+}
+
+/* A loop gate's again line: dashed in the gate's pink, under the loop; a done line in done's green; a lead's dotted. */
+.prefab-line[data-kind='again'] {
+  stroke: var(--prefab);
+  stroke-dasharray: 7 5;
+}
+
+.prefab-line[data-kind='lead'] {
+  stroke-dasharray: 2 5;
+  stroke-linecap: round;
 }
 
 .prefab-line[data-warn] {
@@ -219,6 +456,16 @@ body:has(.prefab-board) .ui-toasts {
   font-size: var(--font-size-xs);
   font-weight: var(--weight-semibold);
   pointer-events: none;
+}
+
+.prefab-line-label[data-kind='again'] {
+  border-color: var(--prefab-edge);
+  background: var(--prefab-soft);
+  color: var(--prefab-ink);
+}
+
+.prefab-line-label[data-kind='lead'] {
+  font-style: italic;
 }
 
 .prefab-line-label[data-selected] {
@@ -258,6 +505,31 @@ body:has(.prefab-board) .ui-toasts {
   color: var(--muted);
   font-size: var(--font-size-xs);
   font-weight: var(--weight-semibold);
+}
+
+.prefab-side-hint {
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+  line-height: var(--leading-snug);
+}
+
+.prefab-side-inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1-5);
+  color: var(--text-soft);
+  font-size: var(--font-size-sm);
+}
+
+.prefab-side-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.prefab-number {
+  width: var(--size-prefab-number);
 }
 
 .prefab-side-note {
@@ -490,12 +762,14 @@ body:has(.prefab-board) .ui-toasts {
 
 .prefabs-setting-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
 }
 
+/* The intro keeps a readable width: the buttons wrap onto a row of their own below it rather than squeeze it. */
 .prefabs-setting-say {
-  flex: 1;
+  flex: 1 1 240px;
   color: var(--text-soft);
   font-size: var(--font-size-sm);
 }
@@ -663,4 +937,142 @@ body:has(.prefab-board) .ui-toasts {
 .prefabs-built-head:focus-visible {
   outline: var(--focus-ring-width) solid var(--accent);
   outline-offset: var(--focus-ring-offset);
+}
+
+/* The gallery's prefab boards: each in a box of its own, as wide as a window. */
+.gallery-prefab-boards {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  box-sizing: border-box;
+  width: var(--size-gallery-prefab-boards);
+  gap: var(--space-6);
+  padding: var(--space-4);
+}
+
+.gallery-prefab-built-ins {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.gallery-prefab-board {
+  position: relative;
+  height: var(--size-gallery-prefab-board);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.gallery-prefab-board[data-size='wide'] {
+  height: var(--size-gallery-prefab-board-wide);
+}
+
+/* A draft an agent made: the banner that it is not saved yet, and what its drafter assumed, under the bar. */
+.prefab-draft {
+  position: absolute;
+  top: calc(var(--island-inset) + var(--island-height) + var(--space-2));
+  left: var(--space-4);
+  z-index: var(--layer-chrome);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1-5);
+  width: var(--size-ask-claude);
+  max-height: calc(100% - 2 * (var(--island-inset) + var(--island-height) + var(--space-4)));
+  overflow-y: auto;
+}
+
+.prefab-draft-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-2-5);
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.prefab-draft-banner > span {
+  flex: 1;
+}
+
+.prefab-draft-banner > svg,
+.prefab-draft-assumption > svg {
+  flex: none;
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+}
+
+.prefab-draft-cap {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+}
+
+.prefab-draft-assumed {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.prefab-draft-assumption {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1-5);
+  width: 100%;
+  padding: var(--space-1-5) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--raised);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  line-height: var(--leading-snug);
+  text-align: left;
+}
+
+button.prefab-draft-assumption:hover {
+  background: var(--hover);
+}
+
+/* Describe a crew: what the crew should do, and who drafts it. */
+.describe-crew {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2-5);
+}
+
+.describe-crew-sub {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: var(--font-size-sm);
+}
+
+.describe-crew-text {
+  min-height: calc(var(--space-10) * 3);
+}
+
+.ui-dialog:has(.describe-crew) {
+  width: min(var(--size-crew-prompt), calc(100vw - var(--space-8)));
+}
+
+/* Settings › Prefabs › Drafts: what agents drafted, under your prefabs. */
+.prefabs-drafts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+
+.prefabs-drafts-head {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
 }

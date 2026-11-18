@@ -145,6 +145,18 @@ export function checkNamedTemplate(name: string, body: string): void {
   if (why !== undefined) throw invalidParams(`the ${name} role's template may not start an agent: ${why}`);
 }
 
+/**
+ * Throws `invalidParams` unless `body`, a crew prefab's text an agent starts on (`what`: a member's brief, or a clock's
+ * line), is stored and checked as a named role's template is: at most `MAX_ROLE_TEMPLATE_LENGTH`, the board's bound on
+ * a template, and text an orchestrator may send. It has no length limit of its own.
+ */
+export function checkAgentText(what: string, body: string): void {
+  if (body.trim() === '') throw invalidParams(`${what} is empty: leave it out for none`);
+  if (body.length > MAX_ROLE_TEMPLATE_LENGTH) throw invalidParams(`${what} is at most ${MAX_ROLE_TEMPLATE_LENGTH} characters, as a template is`);
+  const why = orchestratorTextRefusal(body);
+  if (why !== undefined) throw invalidParams(`${what} may not start an agent: ${why}`);
+}
+
 /** A template's body as given: a string of at most `MAX_ROLE_TEMPLATE_LENGTH`. */
 function templateBody(fields: Record<string, unknown>): string {
   const body = fields.body;

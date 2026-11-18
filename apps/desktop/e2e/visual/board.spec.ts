@@ -717,7 +717,7 @@ test('connections hidden: the hand-off and the arrow between two agents are not 
   }
 });
 
-test('an orchestrator expanded in place, its crew pushed aside in their frame, which its zone grows to hold', async () => {
+test('an orchestrator expanded in place, its crew pushed aside as one, which its zone grows to hold', async () => {
   needsBaselines('expanded-crew');
   const { dir, repo, env } = scratch('orchestrate');
   const dataDir = tempDataDir();
@@ -733,11 +733,9 @@ test('an orchestrator expanded in place, its crew pushed aside in their frame, w
     await expect(tile(window)).toHaveCount(3, { timeout: 2 * TURN_MS });
     // Waiting, not just done working: an agent still thinking, or idle before it asks, redraws its tile.
     for (const at of [0, 1, 2]) await expect(tile(window).nth(at)).toHaveAttribute('data-state', 'waiting', { timeout: 2 * TURN_MS });
-    await expect(window.getByTestId('crew-frame')).toHaveCount(1);
-    // Selected, so its crew's frame shows: at rest it waits for the orchestrator to be focused.
+    // Selected: nothing is drawn round its crew, and no other tile fades.
     const orchestrator = window.locator('[data-testid="agent-tile"][data-orchestrator]');
     await orchestrator.click({ position: { x: 4, y: 4 } });
-    await expect(window.getByTestId('crew-frame')).toHaveAttribute('data-focused', 'true');
     await tileAction(orchestrator, 'Expand in place');
     await expect(window.getByTestId('expanded-tile')).toHaveCount(1);
     // Its pane in view marks the orchestrator seen, but only while the app has the focus, which a background run may
@@ -756,7 +754,6 @@ test('an orchestrator expanded in place, its crew pushed aside in their frame, w
     await pinRandomText(window);
     const restorePointer = await ignorePointer(window);
     await settle(window);
-    await expect(window.getByTestId('crew-frame')).toHaveAttribute('data-focused', 'true');
     await expect.soft(window.locator('.board')).toHaveScreenshot('expanded-crew.png', { ...SHOT, mask: [screen(window)] });
     await restorePointer();
   } finally {

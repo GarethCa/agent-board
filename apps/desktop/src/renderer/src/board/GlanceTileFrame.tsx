@@ -7,7 +7,6 @@ import { useNeedsYouShows } from '../needs-you-setting';
 import { dropKey, dropOver as dropOverValue } from '../session/shell-moves';
 import { CalmButton } from './CalmTile';
 import { TileRobot } from './CommandFigure';
-import { crewsOf, hoverCrew, leaveCrew, useCrewHover, useCrewLit } from './crew-view';
 import { HandoffsContext } from './flow-edges';
 import { glanceFace, type GlanceFace } from './glance-tile';
 import { JobTicket, useHeldJobs } from './items/taken-jobs';
@@ -83,9 +82,6 @@ export function GlanceTileFrame({
   children,
 }: GlanceTileProps & { design: string; children(parts: GlanceParts): ReactNode }) {
   const shows = useNeedsYouShows();
-  useCrewHover(crew === undefined ? undefined : agent.sessionId);
-  const crewOf = crewsOf(agent.sessionId, crew !== undefined, from?.sessionId);
-  const crewLit = useCrewLit(crewOf);
   const tileActions = useContext(TileActionsContext);
   const { expand, openAgent, rename, sendUnsent, clearUnsent, typeFirstPrompt, trustFolder, resendUndelivered, clearUndelivered } = tileActions;
   const clickOpens = useContext(ClickOpensContext);
@@ -206,10 +202,6 @@ export function GlanceTileFrame({
         data-reviewer={agent.reviewOf !== null || undefined}
         data-orchestrator={crew !== undefined || undefined}
         data-master={agent.master || undefined}
-        data-crew={crewOf}
-        data-crew-lit={crewLit || undefined}
-        onMouseEnter={crew === undefined ? undefined : () => hoverCrew(agent.sessionId)}
-        onMouseLeave={crew === undefined ? undefined : () => leaveCrew(agent.sessionId)}
         title={card !== undefined ? undefined : clickOpens !== 'expand' ? 'Double-click to open its session window' : 'Double-click to expand it here'}
         onDoubleClick={open}
       >

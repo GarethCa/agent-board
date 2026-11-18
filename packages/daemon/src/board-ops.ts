@@ -61,6 +61,10 @@ import {
   type Zone,
   type WorkCategoryParams,
   type TicketWatchChange,
+  type PrefabAssumption,
+  type PrefabDraft,
+  MAX_PREFAB_FILE_BYTES,
+  RPC_ERROR,
 } from './protocol.ts';
 import { ticketWatchOf, watchesSummary } from './ticket-watches.ts';
 import { cutText } from './text-cut.ts';
@@ -1414,21 +1418,24 @@ export async function exportPrefab(session: BoardSession, name: string, out: str
 }
 
 /** The most a `.crew.json` file may be: a prefab is a few members, never more than this. */
-const MAX_PREFAB_FILE_BYTES = 1_000_000;
+
+/** A `.crew.json` file's text, as `prefab import` and `prefab draft` read it: at most `MAX_PREFAB_FILE_BYTES`. */
+function prefabFileText(path: string): string {
+  try {
+    if (statSync(path).size > MAX_PREFAB_FILE_BYTES) throw new BoardError(`${tilde(path)} is too big for a crew prefab file`);
+    return readFileSync(path, 'utf8');
+  } catch (error) {
+    if (error instanceof BoardError) throw error;
+    throw new BoardError(`can't read ${tilde(path)}: ${(error as Error).message}`);
+  }
+}
 
 /**
  * `prefab import`: reads a `.crew.json` file and shows it whole, as it would be added; with `add`, adds it to the
  * library (with `replace`, over a saved one of the same name).
  */
 export async function importPrefab(session: BoardSession, path: string, options: { add: boolean; replace: boolean }): Promise<BoardView> {
-  let text: string;
-  try {
-    if (statSync(path).size > MAX_PREFAB_FILE_BYTES) throw new BoardError(`${tilde(path)} is too big for a crew prefab file`);
-    text = readFileSync(path, 'utf8');
-  } catch (error) {
-    if (error instanceof BoardError) throw error;
-    throw new BoardError(`can't read ${tilde(path)}: ${(error as Error).message}`);
-  }
+  const text = prefabFileText(path);
   let prefab: CrewPrefab;
   try {
     prefab = parsePrefab(text);
@@ -1441,6 +1448,35 @@ export async function importPrefab(session: BoardSession, path: string, options:
   }
   const saved = await session.client.call('orchestrator.savePrefab', { token: session.token, text, ...(options.replace ? { replace: true } : {}) });
   return { text: `Added ${saved.name} to the crew prefab library:\n\n${whole}`, json: saved };
+}
+
+/** One `--assumed` line as the daemon takes it: `[<id>] <line>` is about the member, input or loop gate with that id. */
+function assumedLine(line: string): PrefabAssumption {
+  const about = /^\s*\[([^\]\s]+)\]\s*(.*)$/s.exec(line);
+  return about === null ? { text: line, about: null } : { text: about[2]!, about: about[1]! };
+}
+
+/**
+ * `prefab draft`: gives a `.crew.json` file to the user as a draft, read as `prefab import` reads it and checked as it
+ * is, with a line for each thing the caller assumed. Nothing is saved, started or changed.
+ */
+export async function draftPrefab(session: BoardSession, path: string, assumed: readonly string[]): Promise<BoardView> {
+  const token = agentToken(session, 'draft a crew prefab for the user');
+  const text = prefabFileText(path);
+  let draft: PrefabDraft;
+  try {
+    draft = await session.client.call('board.draftPrefab', { token, text, assumptions: assumed.map(assumedLine) });
+  } catch (error) {
+    if (!(error instanceof DaemonRpcError) || error.code !== RPC_ERROR.invalidParams) throw error;
+    throw new BoardError(`${tilde(path)}: ${error.message}`);
+  }
+  const lines = draft.assumptions.map((each) => `  - ${each.about === null ? '' : `[${each.about}] `}${each.text}`);
+  return {
+    text:
+      `Drafted ${draft.prefab.name} for the user: they open it on its board, then save it or delete it.` +
+      (lines.length === 0 ? '' : `\nWhat you assumed:\n${lines.join('\n')}`),
+    json: draft,
+  };
 }
 
 /** `prefab remove`: removes a prefab the library saved. */
@@ -1514,14 +1550,22 @@ const CREW_STOP_WORDS: Record<CrewStop, string> = {
   stopped: 'stopped',
   merged: 'merged, its agents closed',
   'builder-gone': 'stopped: its builder is gone',
+  done: 'done, its agents closed',
 };
 
 /** A crew in lines: its state, its builder, and each round's reviewers with what they said. */
 function crewLines(crew: Crew, name: (sessionId: string) => string): string[] {
+  // A round limit of 0 is a loop gate with none.
+  const of = crew.roundLimit === 0 ? '' : ` of ${crew.roundLimit}`;
+  const reached = crew.roundLimit === 0 ? crew.round : Math.min(crew.round, crew.roundLimit);
   const state =
     crew.stopped === null
-      ? `round ${crew.round} of ${crew.roundLimit}, ${crew.phase === 'building' ? 'building' : 'reviewing'}${crew.needsYou ? ', needs you' : ''}`
-      : `${CREW_STOP_WORDS[crew.stopped]} after round ${Math.min(crew.round, crew.roundLimit)} of ${crew.roundLimit}`;
+      ? `round ${crew.round}${of}, ${crew.phase === 'building' ? 'building' : 'reviewing'}${crew.needsYou ? ', needs you' : ''}`
+      : `${CREW_STOP_WORDS[crew.stopped]} after round ${reached}${of}`;
+  const waits = (crew.waiting ?? []).map(
+    (wait) =>
+      `  waiting: ${wait.kind === 'user' ? `your OK (${wait.at})` : `${wait.kind === 'gate' ? `loop gate ${wait.at}` : wait.kind === 'merge' ? `the merge for ${wait.at}` : wait.at} for ${wait.missing.join(', ')}`}${wait.until === null ? '' : `, until ${wait.until}`}`,
+  );
   const said = (reviewer: CrewReviewer) =>
     reviewer.verdict === null
       ? reviewer.blockers === null ? 'reviewing' : 'left no verdict'
@@ -1530,6 +1574,7 @@ function crewLines(crew: Crew, name: (sessionId: string) => string): string[] {
     `crew:${crew.id}  ${crew.prefab}  ${state}`,
     `  builder: ${name(crew.builder)}`,
     ...crew.reviewers.map((reviewer) => `  round ${reviewer.round}: ${reviewer.member} ${name(reviewer.sessionId)} (${said(reviewer)})`),
+    ...waits,
   ];
 }
 
@@ -1725,6 +1770,20 @@ export async function setAgentEffort(session: BoardSession, ref: string, effort:
   return {
     text: `Set ${effort} effort, taken ${EFFORT_APPLIES[applies]}: ${fresh.line}`,
     json: { ...agentJson(fresh.refs, fresh.agent, session.caller), applies },
+  };
+}
+
+/**
+ * `expand --pin` / `--unpin`: pins the agent's tile expanded, or unpins it, as its tile's Pin expanded does. Pinned, it
+ * stays expanded where it is, at its size, and opens again by itself; nothing collapses, moves or resizes it.
+ */
+export async function pinAgentExpanded(session: BoardSession, ref: string, pinned: boolean): Promise<BoardView> {
+  const { token, agent } = await orchestratorTarget(session, ref);
+  await session.client.call('orchestrator.pinExpanded', { token, sessionId: agent.sessionId, pinned });
+  const fresh = await freshAgentLine(session, agent.sessionId);
+  return {
+    text: `${pinned ? 'Pinned expanded: it stays open where it is until unpinned' : 'Unpinned: it may be collapsed, moved and resized again'}: ${fresh.line}`,
+    json: agentJson(fresh.refs, fresh.agent, session.caller),
   };
 }
 

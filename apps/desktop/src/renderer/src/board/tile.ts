@@ -62,8 +62,11 @@ export interface TileActions {
   expand(nodeId: string): void;
   /** Unfolds a closed agent's chip to its full tile (`open`), or folds the tile back to its chip. */
   setFolded(nodeId: string, folded: boolean): void;
-  /** Returns the expanded tile to compact; its session keeps running. A ticket tile in the terminal view goes to its card. */
-  collapse(nodeId: string): void;
+  /**
+   * Returns the expanded tile to compact; its session keeps running. A ticket tile in the terminal view goes to its card.
+   * `via` names the way the user collapsed it, for the expanded-tile trace.
+   */
+  collapse(nodeId: string, via?: string): void;
   /** Switches a ticket tile to its card, its terminal or its board (by node id); it keeps that view. */
   setTicketView(nodeId: string, view: TicketView): void;
   /** Zooms into the ticket's own board (by its chat's session id): its chat and helpers as tiles, beside its notes. */
@@ -107,6 +110,8 @@ export interface TileActions {
   scheduleAgent(agent: Agent): void;
   /** Mutes the agent's OS notifications, or unmutes them. */
   setMuted(sessionId: string, muted: boolean): void;
+  /** Pins the agent's tile expanded, expanding it, or unpins it. */
+  setPinnedExpanded(sessionId: string, pinned: boolean): void;
   /** Sets the agent's reasoning effort: typed at its prompt between turns, or kept for its next restart, as it can. */
   setEffort(sessionId: string, effort: Effort | null): void;
   /** Changes a ticket's watches from its tile's Watches menu: the kinds named and how often. */
@@ -213,6 +218,7 @@ export const TileActionsContext = createContext<TileActions>({
   linkIssue: () => {},
   scheduleAgent: () => {},
   setMuted: () => {},
+  setPinnedExpanded: () => {},
   setEffort: () => {},
   setWatches: () => {},
   readWatches: () => {},

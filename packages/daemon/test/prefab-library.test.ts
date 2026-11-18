@@ -6,6 +6,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import { fakeHarnessEnv, McpClient } from '@agent-board/fake-harness';
 import { BUILT_IN_PREFABS, prefabFile } from '../src/crew-prefabs.ts';
+import { graphFromStarts } from '../src/prefab-graph.ts';
 import { MAX_PURPOSE_LENGTH, RPC_ERROR, type CrewPrefab, type DaemonEvent, type HookEvent } from '../src/protocol.ts';
 import { connectTestClient, recordEvents, startTestDaemon, TEST_CLI_LAUNCHER, tempDataDir, tempRepo } from './helpers.ts';
 
@@ -72,7 +73,7 @@ describe('the crew prefab library', () => {
     ]);
 
     const saved = await setup.client.call('orchestrator.savePrefab', { text: prefabFile(pair()) });
-    expect(saved).toEqual({ ...pair(), builtIn: false, editedAt: expect.any(String) });
+    expect(saved).toEqual({ ...pair(), ...graphFromStarts(pair()), builtIn: false, editedAt: expect.any(String) });
 
     await setup.daemon.stop();
     const again = await prefabDaemon(setup.dataDir);
@@ -97,6 +98,13 @@ describe('the crew prefab library', () => {
       code: RPC_ERROR.invalidParams,
       message: expect.stringContaining('place'),
     });
+  });
+
+  it('keeps where each input and loop gate of its graph sits, beside its agents', async () => {
+    const { client } = await prefabDaemon();
+    const places = { impl: { x: 0, y: 0 }, prompt: { x: -200, y: 40 }, loop: { x: 480, y: 30 }, end: { x: 600, y: 40 } };
+    const saved = await client.call('orchestrator.savePrefab', { text: prefabFile(pair()), places });
+    expect(saved.places).toEqual(places);
   });
 
   it('refuses a name it has, in any case, unless replaced; and never a built-in’s', async () => {
@@ -130,12 +138,12 @@ describe('the crew prefab library', () => {
     await setup.client.call('orchestrator.savePrefab', { text: prefabFile(pair()) });
     // As an earlier release might have saved it, reading looser than this one.
     const db = new DatabaseSync(join(setup.dataDir, 'agent-board.db'));
-    db.prepare("INSERT INTO crew_prefabs (name, body) VALUES ('Old', ?)").run(prefabFile(pair({ name: 'Old' })).replace('"roundLimit": 2', '"roundLimit": 99'));
+    db.prepare("INSERT INTO crew_prefabs (name, body) VALUES ('Old', ?)").run(prefabFile(pair({ name: 'Old' })).replace('"cap": 2', '"cap": 0'));
     db.close();
 
     const library = await setup.client.call('orchestrator.prefabs', {});
     expect(library.prefabs.map((each) => each.name)).toContain('Pair');
-    expect(library.unreadable).toEqual([{ name: 'Old', reason: 'the round limit is a whole number from 1 to 10' }]);
+    expect(library.unreadable).toEqual([{ name: 'Old', reason: "loop gate loop's cap is a whole number from 1, or null for none" }]);
     await expect(setup.client.call('orchestrator.startPrefab', { name: 'old', zoneId: setup.zone.id })).rejects.toMatchObject({
       message: expect.stringContaining("the crew prefab Old can't be read"),
     });
@@ -374,7 +382,7 @@ describe('starting a crew from a prefab', () => {
     );
 
     expect(await mcp.callTool('prefabs', {})).toMatchObject({ isError: false, text: expect.stringMatching(/^Solo agent +built-in/) });
-    expect(await mcp.callTool('prefabs', { name: 'lead and crew' })).toMatchObject({ text: expect.stringContaining('"agentBoardCrewPrefab": 1') });
+    expect(await mcp.callTool('prefabs', { name: 'lead and crew' })).toMatchObject({ text: expect.stringContaining('"agentBoardCrewPrefab": 2') });
     expect(await mcp.callTool('new_agent', { prompt: 'Fix it', prefab: 'Implementer + reviewer' })).toMatchObject({
       isError: false,
       text: expect.stringContaining("review: starts on impl's branch each time impl hands off, a fresh one each round"),

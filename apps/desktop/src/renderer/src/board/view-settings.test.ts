@@ -71,7 +71,7 @@ describe('the board view settings', () => {
     expect(viewSettings()).toEqual(DEFAULT_VIEW_SETTINGS);
   });
 
-  it('ignore a crew look saved before crews showed only on focus', () => {
+  it('ignore a crew look saved by an older version', () => {
     restoreViewSettings({ crewLook: 'chips' } as never);
     expect(viewSettings()).toEqual(DEFAULT_VIEW_SETTINGS);
   });

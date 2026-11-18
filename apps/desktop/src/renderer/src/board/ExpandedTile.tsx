@@ -2,7 +2,7 @@ import { useContext, useRef, useState, type KeyboardEvent, type MouseEvent, type
 import { NodeResizeControl, ResizeControlVariant, type ControlPosition } from '@xyflow/react';
 import { shortIssueId, TRACKER_PROVIDERS, type Agent, type ExternalSession, type PullRequest, type Shell } from '@agent-board/daemon/protocol';
 import { paneIds } from '@agent-board/daemon/pane-layout';
-import { Folder, GitBranch, Maximize2, Minimize2, Play, SquareArrowOutUpRight, Trash2 } from 'lucide-react';
+import { Folder, GitBranch, Maximize2, Minimize2, Pin, Play, SquareArrowOutUpRight, Trash2 } from 'lucide-react';
 import { leaveToTile, useLeaveKeys } from '../keys/escape-hatch';
 import { useExtendedShortcuts } from '../keys/extended-shortcuts';
 import { pressed } from '../keys/registry';
@@ -54,7 +54,8 @@ export function ExpandedTile(props: TileProps & { parent: ExpandedParent }) {
 }
 
 function ExpandedTileShown({ id, tile, parent }: TileProps & { parent: ExpandedParent }) {
-  const { collapse, expand, resizeExpanded, maximise, popOutAgent, popOutShell, deleteAgent, deleteShell, dismissExternal, openLink, openPullRequest } = useContext(TileActionsContext);
+  const { collapse, expand, resizeExpanded, maximise, popOutAgent, popOutShell, deleteAgent, deleteShell, dismissExternal, openLink, openPullRequest, setPinnedExpanded } =
+    useContext(TileActionsContext);
   const shows = useNeedsYouShows();
   const simplified = useSimplified();
   // The header takes the focus (⌘J's way out) only with the extended keys on; off, a click on it leaves the focus as before.
@@ -72,7 +73,7 @@ function ExpandedTileShown({ id, tile, parent }: TileProps & { parent: ExpandedP
   const shelves = content !== undefined && showsShelves(content);
   const root = useRef<HTMLElement>(null);
   // Esc from its header (⌘J has the focus there), or ⌘Esc from anywhere in it: collapsed, the focus on its tile.
-  useLeaveKeys(root, () => collapse(id));
+  useLeaveKeys(root, () => collapse(id, 'leaveKeys'));
   // A tile too narrow for the shelves beside a terminal opens them on the rail, for itself alone: the choice every window
   // and tile shares is not changed by it.
   const [detailsCollapsed, setDetailsCollapsed] = useSidebarCollapsed(shelves, root, () => isNarrowTile(root.current?.offsetWidth ?? EXPANDED_SIZE.width));
@@ -99,11 +100,16 @@ function ExpandedTileShown({ id, tile, parent }: TileProps & { parent: ExpandedP
 
   const harness = tile.harness ?? 'shell';
   const name = agent?.name ?? shell?.name ?? external?.name ?? tile.label;
+  // Pinned expanded, it stays open where it is, at its size: no window, drag or resize takes it, and Unpin
+  // stands where Collapse was.
+  const pinned = agent?.pinnedExpanded === true;
+  const windowHint = pinned ? 'Pinned expanded: unpin it to open its window' : undefined;
   return (
     <section
       ref={root}
       className={agent ? frostedClasses('expanded-tile', agent) : 'expanded-tile'}
       data-testid="expanded-tile"
+      data-pinned={pinned || undefined}
       data-harness={harness}
       data-session-id={agent?.sessionId}
       data-shell-id={shell?.id}
@@ -125,6 +131,17 @@ function ExpandedTileShown({ id, tile, parent }: TileProps & { parent: ExpandedP
         {/* Its shelves hold the branch, issue and pull requests, as in its window: the header says them only while they are on the rail. */}
         {!(shelves && !detailsCollapsed) && <HeadFacts simplified={simplified} agent={agent} shell={shell} external={external} openLink={openLink} openPullRequest={openPullRequest} />}
         <span className="session-window-head-fill" />
+        {/* Shown on the header's hover or focus, in the fill's room, so the buttons after it never move. */}
+        {agent && !pinned && (
+          <IconButton
+            icon={<Pin />}
+            size="sm"
+            className="expanded-tile-pin nodrag"
+            aria-label="Pin expanded"
+            tooltip="Pin expanded: it stays open where it is, at this size"
+            onClick={() => setPinnedExpanded(agent.sessionId, true)}
+          />
+        )}
         {agent && <span className="session-window-chat-controls nodrag" ref={setChatControlsSlot} />}
         {shelves && <span className="session-window-shelf-controls nodrag" ref={setControlsSlot} />}
         {/* The Simplified header's toggle, as its window's: Classic's rail brings the shelves back by itself. */}
@@ -135,10 +152,23 @@ function ExpandedTileShown({ id, tile, parent }: TileProps & { parent: ExpandedP
             <GateControls agent={agent} visible />
           </span>
         )}
-        {content && <IconButton icon={<Maximize2 />} size="sm" aria-label="Maximise" tooltip="Maximise into its session window" onClick={() => maximise(tile)} />}
-        {popOut && <IconButton icon={<SquareArrowOutUpRight />} size="sm" aria-label="Pop out" tooltip="Into its own window" onClick={popOut} />}
+        {content && <IconButton icon={<Maximize2 />} size="sm" aria-label="Maximise" tooltip={windowHint ?? 'Maximise into its session window'} disabled={pinned} onClick={() => maximise(tile)} />}
+        {popOut && <IconButton icon={<SquareArrowOutUpRight />} size="sm" aria-label="Pop out" tooltip={windowHint ?? 'Into its own window'} disabled={pinned} onClick={popOut} />}
         {remove && <IconButton icon={<Trash2 />} size="sm" variant="danger" aria-label={remove.label} tooltip={remove.label} onClick={remove.run} />}
-        <IconButton icon={<Minimize2 />} size="sm" variant="secondary" aria-label="Collapse" tooltip="Back to its tile; the session keeps running" onClick={() => leaveToTile(root.current, () => collapse(id))} />
+        {/* Pinned, its pin, shown on, stands where Collapse was: the one way to unpin it from here. */}
+        {pinned ? (
+          <IconButton
+            icon={<Pin />}
+            size="sm"
+            variant="secondary"
+            className="expanded-tile-unpin"
+            aria-label="Unpin"
+            tooltip="Pinned expanded. Unpin: then it can be collapsed, moved and resized"
+            onClick={() => setPinnedExpanded(agent!.sessionId, false)}
+          />
+        ) : (
+          <IconButton icon={<Minimize2 />} size="sm" variant="secondary" aria-label="Collapse" tooltip="Back to its tile; the session keeps running" onClick={() => leaveToTile(root.current, () => collapse(id, 'button'))} />
+        )}
       </header>
       <div className="expanded-tile-body nodrag nowheel nopan">
         {CAPTURE_FRAME !== undefined ? (
@@ -154,7 +184,8 @@ function ExpandedTileShown({ id, tile, parent }: TileProps & { parent: ExpandedP
       </div>
       {agent && <CommandFigure agent={agent} />}
       {(agent ?? external) && <SubagentPerch harness={(agent ?? external)!.harness} subagents={(agent ?? external)!.subagents} />}
-      {[...EDGES, ...CORNERS].map((position) => {
+      {/* Pinned, it keeps its size. */}
+      {!pinned && [...EDGES, ...CORNERS].map((position) => {
         const corner = CORNERS.includes(position);
         return (
           <NodeResizeControl

@@ -838,14 +838,14 @@ describe('crew prefabs from the command line', () => {
     expect(listed.out).toMatch(/^Solo agent +built-in {2}agent {2}One agent/m);
     expect(listed.out).toMatch(/^Lead and crew +built-in {2}lead, impl, review/m);
     expect((await run(env, 'prefab', 'show', 'implementer + REVIEWER')).out).toContain(
-      "  review  reviewer · claude, starts at the builder's first hand-off\n\n{\n  \"agentBoardCrewPrefab\": 1,",
+      "  review  reviewer · claude, starts at the builder's first hand-off\n\n{\n  \"agentBoardCrewPrefab\": 2,",
     );
 
     const file = join(dir, 'pair.crew.json');
     expect(await run(env, 'prefab', 'export', 'Implementer + reviewer', '--out', file)).toMatchObject({ code: 0, out: expect.stringContaining('Wrote Implementer + reviewer to') });
     expect(await run(env, 'prefab', 'export', 'Implementer + reviewer', '--out', file)).toMatchObject({ code: 1, err: expect.stringContaining('exists already') });
     const text = JSON.parse(readFileSync(file, 'utf8'));
-    writeFileSync(file, JSON.stringify({ ...text, name: 'Pair', roundLimit: 4 }));
+    writeFileSync(file, JSON.stringify({ ...text, name: 'Pair', gates: [{ ...text.gates[0], cap: 4 }] }));
 
     const shown = await run(env, 'prefab', 'import', file);
     expect(shown.out).toContain('holds this crew prefab:\n\nPair: One builds');

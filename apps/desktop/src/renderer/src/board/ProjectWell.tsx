@@ -7,8 +7,6 @@ import { leastZoneSize, zoneGrid } from '@agent-board/daemon/board-layout';
 import { MIN_ZONE_SIZE, type ArrangeSpacing } from '@agent-board/daemon/protocol';
 import { Chip, ContextMenu, EditableName, Menu, useRenaming } from '../ui';
 import { useTechnicalDetails } from '../technical';
-import { CrewFramesContext } from './crew-view';
-import { CrewFrameBoxes } from './CrewFrameBoxes';
 import { FoldButton } from './FoldedZone';
 import { projectContextMenu, projectMenu, type ModelEntry, type ProjectMenuInput } from './menu-model';
 import { useMenuBarSection } from '../keys/menu-bar-bridge';
@@ -57,7 +55,6 @@ export function ProjectWell({ data: { zone, tileCount = 0, resizeMin, shelves, c
   const cancelClone = useContext(CancelCloneContext);
   const addIssue = useContext(AddIssueContext);
   const dropTarget = useContext(DropTargetContext) === zone.id;
-  const crews = useContext(CrewFramesContext).filter((frame) => frame.zoneId === zone.id && shelves === undefined && clusters === undefined);
   const summary = useContext(ProjectSummaryContext).get(zone.id);
   const technical = useTechnicalDetails();
   const renaming = useRenaming(zone.name, (name) => binding.rename(zone, name));
@@ -108,7 +105,6 @@ export function ProjectWell({ data: { zone, tileCount = 0, resizeMin, shelves, c
       style={{ '--zone-color': zone.color, '--zone-fill-pct': zone.fillOpacity ?? undefined } as CSSProperties}
       onContextMenu={onContextMenu}
     >
-      <CrewFrameBoxes frames={crews} />
       {shelves !== undefined && <ShelvesView zoneId={zone.id} view={shelves} />}
       {clusters !== undefined && <ClustersView zoneId={zone.id} view={clusters} />}
       {selected && lanesArea !== undefined && <LanesArea zoneId={zone.id} lanes={lanesArea} zone={{ width: width ?? zone.width, height: height ?? zone.height }} />}

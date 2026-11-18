@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { fakeHarnessEnv, McpClient } from '@agent-board/fake-harness';
 import { RPC_ERROR, type Agent, type AgentUpdatedEvent, type DaemonEvent } from '../src/protocol.ts';
 import { runBoardCommand } from '../src/board-cli.ts';
@@ -17,11 +17,11 @@ const USER_IDLE_MS = 400;
  * fake takes its first typed line as typed, then loses the `loseEnters` Enters after the next one, as a TUI still
  * redrawing does: a message sent then is left typed at its prompt (three are a send's), and the next Enter submits it.
  */
-async function sendDaemon(loseEnters = 3, log: (message: string) => void = () => {}) {
+async function sendDaemon(loseEnters = 3, log: (message: string) => void = () => {}, joinQueuedMs = 0) {
   const daemon = await startTestDaemon({
     log,
     worktreesDir: tempDataDir(),
-    agentEnv: fakeHarnessEnv({ scenario: 'orchestrate', home: tempDataDir(), idleNotifyMs: 200, loseEnters, loseEntersAfter: 1 }),
+    agentEnv: fakeHarnessEnv({ scenario: 'orchestrate', home: tempDataDir(), idleNotifyMs: 200, loseEnters, loseEntersAfter: 1, joinQueuedMs }),
     submitConfirmMs: 100,
     userIdleMs: USER_IDLE_MS,
   });
@@ -230,6 +230,67 @@ describe('a send while the user is typing at the prompt', () => {
     await connection.call('orchestrator.wait', { token, sessionIds: [worker.sessionId] });
 
     expect(await connection.call('orchestrator.send', { token, sessionId: worker.sessionId, text: 'Rename the file' })).toMatchObject({ delivery: 'started' });
+  });
+});
+
+/** How long the fake Claude stays busy after a turn's Stop before it takes the lines queued in it, as one prompt. */
+const JOIN_QUEUED_MS = 600;
+
+describe('a send queued until a turn ends that the user typed in', () => {
+  /** An agent at work on its first turn, sent `Rename the file` by its lead mid-turn: kept until that turn ends. */
+  async function sendMidTurn() {
+    const setup = await sendDaemon(0, () => {}, JOIN_QUEUED_MS);
+    const { lead, token, connection, worker } = await leadAndWorker(setup, 'Work slowly');
+    await vi.waitFor(async () => expect((await setup.client.call('agent.list')).find((a) => a.sessionId === worker.sessionId)!.state).toMatch(/^(running|thinking)$/), {
+      timeout: 5_000,
+    });
+    const queue = async () =>
+      expect(await connection.call('orchestrator.send', { token, sessionId: worker.sessionId, text: 'Rename the file' })).toMatchObject({ delivery: 'queued-after-turn' });
+    return { setup, lead, worker, queue };
+  }
+
+  it('waits for the line they sent mid-turn to start a turn of its own, then goes alone after it', async () => {
+    const { setup, lead, worker, queue } = await sendMidTurn();
+    await setup.client.call('session.write', { sessionId: worker.sessionId, data: 'my line\r' });
+    await queue();
+
+    await untilAgent(setup.recorder, worker.sessionId, (seen) => seen.lastMessage === 'Slow work done.');
+    const mine = await untilAgent(setup.recorder, worker.sessionId, (seen) => seen.lastMessage?.startsWith('Done: ') === true);
+    expect(mine.lastMessage).toBe('Done: my line.');
+    await untilAgent(setup.recorder, worker.sessionId, (seen) => seen.lastMessage === `Done: ${sentBy(lead, 'Rename the file')}.`);
+  });
+
+  it('waits on a line they typed mid-turn and have not sent, past its end, then goes after the one they send', async () => {
+    const { setup, lead, worker, queue } = await sendMidTurn();
+    await setup.client.call('session.write', { sessionId: worker.sessionId, data: 'my line' });
+    await queue();
+
+    await untilAgent(setup.recorder, worker.sessionId, (seen) => seen.lastMessage === 'Slow work done.');
+    await new Promise((resolve) => setTimeout(resolve, JOIN_QUEUED_MS + USER_IDLE_MS * 2));
+    expect(setup.recorder.screenText(worker.sessionId)).not.toContain('Rename the file');
+
+    await setup.client.call('session.write', { sessionId: worker.sessionId, data: ' here\r' });
+    const mine = await untilAgent(setup.recorder, worker.sessionId, (seen) => seen.lastMessage?.startsWith('Done: ') === true);
+    expect(mine.lastMessage).toBe('Done: my line here.');
+    await untilAgent(setup.recorder, worker.sessionId, (seen) => seen.lastMessage === `Done: ${sentBy(lead, 'Rename the file')}.`);
+  });
+
+  it('waits on a draft of several lines at its prompt after the turn, through a ⌘⌫ that clears only its last line', async () => {
+    const { setup, lead, worker, queue } = await sendMidTurn();
+    await setup.client.call('session.write', { sessionId: worker.sessionId, data: 'my line' });
+    await queue();
+
+    await untilAgent(setup.recorder, worker.sessionId, (seen) => seen.lastMessage === 'Slow work done.');
+    // Shift+Enter twice, a word begun on the third line, and ⌘⌫ (Ctrl-U) to take it back: the first line stays.
+    await setup.client.call('session.write', { sessionId: worker.sessionId, data: '\x1b\r\x1b\rand' });
+    await setup.client.call('session.write', { sessionId: worker.sessionId, data: '\x15' });
+    await new Promise((resolve) => setTimeout(resolve, JOIN_QUEUED_MS + USER_IDLE_MS * 2));
+    expect(setup.recorder.screenText(worker.sessionId)).not.toContain('Rename the file');
+
+    await setup.client.call('session.write', { sessionId: worker.sessionId, data: 'here\r' });
+    const mine = await untilAgent(setup.recorder, worker.sessionId, (seen) => seen.lastMessage?.startsWith('Done: ') === true);
+    expect(mine.lastMessage).toBe('Done: my line\n\nhere.');
+    await untilAgent(setup.recorder, worker.sessionId, (seen) => seen.lastMessage === `Done: ${sentBy(lead, 'Rename the file')}.`);
   });
 });
 

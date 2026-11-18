@@ -5,7 +5,6 @@ import {
   allowingOverlap,
   bringToFront,
   collapsedBetween,
-  collapseFront,
   collapseTile,
   EXPANDED_MAX_SIZE,
   EXPANDED_MIN_SIZE,
@@ -27,6 +26,9 @@ import {
   type ExpandedTiles,
   windowedExpanded,
   withoutOverlaps,
+  frontToCollapse,
+  keptOnBoard,
+  pinnedToOpen,
 } from './expanded';
 
 const ids = (expanded: ExpandedTiles) => expanded.map((entry) => entry.id);
@@ -64,10 +66,35 @@ describe('expanded tiles', () => {
   });
 
   it('collapses the one in front, then the next', () => {
+    const none = new Set<string>();
     const expanded = expandTile(expandTile(expandTile([], 'a'), 'b'), 'a');
-    expect(ids(collapseFront(expanded))).toEqual(['b']);
-    expect(ids(collapseFront(collapseFront(expanded)))).toEqual([]);
-    expect(collapseFront([])).toEqual([]);
+    expect(frontToCollapse(expanded, none)).toEqual({ front: 'a', kept: [] });
+    expect(frontToCollapse(collapseTile(expanded, 'a'), none)).toEqual({ front: 'b', kept: [] });
+    expect(frontToCollapse([], none)).toEqual({ front: undefined, kept: [] });
+  });
+
+  it('passes over the tiles pinned expanded in front, keeping them open, to collapse the one behind', () => {
+    const expanded = expandTile(expandTile(expandTile(expandTile([], 'a'), 'b'), 'pin-1'), 'pin-2');
+    expect(frontToCollapse(expanded, new Set(['pin-1', 'pin-2']))).toEqual({ front: 'b', kept: ['pin-2', 'pin-1'] });
+    // Behind the one it collapses, a pinned tile is no business of this Esc.
+    expect(frontToCollapse(expanded, new Set(['a', 'pin-2']))).toEqual({ front: 'pin-1', kept: ['pin-2'] });
+    // All pinned: nothing collapses, and each is kept.
+    expect(frontToCollapse(expandTile([], 'pin-1'), new Set(['pin-1']))).toEqual({ front: undefined, kept: ['pin-1'] });
+  });
+
+  it('keeps a tile on the board in place of its window only while it is pinned and open', () => {
+    const expanded = expandTile([], 'pinned');
+    expect(keptOnBoard('pinned', new Set(['pinned']), expanded)).toBe(true);
+    expect(keptOnBoard('pinned', new Set(), expanded)).toBe(false);
+    // Pinned in its window: that window is shown.
+    expect(keptOnBoard('pinned', new Set(['pinned']), [])).toBe(false);
+  });
+
+  it('opens each tile pinned expanded that is on the board, not open, and not in its session window', () => {
+    const pinned = new Set(['open', 'compact', 'windowed', 'gone']);
+    const expanded = expandTile(expandTile([], 'open'), 'other');
+    expect(pinnedToOpen(pinned, expanded, new Set(['open', 'compact', 'windowed', 'other']), new Set(['windowed']))).toEqual(['compact']);
+    expect(pinnedToOpen(new Set(), expanded, new Set(['open']), new Set())).toEqual([]);
   });
 
   it('keeps a resized tile at least the minimum size', () => {

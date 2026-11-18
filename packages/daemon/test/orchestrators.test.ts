@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync,
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { fakeHarnessEnv, McpClient } from '@agent-board/fake-harness';
-import { BOARD_MCP_INSTRUCTIONS, ORCHESTRATOR_INSTRUCTIONS } from '../src/board-mcp.ts';
+import { BOARD_MCP_INSTRUCTIONS, BOARD_MCP_TOOLS, ORCHESTRATOR_INSTRUCTIONS } from '../src/board-mcp.ts';
 import { AGENT_ERROR, BOARD_ERROR, MAX_ROLE_NAME_LENGTH, RPC_ERROR, SETTLED_STATES, type Agent, type OrchestratorSpawnParams, type AgentUpdatedEvent, type DaemonEvent, type HookEvent, type OrchestratorActivityEvent } from '../src/protocol.ts';
 import type { DaemonClient } from '../src/client.ts';
 import type { Clock } from '../src/clock.ts';
@@ -1471,8 +1471,8 @@ describe('an orchestrator agent, over the board MCP and CLI', () => {
 describe('agent-board mcp for an orchestrator', () => {
   /** What the board MCP offers an agent's live session: every tool, the control tools among them. */
   const ALL_TOOLS = [
-    'whoami', 'board', 'usage', 'connections', 'handoff', 'ask', 'present_plan', 'show_doc', 'set_status', 'needs_you', 'open_pr', 'record_pr', 'record_doc', 'pin', 'unpin', 'steps_new', 'steps_read', 'steps_update', 'memory_new', 'memory_read', 'memory_update', 'queue_new', 'queue_read', 'queue_update', 'remind', 'remind_read', 'remind_update', 'set_page', 'clock_add', 'clock_set', 'save_clock_template', 'list_clock_templates', 'remove_clock_template', 'new_agent', 'send', 'wait', 'read', 'interrupt', 'set_effort', 'ticket_watches', 'give_role', 'continue_on_credits', 'restart', 'pause', 'wake', 'add_edge', 'list_edges', 'remove_edge', 'move', 'arrange', 'zone_layout', 'map', 'zone_screenshot', 'add_note',
-    'edit_note', 'remove_note', 'pass_note', 'add_shape', 'add_diagram', 'export_diagram', 'edit_shape', 'remove_shape', 'connect', 'edit_connector', 'remove_connector', 'add_schedule', 'list_schedules', 'remove_schedule', 'prefabs', 'roles', 'set_role', 'remove_role', 'close', 'ask_to_remove', 'handover',
+    'whoami', 'board', 'usage', 'connections', 'handoff', 'ask', 'present_plan', 'show_doc', 'set_status', 'needs_you', 'open_pr', 'record_pr', 'record_doc', 'pin', 'unpin', 'steps_new', 'steps_read', 'steps_update', 'memory_new', 'memory_read', 'memory_update', 'queue_new', 'queue_read', 'queue_update', 'remind', 'remind_read', 'remind_update', 'set_page', 'clock_add', 'clock_set', 'save_clock_template', 'list_clock_templates', 'remove_clock_template', 'new_agent', 'send', 'wait', 'read', 'interrupt', 'set_effort', 'pin_expanded', 'ticket_watches', 'give_role', 'continue_on_credits', 'restart', 'pause', 'wake', 'add_edge', 'list_edges', 'remove_edge', 'move', 'arrange', 'zone_layout', 'map', 'zone_screenshot', 'add_note',
+    'edit_note', 'remove_note', 'pass_note', 'add_shape', 'add_diagram', 'export_diagram', 'edit_shape', 'remove_shape', 'connect', 'edit_connector', 'remove_connector', 'add_schedule', 'list_schedules', 'remove_schedule', 'prefabs', 'prefab_draft', 'roles', 'set_role', 'remove_role', 'close', 'ask_to_remove', 'handover',
   ];
 
   it('tells every live agent it may act on the board, and lists the control tools to each', async () => {
@@ -1558,6 +1558,20 @@ describe('the app’s default roles over the tools', () => {
 
     await expect(connection.call('orchestrator.setRole', { token, name: 'designer', body: 'x' })).rejects.toMatchObject({ code: BOARD_ERROR.notAllowed });
     await expect(connection.call('orchestrator.roles', { token })).rejects.toMatchObject({ code: BOARD_ERROR.notAllowed });
+  });
+
+  it('logs a refused unpin as an unpin, not a pin', async () => {
+    const setup = await orchestrateDaemon();
+    const { agent, token, connection } = await agentSide(setup, setup.zone.id);
+    const other = await setup.client.call('agent.spawn', { zoneId: setup.zone.id, ...SIZE });
+    await setup.client.call('agent.stop', { sessionId: agent.sessionId });
+    await untilAgent(setup.recorder, agent.sessionId, (seen) => seen.endedAt !== null);
+
+    for (const pinned of [false, true]) {
+      await expect(connection.call('orchestrator.pinExpanded', { token, sessionId: other.sessionId, pinned })).rejects.toMatchObject({ code: BOARD_ERROR.notAllowed });
+      const [line] = await setup.client.call('orchestrator.activity', { limit: 1 });
+      expect(line).toMatchObject({ action: pinned ? 'pin-expanded' : 'unpin-expanded', outcome: 'refused' });
+    }
   });
 });
 
@@ -2882,6 +2896,48 @@ describe('agents setting their characters’ poses', () => {
     expect(answer.text.split('\n').at(-1)).toBe(JSON.stringify({ ok: true, shown: 'reading', yours: 'reading', expires: 'at turn end, or 20 minutes after this set' }));
     expect(await mcp.callTool('set_status', { character: { pose: 'dancing' } })).toMatchObject({ isError: true, text: expect.stringMatching(/unknown pose 'dancing'/) });
     expect(await mcp.callTool('set_status', {})).toMatchObject({ isError: true, text: expect.stringMatching(/a summary, a character, a category, a description, or more/) });
+  });
+});
+
+describe('the length of a status line', () => {
+  it('takes a line of 120 characters and says it shows in full, and refuses 121 with what the tile still says', async () => {
+    const setup = await orchestrateDaemon();
+    const { token, connection } = await agentSide(setup, setup.zone.id);
+    const mcp = mcpAs(setup, token);
+    const cap = 'x'.repeat(120);
+
+    expect(await mcp.callTool('set_status', { summary: 'Wiring the columns' })).toEqual({
+      text: 'Your tile now says: "Wiring the columns" (18 of 120 characters, shown in full).',
+      isError: false,
+    });
+    expect(await mcp.callTool('set_status', { summary: cap })).toMatchObject({ isError: false, text: `Your tile now says: "${cap}" (120 of 120 characters, shown in full).` });
+    await expect(connection.call('board.setStatus', { token, summary: 'y'.repeat(121) })).rejects.toThrow(
+      `Not set: your line is 121 characters, and a tile shows 120. Shorten it and set it again. Your tile still says: "${cap}"`,
+    );
+  });
+
+  it("speaks of the crew member's tile, not the orchestrator's, when its line is refused", async () => {
+    const setup = await orchestrateDaemon();
+    const lead = await agentSide(setup, setup.zone.id);
+    const worker = await lead.connection.call('orchestrator.spawn', { token: lead.token, name: 'worker' });
+    await lead.connection.call('orchestrator.setStatus', { token: lead.token, sessionId: worker.sessionId, summary: 'Wiring it' });
+    await expect(lead.connection.call('orchestrator.setStatus', { token: lead.token, sessionId: worker.sessionId, summary: 'y'.repeat(121) })).rejects.toThrow(
+      'Not set: the line is 121 characters, and a tile shows 120. Shorten it and set it again. Its tile still says: "Wiring it"',
+    );
+  });
+
+  it('tells an agent with no line yet that its tile has none', async () => {
+    const setup = await orchestrateDaemon();
+    const { token, connection } = await agentSide(setup, setup.zone.id);
+    await expect(connection.call('board.setStatus', { token, summary: 'y'.repeat(143) })).rejects.toThrow(
+      'Not set: your line is 143 characters, and a tile shows 120. Shorten it and set it again. Your tile has no line yet.',
+    );
+  });
+
+  it('gives the MCP schema the same cap', () => {
+    const schema = BOARD_MCP_TOOLS.find((tool) => tool.name === 'set_status')!.inputSchema as { properties: { summary: { maxLength: number; description: string } } };
+    expect(schema.properties.summary.maxLength).toBe(120);
+    expect(schema.properties.summary.description).toMatch(/^What you are doing now, for your tile\. Up to 120 characters, all shown/);
   });
 });
 

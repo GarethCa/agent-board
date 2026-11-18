@@ -254,6 +254,32 @@ function clearOfFixed(
   return result;
 }
 
+/**
+ * `moves` (where `clearOfFixed` puts `movables`), with each one they put past the soft `bounds` moved instead to the clear
+ * spot nearest where it was, inside them if there is one: clear of `fixed`, of what stays, and of what went before it,
+ * in reading order. The ones `kept` (dropped onto a tile) stay where `moves` has them. `moves` itself if none is past.
+ */
+function intoEmptySpace(
+  fixed: readonly Rect[],
+  movables: readonly Movable[],
+  moves: Map<string, { x: number; y: number }>,
+  bounds: Bounds,
+  kept: (id: string) => boolean,
+): Map<string, { x: number; y: number }> {
+  const placed = movables.map(({ id, rect }) => ({ id, rect, now: { ...rect, ...moves.get(id) } }));
+  const past = placed.filter(({ id, now }) => !kept(id) && !withinSoft(now, bounds));
+  if (past.length === 0) return moves;
+  const accepted = [...fixed, ...placed.filter((entry) => !past.includes(entry)).map(({ now }) => now)];
+  const result = new Map(moves);
+  for (const { id, rect } of past.toSorted(inReadingOrder)) {
+    const spot = nearestClear(rect, accepted, bounds);
+    accepted.push({ ...rect, ...spot });
+    if (spot.x === rect.x && spot.y === rect.y) result.delete(id);
+    else result.set(id, spot);
+  }
+  return result;
+}
+
 /** How near a loose tile must be to the tile expanded, or to a neighbour of it, to be part of its grid, px. */
 const GRID_REACH = 2 * TILE_GAP;
 
@@ -380,6 +406,7 @@ export function heldFrom(nodes: readonly BoardNode[], shown: readonly BoardNode[
  * Each of `crews` (the tiles of a crew frame, by node id) moves as one, its frame with it, by one shift that keeps its
  * layout, unless one of them is expanded, changing or dropped onto a tile (`overlaps`), when each moves on its own.
  * `compactSizes` are the sizes compact tiles were resized to (an expanded tile grows from its own).
+ * A tile in `pinned` (pinned expanded) keeps its place, and so does the zone it is in: the other expanded tiles go round it.
  */
 export function displaced(
   nodes: BoardNode[],
@@ -388,6 +415,7 @@ export function displaced(
   held: Held = new Map(),
   crews: readonly (readonly string[])[] = [],
   compactSizes: TileSizes = {},
+  pinned: ReadonlySet<string> = new Set(),
 ): BoardNode[] {
   if (expanded.length === 0) return nodes;
   const open = new Map(expanded.map((entry) => [entry.id, entry]));
@@ -451,7 +479,7 @@ export function displaced(
     const size = sizeOf(parent);
     const inside = { left: padding, top: padding, right: size.width - padding, bottom: size.height - padding };
     const openChildren = children.filter((node) => open.has(node.id));
-    const resizing = new Set(openChildren.filter((node) => node.resizing === true).map((node) => node.id));
+    const resizing = new Set(openChildren.filter((node) => node.resizing === true || pinned.has(node.id)).map((node) => node.id));
     const apartInZone = toKeepApart(openChildren);
     // Where each expanded tile was before the zone kept them apart: its neighbours are sorted into blocks from there.
     const placed = new Map(openChildren.map((node) => [node.id, at(node)]));
@@ -477,11 +505,24 @@ export function displaced(
       const node = byId.get(id);
       return node === undefined ? undefined : { ...(placed.get(id) ?? at(node)), ...tileSizeOf(compactSizes, id) };
     };
-    const moves = clearOfFixed(fixed, movables, { ...inside, right: room.width - padding, bottom: room.height - padding }, partner, compact);
+    const bounds = { ...inside, right: room.width - padding, bottom: room.height - padding };
+    const pushed = clearOfFixed(fixed, movables, bounds, partner, compact);
+    // What the blocks pushed past its edges goes into its empty space first, if that grows it less: it grows only by
+    // what still doesn't fit, and neither wider nor taller than the blocks alone would grow it.
+    const movedBy = (moves: Map<string, { x: number; y: number }>) =>
+      movables.filter(({ id }) => moves.has(id)).map(({ id, rect }) => ({ ...rect, ...moves.get(id)! }));
+    const filled = intoEmptySpace(fixed.map(({ rect }) => rect), movables, pushed, bounds, (id) => partner(id).length > 0);
+    const byBlocks = holding(room, movedBy(pushed));
+    const byFilling = holding(room, movedBy(filled));
+    const smaller =
+      byFilling.width <= byBlocks.width + EPSILON &&
+      byFilling.height <= byBlocks.height + EPSILON &&
+      (byFilling.width < byBlocks.width - EPSILON || byFilling.height < byBlocks.height - EPSILON);
+    const moves = filled !== pushed && smaller ? filled : pushed;
     move(moves, movables);
     // No smaller than it was drawn as a change under way began: what is dragged out of it doesn't shrink it meanwhile.
     const was = parent.resizing === true ? undefined : held.get(parent.id)?.size;
-    const moved = movables.filter(({ id }) => moves.has(id)).map(({ id, rect }) => ({ ...rect, ...moves.get(id)! }));
+    const moved = movedBy(moves);
     const grown = holding(was === undefined ? room : { width: Math.max(room.width, was.width), height: Math.max(room.height, was.height) }, moved);
     if (grown.width !== size.width || grown.height !== size.height) sizes.set(parent.id, grown);
   }
@@ -492,8 +533,10 @@ export function displaced(
   const looseOpen = openNodes.filter((node) => node.parentId === undefined);
   const blocks = [...toKeepApart(looseOpen), ...parents.map((parent) => ({ id: parent.id, rect: zoneRect(parent) }))];
   const anchored = new Set([
-    ...looseOpen.filter((node) => node.resizing === true).map((node) => node.id),
-    ...parents.filter((parent) => changing(parent) || openNodes.some((node) => node.parentId === parent.id && changing(node))).map((parent) => parent.id),
+    ...looseOpen.filter((node) => node.resizing === true || pinned.has(node.id)).map((node) => node.id),
+    ...parents
+      .filter((parent) => changing(parent) || openNodes.some((node) => node.parentId === parent.id && (changing(node) || pinned.has(node.id))))
+      .map((parent) => parent.id),
   ]);
   // On the board, a loose tile dropped onto one in a zone may overlap that zone too, and the zone it.
   const zoneOf = (id: string) => byId.get(id)?.parentId;

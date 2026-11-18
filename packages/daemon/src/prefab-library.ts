@@ -3,8 +3,10 @@
 // an orchestrator starts.
 import type { DatabaseSync } from 'node:sqlite';
 import type { BoardConnection } from './board.ts';
+import { sharerNote } from './crew-loop.ts';
 import { BUILT_IN_PREFABS, parsePrefab, prefabFile } from './crew-prefabs.ts';
 import { withTicketChat } from './ticket-tiles.ts';
+import { unrunnable } from './prefab-graph.ts';
 import type { ActivityEntry, OrchestratorAccess } from './orchestrator-types.ts';
 import { invalidParams, optionalBooleanParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
 import {
@@ -35,11 +37,12 @@ interface PrefabRow {
   places: string | null;
 }
 
-/** The places given to save beside `prefab`: each a finite x and y, kept only for the prompt and its own agents. */
+/** The places given to save beside `prefab`: each a finite x and y, kept only for the prompt and its own agents, inputs and loop gates. */
 function placesParam(value: unknown, prefab: CrewPrefab): PrefabPlaces | null {
   if (value === undefined || value === null) return null;
   if (typeof value !== 'object' || Array.isArray(value)) throw invalidParams('places is an object of x and y by agent id');
-  const known = new Set([PROMPT_PLACE, ...prefab.members.map((member) => member.id)]);
+  const graph = [...(prefab.inputs ?? []), ...(prefab.gates ?? [])].map((node) => node.id);
+  const known = new Set([PROMPT_PLACE, ...prefab.members.map((member) => member.id), ...graph]);
   const kept: PrefabPlaces = {};
   for (const [id, place] of Object.entries(value)) {
     const { x, y } = (place ?? {}) as { x?: unknown; y?: unknown };
@@ -215,6 +218,8 @@ export function createPrefabLibrary(db: DatabaseSync): PrefabLibrary {
           let prefab: LibraryPrefab;
           try {
             prefab = startable(stringParam(fields, 'name'));
+            const later = unrunnable(prefab);
+            if (later !== null) throw invalidParams(`${prefab.name} can't start a crew: ${later}`);
             // For this crew alone: the prefab keeps its own.
             const roundLimit = fields.roundLimit;
             if (roundLimit !== undefined) {
@@ -237,7 +242,11 @@ export function createPrefabLibrary(db: DatabaseSync): PrefabLibrary {
           const first = prefab.members.find((member) => member.starts === 'prompt')!;
           const ledCrew = prefab.members.some((member) => member.starts === 'lead');
           const prompt = optionalStringParam(fields, 'prompt') ?? '';
-          const firstPrompt = ledCrew ? [prompt.trim(), leadBrief(prefab)].filter(Boolean).join('\n\n') : prompt;
+          // Its own brief first, as the crew gives each member it starts.
+          // A first member sharing the crew worktree with others is told so, as each it starts is.
+          const firstPrompt = [first.brief, ledCrew ? [prompt.trim(), leadBrief(prefab)].filter(Boolean).join('\n\n') : prompt, sharerNote(prefab, first.id)]
+            .filter(Boolean)
+            .join('\n\n');
           const token = optionalStringParam(fields, 'token');
           const repo = optionalStringParam(fields, 'repo');
           const issueId = optionalStringParam(fields, 'issueId');

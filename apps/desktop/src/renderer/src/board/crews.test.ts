@@ -41,13 +41,7 @@ describe('a crew on the board', () => {
       {
         orchestratorId: 'boss',
         zoneId: 'z',
-        name: 'boss',
         members: ['w1', 'w2'],
-        labelled: true,
-        x: beside.x - CREW_PADDING,
-        y: at.y - CREW_PADDING,
-        width: 2 * width + TILE_GAP + 2 * CREW_PADDING,
-        height: height + 2 * CREW_PADDING,
       },
     ]);
   });
@@ -123,13 +117,8 @@ describe('a crew on the board', () => {
     const nodes = withTiles([zone('z'), zone('other')], lanes, [], []);
     const parts = crewFrames(tiles(nodes));
     expect(parts.flatMap((part) => part.members).toSorted()).toEqual(['deep', 'first', 'under', 'wide']);
-    // Far apart, each is framed on its own, round its own tile; the first in reading order labelled.
-    expect(parts.map(({ members, labelled, x, y }) => ({ members, labelled, x, y }))).toEqual([
-      { members: ['first'], labelled: true, x: 300 - CREW_PADDING, y: 800 - CREW_PADDING },
-      { members: ['wide'], labelled: false, x: 2400 - CREW_PADDING, y: 1200 - CREW_PADDING },
-      { members: ['under'], labelled: false, x: 20 - CREW_PADDING, y: 3000 - CREW_PADDING },
-      { members: ['deep'], labelled: false, x: 300 - CREW_PADDING, y: 5200 - CREW_PADDING },
-    ]);
+    // Far apart, each is a part on its own, in reading order.
+    expect(parts.map((part) => part.members)).toEqual([['first'], ['wide'], ['under'], ['deep']]);
   });
 
   it('frames a crew close together in one part, across a free grid column but not past it', () => {
@@ -183,7 +172,12 @@ describe('a crew on the board', () => {
 describe('a crew frame on a board like the real one', () => {
   /** Whether two rects on the zone share any place. */
   const overlaps = (a: Rect, b: Rect) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
-  const inside = (a: Rect, b: Rect) => a.x >= b.x && a.y >= b.y && a.x + a.width <= b.x + b.width && a.y + a.height <= b.y + b.height;
+  /** The rect round `rects`, `CREW_PADDING` out on every side. */
+  const around = (rects: Rect[]): Rect => {
+    const x = Math.min(...rects.map((rect) => rect.x)) - CREW_PADDING;
+    const y = Math.min(...rects.map((rect) => rect.y)) - CREW_PADDING;
+    return { x, y, width: Math.max(...rects.map((rect) => rect.x + rect.width)) + CREW_PADDING - x, height: Math.max(...rects.map((rect) => rect.y + rect.height)) + CREW_PADDING - y };
+  };
   const rectOf = (node: TileNodeType): Rect => ({ ...node.position, width: node.width!, height: node.height! });
   const lanePitch = 300;
   /**
@@ -212,58 +206,18 @@ describe('a crew frame on a board like the real one', () => {
     const { nodes, crew } = board();
     const parts = crewFrames(nodes).filter((frame) => frame.orchestratorId === 'boss');
     expect(parts.flatMap((part) => part.members).toSorted()).toEqual(crew.toSorted());
-    expect(parts.filter((part) => part.labelled)).toHaveLength(1);
-    for (const node of nodes) {
-      const id = node.data.agent?.sessionId;
-      const mine = id !== undefined && crew.includes(id);
-      for (const part of parts) {
-        if (mine && part.members.includes(id)) expect(inside(rectOf(node), part), `${node.id} inside its part`).toBe(true);
-        else if (!mine) expect(overlaps(rectOf(node), part), `${node.id}, no crew of boss, outside every part`).toBe(false);
+    for (const part of parts) {
+      const box = around(nodes.filter((node) => part.members.includes(node.data.agent?.sessionId ?? '')).map(rectOf));
+      for (const node of nodes) {
+        const id = node.data.agent?.sessionId;
+        if (id === undefined || crew.includes(id)) continue;
+        expect(overlaps(rectOf(node), box), `${node.id}, no crew of boss, clear of every part`).toBe(false);
       }
     }
-    // The expanded reviewer is framed at its size.
-    const big = parts.find((part) => part.members.includes('review-3'))!;
-    expect(big.x + big.width).toBeGreaterThanOrEqual(300 + width + TILE_GAP + 900 + CREW_PADDING);
   });
 
   it('frames the other orchestrator’s crew apart, in a part of its own', () => {
     const { nodes } = board();
     expect(crewFrames(nodes).filter((frame) => frame.orchestratorId === 'other-lead').map((part) => part.members)).toEqual([['impl-9', 'review-9']]);
-  });
-});
-
-describe('a crew frame round tiles an expanded tile pushed aside', () => {
-  const laidOut = () =>
-    withTiles([zone('z')], [agent('boss', 'z', { ...at, z: 1 }), agent('w1', 'z', null, 'boss'), agent('w2', 'z', null, 'boss')], [], []);
-  /** `nodes` as drawn with each tile `pushed` moved by as much. */
-  const drawn = (nodes: BoardNode[], pushed: Record<string, { dx: number; dy: number }>) =>
-    tiles(nodes).map((node) => {
-      const by = pushed[node.id];
-      return by === undefined ? node : { ...node, position: { x: node.position.x + by.dx, y: node.position.y + by.dy } };
-    });
-
-  it('keeps its members, decided where they are saved, and wraps them where they are drawn', () => {
-    const nodes = laidOut();
-    // Pushed far past the crew's columns and rows: still in the crew.
-    const [frame] = crewFrames(tiles(nodes), drawn(nodes, { 'agent:w1': { dx: 0, dy: 3000 }, 'agent:w2': { dx: 2000, dy: 0 } }));
-    expect(frame).toEqual({
-      orchestratorId: 'boss',
-      zoneId: 'z',
-      name: 'boss',
-      members: ['w1', 'w2'],
-      labelled: true,
-      x: beside.x - CREW_PADDING,
-      y: at.y - CREW_PADDING,
-      width: 2000 + 2 * width + TILE_GAP + 2 * CREW_PADDING,
-      height: 3000 + height + 2 * CREW_PADDING,
-    });
-  });
-
-  it('wraps a member expanded at the size it is drawn', () => {
-    const nodes = laidOut();
-    const shown = tiles(nodes).map((node) => (node.id === 'agent:w2' ? { ...node, width: 900, height: 600 } : node));
-    const [frame] = crewFrames(tiles(nodes), shown);
-    expect(frame!.width).toBe(width + TILE_GAP + 900 + 2 * CREW_PADDING);
-    expect(frame!.height).toBe(600 + 2 * CREW_PADDING);
   });
 });

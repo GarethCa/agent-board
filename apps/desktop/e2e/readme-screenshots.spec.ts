@@ -290,7 +290,7 @@ test('the README screenshots: flows, the review doc and the chat view', async ()
   }
 });
 
-test('the README screenshots: an orchestrator with its crew frame', async () => {
+test('the README screenshots: an orchestrator with its crew', async () => {
   const { dir, env } = scratch('output');
   const dataDir = tempDataDir();
   const { app, window: page } = await launch(dataDir, { ...env, ...RENDER_ENV, PATH: `${scenarioPicker(dir)}:${env.PATH}`, SHELL: '/bin/sh' }, RENDER_ARGS);
@@ -315,13 +315,10 @@ test('the README screenshots: an orchestrator with its crew frame', async () => 
     // The orchestrator starts two workers through the board's MCP tool and CLI: each takes a turn's worth of time to start.
     const lead = await spawn('Lead two: Fix checkout flake', 40, 80);
     await expect(tile(page)).toHaveCount(3, { timeout: 60_000 });
-    const frame = page.getByTestId('crew-frame');
-    await expect(frame).toHaveCount(1);
-    await expect(frame).toContainText(/'s crew$/);
     await expect(page.locator('[data-testid="agent-tile"][data-orchestrator]').getByTestId('crew-count')).toHaveText('2');
     await expect(tile(page).filter({ has: page.getByTitle('worker one', { exact: true }) })).toHaveAttribute('data-state', 'idle', { timeout: 30_000 });
     await expect(tile(page).filter({ has: page.getByTitle('worker two', { exact: true }) })).toHaveAttribute('data-state', 'idle', { timeout: 30_000 });
-    // The workers land beside the orchestrator: move them out so the crew frame has clear space around its tiles.
+    // The workers land beside the orchestrator: move them out so each tile has clear space around it.
     const crew = (await agents(page)).filter((agent) => agent.sessionId !== lead.sessionId);
     for (const [index, worker] of crew.entries()) {
       await page.evaluate(([id, zoneId, x]) => window.agentBoard.agents.move(id as string, { zoneId: zoneId as string, x: x as number, y: 80 }), [worker.sessionId, zone.id, 480 + index * 330]);
@@ -329,9 +326,8 @@ test('the README screenshots: an orchestrator with its crew frame', async () => 
     // Fit View frames the nodes as they are: let them stop growing, shrinking and moving first.
     await stillBoard(page);
     await page.getByRole('button', { name: 'Fit View' }).click();
-    // The orchestrator selected, so its crew's frame shows: at rest it waits for the orchestrator to be focused.
+    // The orchestrator selected: its crew count says how many it started.
     await page.locator('[data-testid="agent-tile"][data-orchestrator]').click({ position: { x: 4, y: 4 } });
-    await expect(frame).toHaveAttribute('data-focused', 'true');
     await pinRandomLooks(page);
     await pinPaths(page);
     await shoot(page, 'orchestrator-crew');

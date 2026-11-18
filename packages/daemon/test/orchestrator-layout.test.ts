@@ -89,6 +89,38 @@ async function lastLine(client: DaemonClient) {
 }
 
 describe('orchestrator.move', () => {
+  it('never moves a tile pinned expanded, by name, by arranging its zone or the board; the rest go round it', async () => {
+    const setup = await layoutDaemon();
+    const me = await lead(setup, setup.other.id);
+    const worker = await me.connection.call('orchestrator.spawn', { token: me.token, name: 'worker' });
+    await me.connection.call('orchestrator.spawn', { token: me.token, name: 'helper' });
+    // Where arranging would never leave it.
+    await setup.client.call('agent.move', { sessionId: worker.sessionId, zoneId: setup.other.id, x: 620, y: 340 });
+
+    expect(await me.connection.call('orchestrator.pinExpanded', { token: me.token, sessionId: worker.sessionId, pinned: true })).toMatchObject({ pinnedExpanded: true });
+    expect(await lastLine(setup.client)).toMatchObject({ action: 'pin-expanded', targetName: 'worker', outcome: 'done' });
+    const before = (await rectsIn(setup.client, setup.other.id)).get('worker');
+
+    await expect(
+      me.connection.call('orchestrator.move', { token: me.token, target: { kind: 'agent', id: worker.sessionId }, near: { kind: 'agent', id: me.agent.sessionId }, side: 'below' }),
+    ).rejects.toMatchObject({ message: expect.stringContaining('unpin it to move it') });
+    await me.connection.call('orchestrator.arrange', { token: me.token });
+    // The user's side, which arranges what an agent leaves where it is, leaves it too.
+    await setup.client.call('orchestrator.arrange', { zoneId: setup.other.id });
+    const arranged = await rectsIn(setup.client, setup.other.id);
+    expect(arranged.get('worker')).toEqual(before);
+    expectNoOverlap(arranged);
+    // Its zone stays where it is, so the tile does: unpinned, it would close up beside web.
+    const result = await me.connection.call('orchestrator.arrangeBoard', { token: me.token });
+    expect(result.zones).toEqual([]);
+    expect((await setup.client.call('zone.list')).find((zone) => zone.id === setup.other.id)).toMatchObject({ x: 3000, y: 0 });
+
+    expect(await me.connection.call('orchestrator.pinExpanded', { token: me.token, sessionId: worker.sessionId, pinned: false })).toMatchObject({ pinnedExpanded: false });
+    expect(await lastLine(setup.client)).toMatchObject({ action: 'unpin-expanded', targetName: 'worker', outcome: 'done' });
+    await me.connection.call('orchestrator.arrangeBoard', { token: me.token });
+    expect((await setup.client.call('zone.list')).find((zone) => zone.id === setup.other.id)!.x).toBeLessThan(3000);
+  });
+
   it('puts a worker beside it, clear of what is there, and logs it', async () => {
     const setup = await layoutDaemon();
     const me = await lead(setup, setup.zone.id);

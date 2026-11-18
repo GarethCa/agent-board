@@ -6,6 +6,9 @@ import type {
   LibraryPrefab,
   PrefabPlaces,
   PrefabStarted,
+  PrefabDraft,
+  PrefabDraftAddedEvent,
+  PrefabDraftRemovedEvent,
   Effort,
   GivenRole,
   EffortApplies,
@@ -763,6 +766,12 @@ export const ORCHESTRATOR_IPC = {
   crewRound: 'orchestrator:crew-round',
   setTicketChat: 'orchestrator:set-ticket-chat',
   arrangeTicket: 'orchestrator:arrange-ticket',
+  drafts: 'orchestrator:prefab-drafts',
+  openDraft: 'orchestrator:open-prefab-draft',
+  removeDraft: 'orchestrator:remove-prefab-draft',
+  describeCrew: 'orchestrator:describe-crew',
+  /** main → renderer: `(PrefabDraftAddedEvent | PrefabDraftRemovedEvent)` as an agent drafts a prefab, or a draft is deleted. */
+  drafted: 'orchestrator:prefab-drafted',
 } as const;
 
 /** What the user starts a prefab's crew with. */
@@ -823,6 +832,23 @@ export interface OrchestratorsApi {
    * refuses any other crew, saying why.
    */
   crewRound(crewId: string): Promise<Crew>;
+  /** The prefab drafts agents made, waiting for the user, oldest first, and any this release can't read. */
+  drafts(): Promise<{ drafts: PrefabDraft[]; unreadable: { id: string; reason: string }[] }>;
+  /** Opens a draft: the draft, its drafter closed if it was started only to draft it. It stays a draft until saved or deleted. */
+  openDraft(id: string): Promise<PrefabDraft>;
+  /** Deletes a draft, saved or discarded. */
+  removeDraft(id: string): Promise<void>;
+  /** Asks an agent to draft a crew from `description`: `drafter` (a session id) by a message, else a new agent in `zoneId`. */
+  describeCrew(params: DescribeCrewParams): Promise<{ sessionId: string; name: string; started: boolean }>;
+  /** Calls `listener` as an agent drafts a prefab, and as a draft is deleted. Returns the unsubscribe function. */
+  onDraft(listener: (event: PrefabDraftAddedEvent | PrefabDraftRemovedEvent) => void): () => void;
+}
+
+/** What the user asks a drafter for: what the crew should do, and who drafts it (an agent, or a new one in a zone). */
+export interface DescribeCrewParams {
+  description: string;
+  drafter?: string;
+  zoneId?: string;
 }
 
 /** The board item IPC channels between the preload and main. */
@@ -958,6 +984,7 @@ export const AGENT_IPC = {
   setSchedule: 'agent:setSchedule',
   markSeen: 'agent:markSeen',
   setMuted: 'agent:setMuted',
+  setPinnedExpanded: 'agent:setPinnedExpanded',
   setEffort: 'agent:setEffort',
   setWatches: 'agent:setWatches',
   readWatches: 'agent:readWatches',
@@ -1075,6 +1102,8 @@ export interface AgentsApi {
   markSeen(sessionId: string): Promise<Agent>;
   /** Mutes the agent's OS notifications, or unmutes them. */
   setMuted(sessionId: string, muted: boolean): Promise<Agent>;
+  /** Pins the agent's tile expanded, or unpins it: pinned, it stays open where it is, at its size, until unpinned. */
+  setPinnedExpanded(sessionId: string, pinned: boolean): Promise<Agent>;
   /** Sets the agent's reasoning effort, and says when it takes it: now, after its turn, or on its next restart. */
   setEffort(sessionId: string, effort: Effort | null): Promise<{ agent: Agent; applies: EffortApplies }>;
   /** Changes a ticket's watches (its chat's, or a helper's ticket's): those named and how often, leaving the rest. */
@@ -1403,9 +1432,12 @@ export const WINDOW_IPC = {
 export type BoardRequest =
   | { kind: 'zone'; zoneId: string }
   | { kind: 'newAgent'; name: string; zoneId: string | null }
-  | { kind: 'crew'; prefab: string | null; zoneId: string | null }
+  /** A crew's prompt box, the library with no prefab, or with `describe`, Describe a crew. */
+  | { kind: 'crew'; prefab: string | null; zoneId: string | null; describe?: boolean }
   /** A prefab on its own board, from Settings › Prefabs: `replaces` the name it saves over, or `null` to save it as new. */
   | { kind: 'prefab'; prefab: CrewPrefab & { places?: PrefabPlaces }; replaces: string | null }
+  /** A draft an agent made, by its id, opened on its prefab's board, from Settings › Prefabs › Drafts. */
+  | { kind: 'prefabDraft'; id: string }
   | { kind: 'open'; target: WindowTarget };
 
 /**
@@ -1758,6 +1790,42 @@ export interface AgentBoardApi {
   };
   setup: SetupApi;
   capture: CaptureApi;
+  trace: TraceApi;
+}
+
+/** The channel a window tells main what collapsed an expanded tile, or moved the view without the user, on. */
+export const TRACE_IPC = {
+  /** A window to main, `(ExpandedTraceEntry)`: one line of the expanded-tile trace, written to the data dir. */
+  expanded: 'trace:expanded',
+} as const;
+
+/** A viewport as the trace keeps it. */
+export interface TraceViewport {
+  x: number;
+  y: number;
+  zoom: number;
+}
+
+/**
+ * One line of the expanded-tile trace: an expanded tile collapsing, a collapse its pin refused (`kept`), or the view
+ * moving by anything but the user's own pan or zoom, with what did it. Short words and numbers only: never what a terminal shows or a prompt holds.
+ */
+export type ExpandedTraceEntry = {
+  /** The code path: `collapse.leaveKeys`, `collapseFront`, `windowedExpanded`, `bringIntoView`, `followExpand`…, or `unexplained`. */
+  path: string;
+  /** What set it off: the event being handled (`keydown Escape`, `click`), else the board's own cause (`tile-gone`, `session-window`), else `none`. */
+  trigger: string;
+  /** Where the keyboard was: `terminal`, `field`, `tile`, `board`, `page` or `other`. */
+  focus: string;
+  /** The view as it happened, and once it was over (for a collapse, once the board had settled). */
+  before: TraceViewport;
+  after: TraceViewport;
+} & ({ kind: 'collapse' | 'kept'; tiles: readonly string[] } | { kind: 'view' });
+
+/** The expanded-tile trace, to find what collapses a tile or moves the view on its own. */
+export interface TraceApi {
+  /** Adds a line to it. A capture window's is dropped. */
+  expanded(entry: ExpandedTraceEntry): void;
 }
 
 /** The channels between a capture window (`shared/capture.ts`) and main. */

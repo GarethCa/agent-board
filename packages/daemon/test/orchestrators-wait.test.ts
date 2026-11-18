@@ -70,6 +70,9 @@ function host(agents = new Map<string, Agent>(), stubs: Partial<HostAgents> = {}
       setRole: () => {
         throw new Error('not here');
       },
+      setPinnedExpanded: () => {
+        throw new Error('not here');
+      },
       continueOnCredits: () => Promise.reject(new Error('not here')),
       sendUnsent: () => Promise.reject(new Error('not here')),
       clearUnsent: () => {

@@ -5,9 +5,8 @@ import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone } from 
 import { scratch } from '../scratch.ts';
 import { viewTransform } from '../board-helpers.ts';
 import { RENDER_ARGS, RENDER_ENV, VIEWPORT, ignorePointer, pinFonts, pinRandomText, settle } from '../render.ts';
-import { openSettings } from '../settings-helpers.ts';
 import { BOARD_BACKGROUND_LABELS, BOARD_BACKGROUNDS } from '../../src/renderer/src/board/board-background.ts';
-import { SHOT, THEMES, needsBaselines } from './shared.ts';
+import { SHOT, THEMES, needsBaselines, openSettingsForShot } from './shared.ts';
 
 test.use({ viewport: null });
 
@@ -44,7 +43,7 @@ for (const { theme, suffix } of THEMES) {
       await pinFonts(window);
       await pinRandomText(window);
 
-      const settings = await openSettings(window, 'general.appearance');
+      const settings = await openSettingsForShot(window, 'general.appearance');
       await settings.emulateMedia({ colorScheme: theme });
       await expect.poll(() => settings.evaluate(() => document.documentElement.dataset.theme)).toBe(theme);
       await pinFonts(settings);
@@ -84,7 +83,7 @@ for (const { theme, suffix } of THEMES) {
       await expect(window.locator('html')).toHaveAttribute('data-design', 'simplified');
       await expect.poll(() => window.evaluate(() => document.documentElement.dataset.theme)).toBe(theme);
       await pinFonts(window);
-      const settings = await openSettings(window, 'general.appearance');
+      const settings = await openSettingsForShot(window, 'general.appearance');
       await settings.getByRole('radio', { name: 'Lines' }).click();
       await expect(window.locator('.board [data-board-background="lines"]')).toHaveCount(1);
       const restorePointer = await ignorePointer(window);
@@ -105,7 +104,7 @@ test('a moving board background follows pan and zoom, and is left out zoomed far
   const { app, window } = await launch(dataDir, RENDER_ENV, RENDER_ARGS);
   try {
     await window.setViewportSize(VIEWPORT);
-    const settings = await openSettings(window, 'general.appearance');
+    const settings = await openSettingsForShot(window, 'general.appearance');
     await settings.getByRole('radio', { name: 'Lines' }).click();
     const backdrop = window.locator('.board [data-board-background="lines"]');
     await expect(backdrop).toHaveCount(1);

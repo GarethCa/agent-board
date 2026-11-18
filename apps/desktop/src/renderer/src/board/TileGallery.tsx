@@ -119,6 +119,7 @@ export const galleryAgent = (state: AgentState): Agent => ({
   hibernated: null,
   issue: null,
   muted: false,
+  pinnedExpanded: false,
   seen: false,
   pullRequests: [],
   pushedPullRequests: [],

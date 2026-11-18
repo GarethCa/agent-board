@@ -20,6 +20,7 @@ import { Button, Dialog, ErrorText, Field, Hint, IconButton, Input, Segmented, S
 import { useAction } from '../use-action';
 import { PrefabIcon, RoleIcon } from './icons';
 import { DECISION, draftProblems, MAX_PREFAB_NAME, modelChoice, readModelChoice, flowLayout, flowSentence, memberLabel, memberModel, newMember, NODE, promptMember, type FlowNode } from './prefab-flow';
+import { graphFields } from './prefab-board';
 
 const HARNESS_NAMES: Record<Harness, string> = { claude: 'Claude', codex: 'Codex' };
 /** Reasoning, short enough for one segmented row. */
@@ -82,7 +83,7 @@ export function PrefabEditor({ prefab, imported, onClose, onSaved, inline = fals
   const [draft, setDraft] = useState<CrewPrefab>(() => {
     if (prefab === null) return imported ?? blank();
     // The prefab alone: whether it is built in, and when it was saved, are the library's.
-    const own: CrewPrefab = { name: prefab.name, icon: prefab.icon, purpose: prefab.purpose, roundLimit: prefab.roundLimit, onBoard: prefab.onBoard, ...(prefab.ticketChat === undefined ? {} : { ticketChat: prefab.ticketChat }), members: prefab.members };
+    const own: CrewPrefab = { name: prefab.name, icon: prefab.icon, purpose: prefab.purpose, roundLimit: prefab.roundLimit, onBoard: prefab.onBoard, ...(prefab.ticketChat === undefined ? {} : { ticketChat: prefab.ticketChat }), members: prefab.members, ...graphFields(prefab) };
     return copy ? { ...own, name: `${own.name} (mine)` } : own;
   });
   const [picked, setPicked] = useState<string | undefined>(pickedAt ?? draft.members[0]?.id);

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { createFakeClock } from './fake-clock.ts';
-import { createHookStates, DRAFT_HOLD_MS, type HookStateRow } from '../src/hook-states.ts';
+import { createHookStates, DRAFT_HOLD_MS, USER_QUEUE_HOLD_MS, USER_QUEUED_REASON, type HookStateRow } from '../src/hook-states.ts';
 import { createPermissionHolds, type PermissionHolds } from '../src/permissions.ts';
 import type { SessionState } from '../src/protocol.ts';
 import { createSubagentStore } from '../src/subagents.ts';
@@ -34,6 +34,7 @@ function setup(
   const finished: [string, string][] = [];
   const order: string[] = [];
   const logged: string[] = [];
+  const lapsed: string[] = [];
   holds = createPermissionHolds({ holdMs: 60_000, askingHoldMs: 600_000, onChange: () => {} });
   const states = createHookStates<HookStateRow>({
     permissions: holds,
@@ -53,9 +54,10 @@ function setup(
     log: (message) => void logged.push(message),
     silentChanged,
     silent,
+    userQueueLapsed: (sessionId) => void lapsed.push(sessionId),
   });
   const hook = (payload: Record<string, unknown>) => states.onHook(current, payload, new AbortController().signal);
-  return { states, hook, saved, unseen, finished, order, clock, startingEnded, logged, row: () => current };
+  return { states, hook, saved, unseen, finished, order, clock, startingEnded, logged, lapsed, row: () => current };
 }
 
 describe('a starting agent', () => {
@@ -651,6 +653,17 @@ describe('where a prompt stands, for pressing Enter on what was typed there', ()
     expect(ended.states.promptNow({ ...ended.row(), ended_at: '2026-01-01T00:00:00Z' })).toBe('moved-on');
   });
 
+  it('keeps a draft too long for one row of its terminal through Ctrl-U, which clears only the last row', () => {
+    const { states, row: now } = setup(row('a'));
+    states.typed('a', 'x'.repeat(150), now(), 80);
+    states.typed('a', '\x15', now(), 80);
+    expect(states.isDrafting('a')).toBe(true);
+    states.typed('a', '\x03', now(), 80);
+    states.typed('a', 'x'.repeat(40), now(), 80);
+    states.typed('a', '\x15', now(), 80);
+    expect(states.isDrafting('a')).toBe(false);
+  });
+
   it('is being typed at while the user has a draft there, until they submit it', () => {
     const { states, hook, row: now } = setup(row('a'));
     states.typed('a', 'half a th');
@@ -732,6 +745,102 @@ describe('where a prompt stands, for pressing Enter on what was typed there', ()
     expect(states.draftHeldFor('a')).toBeGreaterThan(0);
     hook({ hook_event_name: 'Stop' });
     expect(states.whyNotReady(now(), true, false)).toBe('you were typing in its terminal');
+  });
+
+  it('holds back what others send while a line the user sent mid-turn waits, past the turn, till a prompt takes it up', () => {
+    const { states, hook, row: now } = setup(row('a'));
+    hook({ hook_event_name: 'UserPromptSubmit', prompt: 'go' });
+    states.typed('a', 'and then tests\r', now());
+    expect(states.isUserQueued('a')).toBe(true);
+    hook({ hook_event_name: 'Stop', last_assistant_message: 'Done.' });
+    // Its turn is over and no draft is left, but the harness has the line still: what others send would join it.
+    expect(states.isDrafting('a')).toBe(false);
+    expect(states.whyNotReady(now(), true, false)).toBe(USER_QUEUED_REASON);
+    expect(states.whyNotReady(now())).toBe(USER_QUEUED_REASON);
+    hook({ hook_event_name: 'UserPromptSubmit', prompt: 'and then tests' });
+    expect(states.isUserQueued('a')).toBe(false);
+    hook({ hook_event_name: 'Stop', last_assistant_message: 'Tests too.' });
+    expect(states.whyNotReady(now(), true, false)).toBeUndefined();
+  });
+
+  it('lets the hold go a while after the turn when no prompt takes the line up, as the harness took it at a step', () => {
+    const { states, hook, row: now, clock, lapsed } = setup(row('a'));
+    hook({ hook_event_name: 'UserPromptSubmit', prompt: 'go' });
+    states.typed('a', 'and then tests\r', now());
+    // Mid-turn it holds as long as the turn runs.
+    clock.advance(USER_QUEUE_HOLD_MS * 3);
+    expect(lapsed).toEqual([]);
+    hook({ hook_event_name: 'Stop', last_assistant_message: 'Done.' });
+    clock.advance(USER_QUEUE_HOLD_MS - 1);
+    expect(states.whyNotReady(now(), true, false)).toBe(USER_QUEUED_REASON);
+    clock.advance(1);
+    expect(lapsed).toEqual(['a']);
+    expect(states.whyNotReady(now(), true, false)).toBeUndefined();
+    // A prompt later stops nothing that is gone.
+    hook({ hook_event_name: 'UserPromptSubmit', prompt: 'next' });
+    expect(lapsed).toEqual(['a']);
+  });
+
+  it('starts that on an idle prompt, or a turn seen to end with no hook, as on a Stop', () => {
+    const idle = setup(row('a'));
+    idle.hook({ hook_event_name: 'UserPromptSubmit', prompt: 'go' });
+    idle.states.typed('a', 'and then tests\r', idle.row());
+    idle.hook({ hook_event_name: 'Notification', notification_type: 'idle_prompt', message: 'Claude is waiting for your input' });
+    idle.clock.advance(USER_QUEUE_HOLD_MS);
+    expect(idle.lapsed).toEqual(['a']);
+
+    const quiet = setup(row('b'));
+    quiet.hook({ hook_event_name: 'UserPromptSubmit', prompt: 'go' });
+    quiet.states.typed('b', 'and then tests\r', quiet.row());
+    quiet.states.turnEndedQuietly('b');
+    quiet.clock.advance(USER_QUEUE_HOLD_MS);
+    expect(quiet.lapsed).toEqual(['b']);
+  });
+
+  it('starts that while a lost Stop leaves the agent at work, once something asks', () => {
+    const { states, hook, row: now, clock, lapsed } = setup(row('a'));
+    hook({ hook_event_name: 'UserPromptSubmit', prompt: 'go' });
+    states.typed('a', 'and then tests\r', now());
+    expect(states.whyNotReady({ ...now(), state: 'idle' }, true, false)).toBe(USER_QUEUED_REASON);
+    clock.advance(USER_QUEUE_HOLD_MS);
+    expect(lapsed).toEqual(['a']);
+  });
+
+  it('stops holding once the user takes the line back, or the turn is interrupted from the board', () => {
+    const escaped = setup(row('a'));
+    escaped.hook({ hook_event_name: 'UserPromptSubmit', prompt: 'go' });
+    escaped.states.typed('a', 'and then tests\r', escaped.row());
+    escaped.hook({ hook_event_name: 'Stop', last_assistant_message: 'Done.' });
+    escaped.states.typed('a', '\x1b', escaped.row());
+    expect(escaped.states.isUserQueued('a')).toBe(false);
+    escaped.clock.advance(USER_QUEUE_HOLD_MS);
+    expect(escaped.lapsed).toEqual([]);
+
+    const cut = setup(row('b'));
+    cut.hook({ hook_event_name: 'UserPromptSubmit', prompt: 'go' });
+    cut.states.typed('b', 'and then tests\r', cut.row());
+    // The harness may have taken the line at a step of the turn already, so no draft is made of it: a hand-off or a
+    // run after the interrupt goes, as no Enter, Ctrl-C or prompt would come to end a draft the prompt never had.
+    cut.states.interrupted('b');
+    expect(cut.states.isUserQueued('b')).toBe(false);
+    expect(cut.states.isDrafting('b')).toBe(false);
+    expect(cut.states.draftHeldFor('b')).toBeUndefined();
+    expect(cut.states.whyNotReady({ ...cut.row(), state: 'idle' })).toBeUndefined();
+    cut.clock.advance(USER_QUEUE_HOLD_MS);
+    expect(cut.lapsed).toEqual([]);
+  });
+
+  it('forgets the line when the agent is relaunched or deleted', () => {
+    const { states, hook, row: now, clock, lapsed } = setup(row('a'));
+    hook({ hook_event_name: 'UserPromptSubmit', prompt: 'go' });
+    states.typed('a', 'and then tests\r', now());
+    hook({ hook_event_name: 'Stop', last_assistant_message: 'Done.' });
+    states.relaunched('a');
+    expect(states.isUserQueued('a')).toBe(false);
+    states.typed('a', 'x\r', now());
+    states.deleted('a');
+    clock.advance(USER_QUEUE_HOLD_MS);
+    expect(lapsed).toEqual([]);
   });
 
   it("tells a stale hook of an interrupted turn from news of a new one", () => {

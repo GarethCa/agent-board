@@ -116,7 +116,7 @@ async function replayStartupScreen(file: string): Promise<void> {
   if (from < bytes.length) process.stdout.write(bytes.subarray(from));
 }
 
-/** Ctrl-U: clears the prompt's line up to the cursor. */
+/** Ctrl-U: clears the prompt's line up to the cursor, on the row the cursor is on (`readTypedLine`). */
 const CLEAR_KEY = '\x15';
 
 /** What is left at the prompt of `line` once each Ctrl-U in it cleared what came before it. */
@@ -336,6 +336,10 @@ export class FakeSession {
   private foldedShown = 0;
   /** Whether a message typed mid-turn is taken at the turn's next step: `FAKE_HARNESS_QUEUE_MID_TURN`. */
   private readonly queueMidTurn = process.env.FAKE_HARNESS_QUEUE_MID_TURN === '1';
+  /** How long Claude stays busy after a turn's `Stop` before it takes its queue as one prompt: `FAKE_HARNESS_JOIN_QUEUED_MS`. */
+  private readonly joinQueuedMs = Number(process.env.FAKE_HARNESS_JOIN_QUEUED_MS ?? 0);
+  /** When the last turn's queue is taken, as one prompt (`joinQueuedMs`); undefined once it has been, or with none. */
+  private queueTakenAt: number | undefined;
   /** Keys a menu read raw, which the line reader holds as the start of its next line (`readKeys`). */
   private heldKeys = '';
   /** What it put at its prompt itself, as Claude puts `continue` there after a rate limit: Enter submits it. */
@@ -875,6 +879,7 @@ export class FakeSession {
     if (this.stopHooksToLose > 0) this.stopHooksToLose -= 1;
     else await this.fire('Stop', { stop_hook_active: false, last_assistant_message: this.lastAssistantMessage });
     this.inTurn = false;
+    if (this.joinQueuedMs > 0 && this.dialect.harness === 'claude') this.queueTakenAt = Date.now() + this.joinQueuedMs;
     // Claude draws its status line again as the turn ends; what it prints isn't drawn here.
     const { statusLine } = this.dialect;
     if (statusLine !== undefined) await runStatusLine(statusLine.command, { session_id: this.dialect.sessionId, ...statusLine.input }, this.dialect.hookOptions);
@@ -922,6 +927,9 @@ export class FakeSession {
    * again, and no hook fires, as acknowledging Claude's notice starts no turn.
    */
   async waitForInput(): Promise<string | undefined> {
+    // Lines queued in the turn just ended go up before it draws its prompt or says it is idle.
+    const queue = await this.takeQueue();
+    if (queue !== undefined) return queue;
     if (!this.dialect.notificationEvents) return this.readPrompt();
     this.drawPromptBox();
     // Hooks fire in order: one already under way finishes before the next, the next turn or SessionEnd.
@@ -1101,6 +1109,8 @@ export class FakeSession {
 
   /** The next prompt the user typed: like the real TUIs, Enter at an empty prompt submits nothing. */
   async readPrompt(): Promise<string | undefined> {
+    const queue = await this.takeQueue();
+    if (queue !== undefined) return queue;
     for (;;) {
       const line = await this.readLine();
       this.promptTyped = line !== undefined;
@@ -1113,9 +1123,36 @@ export class FakeSession {
   }
 
   /**
+   * Once the turn just ended has been busy for `joinQueuedMs`, every line typed during it or since, as one prompt joined
+   * with line breaks, as Claude Code takes its queue; undefined with none typed, or with no queue to take.
+   */
+  private async takeQueue(): Promise<string | undefined> {
+    const at = this.queueTakenAt;
+    this.queueTakenAt = undefined;
+    if (at === undefined) return undefined;
+    await new Promise((resolve) => setTimeout(resolve, Math.max(0, at - Date.now())));
+    const lines: string[] = [];
+    while (await this.lineTyped()) {
+      const line = await this.readLine();
+      if (line === undefined) break;
+      if (line.trim() !== '') lines.push(line);
+    }
+    if (lines.length === 0) return undefined;
+    this.promptTyped = true;
+    return lines.join('\n');
+  }
+
+  /** Whether a whole line is waiting to be read now: one typed already, its Enter too. */
+  private async lineTyped(): Promise<boolean> {
+    this.nextLine ??= this.lines.next();
+    return Promise.race([this.nextLine.then(() => true), new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 0))]);
+  }
+
+  /**
    * The next line the user typed. Like the real TUIs, ESC CR (Alt+Enter, which the app sends for Shift+Enter) is a
    * new line within it rather than its end; and a bracketed paste of several lines (the app's composer sends one, as a
-   * terminal pastes) is one prompt, its line breaks kept and its markers dropped. Ctrl-U clears what came before it.
+   * terminal pastes) is one prompt, its line breaks kept and its markers dropped. Ctrl-U clears what came before it on
+   * its line.
    */
   async readLine(): Promise<string | undefined> {
     let line = await this.readMessage();
@@ -1174,7 +1211,8 @@ export class FakeSession {
     let line = await this.readRawLine();
     while (line?.endsWith('\x1b')) {
       const next = await this.readRawLine();
-      line = `${line.slice(0, -1)}\n${next ?? ''}`;
+      // Ctrl-U on a new line clears only that line, as Claude's does: the lines above stay.
+      line = `${line.slice(0, -1)}\n${next === undefined ? '' : afterClearKey(next)}`;
       if (next === undefined) break;
     }
     return line;

@@ -72,6 +72,12 @@ describe('glanceFace', () => {
     expect(glanceFace(working({ state: 'rate-limited', status: null }), 'explicit').line).toBeNull();
   });
 
+  it('says its status line without its progress, which its bar shows, so a line at the cap is all shown', () => {
+    const status = { summary: 'Running checks', progress: 40, updatedAt: AT, setBy: null };
+    expect(glanceFace(working({ status }), 'explicit').line).toBe('Running checks');
+    expect(glanceFace(working({ state: 'rate-limited', status }), 'explicit').line).toBe('Running checks');
+  });
+
   it('passes over a status line with nothing in it, progress or not, for its last message', () => {
     for (const progress of [null, 40]) {
       const agent = working({ state: 'rate-limited', status: { summary: '  ', progress, updatedAt: AT, setBy: null }, lastMessage: 'Paused at the parser.' });

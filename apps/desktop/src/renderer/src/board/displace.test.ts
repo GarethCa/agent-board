@@ -4,7 +4,7 @@ import { rotatedBounds, type Rect } from '../geometry';
 import { apart, clearOfExpanded, displaced, droppedOnto, heldFrom, pushedAside, type Movable } from './displace';
 import { bringToFront, EXPANDED_SIZE, expandTile, resizeExpanded } from './expanded';
 import { AGENT_TILE_SIZE, CREW_GAP, PERCH_ROOM, TILE_GAP, ZONE_PADDING } from '@agent-board/daemon/board-layout';
-import { CREW_PADDING, crewFrames } from './crews';
+import { crewFrames } from './crews';
 import type { TileNodeType } from './tile';
 import { itemNode } from './items/items';
 import { isSessionTile, tileNodeId, withTiles, type BoardNode } from './tiles';
@@ -354,7 +354,7 @@ describe('displaced', () => {
   });
 
   it("pushes a zone's 3×3 grid as blocks when the middle tile expands: the rows right of it right, the rows below it down", () => {
-    const zones = [zone('z', 0, 0, 900, 700)];
+    const zones = [zone('z', 0, 0, 1400, 1200)];
     const step = { x: AGENT_TILE_SIZE.width + TILE_GAP, y: PERCH_ROOM + AGENT_TILE_SIZE.height + TILE_GAP };
     const origin = { x: ZONE_PADDING, y: ZONE_PADDING + PERCH_ROOM };
     const cells = ['A1', 'B1', 'C1', 'A2', 'B2', 'C2', 'A3', 'B3', 'C3'];
@@ -370,11 +370,25 @@ describe('displaced', () => {
       return { x: cell === 'C1' || cell === 'C2' ? x + grew.x : x, y: cell[1] === '3' ? y + grew.y : y };
     };
     for (const cell of cells) expect(shown.find((node) => node.id === s(cell))!.position, cell).toEqual(expectedAt(cell));
-    // The zone grows to hold them, and collapsing puts everything back: nothing was saved.
-    const grown = shown.find((node) => node.id === 'z')!;
-    const lowest = boardRect(shown, shown.find((node) => node.id === s('C3'))!);
-    expect(grown.height!).toBeGreaterThanOrEqual(lowest.y + lowest.height + ZONE_PADDING);
+    // The zone had room for them, so it keeps its size, and collapsing puts everything back: nothing was saved.
+    const holder = shown.find((node) => node.id === 'z')!;
+    expect({ width: holder.width, height: holder.height }).toEqual({ width: 1400, height: 1200 });
     expect(displaced(nodes, []).map((node) => node.position)).toEqual(nodes.map((node) => node.position));
+
+    // In a zone too tight for the blocks, what they would push past its edges goes into its empty space instead: it
+    // grows no more than the blocks would have grown it, and less one way, with nothing crowded.
+    const tight = withTiles([zone('z', 0, 0, 900, 700)], [], shells, [], new Map(), expanded);
+    const packed = displaced(tight, expanded);
+    const blocks = { width: place('C1').x + grew.x + AGENT_TILE_SIZE.width + ZONE_PADDING, height: place('A3').y + grew.y + AGENT_TILE_SIZE.height + TILE_GAP + ZONE_PADDING };
+    const z = packed.find((node) => node.id === 'z')!;
+    expect(z.width!).toBeLessThanOrEqual(blocks.width);
+    expect(z.height!).toBeLessThanOrEqual(blocks.height);
+    expect(z.width! * z.height!).toBeLessThan(blocks.width * blocks.height);
+    const rects = cells.map((cell) => boardRect(packed, packed.find((node) => node.id === s(cell))!));
+    for (const [i, a] of rects.entries()) {
+      expect(a.x + a.width + ZONE_PADDING, cells[i]).toBeLessThanOrEqual(z.width! + 1e-6);
+      for (const [j, b] of rects.entries()) if (j > i) expect(crowded(a, b), `${cells[i]} on ${cells[j]}`).toBe(false);
+    }
   });
 
   it('moves a block it pushed onto a tile that stayed clear of it: the pushed tile gives way', () => {
@@ -391,7 +405,8 @@ describe('displaced', () => {
   describe.each(['in a zone', 'loose on the board'] as const)('in a 3×3 grid %s', (where) => {
     const loose = where !== 'in a zone';
     const parent = loose ? null : 'z';
-    const zoneList = () => (loose ? [] : [zone('z', 0, 0, 900, 700)]);
+    // Roomy enough to hold the blocks pushed, so they stay whole (a tighter zone fills its empty space first).
+    const zoneList = () => (loose ? [] : [zone('z', 0, 0, 1800, 1200)]);
     const step = { x: AGENT_TILE_SIZE.width + TILE_GAP, y: PERCH_ROOM + AGENT_TILE_SIZE.height + TILE_GAP };
     const origin = loose ? { x: 1000, y: 1000 + PERCH_ROOM } : { x: ZONE_PADDING, y: ZONE_PADDING + PERCH_ROOM };
     const cells = ['A1', 'B1', 'C1', 'A2', 'B2', 'C2', 'A3', 'B3', 'C3'];
@@ -504,6 +519,35 @@ describe('displaced', () => {
       expect(shown.find((node) => node.id === itemNode(note).id)).toBe(nodes.find((node) => node.id === itemNode(note).id));
       expect(shown.find((node) => node.id === 'beside')).toBe(nodes.find((node) => node.id === 'beside'));
     });
+  });
+
+  it('keeps a tile pinned expanded where it is, loose or in a zone, and moves the other expanded tile round it', () => {
+    const first = { x: ZONE_PADDING, y: ZONE_PADDING + PERCH_ROOM };
+    const zones = [zone('z', 0, 0, 1600, 900)];
+    // Two expanded tiles over each other, on the board and in a zone: the first in reading order would stay.
+    const shells = [
+      shell('a', null, at(5000, 0)),
+      shell('b', null, at(5300, 0)),
+      shell('c', 'z', at(first.x, first.y)),
+      shell('d', 'z', at(first.x + 300, first.y)),
+    ];
+    const expanded = ['a', 'b', 'c', 'd'].reduce((open, id) => expandTile(open, s(id)), [] as ReturnType<typeof expandTile>);
+    const nodes = withTiles(zones, [], shells, [], new Map(), expanded);
+    const where = (shown: BoardNode[], id: string) => shown.find((node) => node.id === s(id))!.position;
+
+    const unpinned = displaced(nodes, expanded);
+    expect(where(unpinned, 'a')).toEqual({ x: 5000, y: 0 });
+    expect(where(unpinned, 'c')).toEqual(first);
+    const shown = displaced(nodes, expanded, new Map(), new Map(), [], {}, new Set([s('b'), s('d')]));
+    expect(where(shown, 'b')).toEqual({ x: 5300, y: 0 });
+    expect(where(shown, 'd')).toEqual({ x: first.x + 300, y: first.y });
+    expect(where(shown, 'a')).not.toEqual({ x: 5000, y: 0 });
+    expect(where(shown, 'c')).not.toEqual(first);
+    // The zone it is in stays where it is too.
+    expect(shown.find((node) => node.id === 'z')!.position).toEqual({ x: 0, y: 0 });
+    const rect = (id: string) => boardRect(shown, shown.find((node) => node.id === s(id))!);
+    expect(crowded(rect('a'), rect('b'))).toBe(false);
+    expect(crowded(rect('c'), rect('d'))).toBe(false);
   });
 
   it('rearranges first: a zone with room for its tiles beside the expanded one does not grow', () => {
@@ -1041,7 +1085,7 @@ describe('displaced, with a crew in the way', () => {
   const clear = (rect: Rect, of: Rect) =>
     rect.x >= of.x + of.width || rect.x + rect.width <= of.x || rect.y >= of.y + of.height || rect.y + rect.height <= of.y;
 
-  it('moves a crew a stranger expanded over as one block, by one shift down or right, frame and all', () => {
+  it('moves a crew a stranger expanded over as one block, by one shift down or right, every member clear and in its zone', () => {
     const expanded = expandTile([], a('stranger'));
     const nodes = board()(expanded);
     const shown = displaced(nodes, expanded, new Map(), new Map(), crews);
@@ -1050,13 +1094,13 @@ describe('displaced, with a crew in the way', () => {
     expect(first!.dx === 0 && first!.dy > 0).toBe(true);
     for (const each of rest) expect(each).toEqual(first);
     const open = boardRect(shown, shown.find((node) => node.id === a('stranger'))!);
-    const tiles = (list: BoardNode[]) => list.filter(isSessionTile) as TileNodeType[];
-    const [frame] = crewFrames(tiles(nodes), tiles(shown));
-    expect(frame!.members).toEqual(['w1', 'w2', 'w3']);
-    expect(clear(frame!, open)).toBe(true);
-    // The zone grows to hold the frame.
     const z = shown.find((node) => node.id === 'z')!;
-    expect(frame!.y + frame!.height).toBeLessThanOrEqual(z.height! - ZONE_PADDING + CREW_PADDING);
+    for (const id of crew) {
+      const member = boardRect(shown, shown.find((node) => node.id === id)!);
+      expect(clear(member, open), `${id} clear of the open tile`).toBe(true);
+      // The zone grows to hold the crew.
+      expect(member.y + member.height, `${id} inside its zone`).toBeLessThanOrEqual(z.position.y + z.height! - ZONE_PADDING);
+    }
   });
 
   it('moves the crew as one block clear of its own orchestrator expanded', () => {
@@ -1133,5 +1177,119 @@ describe('displaced, with a crew in the way', () => {
     const shown = displaced(nodes, expanded);
     expect(shift(nodes, shown, 'g')).not.toEqual({ dx: 0, dy: 0 });
     expect(shift(nodes, shown, tileNodeId('shell', 'in'))).toEqual({ dx: 0, dy: 0 });
+  });
+});
+
+describe('displaced, growing a zone only by what does not fit', () => {
+  const s = (id: string) => tileNodeId('shell', id);
+  const first = { x: ZONE_PADDING, y: ZONE_PADDING + PERCH_ROOM };
+  const step = { x: AGENT_TILE_SIZE.width + TILE_GAP, y: PERCH_ROOM + AGENT_TILE_SIZE.height + TILE_GAP };
+  /** A 2×2 grid of shells in zone `z`, from its top-left. */
+  const grid = ['A1', 'B1', 'A2', 'B2'].map((cell) =>
+    shell(cell, 'z', at(first.x + 'AB'.indexOf(cell[0]!) * step.x, first.y + (Number(cell[1]) - 1) * step.y)),
+  );
+  const perchedOf = (shown: BoardNode[], ids: readonly string[]) => ids.map((id) => boardRect(shown, shown.find((node) => node.id === s(id))!));
+  const expectHeld = (shown: BoardNode[], ids: readonly string[]) => {
+    const rects = perchedOf(shown, ids);
+    for (const [index, rect] of rects.entries()) {
+      for (const [offset, other] of rects.slice(index + 1).entries()) expect(crowded(rect, other), `${ids[index]} and ${ids[index + 1 + offset]}`).toBe(false);
+    }
+    const holder = boardRect(shown, shown.find((node) => node.id === 'z')!);
+    for (const [index, rect] of rects.entries()) {
+      expect(rect.x + rect.width + ZONE_PADDING, `${ids[index]} inside`).toBeLessThanOrEqual(holder.x + holder.width + 1e-6);
+      expect(rect.y + rect.height + TILE_GAP + ZONE_PADDING, `${ids[index]} inside`).toBeLessThanOrEqual(holder.y + holder.height + 1e-6);
+    }
+  };
+  const sizeOf = (shown: BoardNode[]) => {
+    const z = shown.find((node) => node.id === 'z') as ZoneNodeType;
+    return { width: z.width, height: z.height, grown: z.data.grown };
+  };
+
+  it('leaves a roomy zone its size when the rows below have room beside the expanded tile, and moves them clear', () => {
+    const expanded = expandTile([], s('A1'));
+    const nodes = withTiles([zone('z', 0, 0, 2000, 700)], [], grid, [], new Map(), expanded);
+    const shown = displaced(nodes, expanded);
+    expect(sizeOf(shown)).toEqual({ width: 2000, height: 700, grown: undefined });
+    expectHeld(shown, ['A1', 'B1', 'A2', 'B2']);
+  });
+
+  it('keeps rows whole where the block push fits: a wide zone moves only B1 right', () => {
+    const expanded = expandTile([], s('A1'));
+    const nodes = withTiles([zone('z', 0, 0, 2000, 1000)], [], grid, [], new Map(), expanded);
+    const shown = displaced(nodes, expanded);
+    expect(sizeOf(shown)).toEqual({ width: 2000, height: 1000, grown: undefined });
+    const a2 = shown.find((node) => node.id === s('A2'))!.position;
+    const b2 = shown.find((node) => node.id === s('B2'))!.position;
+    expect(a2.y).toBe(b2.y);
+    expect(a2.x).toBe(first.x);
+  });
+
+  it('grows a zone only by the overflow, in the one direction that needs it', () => {
+    const shells = [shell('a', 'z', at(first.x, first.y)), shell('b', 'z', at(first.x + step.x, first.y))];
+    const expanded = expandTile([], s('a'));
+    const nodes = withTiles([zone('z', 0, 0, 1000, 1200)], [], shells, [], new Map(), expanded);
+    const shown = displaced(nodes, expanded);
+    // The tall zone has room for b under the expanded tile, so it doesn't grow right.
+    expect(sizeOf(shown)).toEqual({ width: 1000, height: 1200, grown: undefined });
+    expectHeld(shown, ['a', 'b']);
+
+    const short = displaced(withTiles([zone('z', 0, 0, 1000, 300)], [], shells, [], new Map(), expanded), expanded);
+    const grown = sizeOf(short);
+    // Grown to hold the expanded tile; then b, pushed right past its edge, would make it taller under the expanded
+    // tile, so it stays right of it and the zone grows only that way.
+    const room = { width: first.x + EXPANDED_SIZE.width + ZONE_PADDING, height: first.y + EXPANDED_SIZE.height + TILE_GAP + ZONE_PADDING };
+    expect(grown).toMatchObject({ width: room.width + step.x, height: room.height });
+    expectHeld(short, ['a', 'b']);
+  });
+
+  it('never grows a zone in a direction the block push would not grow it', () => {
+    // Side by side in a zone just tall enough for the expanded tile: the push grows it right only, so b may not go
+    // under the expanded tile, which would grow it down too.
+    const shells = [shell('a', 'z', at(first.x, first.y)), shell('b', 'z', at(first.x + step.x, first.y))];
+    const expanded = expandTile([], s('a'));
+    const shown = displaced(withTiles([zone('z', 0, 0, 900, 700)], [], shells, [], new Map(), expanded), expanded);
+    const pushed = { width: first.x + EXPANDED_SIZE.width + TILE_GAP + AGENT_TILE_SIZE.width + ZONE_PADDING, height: 700 };
+    const grown = sizeOf(shown);
+    expect(grown.height).toBe(pushed.height);
+    expect(grown.width).toBeLessThanOrEqual(pushed.width);
+    expectHeld(shown, ['a', 'b']);
+  });
+
+  it('keeps two expanded tiles, and one resized live, to the same rule', () => {
+    const two = expandTile(expandTile([], s('A1')), s('B2'));
+    const nodes = withTiles([zone('z', 0, 0, 3000, 1400)], [], grid, [], new Map(), two);
+    const shown = displaced(nodes, two);
+    expect(sizeOf(shown)).toEqual({ width: 3000, height: 1400, grown: undefined });
+    expectHeld(shown, ['A1', 'B1', 'A2', 'B2']);
+
+    const one = expandTile([], s('A1'));
+    const resizing = withTiles([zone('z', 0, 0, 2000, 700)], [], grid, [], new Map(), one).map((node) =>
+      node.id === s('A1') ? { ...node, resizing: true, width: 1000, height: 560 } : node,
+    );
+    const live = displaced(resizing, one);
+    expect(sizeOf(live)).toEqual({ width: 2000, height: 700, grown: undefined });
+    expectHeld(live, ['A1', 'B1', 'A2', 'B2']);
+  });
+
+  it('gives the size back on collapse: nothing about the zone was saved', () => {
+    const expanded = expandTile([], s('A1'));
+    const nodes = withTiles([zone('z', 0, 0, 1000, 400)], [], grid, [], new Map(), expanded);
+    const saved = JSON.stringify(nodes);
+    const shown = displaced(nodes, expanded);
+    expect(sizeOf(shown).grown).toBe(true);
+    // Only drawn: the zone and tiles it was given keep their saved size and places, which collapsing draws again.
+    expect(JSON.stringify(nodes)).toBe(saved);
+    const collapsed = withTiles([zone('z', 0, 0, 1000, 400)], [], grid, [], new Map(), []);
+    expect(sizeOf(displaced(collapsed, []))).toMatchObject({ width: 1000, height: 400 });
+  });
+
+  it('draws a zone the user resizes while a tile is open at the size they give it, its tiles clear', () => {
+    const expanded = expandTile([], s('A1'));
+    const nodes = withTiles([zone('z', 0, 0, 1000, 400)], [], grid, [], new Map(), expanded).map((node) =>
+      node.id === 'z' ? { ...node, resizing: true, width: 2200, height: 800 } : node,
+    );
+    const shown = displaced(nodes, expanded);
+    expect(sizeOf(shown)).toMatchObject({ width: 2200, height: 800 });
+    expectHeld(shown, ['A1', 'B1', 'A2', 'B2']);
   });
 });

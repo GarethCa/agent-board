@@ -5,6 +5,7 @@ import { createAgentRecordStore, guessedDocOf, recordHandlers } from './agent-re
 import { runGit } from './git.ts';
 import { stateAfterExit } from './claude-state.ts';
 import { createAgentLifecycle, NO_CONVERSATION_NOTICE } from './agent-lifecycle.ts';
+import { isClosed } from './board-layout.ts';
 import { systemClock } from './clock.ts';
 import { createComposerWatch } from './codex-screen.ts';
 import { createAgentSpawns, issueColumns } from './agent-spawns.ts';
@@ -41,6 +42,7 @@ import {
   parseRole,
   MAX_PURPOSE_LENGTH,
   MAX_STATUS_LENGTH,
+  statusLine,
   type Agent,
   type AgentCharacter,
   type AgentWorkCategory,
@@ -212,6 +214,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   const updateCutOff = db.prepare('UPDATE agents SET turn_cut_off = 0 WHERE session_id = ?');
   const updateTrustedByZone = db.prepare('UPDATE agents SET trusted_by_zone = 1 WHERE session_id = ?');
   const updateMuted = db.prepare('UPDATE agents SET muted = ? WHERE session_id = ?');
+  const updatePinnedExpanded = db.prepare('UPDATE agents SET pinned_expanded = ? WHERE session_id = ?');
   const updateEffort = db.prepare('UPDATE agents SET effort = ? WHERE session_id = ?');
   /** Per live Claude agent, the reasoning effort to type at its prompt (`/effort`) once it is between turns. */
   const effortAfterTurn = new Map<string, Effort>();
@@ -830,6 +833,8 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       updateHooksSilent.run(silent ? 1 : 0, sessionId);
       announce(sessionId);
     },
+    // What waits for the user's line to be taken up is tried again.
+    userQueueLapsed: (sessionId) => announce(sessionId),
     recordFinal: (sessionId, finalMessage) => void updateFinalMessage.run(finalMessage, sessionId),
     finished(sessionId) {
       options.onHandoff(sessionId);
@@ -889,6 +894,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       return row === undefined || row.ended_at !== null ? 'moved-on' : hookStates.promptNow(row);
     },
     draftHeldFor: hookStates.draftHeldFor,
+    userQueued: hookStates.isUserQueued,
     announce: (sessionId) => announce(sessionId),
     undelivered: (sessionId, what, text, reason, from) => keepUndelivered(sessionId, what, text, reason, from),
     promptsFromNow(sessionId) {
@@ -942,6 +948,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     }
     const as = AT_WORK.has(row.state) ? 'as the Stop it never sent would have' : 'nothing of its own up';
     options.log(`${quiet}, its transcript says its turn ended and its screen shows Claude's prompt: moved to idle, ${as}`);
+    hookStates.turnEndedQuietly(sessionId);
     deliveries.turnEnded(sessionId, true);
     options.onTurnCut?.(sessionId, 'its turn ended with no word from its harness');
     save(now, 'idle', subagentsAfterExit(subagents.of(sessionId), 'idle', new Date()), true);
@@ -1011,6 +1018,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     requireAgent: (sessionId) => requireAgent(sessionId),
     repoZone: (row) => repoZone(row),
     announce: (sessionId) => announce(sessionId),
+    settled: (sessionId) => dropPinIfClosed(sessionId),
     setState: (sessionId, state) => update.run(state, sessionId),
     unsee: (sessionId) => updateSeen.run(0, sessionId),
     launch: spawns.launch,
@@ -1186,6 +1194,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       ),
       workFinishedAt: row.work_finished_at,
       muted: row.muted === 1,
+      pinnedExpanded: row.pinned_expanded === 1,
       // An ended agent asks nothing: what it was last seen at doesn't carry over.
       seen: row.seen === 1 && row.ended_at === null,
       issue:
@@ -1463,6 +1472,14 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     if (agent !== undefined) options.broadcast({ type: 'agent.updated', agent });
   };
 
+  /** Drops the agent's pin once it is closed (`isClosed`): nothing of it is left to show expanded. */
+  const dropPinIfClosed = (sessionId: string) => {
+    const agent = get(sessionId);
+    if (agent === undefined || !agent.pinnedExpanded || !isClosed(agent)) return;
+    updatePinnedExpanded.run(0, sessionId);
+    announce(sessionId);
+  };
+
   /** Tells every client the agent changed, and returns it. */
   const announced = (sessionId: string): Agent => {
     const agent = get(sessionId)!;
@@ -1560,7 +1577,8 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       // its composer has been seen up, what they type (a row's number and Enter) answers a startup screen instead.
       const watching = firstPrompts.get(sessionId)?.watchScreen === true && composerWatch.seenUp(sessionId);
       if (watching && submitsDraft(hookStates.isDrafting(sessionId), data)) stopWatchingScreen(sessionId);
-      hookStates.typed(sessionId, data, getRow(sessionId));
+      const cols = sessions.list().find((session) => session.id === sessionId)?.cols;
+      hookStates.typed(sessionId, data, getRow(sessionId), cols);
       deliveries.typed(sessionId, data);
     },
 
@@ -1846,6 +1864,15 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       );
     },
 
+    setPinnedExpanded(sessionId, pinned) {
+      const before = requireAgent(sessionId);
+      if (pinned && isClosed(before)) throw invalidParams(`${before.name} is closed: it has nothing left to show expanded`);
+      updatePinnedExpanded.run(pinned ? 1 : 0, sessionId);
+      const agent = get(sessionId)!;
+      options.broadcast({ type: 'agent.updated', agent });
+      return agent;
+    },
+
     setMuted(sessionId, muted) {
       requireAgent(sessionId);
       updateMuted.run(muted ? 1 : 0, sessionId);
@@ -1892,7 +1919,11 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       const text = summary === null ? null : oneLine(summary);
       if (text === '') throw invalidParams('the status summary must not be blank');
       if (text !== null && text.length > MAX_STATUS_LENGTH) {
-        throw invalidParams(`the status summary is ${text.length} characters; at most ${MAX_STATUS_LENGTH}`);
+        const now = get(sessionId)!.status;
+        // An orchestrator setting a crew member's line hears of that agent's tile, not its own.
+        const [line, tile] = setBy === null ? ['your line', 'Your tile'] : ['the line', 'Its tile'];
+        const still = now === null ? `${tile} has no line yet.` : `${tile} still says: "${statusLine(now)}"`;
+        throw invalidParams(`Not set: ${line} is ${text.length} characters, and a tile shows ${MAX_STATUS_LENGTH}. Shorten it and set it again. ${still}`);
       }
       if (progress !== null && !isStatusProgress(progress)) {
         throw invalidParams('progress must be a whole number from 0 to 100');
@@ -2080,6 +2111,10 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       characterLapses.clear();
     },
   };
+  // An agent that closed as the daemon last stopped (its exit landed as it closed) never settled: its pin goes now.
+  for (const row of selectAll.all() as unknown as AgentRow[]) {
+    if (row.pinned_expanded === 1 && isClosed(toAgent(row))) updatePinnedExpanded.run(0, row.session_id);
+  }
   return host;
 }
 
@@ -2235,6 +2270,11 @@ export function agentHandlers<Context>(
       const p = paramsObject(params);
       if (typeof p.muted !== 'boolean') throw invalidParams('muted must be a boolean');
       return agents.setMuted(stringParam(p, 'sessionId'), p.muted);
+    },
+    'agent.setPinnedExpanded': (params) => {
+      const p = paramsObject(params);
+      if (typeof p.pinned !== 'boolean') throw invalidParams('pinned must be a boolean');
+      return agents.setPinnedExpanded(stringParam(p, 'sessionId'), p.pinned);
     },
   };
 }

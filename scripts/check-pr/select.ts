@@ -33,7 +33,7 @@ export const SCANNERS: ReadonlyArray<{ tests: readonly string[]; globs: readonly
       'apps/desktop/src/renderer/src/demo/demo-mode.test.ts',
       'apps/desktop/src/renderer/src/board/board-background.test.ts',
       'apps/desktop/src/renderer/src/board/hybrid-tile-body.test.ts',
-      'apps/desktop/src/renderer/src/board/crew-dim.test.ts',
+      'apps/desktop/src/renderer/src/board/use-shrinking-line.test.ts',
     ],
     // The `shared/` theme sources are a full gate today (`FULL_GATE_GLOBS`); the glob takes effect when that narrows.
     globs: ['apps/desktop/src/renderer/**/*.{css,ts,tsx}', 'apps/desktop/src/shared/{themes,theme-pack-tokens,design,colour}.ts'],
@@ -165,7 +165,7 @@ export const E2E_MAP: ReadonlyArray<readonly [glob: string, specs: readonly stri
   ['apps/desktop/src/renderer/src/board/connectors/**', ['connectors.spec.ts']],
   ['apps/desktop/src/renderer/src/board/*Tile*', ['tiles.spec.ts', 'expanded-tile.spec.ts', 'tile-resize.spec.ts']],
   ['apps/desktop/src/renderer/src/board/*tile*', ['tiles.spec.ts', 'expanded-tile.spec.ts', 'tile-resize.spec.ts']],
-  ['apps/desktop/src/renderer/src/board/*xpanded*', ['expanded-tile.spec.ts']],
+  ['apps/desktop/src/renderer/src/board/*xpanded*', ['expanded-tile.spec.ts', 'pinned-expanded.spec.ts']],
   ['apps/desktop/src/renderer/src/board/*Agent*', ['agents.spec.ts']],
   ['apps/desktop/src/renderer/src/board/*Issue*', ['trackers.spec.ts']],
   ['apps/desktop/src/renderer/src/board/*racker*', ['trackers.spec.ts']],

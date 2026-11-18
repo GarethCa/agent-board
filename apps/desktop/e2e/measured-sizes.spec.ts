@@ -1,32 +1,13 @@
 import { expect, type Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
-import type { DaemonClient } from '@agent-board/daemon/client';
 import { MAX_AGENT_NOTE_HEIGHT, type BoardItem } from '@agent-board/daemon/protocol';
 import { agents, launch, spawnAgent, tile, zones } from './agent-helpers.ts';
-import { drag, emptyFoot, settledBox, withDaemon } from './board-helpers.ts';
+import { drag, emptyFoot, settledBox, tokenOf, withDaemon } from './board-helpers.ts';
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
 import { scratch } from './scratch.ts';
 
 // An orchestrator's arrange sizes each lane's note to what the app measures its text at, not to the daemon's estimate,
 // and its zone map knows the board was measured.
-
-/**
- * The board token of the agent `sessionId`, which the fake harness prints when asked for its identity. Only a token's
- * own characters are read: attached late, the snapshot ends the screen with cursor moves, not a new line, so the shell
- * call's line (`identity:$AGENT_BOARD_IDENTITY:end`) runs on into the printed token.
- */
-async function tokenOf(client: DaemonClient, sessionId: string): Promise<string> {
-  let text = '';
-  const printed = new Promise<string>((resolve) =>
-    client.onEvent((event) => {
-      if ((event.type === 'session.snapshot' || event.type === 'session.output') && event.sessionId === sessionId) text += event.data;
-      const token = /identity:([\w-]+):end/.exec(text)?.[1];
-      if (token !== undefined) resolve(token);
-    }),
-  );
-  await client.call('session.attach', { sessionId });
-  return printed;
-}
 
 const fitView = (window: Page) => window.getByRole('button', { name: /^Fit view/ }).click();
 

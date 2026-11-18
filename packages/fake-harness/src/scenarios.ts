@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { demoScripts } from './demo-scenarios.ts';
 import { PLAN_TOOL, type FakeSession } from './session.ts';
 
@@ -13,6 +13,8 @@ export function isScenario(name: string): name is FakeScenario {
 
 type Script = (session: FakeSession, prompt: string) => Promise<void>;
 
+/** Each session's hand-over file, as a prompt of it named it. */
+const handoverFiles = new WeakMap<object, string>();
 /** `text` single-quoted for the shell, a quote in it closed, escaped and opened again. */
 const shellQuoted = (text: string) => `'${text.replaceAll("'", `'\\''`)}'`;
 
@@ -500,7 +502,10 @@ const scripts: Record<FakeScenario, Script> = {
    * typed meanwhile between them (`queueMidTurn`); `Work slowly, then fail` and `Work slowly, then hit the rate limit`
    * run `sleep 5`, then fail the turn (Claude's StopFailure: `server_error`, `rate_limit`);
    * `Ask permission` plays `permission`; `Run: ‹command› | ‹what it is for›` asks to run that command and says whether it ran; `Think, then send a subagent` thinks a step and plays `subagent`; `Ask: …`, `Plan: …`, `Flag: …`, `Doc: …` and `Pins: …` and `Remind: …` play `ask-plan`; `Hit the rate limit` plays `rate-limit`. Any other prompt is a worker's:
-   * it writes `.agent-board/handover.md` in its shell and ends on `STATUS: done`.
+   * it writes `.agent-board/handover.md` (or the file a prompt of its session's `Hand over in <file>.` last named) in its shell and ends on
+   * `STATUS: done`. Before that, a `Commit <file>: <text>` line commits that file, a maker's work; each `Write <file>:
+   * <text>` line writes one with the file-writing tool, left uncommitted; and a `Stage everything` line runs `git add -A`.
+   * A `Stash everything` line runs `git stash -u` before any of them, taking what the worktree had uncommitted.
    */
   async orchestrate(session, prompt) {
     // Prompts that play another scenario, which submits them itself.
@@ -667,7 +672,27 @@ const scripts: Record<FakeScenario, Script> = {
       return prompt.endsWith('fail') ? session.failTurn('server_error', '500 Internal Server Error') : session.failTurn('rate_limit', '429 Too Many Requests');
     }
     if (prompt === 'Hit the rate limit') return session.failTurn('rate_limit', '429 Too Many Requests');
-    await session.runShell("mkdir -p .agent-board && printf '# Handover\\n\\nThe work is done.\\n' > .agent-board/handover.md");
+    // A maker's work, as a crew's makers do it: a file written and committed on its branch, then handed over as below.
+    const committed = /^Commit (\S+): (.*)$/m.exec(prompt);
+    if (committed !== null) {
+      const [, path = '', text = ''] = committed;
+      const author = '-c user.name=Fake -c user.email=fake@example.com';
+      await session.runShell(`${writeFileCommand(path, `${text}\n`)} && git add -- ${shellQuoted(path)} && git ${author} commit --quiet --no-verify -m ${shellQuoted(`Write ${path}`)}`);
+    }
+    if (/^Stash everything$/m.test(prompt)) await session.runShell('git stash push --include-untracked --quiet');
+    // A non-maker's work in a worktree it shares: each file written with the file-writing tool, left uncommitted.
+    for (const [, path = '', text = ''] of prompt.matchAll(/^Write (\S+): (.*)$/gm)) await session.writeFile(path, `${text}\n`);
+    if (/^Stage everything$/m.test(prompt)) await session.runShell('git add -A');
+    // Handed over where its prompts said to, as an agent keeps to it, else where a worker does.
+    const named = /Hand over in (\S+?)\.(?:\s|$)/.exec(prompt)?.[1];
+    if (named !== undefined) handoverFiles.set(session, named);
+    const handover = handoverFiles.get(session);
+    // The default command stays as it reads on the chat's status line; only a named path needs quoting.
+    await session.runShell(
+      handover === undefined
+        ? "mkdir -p .agent-board && printf '# Handover\\n\\nThe work is done.\\n' > .agent-board/handover.md"
+        : `mkdir -p ${shellQuoted(dirname(handover))} && printf '# Handover\\n\\nThe work is done.\\n' > ${shellQuoted(handover)}`,
+    );
     await session.say('Handover written.\nSTATUS: done');
     await session.stop();
   },

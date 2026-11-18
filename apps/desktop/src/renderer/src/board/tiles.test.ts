@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent, AgentStart, ExternalSession, Shell, TilePosition, Zone } from '@agent-board/daemon/protocol';
 import { AGENT_TILE_SIZE, CHIP_SIZE, freeTileSlot, tileSlot, ZONE_PADDING } from '@agent-board/daemon/board-layout';
-import { agentOfTile, drawnIn, drawsAsTicket, DRAGGED_TILE_Z_INDEX, EXPANDED_DRAG_HANDLE, holdsTiles, resizesFrom, savedMove, savedPlace, shellWithPane, tileNodeId, tileSubject, withTiles, type BoardNode } from './tiles';
+import { drawnIn, drawsAsTicket, DRAGGED_TILE_Z_INDEX, EXPANDED_DRAG_HANDLE, holdsTiles, resizesFrom, savedMove, savedPlace, shellWithPane, tileNodeId, tileSubject, withTiles, type BoardNode } from './tiles';
 import { EXPANDED_SIZE, expandTile } from './expanded';
 import type { TileNodeType } from './tile';
 import { itemNode } from './items/items';
@@ -263,6 +263,12 @@ describe('withTiles', () => {
     expect(tile(nodes, 'agent:a').zIndex).toBeGreaterThan(tile(nodes, 'shell:s').zIndex!);
   });
 
+  it('never drags a tile pinned expanded; compact, it still drags', () => {
+    const pinned = { ...agent('a', 'z'), pinnedExpanded: true };
+    expect(tile(withTiles([zone('z')], [pinned], [], [], new Map(), expandTile([], 'agent:a')), 'agent:a').draggable).toBe(false);
+    expect(tile(withTiles([zone('z')], [pinned], [], [], new Map(), []), 'agent:a').draggable).toBe(true);
+  });
+
   it('keeps an expanded tile in front while it is dragged, and at the size and place React Flow has while it is resized', () => {
     const expanded = expandTile([], 'agent:a');
     const first = withTiles([zone('z')], [agent('a', 'z')], [], [], new Map(), expanded);
@@ -477,14 +483,5 @@ describe('withTiles: ticket tiles', () => {
   it('never folds a ticket chat to a chip, however it ended', () => {
     const ended = { ...chat(), endedAt: '2026-01-01T00:00:00Z', state: 'done', shellSessionId: null, shellHarness: null } as Agent;
     expect(tile(withTiles([zone('z')], [ended], [], []), 'agent:chat').data.folded).toBeUndefined();
-  });
-});
-
-describe('agentOfTile', () => {
-  it("reads the agent from an agent tile's node id, and none from a shell's, another node or no node", () => {
-    expect(agentOfTile(tileNodeId('agent', 'lead'))).toBe('lead');
-    expect(agentOfTile(tileNodeId('shell', 'lead'))).toBeUndefined();
-    expect(agentOfTile('zone:z')).toBeUndefined();
-    expect(agentOfTile(undefined)).toBeUndefined();
   });
 });

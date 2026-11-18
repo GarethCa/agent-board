@@ -3,6 +3,7 @@ import type { CrewPrefab, LibraryPrefab, Zone } from '@agent-board/daemon/protoc
 import { errorMessage } from '../../../shared/errors';
 import { useToast } from '../ui';
 import { CrewPromptDialog } from './CrewPromptDialog';
+import { DescribeCrewDialog, type DrafterChoice } from './DescribeCrewDialog';
 import { NewTicketDialog } from './NewTicketDialog';
 import { PrefabsDialog } from './PrefabsDialog';
 import { libraryBoard, newPrefab } from './prefab-board';
@@ -10,7 +11,7 @@ import type { PrefabBoardStart } from './PrefabBoard';
 import { currentPrefabs } from './prefab-store';
 
 /** Where the crew dialogs open: the library, or the prompt box of the prefab named, in a zone if one is meant. */
-export type CrewFlowStart = ({ kind: 'library' } | { kind: 'prompt'; prefab: LibraryPrefab } | { kind: 'ticket' }) & {
+export type CrewFlowStart = ({ kind: 'library' } | { kind: 'prompt'; prefab: LibraryPrefab } | { kind: 'ticket' } | { kind: 'describe' }) & {
   /** The zone it was asked from: its crew starts there, and the prompt box says so. */
   zone?: Zone;
   /** With no such zone, the one the prompt box's Zone starts on: nearest what was clicked, or in view. */
@@ -19,12 +20,14 @@ export type CrewFlowStart = ({ kind: 'library' } | { kind: 'prompt'; prefab: Lib
   fromSheet?: { position?: { x: number; y: number } };
 };
 
-type Step = { kind: 'library' } | { kind: 'ticket'; prefab?: string } | { kind: 'prompt'; prefab: LibraryPrefab };
+type Step = { kind: 'library' } | { kind: 'ticket'; prefab?: string } | { kind: 'prompt'; prefab: LibraryPrefab } | { kind: 'describe' };
 
 interface CrewFlowProps {
   start: CrewFlowStart;
   /** The zones a crew can start in. */
   zones: readonly Zone[];
+  /** The agents on the board that may draft a crew described. */
+  agents?: readonly DrafterChoice[];
   /** The crew started: its first member's session. */
   onStarted(sessionId: string): void;
   onClose(): void;
@@ -45,8 +48,8 @@ export function editStart(prefab: LibraryPrefab | null, imported?: CrewPrefab): 
  * The crew dialogs, one at a time: the library and a prefab's prompt box. From the library, each goes back to it; opened
  * on a prompt box, closing it closes them all. Changing a prefab opens it on its own board, closing them.
  */
-export function CrewFlow({ start, zones, onStarted, onClose, onAddZone, onEdit }: CrewFlowProps) {
-  const [step, setStep] = useState<Step>(start.kind === 'prompt' ? { kind: 'prompt', prefab: start.prefab } : start.kind === 'ticket' ? { kind: 'ticket' } : { kind: 'library' });
+export function CrewFlow({ start, zones, agents = [], onStarted, onClose, onAddZone, onEdit }: CrewFlowProps) {
+  const [step, setStep] = useState<Step>(start.kind === 'prompt' ? { kind: 'prompt', prefab: start.prefab } : start.kind === 'library' ? { kind: 'library' } : { kind: start.kind });
   const toasts = useToast();
   const back = () => (start.kind === 'library' ? setStep({ kind: 'library' }) : onClose());
 
@@ -66,6 +69,9 @@ export function CrewFlow({ start, zones, onStarted, onClose, onAddZone, onEdit }
       />
     );
   }
+  if (step.kind === 'describe') {
+    return <DescribeCrewDialog zones={zones} {...(start.zone === undefined ? {} : { zone: start.zone })} {...(start.suggested === undefined ? {} : { suggested: start.suggested })} agents={agents} onClose={back} />;
+  }
   if (step.kind === 'prompt') {
     return <CrewPromptDialog prefab={step.prefab} zones={zones} zone={start.zone} suggested={start.suggested} onAddZone={onAddZone} onStarted={onStarted} onCancel={back} />;
   }
@@ -77,7 +83,15 @@ export function CrewFlow({ start, zones, onStarted, onClose, onAddZone, onEdit }
       (failure: unknown) => toasts.show({ id: 'import a crew prefab', tone: 'error', message: `Could not import it: ${errorMessage(failure)}` }),
     );
   };
-  return <PrefabsDialog onClose={onClose} onStart={(prefab) => setStep({ kind: 'prompt', prefab })} onEdit={(prefab) => onEdit(editStart(prefab))} onImport={importFile} />;
+  return (
+    <PrefabsDialog
+      onClose={onClose}
+      onStart={(prefab) => setStep({ kind: 'prompt', prefab })}
+      onEdit={(prefab) => onEdit(editStart(prefab))}
+      onDescribe={() => setStep({ kind: 'describe' })}
+      onImport={importFile}
+    />
+  );
 }
 
 /** The prefab named `name`, as last known, for an entry point that holds only its name. */

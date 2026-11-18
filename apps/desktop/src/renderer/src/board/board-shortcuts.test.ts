@@ -32,7 +32,7 @@ describe("the board's single-key shortcuts", () => {
     expect(boardShortcut(press('E', { shiftKey: true, metaKey: true }))).toBeUndefined();
   });
 
-  it('leave ⇧C and a bare C alone: a crew shows on focus, with nothing to cycle', () => {
+  it('leave ⇧C and a bare C alone: a crew has no look to cycle', () => {
     expect(boardShortcut(press('C', { shiftKey: true }))).toBeUndefined();
     expect(boardShortcut(press('c'))).toBeUndefined();
   });

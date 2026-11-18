@@ -80,6 +80,7 @@ export function registerAgentIpc(daemon: DaemonLink, dataDir: string): void {
   passthrough(daemon, AGENT_IPC.setName, 'agent.setName', (sessionId: string, name: string) => ({ sessionId, name }));
   passthrough(daemon, AGENT_IPC.markSeen, 'agent.markSeen', (sessionId: string) => ({ sessionId }));
   passthrough(daemon, AGENT_IPC.setMuted, 'agent.setMuted', (sessionId: string, muted: boolean) => ({ sessionId, muted }));
+  passthrough(daemon, AGENT_IPC.setPinnedExpanded, 'agent.setPinnedExpanded', (sessionId: string, pinned: boolean) => ({ sessionId, pinned }));
   passthrough(daemon, AGENT_IPC.setEffort, 'agent.setEffort', (sessionId: string, effort: Effort | null) => ({ sessionId, effort }));
   ipcMain.handle(AGENT_IPC.setWatches, async (_event, sessionId: string, change: TicketWatchChange) => (await daemon.call('ticket.setWatches', { ...change, sessionId })).agent);
   ipcMain.handle(AGENT_IPC.readWatches, async (_event, sessionId: string) => (await daemon.call('ticket.readWatches', { sessionId })).agent);

@@ -1,4 +1,4 @@
-import { Plus } from 'lucide-react';
+import { MessageSquareText, Plus } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import type { LibraryPrefab } from '@agent-board/daemon/protocol';
 import { errorMessage } from '../../../shared/errors';
@@ -19,6 +19,8 @@ export interface PrefabsDialogProps {
   onEdit(prefab: LibraryPrefab | null): void;
   /** Asks for a `.crew.json` file, to show it whole before it is added. */
   onImport(): void;
+  /** Opens Describe a crew, for an agent to draft one. */
+  onDescribe?(): void;
   /** What it shows in place of reading the library, and a card asking before it removes, for the gallery. */
   library?: Library;
   asking?: string;
@@ -60,7 +62,7 @@ function PrefabCard({ prefab, children }: { prefab: LibraryPrefab; children: Rea
  * built-in, as a copy of your own) or remove, with Make a prefab and Import a file. A prefab can't be got back once
  * removed, so Remove asks first, on its card.
  */
-export function PrefabsDialog({ onClose, onStart, onEdit, onImport, library: given, asking }: PrefabsDialogProps) {
+export function PrefabsDialog({ onClose, onStart, onEdit, onImport, onDescribe, library: given, asking }: PrefabsDialogProps) {
   const [library, setLibrary] = useState<Library | undefined>(given);
   const [loadError, setLoadError] = useState<string>();
   const [removing, setRemoving] = useState(asking);
@@ -143,6 +145,15 @@ export function PrefabsDialog({ onClose, onStart, onEdit, onImport, library: giv
               <span>Start blank, or copy one above</span>
             </button>
           </li>
+          {onDescribe !== undefined && (
+            <li className="prefab-card-make">
+              <button type="button" data-testid="prefabs-describe" onClick={onDescribe}>
+                <MessageSquareText aria-hidden />
+                Describe a crew
+                <span>An agent drafts it; you tweak it and save it</span>
+              </button>
+            </li>
+          )}
         </ul>
       )}
       {error && <ErrorText>{error}</ErrorText>}

@@ -1,4 +1,4 @@
-// An orchestrator's crew: the agents it started, slotted beside it, framed together, and moved with it.
+// An orchestrator's crew: the agents it started, slotted beside it, kept together as layout blocks, and moved with it.
 // Pure, so the layout is unit-tested.
 import type { NodeChange } from '@xyflow/react';
 import type { TileMove } from '@agent-board/daemon/protocol';
@@ -7,7 +7,7 @@ import { AGENT_TILE_SIZE, clearOf, CREW_GAP, CREW_PER_ROW, CREW_ROWS, crewSpot, 
 import type { TileNodeType } from './tile';
 import { compactSizeOf, isSessionTile, isZone, type BoardNode } from './tiles';
 
-/** Space between a crew frame and the tiles in it. */
+/** Room kept round a crew frame's tiles: no stranger within it, and the zone grows to hold it. */
 export const CREW_PADDING = 10;
 /** How far right of its orchestrator a crew member's corner may be and still sit with it: its crew's columns. */
 const CREW_REACH = AGENT_TILE_SIZE.width + CREW_GAP + CREW_PER_ROW * (AGENT_TILE_SIZE.width + TILE_GAP);
@@ -17,19 +17,15 @@ const MAX_JOIN_GAP = GRID_COLUMN + TILE_GAP;
 const MAX_ROW_STEPS = 64;
 
 /**
- * A dashed frame round an orchestrator's crew, relative to their zone: the whole crew, or one part of it, as a crew
- * spread round other tiles is framed in parts that hold none of them.
+ * An orchestrator's crew frame, a layout block never drawn: the whole crew in its zone, or one part of it, as a crew
+ * spread round other tiles is split into parts that hold none of them. An expanded tile pushes each part aside as one.
  */
-export interface CrewFrame extends Rect {
+export interface CrewFrame {
   /** The orchestrator's session id. */
   orchestratorId: string;
   zoneId: string;
-  /** The orchestrator's name, for the frame's label. */
-  name: string;
   /** The session ids of the crew in the frame, in board order. */
   members: string[];
-  /** Whether it carries the crew's label: its first part, in reading order, alone does. */
-  labelled: boolean;
 }
 
 /** An agent's tile. */
@@ -62,8 +58,6 @@ function crewBeside(nodes: readonly BoardNode[], orchestrator: TileNodeType): Ti
 
 /** Where a tile is saved, at its compact size: what decides who sits among whom, an expanded tile changing none of it. */
 const savedRect = (node: TileNodeType): Rect => ({ ...node.position, ...compactSizeOf(node) });
-/** Where a tile is drawn, expanded or not. */
-const drawnRect = (node: TileNodeType): Rect => ({ ...node.position, width: node.width ?? AGENT_TILE_SIZE.width, height: node.height ?? AGENT_TILE_SIZE.height });
 
 /** The rect round `rects`, `pad` out on every side. */
 function bounds(rects: readonly Rect[], pad: number): Rect {
@@ -102,29 +96,18 @@ function crewParts(crew: readonly TileNodeType[], strangers: readonly Rect[]): T
   return parts.filter((_, index) => find(index) === index).map((part) => part.nodes);
 }
 
-/**
- * The orchestrators among the selected tiles, by session id: their crews stay focused (framed, lit, the rest dimmed)
- * while they are selected, dragged or not. A ticket's chat that started helpers is one, as any lead.
- */
-export function selectedOrchestrators(nodes: readonly BoardNode[]): string[] {
-  return nodes.flatMap((node) => (node.selected === true && isSessionTile(node) && node.data.crew !== undefined && node.data.agent !== undefined ? [node.data.agent.sessionId] : []));
-}
-
-/** The tiles crew frames are drawn round: none in a zone on status shelves, whose crew is in its stacks and keeps its chips. */
+/** The tiles crew frames are made of: none in a zone on status shelves, whose crew is in its stacks and keeps its chips. */
 export function frameableTiles(nodes: readonly BoardNode[]): TileNodeType[] {
   const shelved = new Set(nodes.flatMap((node) => (isZone(node) && node.data.zone.layoutMode === 'shelves' ? [node.id] : [])));
   return nodes.filter((node): node is TileNodeType => isSessionTile(node) && (node.parentId === undefined || !shelved.has(node.parentId)));
 }
 
 /**
- * The frames round each orchestrator's crew in its zone, wherever in it they are: who is in each part decided where they
- * are saved (`tiles`), and the frame round where they are drawn (`drawn`), so tiles an expanded tile pushed aside stay
- * in it. Where they are saved, a frame holds no other tile, its orchestrator's included: a crew spread round other
- * tiles, or far apart, is framed in parts, the first in reading order labelled. Drawn, a part round a member expanded
- * past where it is saved may reach over another tile.
+ * The frames of each orchestrator's crew in its zone, wherever in it they are, decided where the tiles are saved, so an
+ * expanded tile changes none of it. A frame holds no other tile, its orchestrator's included: a crew spread round other
+ * tiles, or far apart, is split into parts, in reading order.
  */
-export function crewFrames(tiles: readonly TileNodeType[], drawn: readonly TileNodeType[] = tiles): CrewFrame[] {
-  const shown = new Map(drawn.map((node) => [node.id, node]));
+export function crewFrames(tiles: readonly TileNodeType[]): CrewFrame[] {
   const frames: CrewFrame[] = [];
   for (const orchestrator of tiles) {
     const crew = zoneCrew(tiles, orchestrator);
@@ -135,19 +118,9 @@ export function crewFrames(tiles: readonly TileNodeType[], drawn: readonly TileN
       .map((part) => tiles.filter((node) => part.includes(node)))
       .map((part) => ({ part, at: bounds(part.map(savedRect), 0) }))
       .toSorted((a, b) => a.at.y - b.at.y || a.at.x - b.at.x);
-    parts.forEach(({ part }, index) =>
-      frames.push({
-        orchestratorId: orchestrator.data.agent!.sessionId,
-        zoneId: orchestrator.parentId!,
-        name: orchestrator.data.agent!.name,
-        members: part.map((node) => node.data.agent!.sessionId),
-        labelled: index === 0,
-        ...bounds(
-          part.map((node) => drawnRect(shown.get(node.id) ?? node)),
-          CREW_PADDING,
-        ),
-      }),
-    );
+    for (const { part } of parts) {
+      frames.push({ orchestratorId: orchestrator.data.agent!.sessionId, zoneId: orchestrator.parentId!, members: part.map((node) => node.data.agent!.sessionId) });
+    }
   }
   return frames;
 }

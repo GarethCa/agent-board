@@ -147,6 +147,12 @@ export interface FakeHarnessEnvOptions {
    */
   queueMidTurn?: boolean;
   /**
+   * Claude stays busy this long after a turn's `Stop`, and then takes every line typed during the turn or since as one
+   * prompt, joined with line breaks, as Claude Code takes the messages in its queue (Claude only). Defaults to 0: each
+   * line is a prompt of its own.
+   */
+  joinQueuedMs?: number;
+  /**
    * Claude runs full-screen, in the terminal's alternate screen, as Claude Code's full-screen TUI does, and as it exits
    * it leaves that screen and prints only how to resume it. Defaults to false: it prints inline.
    */
@@ -200,6 +206,7 @@ export function fakeHarnessEnv(options: FakeHarnessEnvOptions): NodeJS.ProcessEn
     FAKE_HARNESS_QUESTIONS_DROP_ANSWERS: options.questionsDropAnswers ? '1' : '0',
     FAKE_HARNESS_RATE_LIMIT_SCREEN: options.rateLimitScreen ?? '',
     FAKE_HARNESS_QUEUE_MID_TURN: options.queueMidTurn ? '1' : '0',
+    FAKE_HARNESS_JOIN_QUEUED_MS: String(options.joinQueuedMs ?? 0),
     FAKE_HARNESS_RATE_LIMITS: options.rateLimits === undefined ? '' : JSON.stringify(options.rateLimits),
     FAKE_HARNESS_FULLSCREEN: options.fullscreen ? '1' : '0',
     FAKE_HARNESS_BACKLOG_LINES: String(options.backlogLines ?? 0),

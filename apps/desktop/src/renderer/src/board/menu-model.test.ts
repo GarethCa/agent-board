@@ -201,7 +201,7 @@ describe("an agent tile's menu, grouped", () => {
       'settings/role/with-template', 'settings/role/with-template/send-orchestrator', 'settings/role/with-template/send-implementer', 'settings/role/with-template/send-reviewer',
       'settings/role/with-template/send-follow-up-reviewer',
       'review', 'review/open-pr', 'review/start-review', 'review/run-gate',
-      'arrange', 'arrange/front', 'arrange/forward', 'arrange/backward', 'arrange/back', 'arrange/align',
+      'arrange', 'arrange/front', 'arrange/forward', 'arrange/backward', 'arrange/back', 'arrange/align', 'arrange/pin-expanded',
       'ask',
       'copy', 'copy/branch', 'copy/worktree', 'copy/session-id', 'copy/save-prefab',
       'delete',
@@ -272,6 +272,19 @@ describe("an agent tile's menu, grouped", () => {
     expect(entries).toMatchObject([{ id: 'open-review' }, { id: 'show-impl', label: 'Show checkout-fix' }, 'separator', { id: 'run-gate' }]);
     (row(entries, 'show-impl') as { onSelect(): void }).onSelect();
     expect(calls).toEqual([['show', ['impl']]]);
+  });
+
+  it('pins the tile expanded from Arrange, or unpins it; a closed agent has none to pin', () => {
+    const calls: [string, unknown[]][] = [];
+    const actions = { ...tileInput(running).actions, setPinnedExpanded: (...args: unknown[]) => void calls.push(['setPinnedExpanded', args]) };
+    const pin = row(sub(agentTileMenu(tileInput(running, { actions })), 'arrange'), 'pin-expanded') as ModelEntry & { onSelect(): void };
+    expect(pin).toMatchObject({ label: 'Pin expanded', hint: 'It stays open where it is, at its size' });
+    pin.onSelect();
+    const unpin = row(sub(agentTileMenu(tileInput({ ...running, pinnedExpanded: true }, { actions })), 'arrange'), 'pin-expanded') as ModelEntry & { onSelect(): void };
+    expect(unpin).toMatchObject({ label: 'Unpin', hint: 'Then it can be collapsed, moved and resized' });
+    unpin.onSelect();
+    expect(calls).toEqual([['setPinnedExpanded', [running.sessionId, true]], ['setPinnedExpanded', [running.sessionId, false]]]);
+    expect(menuIds(sub(agentTileMenu(tileInput(ended)), 'arrange'))).not.toContain('pin-expanded');
   });
 
   it('arranges the tile: its z-order, Align for two or more, and where it sits', () => {
@@ -539,7 +552,7 @@ describe("a zone's tab menus", () => {
     expect(menuIds([zoneTabEntries(group, undefined, spies()).bind!])).toEqual(['tab-bind', 'tab-bind/repo', 'tab-bind/project', 'tab-bind/tracker']);
   });
 
-  it("offers a blank agent first beside + agent, then yours newest first, the built-ins, and a way to make one or open the library", () => {
+  it("offers a blank agent first beside + agent, then yours newest first, the built-ins, and a way to make one, describe one or open the library", () => {
     const now = Date.parse('2026-11-16T12:00:00Z');
     const one = { harness: 'claude', model: 'opus', starts: 'prompt' };
     library.current = [
@@ -550,7 +563,8 @@ describe("a zone's tab menus", () => {
     const actions = spies<ZoneBindingActions & { newAgent(zone: Zone): void }>();
     const entries = newAgentMenu(repoZone, undefined, actions, now);
     library.current = [];
-    expect(menuIds(entries)).toEqual(['new-agent', 'crew-Reviewer', 'crew-Builder', 'crew-Ticket', 'make-prefab', 'crew-library']);
+    expect(menuIds(entries)).toEqual(['new-agent', 'crew-Reviewer', 'crew-Builder', 'crew-Ticket', 'make-prefab', 'describe-crew', 'crew-library']);
+    expect(row(entries, 'describe-crew')).toMatchObject({ label: 'Describe a crew…' });
     expect(row(entries, 'new-agent')).toMatchObject({ label: 'Blank agent', shortcut: '⏎' });
     expect(entries.filter((entry) => typeof entry === 'object' && 'heading' in entry)).toEqual([{ heading: 'Your prefabs' }, { heading: 'Built in' }]);
     // Saved in the last day is new; each says how many agents, and the model of the one your prompt starts.
@@ -559,13 +573,14 @@ describe("a zone's tab menus", () => {
     expect(row(entries, 'crew-Builder')).not.toHaveProperty('badge');
     expect(row(entries, 'crew-Ticket')).toMatchObject({ aside: { label: 'Duplicate Ticket to change it' } });
     expect(row(entries, 'crew-library')).toMatchObject({ label: 'Crew library…' });
-    for (const id of ['new-agent', 'crew-Reviewer', 'crew-Ticket', 'make-prefab', 'crew-library']) (row(entries, id) as { onSelect(): void }).onSelect();
+    for (const id of ['new-agent', 'crew-Reviewer', 'crew-Ticket', 'make-prefab', 'describe-crew', 'crew-library']) (row(entries, id) as { onSelect(): void }).onSelect();
     for (const id of ['crew-Builder', 'crew-Ticket']) (row(entries, id) as { aside: { onSelect(): void } }).aside.onSelect();
     expect(actions.calls).toEqual([
       ['newAgent', [repoZone]],
       ['startCrew', ['Reviewer', repoZone]],
       ['startCrew', ['Ticket', repoZone]],
       ['editPrefab', [null]],
+      ['describeCrew', [repoZone]],
       ['crewLibrary', [repoZone]],
       ['editPrefab', [expect.objectContaining({ name: 'Builder' })]],
       ['editPrefab', [expect.objectContaining({ name: 'Ticket' })]],
@@ -1994,6 +2009,7 @@ describe("every row's handler", () => {
         "arrange/forward → restack("forward")",
         "arrange/backward → restack("backward")",
         "arrange/back → restack("back")",
+        "arrange/pin-expanded → setPinnedExpanded("a1", true)",
         "arrange/lead-pin → toggleLeadPin()",
         "arrange/connect → connect()",
         "ask → askClaude()",

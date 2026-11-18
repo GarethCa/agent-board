@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ChevronRight, Copy, Lock, MoreHorizontal, Plus, Upload } from 'lucide-react';
+import { ChevronRight, Copy, Lock, MessageSquareText, MoreHorizontal, Pencil, Plus, Upload } from 'lucide-react';
 import type { LibraryPrefab, PrefabMember } from '@agent-board/daemon/protocol';
 import { errorMessage } from '../../../shared/errors';
 import { isNewPrefab } from '../board/menu-model';
@@ -8,6 +8,7 @@ import { editStart } from './CrewFlow';
 import { CrewFaces, PrefabIcon } from './icons';
 import { libraryBoard } from './prefab-board';
 import type { PrefabBoardStart } from './PrefabBoard';
+import { usePrefabDrafts } from './prefab-drafts';
 import { refreshPrefabs, usePrefabs, usePrefabsFailed } from './prefab-store';
 
 /** Opens `start` on its own board, in the board's window, which comes to the front. */
@@ -44,7 +45,8 @@ function PrefabShape({ members }: { members: readonly PrefabMember[] }) {
 /**
  * Settings › Prefabs: your crew prefabs, newest first, each to open on its own board, duplicate, export as a file or
  * delete (which asks first, in its row, as it can't be got back); the built-ins folded under them, to duplicate; and
- * + New prefab and Import a file… at the top. Every one opens on its board in the board's window.
+ * + New prefab, Describe a crew… and Import a file… at the top, and the drafts agents made under yours. Every one opens
+ * on its board in the board's window.
  */
 export function PrefabsSetting() {
   const prefabs = usePrefabs();
@@ -85,6 +87,10 @@ export function PrefabsSetting() {
         <Button size="sm" variant="ghost" onClick={importFile}>
           <Upload aria-hidden />
           Import a file…
+        </Button>
+        <Button size="sm" variant="ghost" data-testid="prefabs-describe" onClick={() => void window.agentBoard.windows.requestBoard({ kind: 'crew', prefab: null, zoneId: null, describe: true })}>
+          <MessageSquareText aria-hidden />
+          Describe a crew…
         </Button>
         <Button size="sm" variant="primary" onClick={() => openBoard(editStart(null))} data-testid="prefabs-new">
           <Plus aria-hidden />
@@ -147,6 +153,7 @@ export function PrefabsSetting() {
           )}
         </ul>
       )}
+      <PrefabDrafts />
       {builtIn.length > 0 && (
         <div className="prefabs-built">
           <button type="button" className="prefabs-built-head" aria-expanded={shown} onClick={() => setShown(!shown)}>
@@ -181,5 +188,67 @@ export function PrefabsSetting() {
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Settings › Prefabs › Drafts: the prefabs agents drafted that the user hasn't saved or deleted, oldest first, each to
+ * open on its board in the board's window or delete. None is in the library until it is saved from its board.
+ */
+function PrefabDrafts() {
+  const { drafts, unreadable, failed } = usePrefabDrafts();
+  const [error, setError] = useState<string>();
+  if (drafts.length === 0 && unreadable.length === 0 && !failed) return null;
+
+  const remove = (id: string) => {
+    setError(undefined);
+    window.agentBoard.orchestrators.removeDraft(id).catch((failure: unknown) => setError(`Could not delete it: ${errorMessage(failure)}`));
+  };
+
+  return (
+    <section className="prefabs-drafts" aria-label="Drafts" data-testid="prefabs-drafts">
+      <h3 className="prefabs-drafts-head">Drafts · {drafts.length}</h3>
+      <p className="prefabs-setting-say">Drafted by agents, waiting for you. None is in your prefabs until you save it from its board.</p>
+      {error !== undefined && <ErrorText>{error}</ErrorText>}
+      {failed && <ErrorText>Could not read the drafts.</ErrorText>}
+      <ul className="prefabs-list" aria-label="Drafts">
+        {drafts.map((draft) => (
+          <li key={draft.id} className="prefabs-row" data-testid="prefabs-draft">
+            <span className="prefabs-icon">
+              <Pencil aria-hidden />
+            </span>
+            <span className="prefabs-words">
+              <span className="prefabs-name">{draft.prefab.name}</span>
+              <span className="prefabs-purpose">Drafted by {draft.drafter.name}</span>
+            </span>
+            <PrefabShape members={draft.prefab.members} />
+            <span className="prefabs-row-actions" data-shown>
+              <Button size="sm" variant="primary" data-testid="prefabs-draft-open" onClick={() => void window.agentBoard.windows.requestBoard({ kind: 'prefabDraft', id: draft.id })}>
+                Open
+              </Button>
+              <Button size="sm" variant="ghost" data-testid="prefabs-draft-delete" onClick={() => remove(draft.id)}>
+                Delete
+              </Button>
+            </span>
+          </li>
+        ))}
+        {unreadable.map((id) => (
+          <li key={id} className="prefabs-row" data-testid="prefabs-draft-unreadable">
+            <span className="prefabs-icon">
+              <Pencil aria-hidden />
+            </span>
+            <span className="prefabs-words">
+              <span className="prefabs-name">A draft this version can’t read</span>
+              <span className="prefabs-purpose">Made by a later version of the app, or changed outside it</span>
+            </span>
+            <span className="prefabs-row-actions" data-shown>
+              <Button size="sm" variant="ghost" onClick={() => remove(id)}>
+                Delete
+              </Button>
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }

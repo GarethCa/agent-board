@@ -19,6 +19,8 @@
     "./client": "./src/client.ts",
     "./cron": "./src/cron.ts",
     "./crew-prefabs": "./src/crew-prefabs.ts",
+    "./prefab-graph": "./src/prefab-graph.ts",
+    "./prefab-graph-checks": "./src/prefab-graph-checks.ts",
     "./gate-output": "./src/gate-output.ts",
     "./gate-rules": "./src/gate-rules.ts",
     "./human-status": "./src/human-status.ts",

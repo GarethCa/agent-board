@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.6.31 (2026-11-18)
+
+- Settings shots hide the groups the public build cuts, so both builds share one baseline
+- Non-makers share the crew worktree: own paths, board commits, clashes, Restore and the waiting merge
+- The daemon's git commands run with the repo's hooks off (post-checkout on addWorktree first)
+- The prefab sentence says a join on a multi-target work line
+- Draft a crew prefab from a description, by any agent you pick
+- An input pill's panel can change its kind in place
+- The prefab sentence says joins past your OK, and whose work goes on
+- An agent's crew prompt can't pass for a board line in a member's first prompt
+- Crew branches: makers on branches of their own, merged into the crew branch, one draft PR
+- The prefab editor draws graphs: loop gates, input pills, joins, panels, branch tags
+- A crew member's hand-off can't pass for the user's note in a new agent's first prompt
+- Prefab checks refuse a loop gate's done line that leads back into its own loop
+- The board runs a prefab's graph: routing, joins, timeouts, gates, Your OK and stops
+- Pin an agent expanded, so it stays open where it is, at its size, through restarts
+- Crew prefabs are graphs on file: .crew.json v2, its checks, and v1 import
+- Agent tiles show the whole status line, up to 120 characters, in a fixed box that shrinks its text to fit
+- Log each expanded-tile collapse and view move with its cause
+- A send queued until the turn ends no longer joins the line the user sent mid-turn
+- Drop crew-dim.test.ts from the gate's scanner list
+- Expanding a tile grows its zone only by what doesn't fit, and collapsing gives the size back
+- Focusing an orchestrator no longer dims other tiles or draws a crew frame
+
 ## v0.6.30 (2026-11-17)
 
 - Size a zone's lanes area on its own, with a free area outside it that Arrange leaves alone

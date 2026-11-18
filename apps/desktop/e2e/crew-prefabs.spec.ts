@@ -8,7 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { LibraryPrefab } from '@agent-board/daemon/protocol';
-import { run } from './board-helpers.ts';
+import { run, tokenOf, withDaemon } from './board-helpers.ts';
 import { agents, launch, screen, sessionWindow, SHELL_ENV, spawnAgent, tile, tileAction, TURN_MS, windowKey, zoneNamed, zones } from './agent-helpers.ts';
 import { test, browseForZone, pickFolderNext, removeDataDir, tempDataDir } from './launch.ts';
 import { openSettings } from './settings-helpers.ts';
@@ -49,19 +49,26 @@ test('a prefab changes on its own board, problems listed at Save; Settings › P
     await name.fill('Pair and design');
     await board.getByRole('combobox', { name: 'Stop after' }).selectOption('4');
 
+    // Your prompt's Kind turns it into a clock in place, its settings shown; Undo turns it back.
+    await board.getByTestId('prefab-prompt').click();
+    await board.getByRole('group', { name: 'Kind' }).getByRole('button', { name: 'Clock' }).click();
+    await expect(board.getByRole('combobox', { name: 'When' })).toBeVisible();
+    await board.getByRole('button', { name: 'Undo' }).click();
+    await expect(board.getByTestId('prefab-prompt')).toBeVisible();
+
     // An agent with no line in is listed at Save, not refused as it is drawn; Undo takes it off again.
     await board.getByTestId('prefab-board-add').click();
     await window.getByRole('menuitem', { name: 'Reviewer' }).click();
     await board.getByTestId('prefab-board-save').click();
-    await expect(board.getByTestId('prefab-problems')).toContainText('has no line in.');
+    await expect(board.getByTestId('prefab-problems')).toContainText('is reached from no input');
     expect((await prefabs(window)).some((prefab) => prefab.name === 'Pair and design')).toBe(false);
     await board.getByRole('button', { name: 'Undo' }).click();
     await board.getByTestId('prefab-board-save').click();
     await expect(board.getByTestId('prefab-ready')).toBeVisible();
     await expect.poll(async () => (await prefabs(window)).find((prefab) => prefab.name === 'Pair and design')).toMatchObject({ roundLimit: 4, builtIn: false });
     const kept = (await prefabs(window)).find((prefab) => prefab.name === 'Pair and design')!;
-    // Where each one was, for the next time it opens.
-    expect(Object.keys(kept.places ?? {}).length).toBe(kept.members.length + 1);
+    // Where each one was, for the next time it opens: its agents, its pills and its loop gate, and Your prompt's as before.
+    expect(Object.keys(kept.places ?? {}).length).toBe(kept.members.length + (kept.inputs?.length ?? 0) + (kept.gates?.length ?? 0) + 1);
     await board.getByTestId('prefab-board-back').click();
     await expect(board).toBeHidden();
 
@@ -375,6 +382,67 @@ test('a zone’s ▾ beside + agent offers a blank agent first, then the library
     await expect(box).toBeHidden();
     await expect.poll(async () => (await agents(window)).filter((agent) => agent.description === 'Add a header').map((agent) => agent.zoneId)).toEqual([zone!.id]);
     await expect(crewCard(window, 'Add a header').getByTestId('crew-card-row')).toHaveCount(2);
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a draft an agent made opens from Settings › Prefabs › Drafts on its board: kept for later, saved to the library, or discarded', async () => {
+  const { dir, repo, env } = scratch('orchestrate');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, env);
+  try {
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await spawnAgent(window, 'monorepo', 'Print your board identity');
+    const [drafter] = await agents(window);
+    const token = await withDaemon(dataDir, (client) => tokenOf(client, drafter!.sessionId));
+    const draft = (name: string) =>
+      withDaemon(dataDir, (client) =>
+        client.call('board.draftPrefab', {
+          token,
+          text: JSON.stringify({ agentBoardCrewPrefab: 1, name, members: [{ id: 'writer', role: 'implementer', starts: 'prompt' }] }),
+          assumptions: [{ text: 'One writer is enough', about: 'writer' }],
+        }),
+      );
+    await draft('Drafted docs');
+    await draft('Drafted spike');
+
+    const settings = await openSettings(window, 'prefabs.library');
+    const drafts = settings.getByTestId('prefabs-drafts');
+    const row = (name: string) => drafts.getByTestId('prefabs-draft').filter({ hasText: name });
+    const board = window.getByTestId('prefab-board');
+    const name = board.getByRole('textbox', { name: 'Prefab name' });
+    const leave = window.getByRole('alertdialog', { name: /^Save / });
+
+    // Opened, it shows on its board with what its drafter assumed; leaving asks, and Keep keeps it for later.
+    await row('Drafted docs').getByTestId('prefabs-draft-open').click();
+    await expect(name).toHaveValue('Drafted docs');
+    await expect(board.getByTestId('prefab-draft')).toContainText('One writer is enough');
+    await board.getByTestId('prefab-board-back').click();
+    await leave.getByTestId('prefab-draft-keep').click();
+    await expect(board).toBeHidden();
+    await expect(row('Drafted docs')).toHaveCount(1);
+
+    // Saved to the library from its note, it is the user's prefab, and no longer a draft.
+    await row('Drafted docs').getByTestId('prefabs-draft-open').click();
+    await board.getByTestId('prefab-draft-save').click();
+    await expect.poll(async () => (await prefabs(window)).some((prefab) => prefab.name === 'Drafted docs')).toBe(true);
+    await expect(row('Drafted docs')).toHaveCount(0);
+    await board.getByTestId('prefab-board-back').click();
+    await expect(board).toBeHidden();
+    await expect(settings.getByTestId('prefabs-row').filter({ hasText: 'Drafted docs' }).first()).toBeVisible();
+
+    // Discarded as it is left, it is gone, and never reached the library.
+    await row('Drafted spike').getByTestId('prefabs-draft-open').click();
+    await expect(name).toHaveValue('Drafted spike');
+    await board.getByTestId('prefab-board-back').click();
+    await leave.getByRole('button', { name: 'Discard' }).click();
+    await expect(board).toBeHidden();
+    await expect(row('Drafted spike')).toHaveCount(0);
+    expect((await prefabs(window)).some((prefab) => prefab.name === 'Drafted spike')).toBe(false);
   } finally {
     await app.close();
     await removeDataDir(dataDir);

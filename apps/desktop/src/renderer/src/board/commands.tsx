@@ -40,8 +40,8 @@ export interface BoardCommands {
   canStartAgent(): boolean;
   /** Opens New agent with the name filled in: in the zone, if it can start there, else the one the board picks. */
   newAgentNamed(name: string, zoneId: string | null): void;
-  /** Opens the prompt box of a crew from the prefab named, in the zone or the one in view; with no name, the library. */
-  startCrew(prefab: string | null, zoneId: string | null): void;
+  /** Opens the prompt box of a crew from the prefab named, in the zone or the one in view; with no name, the library; with `describe`, Describe a crew. */
+  startCrew(prefab: string | null, zoneId: string | null, describe?: boolean): void;
 }
 
 const BoardCommandsContext = createContext<RefObject<BoardCommands | undefined>>({ current: undefined });
@@ -69,7 +69,7 @@ export function useBoardCommands(): BoardCommands {
       showTicketItem: (ticket, itemId) => commands.current?.showTicketItem(ticket, itemId),
       canStartAgent: () => commands.current?.canStartAgent() ?? false,
       newAgentNamed: (name, zoneId) => commands.current?.newAgentNamed(name, zoneId),
-      startCrew: (prefab, zoneId) => commands.current?.startCrew(prefab, zoneId),
+      startCrew: (prefab, zoneId, describe) => commands.current?.startCrew(prefab, zoneId, describe),
     }),
     [commands],
   );
