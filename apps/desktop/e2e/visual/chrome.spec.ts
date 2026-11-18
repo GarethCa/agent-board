@@ -6,9 +6,9 @@ import { agents, launch, listFinishedTurns, LONG_MODEL, narrowBy, pickInChip, sc
 import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone, newShell } from '../launch.ts';
 import { RENDER_ARGS, RENDER_ENV, VIEWPORT, ignorePointer, pinFonts, pinRandomText, settle } from '../render.ts';
 import { scratch } from '../scratch.ts';
-import { openSettings, settingsSection, showTileParts } from '../settings-helpers.ts';
+import { settingsSection, showTileParts } from '../settings-helpers.ts';
 import { SETTINGS_GROUPS } from '../../src/renderer/src/chrome/settings-ia.ts';
-import { SHOT, needsBaselines, viewSettled } from './shared.ts';
+import { CUT_SETTINGS_GROUPS, SHOT, needsBaselines, openSettingsForShot, viewSettled } from './shared.ts';
 
 test.use({ viewport: null });
 
@@ -470,7 +470,7 @@ for (const { theme, suffix } of [
       await window.setViewportSize(VIEWPORT);
       await window.emulateMedia({ colorScheme: theme });
       await expect.poll(() => window.evaluate(() => document.documentElement.dataset.theme)).toBe(theme);
-      const settings = await openSettings(window, 'general.appearance');
+      const settings = await openSettingsForShot(window, 'general.appearance');
       await settings.emulateMedia({ colorScheme: theme });
       await expect.poll(() => settings.evaluate(() => document.documentElement.dataset.theme)).toBe(theme);
       await pinFonts(settings);
@@ -589,7 +589,7 @@ test('the compact window setting: Off by default, then a custom window with its 
   const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
   await listFinishedTurns(window);
   try {
-    const settings = await openSettings(window, 'agents.context');
+    const settings = await openSettingsForShot(window, 'agents.context');
     await pinFonts(settings);
     const menu = settingsSection(settings, 'Context');
     const select = menu.getByLabel("Compact agents' context at");
@@ -616,14 +616,17 @@ test('the compact window setting: Off by default, then a custom window with its 
   }
 });
 
-/** The Settings window on each of its eight groups' pages, the Background service row with its Restart, and searching, light and dark. */
+/** The groups shot here: all but the ones some builds cut. */
+const SHOT_GROUPS = SETTINGS_GROUPS.filter((group) => !CUT_SETTINGS_GROUPS.includes(group.id));
+
+/** The Settings window on each of its groups' pages, the Background service row with its Restart, and searching, light and dark. */
 for (const { theme, suffix } of [
   { theme: 'light', suffix: '' },
   { theme: 'dark', suffix: '-dark' },
 ] as const) {
   test(`the Settings window on each group, ${theme}`, async () => {
     const shots = [
-      ...SETTINGS_GROUPS.map((group) => `settings-window-${group.id}${suffix}`),
+      ...SHOT_GROUPS.map((group) => `settings-window-${group.id}${suffix}`),
       `settings-window-advanced-service${suffix}`,
       `settings-window-search${suffix}`,
     ];
@@ -632,12 +635,12 @@ for (const { theme, suffix } of [
     const appearance: Record<string, string> = theme === 'dark' ? { AGENT_BOARD_APPEARANCE: 'dark' } : {};
     const { app, window } = await launch(dataDir, { ...RENDER_ENV, ...appearance }, RENDER_ARGS);
     try {
-      const settings = await openSettings(window);
+      const settings = await openSettingsForShot(window);
       await settings.emulateMedia({ colorScheme: theme });
       await expect.poll(() => settings.evaluate(() => document.documentElement.dataset.theme)).toBe(theme);
       await pinFonts(settings);
-      for (const group of SETTINGS_GROUPS) {
-        await openSettings(window, group.id);
+      for (const group of SHOT_GROUPS) {
+        await openSettingsForShot(window, group.id);
         await pinRandomText(settings);
         const restorePointer = await ignorePointer(settings);
         await settle(settings);
@@ -646,7 +649,7 @@ for (const { theme, suffix } of [
       }
 
       // Advanced › Background service, below the fold on its group's page: its reading, Restart and hint.
-      await openSettings(window, 'advanced.service');
+      await openSettingsForShot(window, 'advanced.service');
       const service = settings.locator('#settings-section-advanced-service');
       await expect(service.getByRole('button', { name: 'Restart' })).toBeVisible();
       await pinRandomText(settings);
@@ -681,7 +684,7 @@ for (const { theme, suffix } of [
     const appearance: Record<string, string> = theme === 'dark' ? { AGENT_BOARD_APPEARANCE: 'dark' } : {};
     const { app, window } = await launch(dataDir, { ...RENDER_ENV, ...appearance }, RENDER_ARGS);
     try {
-      const settings = await openSettings(window, 'board.tiles');
+      const settings = await openSettingsForShot(window, 'board.tiles');
       await settings.emulateMedia({ colorScheme: theme });
       await expect.poll(() => settings.evaluate(() => document.documentElement.dataset.theme)).toBe(theme);
       await pinFonts(settings);

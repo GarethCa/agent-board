@@ -7,13 +7,13 @@ import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from 
 import { scratch } from './scratch.ts';
 import { openSettings, settingsSection } from './settings-helpers.ts';
 
-// Orchestrators on the board: agents that orchestrate, the crew frame that shows who started whom
-// while the orchestrator is focused, and the orchestrator's Activity tab.
+// Orchestrators on the board: agents that orchestrate, their crew count, focusing one changing no other tile, and the
+// orchestrator's Activity tab.
 
 /** The tile of the agent named `name`. */
 const agentTile = (window: Page, name: string) => tile(window).filter({ has: window.getByTitle(name, { exact: true }) });
 
-test('an orchestrator in any zone starts two workers: their crew frame shows while it is hovered or selected, the rest dims, and its Activity tab lists them', async () => {
+test('an orchestrator in any zone starts two workers: hovering, selecting or typing in it changes no other tile, and its Activity tab lists them', async () => {
   const { dir, repo, env } = scratch('orchestrate');
   const dataDir = tempDataDir();
   let { app, window } = await launch(dataDir, { ...env, ...SHELL_ENV });
@@ -34,66 +34,48 @@ test('an orchestrator in any zone starts two workers: their crew frame shows whi
     const lead = window.locator('[data-testid="agent-tile"][data-orchestrator]');
     await expect(lead).toHaveCount(1);
     await expect(lead.getByTestId('crew-count')).toHaveText('2');
-    const workers = [agentTile(window, 'worker one'), agentTile(window, 'worker two')];
-    const ids = await Promise.all(workers.map((worker) => worker.getAttribute('data-session-id')));
+    await expect(agentTile(window, 'worker one')).toHaveCount(1);
+    await expect(agentTile(window, 'worker two')).toHaveCount(1);
     // A session of the user's own, in no crew.
     await spawnAgent(window, 'monorepo', 'Tidy the docs');
     if (await sessionWindow(window).isVisible()) await sessionWindow(window).getByRole('button', { name: 'Close session window' }).click();
     await expect(tile(window)).toHaveCount(4);
-    const stranger = window.locator('[data-testid="agent-tile"]:not([data-crew])');
+    const leadId = await lead.getAttribute('data-session-id');
+    const own = (await agents(window)).find((agent) => agent.spawnedBy === null && agent.sessionId !== leadId)!;
+    const stranger = window.locator(`[data-testid="agent-tile"][data-session-id="${own.sessionId}"]`);
     await expect(stranger).toHaveCount(1);
 
-    // At rest the frame is there, round the crew, but not shown, and nothing dims.
-    const frame = window.getByTestId('crew-frame');
-    await expect(frame).toHaveCount(1);
-    await expect(frame).toHaveAttribute('data-members', ids.join(' '));
-    await expect(frame).toContainText(/'s crew$/);
-    await expect(frame).toHaveCSS('opacity', '0');
+    // Nothing is drawn round the crew, and no tile fades: at rest, hovered, selected, or typed in.
+    // Each tile's opacity once a fade would have eased in: longer than the tile's opacity transition.
+    const opacities = () =>
+      tile(window).evaluateAll(async (tiles) => {
+        await new Promise((done) => setTimeout(done, 400));
+        return tiles.map((one) => getComputedStyle(one).opacity);
+      });
+    const atRest = await opacities();
+    expect(atRest).toEqual(['1', '1', '1', '1']);
+    await expect(window.getByTestId('crew-frame')).toHaveCount(0);
     await expect(window.getByTestId('from-chip')).toHaveCount(0);
-    await expect(stranger).toHaveCSS('opacity', '1');
 
-    // Hovering the orchestrator shows its frame, lights its crew and dims the user's own session.
     await lead.hover();
-    await expect(frame).toHaveAttribute('data-focused', 'true');
-    await expect(frame).toHaveCSS('opacity', '1');
-    for (const member of [lead, ...workers]) await expect(member).toHaveAttribute('data-crew-lit', 'true');
-    await expect(stranger).toHaveCSS('opacity', '0.4');
-    await stranger.hover();
-    await expect(frame).toHaveCSS('opacity', '0');
-    await expect(stranger).toHaveCSS('opacity', '1');
+    await expect(lead).toHaveAttribute('data-orchestrator');
+    expect(await opacities(), 'hovered').toEqual(atRest);
 
-    // Selected, it keeps them shown after the pointer leaves, until it is unselected.
     await lead.click();
     await stranger.hover();
-    await expect(frame).toHaveCSS('opacity', '1');
-    await expect(stranger).toHaveCSS('opacity', '0.4');
+    expect(await opacities(), 'selected').toEqual(atRest);
     await window.keyboard.press('Escape');
-    await expect(frame).toHaveCSS('opacity', '0');
-    await expect(stranger).toHaveCSS('opacity', '1');
 
-    // Expanded in place and selected, it still focuses its crew. While the keyboard is in its terminal, typing, the
-    // crew lets go: no dim round it and no frame, though the pointer rests on it. The keyboard back on the board, its
-    // selection focuses the crew again. (The board draws only the tiles in view, so this reads the board's mark.)
-    const board = window.locator('html');
     await tileAction(lead, 'Expand in place');
     const expanded = window.getByTestId('expanded-tile');
     await expect(expanded).toHaveCount(1);
-    const head = expanded.locator('.expanded-tile-head');
-    await head.click();
-    await expect(board).toHaveAttribute('data-crew-focus');
     await expanded.getByTestId('session-terminal').click();
     await expect.poll(() => window.evaluate(() => document.activeElement?.closest('.xterm') !== null)).toBe(true);
-    await expect(board).not.toHaveAttribute('data-crew-focus');
-    await expect(frame).toHaveCSS('opacity', '0');
-    await head.click();
-    await expect(board).toHaveAttribute('data-crew-focus');
+    // Expanded, the lead's tile is drawn in its place, so only the others' looks are compared.
+    expect(new Set(await opacities()), 'typed in').toEqual(new Set(['1']));
     await expanded.getByRole('button', { name: 'Collapse', exact: true }).click();
     await expect(lead).toBeVisible();
-    // Unselected, and the pointer off it: the tile collapses back under the pointer, whose hover would focus the crew.
     await window.keyboard.press('Escape');
-    await expect(window.locator('.react-flow__node.selected')).toHaveCount(0);
-    await window.mouse.move(1, 1);
-    await expect(board).not.toHaveAttribute('data-crew-focus');
 
     // The View popover has no crew row now; its Tethers switch is off by default and saved, as Settings shows.
     await window.getByRole('button', { name: 'View', exact: true }).click();
@@ -116,14 +98,13 @@ test('an orchestrator in any zone starts two workers: their crew frame shows whi
     await expect(lines.nth(0)).toContainText('started worker two');
     await expect(lines.nth(1)).toContainText('started worker one');
 
-    // Tethers on is kept across a restart; the crew comes back framed, the frame still waiting for focus.
+    // Tethers on is kept across a restart, and the crew comes back with nothing drawn round it.
     await app.close();
     const again = await launch(dataDir, { ...env, ...SHELL_ENV });
     app = again.app;
     window = again.window;
     await expect(tile(window)).toHaveCount(4);
-    await expect(window.getByTestId('crew-frame')).toHaveCount(1);
-    await expect(window.getByTestId('crew-frame')).toHaveCSS('opacity', '0');
+    await expect(window.getByTestId('crew-frame')).toHaveCount(0);
     await expect.poll(() => window.evaluate(() => globalThis.window.agentBoard.view.get('tethers'))).toBe(true);
   } finally {
     await app.close();

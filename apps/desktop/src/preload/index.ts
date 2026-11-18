@@ -26,6 +26,7 @@ import {
   SHELL_IPC,
   TAB_DRAG_IPC,
   TRACKER_IPC,
+  TRACE_IPC,
   VIEW_IPC,
   WINDOW_IPC,
   WINDOW_QUERY,
@@ -286,6 +287,11 @@ const api: AgentBoardApi = {
     crewRound: (crewId) => invoke(ORCHESTRATOR_IPC.crewRound, crewId),
     setTicketChat: (sessionId, kind) => invoke(ORCHESTRATOR_IPC.setTicketChat, sessionId, kind),
     arrangeTicket: (ticket) => invoke(ORCHESTRATOR_IPC.arrangeTicket, ticket),
+    drafts: () => invoke(ORCHESTRATOR_IPC.drafts),
+    openDraft: (id) => invoke(ORCHESTRATOR_IPC.openDraft, id),
+    removeDraft: (id) => invoke(ORCHESTRATOR_IPC.removeDraft, id),
+    describeCrew: (params) => invoke(ORCHESTRATOR_IPC.describeCrew, params),
+    onDraft: (listener) => subscribe(ORCHESTRATOR_IPC.drafted, listener),
   },
   agents: {
     list: () => invoke(AGENT_IPC.list),
@@ -325,6 +331,7 @@ const api: AgentBoardApi = {
     setSchedule: (sessionId, schedule) => invoke(AGENT_IPC.setSchedule, sessionId, schedule),
     markSeen: (sessionId) => invoke(AGENT_IPC.markSeen, sessionId),
     setMuted: (sessionId, muted) => invoke(AGENT_IPC.setMuted, sessionId, muted),
+    setPinnedExpanded: (sessionId, pinned) => invoke(AGENT_IPC.setPinnedExpanded, sessionId, pinned),
     setEffort: (sessionId, effort) => invoke(AGENT_IPC.setEffort, sessionId, effort),
     setWatches: (sessionId, change) => invoke(AGENT_IPC.setWatches, sessionId, change),
     readWatches: (sessionId) => invoke(AGENT_IPC.readWatches, sessionId),
@@ -503,6 +510,9 @@ const api: AgentBoardApi = {
     ready: () => {
       if (capturing) ipcRenderer.send(CAPTURE_IPC.ready);
     },
+  },
+  trace: {
+    expanded: (entry) => ipc.send(TRACE_IPC.expanded, entry),
   },
 };
 

@@ -1,7 +1,7 @@
 import { expect, type Locator, type Page } from '@playwright/test';
 import { SPACING_GAPS } from '@agent-board/daemon/board-layout';
 import { rmSync } from 'node:fs';
-import { drag, run, settledBox, viewSettled } from './board-helpers.ts';
+import { drag, run, settledBox, viewSettled, viewTransform } from './board-helpers.ts';
 import { agents, launch, sessionWindow, setClickOpens, SHELL_ENV, spawnAgent, tile, tileAction, TURN_MS, zones } from './agent-helpers.ts';
 import { test, pickFolderNext, removeDataDir, runDesign, tempDataDir, browseForZone, newShell, placeWithTool, addEmptyZone } from './launch.ts';
 import { scratch } from './scratch.ts';
@@ -681,6 +681,11 @@ for (const loose of [false, true]) {
         loose,
       );
       await expect(window.getByTestId('shell-tile')).toHaveCount(9);
+      // Roomy enough to hold the blocks pushed: a tighter zone fills its empty space first.
+      if (!loose) await window.evaluate(async () => {
+        const [zone] = await globalThis.window.agentBoard.zones.list();
+        await globalThis.window.agentBoard.zones.update(zone!.id, { x: zone!.x, y: zone!.y, width: 2000, height: 1400 });
+      });
       const idOf = (cell: (typeof cells)[number]) => ids[cells.indexOf(cell)]!;
       const drawn = async () =>
         Object.fromEntries(await Promise.all(cells.map(async (cell) => [cell, await nodeRect(shellNode(window, idOf(cell)))] as const))) as Record<(typeof cells)[number], Rect>;
@@ -724,6 +729,55 @@ for (const loose of [false, true]) {
     }
   });
 }
+
+test("expanding a tile in a zone with room to spare leaves the zone's size alone, its tiles moved clear into its empty space, and collapsing puts them back", async () => {
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, SHELL_ENV);
+  try {
+    await setClickOpens(window, 'Expand in place');
+    await addEmptyZone(window, 'Roomy');
+    const zone = window.getByTestId('zone');
+    // A1 B1 / A2 B2 in a wide zone: the row below has room beside the expanded tile, not below it. It is just taller than the expanded tile needs.
+    const STEP = { x: 256 + 16, y: 24 + 136 + 16 };
+    const ids = await shellsAt(window, [0, 1, 2, 3].map((index) => ({ x: 20 + (index % 2) * STEP.x, y: 44 + Math.floor(index / 2) * STEP.y })));
+    await expect(window.getByTestId('shell-tile')).toHaveCount(4);
+    await window.evaluate(async () => {
+      const [made] = await globalThis.window.agentBoard.zones.list();
+      await globalThis.window.agentBoard.zones.update(made!.id, { x: made!.x, y: made!.y, width: 2000, height: 800 });
+    });
+    await expect.poll(async () => [(await zoneRect(zone)).width, (await zoneRect(zone)).height]).toEqual([2000, 800]);
+    const drawnTiles = () => Promise.all(ids.map((id) => nodeRect(shellNode(window, id))));
+    const home = await drawnTiles();
+    const before = await zoneRect(zone);
+    const stored = async () => JSON.stringify([await storedShellPlaces(window), await storedZoneLayouts(window)]);
+    const layout = await stored();
+
+    await shellNode(window, ids[0]!).dblclick();
+    await expect(expandedTile(window)).toHaveCount(1);
+    await expect.poll(async () => (await nodeRect(shellNode(window, ids[0]!))).width).toBe(EXPANDED_WIDTH);
+    // The others go clear of it, inside the zone, which keeps its size.
+    await expect
+      .poll(async () => {
+        const open = await nodeRect(shellNode(window, ids[0]!));
+        const rects = (await drawnTiles()).slice(1);
+        return rects.every((rect) => rect.x >= open.x + open.width || rect.y >= open.y + open.height);
+      })
+      .toBe(true);
+    const grown = await zoneRect(zone);
+    expect([grown.width, grown.height]).toEqual([before.width, before.height]);
+    for (const rect of await drawnTiles()) expect(holds(grown, rect)).toBe(true);
+    expect(await stored()).toBe(layout);
+
+    await expandedTile(window).getByRole('button', { name: 'Collapse', exact: true }).click();
+    await expect(expandedTile(window)).toHaveCount(0);
+    await expect.poll(() => zoneRect(zone)).toEqual(before);
+    await expect.poll(drawnTiles).toEqual(home);
+    expect(await stored()).toBe(layout);
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+  }
+});
 
 test("Tidy with a tile expanded lays the zone out round its expanded size, and expanding or collapsing it then moves nothing more", async () => {
   const dataDir = tempDataDir();
@@ -1276,16 +1330,14 @@ interface Box {
 }
 
 /**
- * Where the zone, its crew frame and each tile (by node id) are drawn on the board, whatever the view, with which agents
- * the frame holds. The view is fitted first: a tile out of view isn't drawn.
+ * Where the zone and each tile (by node id) are drawn on the board, whatever the view. The view is fitted first: a tile
+ * out of view isn't drawn.
  */
-async function crewLayout(page: Page): Promise<{ zone: Box; frame: Box; members: string[]; parts: { box: Box; members: string[] }[]; tiles: Record<string, Box> }> {
+async function crewLayout(page: Page): Promise<{ zone: Box; tiles: Record<string, Box> }> {
   await page.getByRole('button', { name: 'Fit View' }).click();
   await viewSettled(page);
-  // Done moving and growing: no node, nor the frame, easing anywhere.
-  await expect
-    .poll(() => page.locator('.react-flow__node, [data-testid="crew-frame"]').evaluateAll((nodes) => nodes.flatMap((node) => node.getAnimations()).length))
-    .toBe(0);
+  // Done moving and growing: no node easing anywhere.
+  await expect.poll(() => page.locator('.react-flow__node').evaluateAll((nodes) => nodes.flatMap((node) => node.getAnimations()).length)).toBe(0);
   return page.evaluate(() => {
     const flow = document.querySelector('.react-flow')!.getBoundingClientRect();
     const { a: scale, m41: panX, m42: panY } = new DOMMatrix(getComputedStyle(document.querySelector('.react-flow__viewport')!).transform);
@@ -1293,16 +1345,19 @@ async function crewLayout(page: Page): Promise<{ zone: Box; frame: Box; members:
       const { x, y, width, height } = element.getBoundingClientRect();
       return { x: (x - flow.x - panX) / scale, y: (y - flow.y - panY) / scale, width: width / scale, height: height / scale };
     };
-    const frame = document.querySelector('[data-testid="crew-frame"]')!;
     return {
       zone: box(document.querySelector('.react-flow__node-zone')!),
-      frame: box(frame),
-      members: frame.getAttribute('data-members')!.split(' '),
-      parts: [...document.querySelectorAll('[data-testid="crew-frame"]')].map((part) => ({ box: box(part), members: part.getAttribute('data-members')!.split(' ') })),
       tiles: Object.fromEntries([...document.querySelectorAll('.react-flow__node-tile')].map((node) => [node.getAttribute('data-id')!, box(node)])),
     };
   });
 }
+
+/** The box round `boxes`. */
+const around = (boxes: Box[]): Box => {
+  const x = Math.min(...boxes.map((box) => box.x));
+  const y = Math.min(...boxes.map((box) => box.y));
+  return { x, y, width: Math.max(...boxes.map((box) => box.x + box.width)) - x, height: Math.max(...boxes.map((box) => box.y + box.height)) - y };
+};
 
 /** Whether `inner` lies inside `outer`, give or take a pixel. */
 const inside = (inner: Box, outer: Box) =>
@@ -1315,7 +1370,7 @@ const apart = (a: Box, b: Box) => a.x + a.width <= b.x || b.x + b.width <= a.x |
 const rounded = (layout: Awaited<ReturnType<typeof crewLayout>>) =>
   JSON.stringify(layout, (_, value: unknown) => (typeof value === 'number' ? Math.round(value) : value));
 
-test('an expanded tile reshapes its zone round a crew frame: the frame keeps its crew where they are drawn, a crew in the way moves as one, and collapsing puts it all back', async () => {
+test('an expanded tile reshapes its zone round a crew: a crew in the way moves as one, and collapsing puts it all back', async () => {
   const { dir, repo, env } = scratch('orchestrate');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, { ...env, ...SHELL_ENV });
@@ -1344,17 +1399,16 @@ test('an expanded tile reshapes its zone round a crew frame: the frame keeps its
       { zoneId: zone!.id, lead: lead.sessionId, crew: crew.map((agent) => agent.sessionId) },
     );
     const crewIds = crew.map((agent) => `agent:${agent.sessionId}`);
-    await expect(window.getByTestId('crew-frame')).toHaveAttribute('data-members', crew.map((agent) => agent.sessionId).join(' '));
+    const crewBox = (layout: Awaited<ReturnType<typeof crewLayout>>) => around(crewIds.map((id) => layout.tiles[id]!));
+    // Nothing is drawn round the crew: its lead's crew count says how many it started.
+    await expect(window.getByTestId('crew-frame')).toHaveCount(0);
     const atRest = await crewLayout(window);
 
-    /** Expands `opened`, checks the frame holds its crew and the zone holds it all, collapses it, and checks it is all back. */
+    /** Expands `opened`, checks the zone holds it all, collapses it, and checks it is all back. */
     const expandThenCollapse = async (opened: Locator, check: (layout: Awaited<ReturnType<typeof crewLayout>>) => void) => {
       await tileAction(opened, 'Expand in place');
       await expect(expandedTile(window)).toHaveCount(1);
       const layout = await crewLayout(window);
-      expect(layout.members, 'the frame keeps its crew').toEqual(atRest.members);
-      for (const id of crewIds) expect(inside(layout.tiles[id]!, layout.frame), `${id} inside its frame`).toBe(true);
-      expect(inside(layout.frame, layout.zone), 'the frame inside the zone').toBe(true);
       for (const [id, box] of Object.entries(layout.tiles)) expect(inside(box, layout.zone), `${id} inside the zone`).toBe(true);
       check(layout);
       await expandedTile(window).getByRole('button', { name: 'Collapse', exact: true }).click();
@@ -1362,18 +1416,18 @@ test('an expanded tile reshapes its zone round a crew frame: the frame keeps its
       expect(rounded(await crewLayout(window)), 'all of it back where it was').toBe(rounded(atRest));
     };
 
-    // The lead expanded: its crew pushed aside, in its frame.
+    // The lead expanded: its crew pushed aside.
     await expandThenCollapse(window.locator('[data-testid="agent-tile"][data-orchestrator]'), () => {});
-    // One of the crew expanded: the frame round it at its size, and the other.
+    // One of the crew expanded, at its size.
     await expandThenCollapse(tile(window).filter({ has: window.getByTitle(crew[0]!.name, { exact: true }) }), () => {});
-    // The shell, no part of the crew, expanded over it: the crew and its frame move by one shift, keeping its layout.
+    // The shell, no part of the crew, expanded over it: the crew moves by one shift, keeping its layout.
     await expandThenCollapse(window.getByTestId('shell-tile'), (layout) => {
       const shift = (from: Box, to: Box) => ({ dx: Math.round(to.x - from.x), dy: Math.round(to.y - from.y) });
-      const moved = shift(atRest.frame, layout.frame);
-      expect(moved, 'the frame moved').not.toEqual({ dx: 0, dy: 0 });
-      for (const id of crewIds) expect(shift(atRest.tiles[id]!, layout.tiles[id]!), `${id} moved with its frame`).toEqual(moved);
+      const moved = shift(crewBox(atRest), crewBox(layout));
+      expect(moved, 'the crew moved').not.toEqual({ dx: 0, dy: 0 });
+      for (const id of crewIds) expect(shift(atRest.tiles[id]!, layout.tiles[id]!), `${id} moved with its crew`).toEqual(moved);
       const [, shell] = Object.entries(layout.tiles).find(([id]) => id.startsWith('shell:'))!;
-      expect(apart(layout.frame, shell), 'the frame clear of the shell').toBe(true);
+      expect(apart(crewBox(layout), shell), 'the crew clear of the shell').toBe(true);
     });
   } finally {
     await app.close();
@@ -1382,57 +1436,114 @@ test('an expanded tile reshapes its zone round a crew frame: the frame keeps its
   }
 });
 
-test('a crew frame holds its whole crew in its zone, wherever it is moved, in parts round a tile among them, and round a member expanded far from its lead', async () => {
+/**
+ * Notes, in the page, each time the expanded tiles come or go, the keyboard moves (read each frame: a focused element
+ * taken out of the page says nothing), the view moves, or a key reaches anything but a terminal.
+ */
+const watchTheTile = (page: Page) =>
+  page.evaluate(() => {
+    const notes: string[] = [];
+    (window as unknown as { tileNotes: string[] }).tileNotes = notes;
+    const start = performance.now();
+    const note = (what: string) => notes.push(`${Math.round(performance.now() - start)}ms ${what}`);
+    const name = (element: Element | null) =>
+      element === null ? 'none' : `${element.tagName.toLowerCase()}${element.className && typeof element.className === 'string' ? `.${element.className.split(' ').slice(0, 2).join('.')}` : ''}${element.closest('[data-testid="expanded-tile"]') ? ' (in the tile)' : ''}`;
+    let expanded = document.querySelectorAll('[data-testid="expanded-tile"]').length;
+    let active = document.activeElement;
+    const viewport = document.querySelector<HTMLElement>('.react-flow__viewport')!;
+    let view = viewport.style.transform;
+    const read = () => {
+      const now = document.querySelectorAll('[data-testid="expanded-tile"]').length;
+      if (now !== expanded) note(`expanded ${expanded} -> ${now}`);
+      expanded = now;
+      if (document.activeElement !== active) note(`keyboard ${name(active)} -> ${name(document.activeElement)}`);
+      active = document.activeElement;
+      if (viewport.style.transform !== view) note(`view ${view} -> ${viewport.style.transform}`);
+      view = viewport.style.transform;
+      requestAnimationFrame(read);
+    };
+    requestAnimationFrame(read);
+    document.addEventListener('keydown', (event) => {
+      if (!(event.target as Element).closest('.xterm')) note(`key ${event.key} on ${name(event.target as Element)}`);
+    }, true);
+  });
+
+const tileNotes = (page: Page) => page.evaluate(() => (window as unknown as { tileNotes: string[] }).tileNotes.join('\n'));
+
+test('an expanded tile stays expanded, its terminal keeping the keyboard, through its crew starting and asking back, a send, its own permission prompt and its turns; collapsed, the view stays where it was', async () => {
   const { dir, repo, env } = scratch('orchestrate');
   const dataDir = tempDataDir();
-  const { app, window } = await launch(dataDir, { ...env, ...SHELL_ENV });
+  // Each prompt typed later plays the scenario again, as the first did.
+  const { app, window } = await launch(dataDir, { ...env, ...SHELL_ENV, FAKE_HARNESS_REPEAT: '1' });
   try {
-    await pickFolderNext(app, repo);
-    await browseForZone(window);
-    await spawnAgent(window, 'monorepo', 'Lead two: Fix the flaky test');
+    await setClickOpens(window, 'Expand in place');
+    await addRepoZone(window, app, repo);
+    await spawnAgent(window, 'monorepo', 'Ask back: Ready when you are.', { name: 'lead' });
     if (await sessionWindow(window).isVisible()) await sessionWindow(window).getByRole('button', { name: 'Close session window' }).click();
-    await expect(tile(window)).toHaveCount(3, { timeout: 2 * TURN_MS });
-    await newShell(window);
-    await expect(sessionWindow(window)).toBeVisible();
-    await sessionWindow(window).getByRole('button', { name: 'Close session window' }).click();
-    const lead = (await agents(window)).find((agent) => agent.spawnedBy === null)!;
-    const crew = (await agents(window)).filter((agent) => agent.spawnedBy === lead.sessionId).toSorted((a, b) => a.name.localeCompare(b.name));
-    const crewIds = crew.map((agent) => `agent:${agent.sessionId}`);
-    const [zone] = await zones(window);
-    // As an arrange lays out a long crew: one many lanes below its lead, the other far to its right, and a shell, no
-    // part of the crew, between them.
-    await window.evaluate(
-      async ({ zoneId, lead, crew }) => {
-        const { agents, shells } = globalThis.window.agentBoard;
-        await agents.move(lead, { zoneId, x: 40, y: 64 });
-        await agents.move(crew[0]!, { zoneId, x: 336, y: 4200 });
-        await agents.move(crew[1]!, { zoneId, x: 1800, y: 1200 });
-        const [shell] = await shells.list();
-        await shells.move(shell!.id, { zoneId, x: 900, y: 2600 });
-      },
-      { zoneId: zone!.id, lead: lead.sessionId, crew: crew.map((agent) => agent.sessionId) },
-    );
-    await expect(window.getByTestId('crew-frame')).toHaveCount(2);
-    await expect(window.getByTestId('from-chip')).toHaveCount(0);
-    // Labelled once, on its first part.
-    await expect(window.locator('.crew-frame-label')).toHaveCount(1);
-
-    /** Every crew member in a part of its frame, and every other tile (its lead, the shell) clear of every part. */
-    const expectFramedExactly = (layout: Awaited<ReturnType<typeof crewLayout>>, when: string) => {
-      expect(layout.parts.flatMap((part) => part.members).toSorted(), `the crew, ${when}`).toEqual(crew.map((agent) => agent.sessionId).toSorted());
-      for (const part of layout.parts) {
-        for (const id of part.members) expect(inside(layout.tiles[`agent:${id}`]!, part.box), `agent:${id} inside its part, ${when}`).toBe(true);
-        for (const [id, box] of Object.entries(layout.tiles)) if (!crewIds.includes(id)) expect(apart(box, part.box), `${id} outside every part, ${when}`).toBe(true);
-      }
+    await expect(tile(window)).toHaveAttribute('data-state', /^(idle|waiting)$/, { timeout: TURN_MS });
+    const compact = (await tile(window).boundingBox())!;
+    await tile(window).dblclick();
+    await expect(expandedTile(window)).toBeVisible();
+    await viewSettled(window);
+    await expandedTile(window).getByTestId('session-terminal').click();
+    await watchTheTile(window);
+    const terminalHasKeyboard = () => window.evaluate(() => document.activeElement?.closest('[data-testid="expanded-tile"] .xterm') != null);
+    const stillExpanded = async (after: string) => {
+      const notes = await tileNotes(window);
+      expect.soft(await expandedTile(window).count(), `expanded after ${after}\n${notes}`).toBe(1);
+      expect.soft(await terminalHasKeyboard(), `its terminal has the keyboard after ${after}\n${notes}`).toBe(true);
     };
-    expectFramedExactly(await crewLayout(window), 'at rest');
 
-    // The far one expanded: its part round it at its expanded size, the shell still outside.
-    await tileAction(tile(window).filter({ has: window.getByTitle(crew[0]!.name, { exact: true }) }), 'Expand in place');
-    await expect(expandedTile(window)).toHaveCount(1);
-    const opened = await crewLayout(window);
-    expect(opened.tiles[crewIds[0]!]!.width, 'drawn at its expanded size').toBeGreaterThan(256);
-    expectFramedExactly(opened, 'one expanded');
+    // A crew member joins it, beside it, and the member's turn ends on a question the lead takes: typed at its prompt.
+    await run(window, 'Lead a worker that asks back');
+    await expect(expandedScreen(window)).toContainText('A worker started.', { timeout: TURN_MS });
+    const member = tile(window).filter({ has: window.getByTitle('worker asking', { exact: true }) });
+    await expect(member).toHaveAttribute('data-state', /^(idle|waiting)$/, { timeout: 2 * TURN_MS });
+    await expect(expandedScreen(window)).toContainText('Postgres or SQLite', { timeout: TURN_MS });
+    await stillExpanded('its crew starting and asking back');
+
+    // Its own permission prompt: a needs-you, answered where the keyboard is.
+    await run(window, 'Ask permission');
+    await expect(expandedScreen(window)).toContainText('(y/n)', { timeout: TURN_MS });
+    await stillExpanded('its permission prompt');
+    await run(window, 'y');
+    await expect(expandedScreen(window)).toContainText('Removed dist.', { timeout: TURN_MS });
+    await stillExpanded('answering it');
+
+    // It starts a crew member, sends it a message, waits for it and closes it.
+    await run(window, 'Orchestrate: Fix the flaky test');
+    await expect(expandedScreen(window)).toContainText('The worker is done and closed.', { timeout: 3 * TURN_MS });
+    await stillExpanded('a send to its crew member, and the member closed');
+    expect(await tileNotes(window), 'the view never moved, and no key left the terminal').not.toMatch(/ (view|key) /);
+
+    // The view panned until the tile's top-left corner, where its compact tile goes back to, is wholly out of sight.
+    const empty = await window.evaluate(() => {
+      for (let y = innerHeight - 60; y > 100; y -= 20) {
+        for (let x = 60; x < innerWidth - 60; x += 20) {
+          if (document.elementFromPoint(x, y)?.matches('.react-flow__pane, .react-flow__node-zone, .react-flow__node-zone > *')) return { x, y };
+        }
+      }
+      throw new Error('no empty board in view');
+    });
+    await window.mouse.move(empty.x, empty.y);
+    for (let step = 0; step < 40; step++) {
+      const box = (await expandedTile(window).boundingBox())!;
+      const clearX = box.x < -compact.width - 40;
+      const clearY = box.y < -compact.height - 40;
+      if (clearX && clearY) break;
+      await window.mouse.wheel(clearX ? 0 : 40, clearY ? 0 : 40);
+    }
+    await viewSettled(window);
+    const view = await viewTransform(window);
+
+    // ⌘Esc from its terminal collapses it: the tiles go back, and the view stays where it was.
+    const terminal = expandedTile(window).getByTestId('session-terminal');
+    const shown = (await terminal.boundingBox())!;
+    await terminal.click({ position: { x: shown.width - 40, y: shown.height - 40 } });
+    await window.keyboard.press('Meta+Escape');
+    await expect(expandedTile(window)).toHaveCount(0);
+    await viewSettled(window);
+    expect(await viewTransform(window), await tileNotes(window)).toBe(view);
   } finally {
     await app.close();
     await removeDataDir(dataDir);

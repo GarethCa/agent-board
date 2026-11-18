@@ -66,7 +66,7 @@ function TicketOpenTileShown({ id, tile, parent, standIn }: TicketOpenTileProps)
   const root = useRef<HTMLElement>(null);
   const resizeStart = useRef({ x: 0, y: 0 });
   // Esc from its header, or ⌘Esc from anywhere in it: back to its card; from the terminal view, a switch by hand.
-  useLeaveKeys(root, () => (terminal ? setTicketView(id, 'card') : collapse(id)));
+  useLeaveKeys(root, () => (terminal ? setTicketView(id, 'card') : collapse(id, 'leaveKeys')));
   const prOwner = face.pr === undefined ? undefined : [chat, ...helpers].find((agent) => agent.pullRequests.includes(face.pr!));
   const openPr = (pr: PullRequest) => prOwner !== undefined && openPullRequest(prOwner, pr);
   const helperOf = (sessionId: string) => helpers.find((each) => each.sessionId === sessionId)!;
@@ -134,7 +134,7 @@ function TicketOpenTileShown({ id, tile, parent, standIn }: TicketOpenTileProps)
         <span className="nodrag">
           <TileMenu entries={entries} onOpen={menu.reread} />
         </span>
-        {!terminal && <IconButton icon={<Minimize2 />} size="sm" variant="secondary" aria-label="Collapse" tooltip="Back to its card; the session keeps running" onClick={() => collapse(id)} />}
+        {!terminal && <IconButton icon={<Minimize2 />} size="sm" variant="secondary" aria-label="Collapse" tooltip="Back to its card; the session keeps running" onClick={() => collapse(id, 'button')} />}
       </header>
       {helper !== undefined && <Breadcrumb helper={helper} onBack={() => show(undefined)} kind={face.helpers.find((each) => each.sessionId === helper.sessionId)?.kind} />}
       <div className="ticket-open-main" data-view={view}>

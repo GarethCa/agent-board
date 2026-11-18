@@ -6,8 +6,6 @@ import { Chip, EditableName, Menu, useRenaming } from '../ui';
 import { folderLabel } from './folders';
 import { bindEntries, cleanUpHint, newAgentMenu, tidyBlocked, tidyMenu, zoneMenu, zoneTabEntries, type ModelEntry, type ZoneBindingActions, type ZoneTabChip } from './menu-model';
 import { leastZoneSize, zoneGrid } from '@agent-board/daemon/board-layout';
-import { CrewFramesContext } from './crew-view';
-import { CrewFrameBoxes } from './CrewFrameBoxes';
 import { tokenNumber } from '../theme';
 import { useZoneTabFold } from './zone-tab-fold';
 import { useSimplified } from '../design';
@@ -170,8 +168,6 @@ function ClassicZone({
   const cancelClone = useContext(CancelCloneContext);
   const addIssue = useContext(AddIssueContext);
   const dropTarget = useContext(DropTargetContext) === zone.id;
-  // A shelved zone's crew is in its stacks: no frame round where their tiles are saved.
-  const crews = useContext(CrewFramesContext).filter((frame) => frame.zoneId === zone.id && shelves === undefined && clusters === undefined);
   const unbound = zone.repoRoot === null;
   const { clone } = zone;
   // A group starts agents too: in its default repo, or one picked for each. Only a clone holds them back.
@@ -358,8 +354,6 @@ function ClassicZone({
       data-fill={zone.fillOpacity ?? undefined}
       style={{ '--zone-color': zone.color, '--zone-fill-pct': zone.fillOpacity ?? undefined } as CSSProperties}
     >
-      {/* Under its tiles: each orchestrator's crew, framed beside it. */}
-      <CrewFrameBoxes frames={crews} />
       {shelves !== undefined && <ShelvesView zoneId={zone.id} view={shelves} />}
       {clusters !== undefined && <ClustersView zoneId={zone.id} view={clusters} />}
       {selected && lanesArea !== undefined && <LanesArea zoneId={zone.id} lanes={lanesArea} zone={{ width: width ?? zone.width, height: height ?? zone.height }} />}

@@ -1,7 +1,8 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished } from 'vitest';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { RATE_LIMIT_MENU_TITLE, SPINNER_LINE, claudeHookSettings, startHookRecorder, type HookRecorder } from '../src/index.ts';
+import { execFileSync } from 'node:child_process';
+import { RATE_LIMIT_MENU_TITLE, SPINNER_LINE, claudeHookSettings, scrubGitEnv, startHookRecorder, type HookRecorder } from '../src/index.ts';
 import { startEchoHttpServer } from './fixtures/mcp/echo-http-server.ts';
 import { readJsonl, removeTempDirs, runFake, sleep, startFake, tempDir, untilEvents, untilStdout } from './run-fake.ts';
 
@@ -108,6 +109,17 @@ describe('fake claude', () => {
 
     expect(result.code).toBe(0);
     expect(recorder.events.filter((event) => event.hook_event_name === 'UserPromptSubmit').at(-1)).toMatchObject({ prompt: 'line one\nline two' });
+  });
+
+  it('clears with Ctrl-U only the line the cursor is on, as Claude does: the lines before a new line stay', async () => {
+    const result = await runFake('claude', {
+      scenario: 'waiting',
+      args: ['--settings', settings(), 'set up storage'],
+      input: ['line one\x1b\r\x1b\rline three\x15typed after'],
+    });
+
+    expect(result.code).toBe(0);
+    expect(recorder.events.filter((event) => event.hook_event_name === 'UserPromptSubmit').at(-1)).toMatchObject({ prompt: 'line one\n\ntyped after' });
   });
 
   it('fires no UserPromptSubmit for the first prompts typed at it with FAKE_HARNESS_LOSE_PROMPT_HOOKS, and runs their turns', async () => {
@@ -807,6 +819,25 @@ describe('fake claude', () => {
     expect(entries[4]).toMatchObject({ attachment: { prompt: 'also update the changelog', commandMode: 'prompt', origin: { kind: 'human' } }, version: expect.any(String) });
   });
 
+  it('with FAKE_HARNESS_JOIN_QUEUED_MS, takes the lines typed in a turn, and as it ends, as one prompt after its Stop', async () => {
+    const { child, done } = startFake('claude', {
+      scenario: 'output',
+      args: ['--settings', settings(), 'fix the tests'],
+      env: { FAKE_HARNESS_STEP_DELAY_MS: '100', FAKE_HARNESS_JOIN_QUEUED_MS: '300' },
+    });
+    await untilEvents(recorder, 'UserPromptSubmit');
+    child.stdin.write('also update the changelog\n');
+    await untilEvents(recorder, 'Stop');
+    // Typed just after its Stop, while it is still busy: it joins the line queued in the turn.
+    child.stdin.write('and the readme\n');
+    await untilEvents(recorder, 'UserPromptSubmit', 2);
+    child.stdin.end();
+    expect((await done).code).toBe(0);
+
+    const prompts = recorder.events.filter((event) => event.hook_event_name === 'UserPromptSubmit').map((event) => event.prompt);
+    expect(prompts).toEqual(['fix the tests', 'also update the changelog\nand the readme']);
+  });
+
   it('SIGINT (Ctrl-C) interrupts the turn with no Stop, then takes the next prompt', async () => {
     const { child, done } = startFake('claude', {
       scenario: 'output',
@@ -1109,5 +1140,20 @@ describe('claude MCP servers', () => {
     expect(result.stdout).toContain('The board says: You are on the echo board.');
     expect(result.stdout).toContain('whoami {} auth:Bearer from-env');
     expect(result.stdout).toContain('set_status {"summary":"Map the board","progress":10} auth:Bearer from-env');
+  });
+});
+
+describe('orchestrate: a maker that commits', () => {
+  it('writes and commits the file a "Commit <path>: <text>" line names, then hands over', async () => {
+    const repo = tempDir('fake-commit-repo-');
+    const run = (...args: string[]) => execFileSync('git', ['-C', repo, ...args], { env: scrubGitEnv({ ...process.env }), encoding: 'utf8' }).trim();
+    run('init', '--quiet');
+    const result = await runFake('claude', { scenario: 'orchestrate', cwd: repo, args: ["Build the api half\n\nCommit src/api.ts: export const api = 'it';"] });
+
+    expect(result.code).toBe(0);
+    expect(run('log', '--format=%s')).toBe('Write src/api.ts');
+    expect(run('show', 'HEAD:src/api.ts')).toBe("export const api = 'it';");
+    // The handover is written, not committed: only the named file is.
+    expect(run('status', '--porcelain')).toBe('?? .agent-board/');
   });
 });

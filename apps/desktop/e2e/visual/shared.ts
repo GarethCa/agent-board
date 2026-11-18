@@ -7,6 +7,7 @@ import { agents, launch, listFinishedTurns, spawnAgent, tile, TURN_MS, zones } f
 import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone, type LaunchOptions } from '../launch.ts';
 import { RENDER_ARGS, RENDER_ENV, VIEWPORT, ignorePointer, pinFonts, pinNow, pinRandomText, settle } from '../render.ts';
 import { scratch } from '../scratch.ts';
+import { openSettings } from '../settings-helpers.ts';
 import { untilStill, viewTransform } from '../board-helpers.ts';
 
 // Visual regression for the Workbench theme, in one spec file per surface so Playwright runs them on several workers.
@@ -17,6 +18,30 @@ import { untilStill, viewTransform } from '../board-helpers.ts';
 
 /** Tight: a recoloured PR chip is a few hundred pixels. Shots are stable to the pixel run to run. */
 export const SHOT = { maxDiffPixels: 100, animations: 'disabled' as const, caret: 'hide' as const };
+
+/**
+ * The Settings groups that only some builds have: a requires block cuts them where their feature is left out. Every
+ * shot of the Settings window hides their sidebar rows, so one baseline holds for both builds.
+ */
+export const CUT_SETTINGS_GROUPS: readonly string[] = [
+];
+
+/**
+ * Opens the Settings window for a shot, as `openSettings` does, with the sidebar rows of `CUT_SETTINGS_GROUPS` hidden.
+ * Visual specs open Settings only through this.
+ */
+export async function openSettingsForShot(window: Page, pane?: string): Promise<Page> {
+  const settings = await openSettings(window, pane);
+  const css = CUT_SETTINGS_GROUPS.map((id) => `.settings-group[data-group="${id}"] { display: none; }`).join('\n');
+  await settings.evaluate((content) => {
+    if (document.getElementById('cut-settings-groups') !== null) return;
+    const style = document.createElement('style');
+    style.id = 'cut-settings-groups';
+    style.textContent = content;
+    document.head.append(style);
+  }, css);
+  return settings;
+}
 
 const SNAPSHOTS = join(import.meta.dirname, '..', 'visual.spec.ts-snapshots');
 

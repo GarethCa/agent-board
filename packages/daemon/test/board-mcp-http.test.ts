@@ -102,7 +102,7 @@ describe('the board MCP over HTTP', () => {
     });
     expect((await mcp.callTool('whoami', {})).text).toMatch(new RegExp(`^you {6}agent:${one.agent.sessionId.slice(0, 4)}\\w* {2}one`));
     expect(await mcp.callTool('set_status', { summary: 'Moving session ids', progress: 40 })).toEqual({
-      text: 'Your tile now says: Moving session ids',
+      text: 'Your tile now says: "Moving session ids" (18 of 120 characters, shown in full).',
       isError: false,
     });
 

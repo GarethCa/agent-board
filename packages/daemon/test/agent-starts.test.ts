@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { fakeHarnessEnv, type FakeHarnessEnvOptions } from '@agent-board/fake-harness';
@@ -12,7 +12,7 @@ import type {
   DaemonEvent,
   HookEvent,
 } from '../src/protocol.ts';
-import { connectTestClient, git, recordEvents, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
+import { connectTestClient, git, onCheckout, recordEvents, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
 
 const SIZE = { cols: 100, rows: 30 };
 
@@ -41,12 +41,10 @@ function commit(repo: string, files: Record<string, string>): void {
   git(repo, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '--quiet', '-m', 'add files');
 }
 
-/** A repo whose `git worktree add` takes `ms` longer, as on a slow disk: its checkout hook sleeps. */
+/** A repo whose `git worktree add` takes `ms` longer, as on a slow disk: its checkout sleeps. */
 function slowRepo(ms: number): string {
   const repo = tempRepo();
-  const hook = join(repo, '.git', 'hooks', 'post-checkout');
-  writeFileSync(hook, `#!/bin/sh\nsleep ${ms / 1000}\n`);
-  chmodSync(hook, 0o755);
+  onCheckout(repo, `sleep ${ms / 1000}`);
   return repo;
 }
 

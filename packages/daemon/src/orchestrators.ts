@@ -12,7 +12,7 @@ import { runGit } from './git.ts';
 import { checkedBranchName, localBaseBranch } from './worktrees.ts';
 import type { ActivityEntry, Orchestrator, OrchestratorAccess } from './orchestrator-types.ts';
 import { chainUp } from './crew-chain.ts';
-import { createCrewEventLog, type LoggedEvent } from './crew-events.ts';
+import { createCrewEventLog, type CrewNewsKind, type LoggedEvent } from './crew-events.ts';
 import { refOf } from './crew-flags.ts';
 import { markSender, sendTrailer } from './sender-marker.ts';
 import { sendTrail } from './send-log.ts';
@@ -83,6 +83,10 @@ type OrchestratorMethods = Omit<
   | 'orchestrator.crews'
   | 'orchestrator.stopCrew'
   | 'orchestrator.crewRound'
+  | 'orchestrator.crewGoOn'
+  | 'orchestrator.crewSendBack'
+  | 'orchestrator.crewGoOnWithout'
+  | 'orchestrator.crewRestore'
   | 'orchestrator.passItem'
 >;
 
@@ -118,6 +122,7 @@ const LOGGED_METHODS: Partial<Record<DaemonMethod, OrchestratorAction>> = {
   'orchestrator.setStatus': 'set-status',
   'orchestrator.interrupt': 'interrupt',
   'orchestrator.setEffort': 'effort',
+  'orchestrator.pinExpanded': 'pin-expanded',
   'orchestrator.setWatches': 'watches',
   'orchestrator.giveRole': 'role',
   'orchestrator.continueOnCredits': 'continue',
@@ -157,7 +162,15 @@ const LOGGED_METHODS: Partial<Record<DaemonMethod, OrchestratorAction>> = {
   'orchestrator.startPrefab': 'spawn',
   'orchestrator.stopCrew': 'stop-crew',
   'orchestrator.crewRound': 'crew-round',
+  'orchestrator.crewGoOn': 'crew-go-on',
+  'orchestrator.crewSendBack': 'crew-send-back',
+  'orchestrator.crewGoOnWithout': 'crew-go-on-without',
+  'orchestrator.crewRestore': 'crew-restore',
 };
+
+/** A control method's action in the log, as asked: an unpin is no pin, refused or not. */
+const loggedAction = (method: DaemonMethod, params: unknown): OrchestratorAction | undefined =>
+  method === 'orchestrator.pinExpanded' && (params as { pinned?: unknown } | null)?.pinned === false ? 'unpin-expanded' : LOGGED_METHODS[method];
 
 /**
  * The one agent whose branch `reviewer` reviews: in the same repo (two repos may share a branch name), on that branch,
@@ -195,7 +208,7 @@ export interface OrchestratorHostOptions extends BoardCallerSources {
   db: DatabaseSync;
   agents: Pick<
     AgentHost,
-    'get' | 'list' | 'announce' | 'handCrew' | 'removedOrchestrator' | 'fallbackOwner' | 'spawn' | 'answer' | 'interrupt' | 'setEffort' | 'setRole' | 'roleTemplate' | 'continueOnCredits' | 'resume' | 'stop' | 'pause' | 'finalMessage' | 'waitsAtPrompt' | 'setStatus' | 'clearFlag' | 'sendUnsent' | 'clearUnsent' | 'queueAfterTurn' | 'dropNotices' | 'deliverAfterTurn' | 'userTyping'
+    'get' | 'list' | 'announce' | 'handCrew' | 'removedOrchestrator' | 'fallbackOwner' | 'spawn' | 'answer' | 'interrupt' | 'setEffort' | 'setPinnedExpanded' | 'setRole' | 'roleTemplate' | 'continueOnCredits' | 'resume' | 'stop' | 'pause' | 'finalMessage' | 'waitsAtPrompt' | 'setStatus' | 'clearFlag' | 'sendUnsent' | 'clearUnsent' | 'queueAfterTurn' | 'dropNotices' | 'deliverAfterTurn' | 'userTyping'
   >;
   zones: () => Zone[];
   flowEdges: Pick<FlowEdgeHost, 'create' | 'get' | 'link' | 'remove'>;
@@ -242,7 +255,7 @@ export interface OrchestratorHost {
   /** Hears an agent's own pull requests read (`PullRequestWatcherOptions.onRead`): a new open one is a crew event. */
   onPullRequestsRead(sessionId: string, own: readonly PullRequest[], first: boolean): void;
   /** Logs a running crew's news as an event of its builder (`CrewEventLog.crewNews`), which moves waits on. */
-  crewNews(sessionId: string, kind: 'round' | 'crew-stopped', detail: string): void;
+  crewNews(sessionId: string, kind: CrewNewsKind, detail: string, gate?: string): void;
   /** Hears every event the daemon broadcasts: agents' updates move waits on. */
   onEvent(event: DaemonEvent): void;
   handlers<Context extends BoardConnection>(): RpcHandlers<OrchestratorMethods, Context>;
@@ -441,7 +454,7 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
     const caller = boardCaller(options, token, connection);
     if (!caller.orchestrates) {
       const reason = notOrchestrating(caller.sessionId);
-      const action = LOGGED_METHODS[method];
+      const action = loggedAction(method, params);
       if (action !== undefined) record({ sessionId: caller.tileId, name: caller.name }, action, { detail: askedText(params) }, reason);
       throw new RpcMethodError(BOARD_ERROR.notAllowed, reason);
     }
@@ -767,14 +780,14 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
     notOrchestrating,
 
     refused(sessionId, method, params, reason) {
-      const action = LOGGED_METHODS[method];
+      const action = loggedAction(method, params);
       const caller = sessionCaller(options, sessionId);
       if (action === undefined || caller === undefined) return;
       record({ sessionId: caller.tileId, name: caller.name }, action, { detail: askedText(params) }, reason);
     },
 
-    crewNews(sessionId, kind, detail) {
-      crewEvents.crewNews(sessionId, kind, detail);
+    crewNews(sessionId, kind, detail, gate) {
+      crewEvents.crewNews(sessionId, kind, detail, gate);
       notifyWaiters();
     },
 
@@ -1118,6 +1131,20 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
             const effort = oneOf(p, 'effort', EFFORTS);
             entry.detail = effort;
             return agents.setEffort(agent.sessionId, effort);
+          });
+        },
+
+        // Its own tile too: pinning changes only how the board shows it, as the user's Pin expanded does.
+        'orchestrator.pinExpanded': (params, connection) => {
+          const p = paramsObject(params);
+          const me = orchestrator('orchestrator.pinExpanded', p, connection);
+          if (typeof p.pinned !== 'boolean') throw invalidParams('pinned must be a boolean');
+          const pinned = p.pinned;
+          const entry: Entry = { detail: '' };
+          return logged(me, pinned ? 'pin-expanded' : 'unpin-expanded', entry, async () => {
+            const agent = agentNamed(stringParam(p, 'sessionId'));
+            entry.on = agentTarget(agent);
+            return agents.setPinnedExpanded(agent.sessionId, pinned);
           });
         },
 

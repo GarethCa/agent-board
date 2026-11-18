@@ -24,6 +24,7 @@ import { TileActionsContext } from './tile';
 import { stopPropagation } from './tile-parts';
 import { pulseTile } from './tile-attention';
 import { motionDuration, tokenNumber } from '../theme';
+import { expandedTrace, FIT_NOTED_MS } from './expanded-trace';
 import { clearRooms, coveredView, fitView, UNCOVERED } from './view-follow';
 import { helperIcon, ticketFace, type HelperIcon, type TicketFace } from './ticket-tile';
 
@@ -194,6 +195,7 @@ function TicketBoardShown({ chatId, agents, onLeave, onOpenAgent, onError, desk,
     if (node !== undefined && tileWidth !== undefined && tileHeight !== undefined) {
       const rect = { ...node.internals.positionAbsolute, width: tileWidth, height: tileHeight };
       const rooms = clearRooms({ width, height }, domNode === null ? UNCOVERED : coveredView(domNode, domNode));
+      expandedTrace.noteView('focus', 'ticketBoard');
       void setViewport(fitView(rect, rooms, minZoom, 1, FOCUS_MARGIN), { duration });
     }
     pulseTile(focus.nodeId, duration);
@@ -357,6 +359,9 @@ function TicketBoardShown({ chatId, agents, onLeave, onOpenAgent, onError, desk,
               minZoom={0.1}
               fitView
               fitViewOptions={{ maxZoom: 1 }}
+              onInit={() => expandedTrace.noteView('fitOnOpen', 'ticketBoard', FIT_NOTED_MS)}
+              onMoveStart={(event, viewport) => expandedTrace.moveStarted(event !== null, viewport, 'ticketBoard')}
+              onMoveEnd={(_event, viewport) => expandedTrace.moveEnded(viewport, 'ticketBoard')}
               proOptions={{ hideAttribution: true }}
             >
               <BoardBackdrop gap={desk.gap} size={desk.size} />

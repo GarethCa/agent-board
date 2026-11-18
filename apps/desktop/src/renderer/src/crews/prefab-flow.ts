@@ -1,11 +1,16 @@
 // A crew prefab as its flow editor draws and words it: where each piece of its diagram goes, the sentence under it,
 // and what a draft still lacks before the library would take it. Pure, so the editor and its tests share it.
 import {
+  defaultWorks,
   isOrchestratorRole,
   MAX_PREFAB_MEMBERS,
   REVIEWER_ROLES,
   type CrewPrefab,
   type Harness,
+  type PrefabGate,
+  type PrefabInput,
+  type PrefabInputKind,
+  type PrefabLine,
   type PrefabMember,
 } from '@agent-board/daemon/protocol';
 
@@ -301,4 +306,274 @@ export function draftProblems(prefab: Pick<CrewPrefab, 'name' | 'members'>): str
     if (member.starts === 'lead' && first !== undefined && !led) problems.push(`${memberLabel(member)} is started by the lead, so ${memberLabel(first)} is an orchestrator.`);
   }
   return problems;
+}
+
+/** A prefab as its board draws it: its members, and the graph of inputs, loop gates and lines between them. */
+export type GraphPrefab = Pick<CrewPrefab, 'members'> & { inputs: PrefabInput[]; gates: PrefabGate[]; lines: PrefabLine[] };
+
+/** The inputs work comes from, and their names in the sentence. */
+export const SOURCE_NAMES: Partial<Record<PrefabInputKind, string>> = { prompt: 'Your prompt', queue: 'The queue', ticket: 'The ticket', clock: 'The clock' };
+
+const each = (count: number) => (count === 2 ? 'both' : 'all');
+
+/** A loop gate's rule, as on its chip: `until both approve · max 5`, `until done · no limit`, `3 rounds`. */
+export function gateRule(gate: PrefabGate, deciders: readonly Pick<PrefabMember, 'role'>[]): string {
+  if (gate.rule === 'rounds') return `${gate.rounds} ${gate.rounds === 1 ? 'round' : 'rounds'}`;
+  const reviewers = deciders.length > 0 && deciders.every((decider) => REVIEWER_ROLES.includes(decider.role as never));
+  const until = !reviewers ? 'until done' : deciders.length === 1 ? 'until it approves' : `until ${each(deciders.length)} approve`;
+  return `${until} · ${gate.cap === null ? 'no limit' : `max ${gate.cap}`}`;
+}
+
+/** What a member does when more than one line brings it work, as under its tile; null for one line or none. */
+export function joinBadge(member: Pick<PrefabMember, 'join' | 'timeout'>, linesIn: number): string | null {
+  if (linesIn < 2) return null;
+  if (member.join === 'each') return 'each as it comes';
+  return `waits for ${each(linesIn)}${member.timeout === undefined ? '' : ` · ${member.timeout} min`}`;
+}
+
+/**
+ * What a loop gate waits for, as on the badge under its diamond: `waits for both · 30 min`, `waits for all 3`, `waits
+ * 30 min` for one decider with a timeout. Null when it waits for one, with no timeout, as there is nothing to say.
+ */
+export function gateWait(gate: Pick<PrefabGate, 'timeout'>, deciders: number): string | null {
+  if (deciders < 2 && gate.timeout === null) return null;
+  const late = gate.timeout === null ? '' : `${gate.timeout} min`;
+  if (deciders < 2) return `waits ${late}`;
+  return `waits for ${deciders === 2 ? 'both' : `all ${deciders}`}${late === '' ? '' : ` · ${late}`}`;
+}
+
+export interface Size {
+  width: number;
+  height: number;
+}
+
+/** Where each node of a graph goes, by its top-left corner and its size. */
+export type GraphPlaces = Map<string, Size & { x: number; y: number }>;
+
+/**
+ * A graph laid out left to right: each node in the column of the longest way to it from a node nothing leads to, the
+ * loop gates' again lines left out (and any other line back round a loop); the nodes of a column one above the other,
+ * every column centred on one middle.
+ */
+export function graphLayout(prefab: GraphPrefab, sizes: { member: Size; input: Size; gate: Size; end?: Size }, spacing: { gap: number; row: number }): GraphPlaces {
+  const nodes = [
+    ...prefab.inputs.filter((input) => input.kind !== 'end').map((input) => ({ id: input.id, size: sizes.input })),
+    ...prefab.members.map((member) => ({ id: member.id, size: sizes.member })),
+    ...prefab.gates.map((gate) => ({ id: gate.id, size: sizes.gate })),
+    ...prefab.inputs.filter((input) => input.kind === 'end').map((input) => ({ id: input.id, size: sizes.end ?? sizes.input })),
+  ];
+  const ids = new Set(nodes.map((node) => node.id));
+  const forward = prefab.lines.filter((line) => line.way !== 'again' && ids.has(line.from) && ids.has(line.to));
+  const depths = new Map<string, number>();
+  const walking = new Set<string>();
+  const depth = (id: string): number => {
+    const known = depths.get(id);
+    if (known !== undefined) return known;
+    walking.add(id);
+    let most = 0;
+    for (const line of forward) if (line.to === id && !walking.has(line.from)) most = Math.max(most, depth(line.from) + 1);
+    walking.delete(id);
+    depths.set(id, most);
+    return most;
+  };
+  const columns: (typeof nodes)[] = [];
+  for (const node of nodes) (columns[depth(node.id)] ??= []).push(node);
+  const places: GraphPlaces = new Map();
+  const tallest = Math.max(...columns.map((column = []) => column.reduce((sum, node) => sum + node.size.height, 0) + spacing.row * (column.length - 1)));
+  let x = 0;
+  for (const column of columns) {
+    if (column === undefined) continue;
+    let y = (tallest - (column.reduce((sum, node) => sum + node.size.height, 0) + spacing.row * (column.length - 1))) / 2;
+    for (const node of column) {
+      places.set(node.id, { x, y, ...node.size });
+      y += node.size.height + spacing.row;
+    }
+    x += Math.max(...column.map((node) => node.size.width)) + spacing.gap;
+  }
+  return places;
+}
+
+/**
+ * The branch a member works on, as its tile and the sentence say it: its own or the crew's, from its role when it sets
+ * none. Only where more than one member of the crew writes, so where each works matters; never a reviewer's, which
+ * writes only its review, nor a lead's, which runs the crew.
+ */
+export function memberBranch(members: readonly PrefabMember[], id: string): 'own' | 'crew' | null {
+  const writers = members.filter((member) => !isReviewer(member) && !isOrchestratorRole(member.role));
+  const member = writers.find((each) => each.id === id);
+  if (member === undefined || writers.length < 2) return null;
+  return member.works ?? defaultWorks(member.role);
+}
+
+const unique = <T>(items: readonly T[]): T[] => [...new Set(items)];
+
+const capital = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
+
+/** The graph in words, as under the board: where work comes from, who gets it, how each loop goes round, where it stops. */
+export function graphSentence(prefab: GraphPrefab): Words[] {
+  const members = new Map(prefab.members.map((member) => [member.id, member]));
+  const inputs = new Map(prefab.inputs.map((input) => [input.id, input]));
+  const gates = new Map(prefab.gates.map((gate) => [gate.id, gate]));
+  const name = (id: string) => memberLabel(members.get(id)!);
+  const out = (id: string) => prefab.lines.filter((line) => line.from === id && line.way !== 'again');
+  const into = (id: string) => prefab.lines.filter((line) => line.to === id);
+  const sources = prefab.inputs.filter((input) => SOURCE_NAMES[input.kind] !== undefined && out(input.id).length > 0);
+  if (sources.length === 0) return [{ text: 'Draw a line from Your prompt to the agent that starts.' }];
+  const words: Words[] = [];
+  const say = (...more: (Words | string)[]) => words.push(...more.map((each) => (typeof each === 'string' ? { text: each } : each)));
+  const said = new Set<string>();
+  // The one member the sentence just named, so `Its work` can only mean it; any other member's work is said by name.
+  let subject: string | null = null;
+  // What a member with more than one line in does with them, as its join badge says it: `, which waits for both, or 20 minutes`.
+  // Each member's join is said once, the first time the sentence reaches it.
+  const joined = new Set<string>();
+  // `waits for both, or 20 minutes`, or '' when it has no join to say.
+  const joinOf = (id: string) => {
+    const member = members.get(id)!;
+    const count = into(id).filter((line) => line.way !== 'again').length;
+    if (count < 2 || joined.has(id)) return '';
+    joined.add(id);
+    if (member.join === 'each') return 'takes each as it comes';
+    return `waits for ${each(count)}${member.timeout === undefined ? '' : `, or ${member.timeout} minutes`}`;
+  };
+  const joins = (id: string) => {
+    const join = joinOf(id);
+    return join === '' ? '' : `, which ${join}`;
+  };
+  // Work that goes to more than one member says each one's join as a sentence of its own: `Review waits for both.`
+  // Only once every member with a line in is said: until then a later line says it, after the lines it waits for.
+  const joinSentences = (ids: readonly string[]) => {
+    for (const id of ids) {
+      const pending = into(id).some((line) => line.way !== 'again' && members.has(line.from) && !said.has(line.from));
+      if (pending) continue;
+      const join = joinOf(id);
+      if (join !== '') say(' ', { text: capital(name(id)), bold: true }, ` ${join}.`);
+    }
+  };
+  // Where the crew stops, each end once, said last of all, after every agent's work.
+  const stops: Extract<PrefabInput, { kind: 'end' }>[] = [];
+  // `also`: the source that reaches it goes to an agent too and named the OK in its opening line, so the crew doesn't
+  // wait for it after that agent: what comes after the OK is said, if anything but the end.
+  const reach = (id: string, also = false) => {
+    const input = inputs.get(id);
+    if (input === undefined || said.has(id)) return;
+    said.add(id);
+    if (input.kind === 'user') {
+      // Members already said, by another line in, are said again only as going on from the OK too.
+      const again = out(input.id).map((line) => line.to).filter((to) => members.has(to) && said.has(to));
+      const next = out(input.id).filter((line) => !again.includes(line.to));
+      if (!also) say(' Then the crew ', { text: 'waits for your OK', bold: true }, '.');
+      else if (next.some((line) => inputs.get(line.to)?.kind !== 'end')) say(' After ', { text: 'your OK', bold: true }, ',');
+      for (const line of next) gets(line.to, true);
+      if (again.length > 0) say(' ', { text: 'Your OK', bold: true }, ' goes on to ', ...listed(again.map(name)), ' too.');
+    }
+    if (input.kind === 'end') stops.push(input);
+  };
+  const ends = (id: string) => {
+    for (const line of out(id)) reach(line.to);
+  };
+  // `past`: it is reached past your OK, where no `work goes to` line has said its join yet.
+  const gets = (id: string, past = false) => {
+    if (gates.has(id)) return;
+    if (!members.has(id)) {
+      reach(id);
+      return;
+    }
+    if (said.has(id)) return;
+    const branch = memberBranch(prefab.members, id);
+    const join = past ? joins(id) : '';
+    say(' ', { text: capital(name(id)), bold: true }, ` gets it${join}${branch === null ? '' : `${join === '' ? '' : ','} and works on ${branch === 'own' ? 'its own branch' : 'the crew branch'}`}.`);
+    subject = id;
+    follow(id);
+  };
+  const loop = (gateId: string) => {
+    const gate = gates.get(gateId)!;
+    said.add(gateId);
+    const deciders = into(gateId).map((line) => line.from).filter((id) => members.has(id));
+    const waits = gate.timeout === null ? '' : deciders.length > 1 ? `waits for ${each(deciders.length)}, or ${gate.timeout} minutes, and ` : deciders.length === 1 ? `waits ${gate.timeout} minutes for it, and ` : '';
+    if (gate.rule === 'rounds') say(`; the loop gate ${waits}sends it round again, ${gate.rounds} ${gate.rounds === 1 ? 'round' : 'rounds'} in all.`);
+    else {
+      const until = deciders.length === 1 ? `${name(deciders[0]!)} says done` : `${each(deciders.length)} approve`;
+      say(`; the loop gate ${waits}sends it back until ${until}, ${gate.cap === null ? 'with no limit' : `at most ${gate.cap} ${gate.cap === 1 ? 'round' : 'rounds'}`}.`);
+    }
+    for (const line of out(gateId)) gets(line.to);
+  };
+  const follow = (id: string) => {
+    if (said.has(id)) return;
+    said.add(id);
+    walk([id]);
+  };
+  // What members' work does, once they are said: where it goes, the loop they decide, whom they lead, where it ends.
+  // Several makers whose work all goes to the same place are said together, so their reviewer is said once.
+  const walk = (ids: readonly string[]) => {
+    const lines = ids.flatMap(out);
+    const who = (): Words[] => (ids.length === 1 ? [{ text: name(ids[0]!), bold: true }] : listed(ids.map(name)));
+    const led = unique(lines.filter((line) => line.lead === true && members.has(line.to)).map((line) => line.to));
+    if (led.length > 0) {
+      say(' ', ...who(), ids.length === 1 ? ' starts ' : ' start ', ...listed(led.map(name)), ' when it needs them.');
+      subject = ids.length === 1 ? ids[0]! : null;
+    }
+    const work = unique(lines.filter((line) => line.lead !== true && members.has(line.to)).map((line) => line.to));
+    const gate = [...ids, ...work].flatMap((each) => out(each)).find((line) => gates.has(line.to) && !said.has(line.to))?.to;
+    if (work.length > 0) {
+      const whose = ids.length > 1 ? [' Their work goes to '] : subject === ids[0] ? [' Its work goes to '] : [' ', { text: capital(name(ids[0]!)), bold: true }, `${name(ids[0]!).endsWith('s') ? "'" : "'s"} work goes to `];
+      subject = work.length === 1 ? work[0]! : null;
+      say(...whose, ...listed(work.map(name)), work.length === 1 ? joins(work[0]!) : '');
+      if (gate === undefined) say('.');
+      else {
+        const fresh = work.filter((each) => !said.has(each));
+        fresh.forEach((each) => said.add(each));
+        loop(gate);
+        // The deciders are said, so the loop doesn't name them again; their other lines still are.
+        for (const each of fresh) walk([each]);
+      }
+      if (work.length > 1) joinSentences(work);
+      for (const each of work) follow(each);
+    } else if (gate !== undefined) {
+      say(' ', ...who(), ids.length === 1 ? ' decides' : ' decide');
+      loop(gate);
+    }
+    for (const each of led) follow(each);
+    for (const each of ids) ends(each);
+  };
+  // Members a source starts together, whose work all goes on to the same place and none of whom leads.
+  const together = (ids: readonly string[]) => {
+    if (ids.length < 2 || ids.some((id) => said.has(id))) return false;
+    const onward = (id: string) => out(id).filter((line) => line.lead !== true).map((line) => line.to).sort().join(' ');
+    return ids.every((id) => out(id).every((line) => line.lead !== true) && onward(id) !== '' && onward(id) === onward(ids[0]!));
+  };
+  for (const source of sources) {
+    const to = out(source.id).map((line) => line.to).filter((id) => members.has(id));
+    const branches = unique(to.map((id) => memberBranch(prefab.members, id)));
+    const branch = to.length > 0 && branches.length === 1 ? branches[0]! : null;
+    const only = branch === null ? '' : branch === 'crew' ? ' on the crew branch' : to.length === 1 ? ' on its own branch' : ' each on its own branch';
+    // Work that goes first to a pill (your OK, an end) starts there: the pill says what comes next.
+    if (to.length === 0) say(' ', { text: SOURCE_NAMES[source.kind]!, bold: true }, ' starts it.');
+    else {
+      // Its pills too, but for the end, which is said last.
+      const asks = out(source.id).some((line) => inputs.get(line.to)?.kind === 'user');
+      say(' ', { text: SOURCE_NAMES[source.kind]!, bold: true }, ' goes to ', ...listed(to.map(name)), only === '' ? '' : `,${only}`);
+      subject = to.length === 1 ? to[0]! : null;
+      say(...(asks ? [', and to ', { text: 'your OK', bold: true }, '.'] : ['.']));
+    }
+  }
+  for (const source of sources) {
+    const to = out(source.id).map((line) => line.to).filter((id) => members.has(id));
+    if (together(to)) {
+      to.forEach((id) => said.add(id));
+      walk(to);
+    }
+    // Its agents' work, then what comes after your OK straight from the source; the ends wait for the last word.
+    for (const id of to) follow(id);
+    for (const line of out(source.id)) if (!members.has(line.to)) reach(line.to, to.length > 0);
+  }
+  // Agents whose work goes nowhere yet, as the board is being drawn; not a lead's, nor one only a lead starts.
+  const stuck = prefab.members
+    .filter((member) => said.has(member.id) && out(member.id).length === 0 && !isOrchestratorRole(member.role))
+    .filter((member) => into(member.id).some((line) => line.lead !== true))
+    .map((member) => member.id);
+  if (stuck.length > 0) say(' Nothing goes on from ', ...listed(stuck.map(name)), ' yet.');
+  for (const end of stops) say(' Then it stops, ', { text: end.as === 'ready' ? 'ready to merge' : 'done', bold: true }, '.');
+  words[0] = { ...words[0]!, text: words[0]!.text.trimStart() };
+  return words.filter((each) => each.text !== '');
 }

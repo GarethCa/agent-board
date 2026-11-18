@@ -84,6 +84,11 @@ interface AgentLifecycleOptions
   repoZone(row: AgentRow): ZoneRow | undefined;
   /** Tells every client about the agent. */
   announce(sessionId: string): void;
+  /**
+   * After its exit has left what it will (its pane dropped into a shell, or not), and after that shell exits: the agent
+   * may now be closed (`isClosed`), with nothing of it left running.
+   */
+  settled(sessionId: string): void;
   /** Records the agent's state, telling no one. */
   setState(sessionId: string, state: SessionState): void;
   /** Marks what the agent last asked unseen. */
@@ -324,10 +329,17 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
       const row = getRow(sessionId);
       if (row === undefined || row.ended_at === null) return;
       const started = relaunch(row, undefined, "afresh: Codex couldn't resume its conversation", null);
-      if (!started.started) return options.log(`could not start ${sessionId} afresh: ${started.reason}`);
+      if (!started.started) {
+        options.log(`could not start ${sessionId} afresh: ${started.reason}`);
+        if (!closed) options.settled(sessionId);
+        return;
+      }
       updateNotice.run("Codex couldn't resume its conversation, so it started a new conversation in the same worktree.", sessionId);
       announce(sessionId);
-    }, (error: Error) => options.log(`could not start ${sessionId} afresh: ${error.message}`));
+    }, (error: Error) => {
+      options.log(`could not start ${sessionId} afresh: ${error.message}`);
+      if (!closed) options.settled(sessionId);
+    });
   };
 
   /**
@@ -349,7 +361,11 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
       fallbackShells.set(sessionId, shell.id);
       fallbackOwners.set(shell.id, sessionId);
       announce(sessionId);
-    }).catch((error: Error) => options.log(`could not open a shell for ${sessionId}: ${error.message}`));
+    })
+      .catch((error: Error) => options.log(`could not open a shell for ${sessionId}: ${error.message}`))
+      .then(() => {
+        if (!closed) options.settled(sessionId);
+      });
   };
 
   /** Ends the shell the agent's pane dropped into, if any, and resolves once it has exited. */
@@ -429,6 +445,7 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
       // Forgotten once its exit has finished: its screen is saved then, and would be written back after a forget now.
       void sessions.kill(shellId, 'its exit').catch(() => {}).then(() => sessions.forget(shellId));
       announce(owner);
+      options.settled(owner);
       return true;
     },
 
@@ -507,6 +524,7 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
         updateHibernated.run(null, null, null, sessionId);
         options.log(`closed paused agent ${sessionId} for ${why}`);
         announce(sessionId);
+        options.settled(sessionId);
         return get(sessionId)!;
       }
       return stop(sessionId, why);

@@ -34,6 +34,7 @@ const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}
   earlierConversations: [],
   hibernated: null,
   muted: false,
+  pinnedExpanded: false,
   seen: false,
   subagents: [],
   commands: [],

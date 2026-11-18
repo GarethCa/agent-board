@@ -1,5 +1,6 @@
 import { MiniMap, MiniMapNode, useReactFlow, useStore, type MiniMapNodeProps, type Node } from '@xyflow/react';
 import { Grid3x3, Map as MapIcon, Minus, Plus } from 'lucide-react';
+import { expandedTrace } from '../board/expanded-trace';
 import { useSimplified } from '../design';
 import { useMenuBarAction } from '../keys/menu-bar-bridge';
 import { Button, Island, IslandSeparator, ToolButton } from '../ui';
@@ -26,7 +27,20 @@ export function ZoomControls({
   grid: boolean;
   onGrid(): void;
 } & ViewPopoverProps) {
-  const { zoomIn, zoomOut, fitView } = useReactFlow();
+  const flow = useReactFlow();
+  // Noted for the expanded-tile trace: these are the user's, though the board makes the move.
+  const zoomIn = () => {
+    expandedTrace.noteView('zoomIn');
+    return flow.zoomIn();
+  };
+  const zoomOut = () => {
+    expandedTrace.noteView('zoomOut');
+    return flow.zoomOut();
+  };
+  const fitView = (options: { maxZoom: number }) => {
+    expandedTrace.noteView('zoomToFit');
+    return flow.fitView(options);
+  };
   const zoom = useStore((state) => state.transform[2]);
   const simplified = useSimplified();
   // Shown by default under Classic and hidden under the Simplified design, until it is turned on or off here.

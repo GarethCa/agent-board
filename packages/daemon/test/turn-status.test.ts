@@ -15,7 +15,7 @@ describe('summaryOfMessage', () => {
   });
 
   it('cuts a long summary to a status’s length', () => {
-    expect(summaryOfMessage(`STATUS: done | ${'x'.repeat(500)}`)).toHaveLength(200);
+    expect(summaryOfMessage(`STATUS: done | ${'x'.repeat(500)}`)).toHaveLength(120);
   });
 });
 

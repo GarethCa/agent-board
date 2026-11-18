@@ -765,9 +765,8 @@ export async function initProject(
     const fallback = identity.every((result) => result.ok)
       ? []
       : ['-c', 'user.name=agent-board', '-c', 'user.email=agent-board@localhost'];
-    // --no-verify skips pre-commit and commit-msg; a hooks path that isn't a folder skips the rest, post-commit too.
-    const noHooks = ['-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null'];
-    await git([...fallback, ...noHooks, 'commit', '--quiet', '--allow-empty', '--no-verify', '-m', 'Initial commit']);
+    // `runGit` runs no hooks, post-commit included.
+    await git([...fallback, '-c', 'commit.gpgsign=false', 'commit', '--quiet', '--allow-empty', '--no-verify', '-m', 'Initial commit']);
   } catch (error) {
     await undo();
     throw error;

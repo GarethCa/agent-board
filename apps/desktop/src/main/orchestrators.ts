@@ -3,7 +3,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import type { DaemonLink } from '@agent-board/daemon/client';
 import { parsePrefab, prefabFile, prefabFileName } from '@agent-board/daemon/crew-prefabs';
 import { DEFAULT_ACTIVITY_LIMIT, type CrewPrefab, type PrefabPlaces, type TicketChatKind } from '@agent-board/daemon/protocol';
-import { ORCHESTRATOR_IPC, type StartPrefabParams } from '../preload/api';
+import { ORCHESTRATOR_IPC, type DescribeCrewParams, type StartPrefabParams } from '../preload/api';
 import { forwardEvents } from './broadcast';
 import { passthrough, passthroughVoid } from './passthrough';
 
@@ -72,4 +72,10 @@ export function registerOrchestratorIpc(daemon: DaemonLink): void {
     return true;
   });
   passthroughVoid(daemon, ORCHESTRATOR_IPC.removePrefab, 'orchestrator.removePrefab', (name: string) => ({ name }));
+  // Drafts agents made for the user: kept until opened and saved, or deleted, and never in the library by themselves.
+  forwardEvents(daemon, ['prefabDraft.added', 'prefabDraft.removed'], ORCHESTRATOR_IPC.drafted);
+  passthrough(daemon, ORCHESTRATOR_IPC.drafts, 'prefabDraft.list', () => ({}));
+  passthrough(daemon, ORCHESTRATOR_IPC.openDraft, 'prefabDraft.open', (id: string) => ({ id }));
+  passthroughVoid(daemon, ORCHESTRATOR_IPC.removeDraft, 'prefabDraft.remove', (id: string) => ({ id }));
+  passthrough(daemon, ORCHESTRATOR_IPC.describeCrew, 'prefabDraft.describe', (params: DescribeCrewParams) => params);
 }

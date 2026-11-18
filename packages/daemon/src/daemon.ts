@@ -94,8 +94,11 @@ import { createImageStore } from './image-store.ts';
 import { createImageSweeper } from './image-sweeper.ts';
 import { createLinkCards } from './link-cards.ts';
 import { createCrewCards, type CrewCards } from './crew-cards.ts';
+import { gitCrewBranches, openCrewPullRequest } from './crew-branches.ts';
+import { editedFiles, gitSharedWorktree } from './crew-worktree.ts';
 import { createCrewLoop } from './crew-loop.ts';
 import { unsavedWork } from './worktrees.ts';
+import { createPrefabDrafts } from './prefab-drafts.ts';
 import { createPrefabLibrary } from './prefab-library.ts';
 import { createRoleTemplates } from './role-templates.ts';
 import { createReviewHost } from './reviews.ts';
@@ -441,6 +444,8 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     const late: {
       memoryQueue?: MemoryQueueHost;
       crewCards?: CrewCards;
+      /** The crews, told of files an agent's harness says it edited. */
+      crewEdits?: (sessionId: string, files: string[]) => void;
       /** The items `connection` may read, as `item.list` lists them (ADR-0010). */
       visibleItems?: (list: BoardItem[], connection: BoardConnection) => BoardItem[];
     } = {};
@@ -466,6 +471,11 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         const command = payload.hook_event_name === 'PostToolUse' ? hookCommand(payload) : undefined;
         const chatId = command !== undefined && pushesWork(command) ? ticketWatches.chatOf(sessionId) : undefined;
         if (chatId !== undefined) void pullRequests.refresh(sessionId).then(() => ticketWatches.checkNow(chatId));
+        // A file a crew member edited, which a crew sharing its worktree checks is in that member's own paths.
+        if (payload.hook_event_name === 'PostToolUse') {
+          const edited = editedFiles(payload);
+          if (edited.length > 0) late.crewEdits?.(sessionId, edited);
+        }
         const reply = agents.onHook(sessionId, payload, signal);
         // A ticket's chat at its prompt again is told the watch news it was too busy for.
         if (payload.hook_event_name === 'Stop') void Promise.resolve(reply).then(() => ticketWatches.turnEnded(sessionId));
@@ -627,6 +637,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     const stopFollowingTimeZone = followSystemTimeZone({ log });
     const roleTemplates = createRoleTemplates(db);
     const prefabs = createPrefabLibrary(db);
+    const prefabDrafts = createPrefabDrafts(db);
     // An agent's questions and plans: it is `waiting` while one waits on the user.
     const asks = createAskHost({
       db,
@@ -940,7 +951,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     // A crew started from a prefab: the board starts its reviewers at each hand-off and hands their reviews back.
     const crews = createCrewLoop(db, {
       agent: (sessionId) => agents.get(sessionId),
-      spawn: (params, spawnedBy, used) => agents.spawn(params, spawnedBy, undefined, used),
+      spawn: (params, spawnedBy, used, place) => agents.spawn(params, spawnedBy, place, used),
       deliver: (from, to, name, text) => agents.deliver(from, to, name, text),
       flag: (sessionId, reason) => void agents.flag(sessionId, reason, null),
       clearFlag: (sessionId) => void agents.clearFlag(sessionId),
@@ -953,12 +964,27 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
           if (reason !== undefined) throw new Error(reason);
           await reviews.deleteAgent(sessionId, why, () => agents.delete(sessionId, why, true).then(() => null));
         }),
-      news: (sessionId, kind, detail) => orchestrators.crewNews(sessionId, kind, detail),
+      tell: (sessionId, text) => agents.tell(sessionId, text),
+      news: (sessionId, kind, detail, gate) => orchestrators.crewNews(sessionId, kind, detail, gate),
+      branches: gitCrewBranches(options.worktreesDir ?? defaultWorktreesDir()),
+      shared: gitSharedWorktree,
+      // The crew branch's draft pull request, recorded on its builder, whose tile shows it and whose crew sees it merge.
+      openPullRequest: async (crewBranch, builder, title, body) => {
+        const url = await openCrewPullRequest(crewBranch, { gh, repo: githubRepo(repoZoneTracker(builder)), title, body });
+        const record = pullRequestRecord(url, title);
+        if (record !== undefined) {
+          agents.records.put(builder, record);
+          agents.announce(builder);
+        }
+        return url;
+      },
       dir: join(paths.dataDir, 'crews'),
+      clock: options.clock ?? systemClock,
       changed: (crewId) => late.crewCards?.changed(crewId),
       log,
     });
     listeners.push((event) => event.type === 'agent.updated' && crews.observe(event.agent));
+    late.crewEdits = (sessionId, files) => crews.edited(sessionId, files);
     crews.resume();
     // A crew member's flag goes to its orchestrator, typed at its prompt.
     const crewFlags = createCrewFlags({
@@ -1172,6 +1198,16 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         startCrew: (prefab, builder, startedBy, prompt) => crews.start(prefab, builder, startedBy, prompt)?.id ?? null,
       }),
       ...crews.handlers<SessionSubscriber & BoardConnection>(orchestrators.access),
+      // A drafter starts, is asked and closes as the user's agents do: through the orchestrator's methods, for the user.
+      ...prefabDrafts.handlers<SessionSubscriber & BoardConnection>({
+        sessions,
+        agents,
+        shells,
+        broadcast,
+        spawn: async (params, connection) => orchestratorHandlers['orchestrator.spawn'](params as never, connection),
+        send: async (params, connection) => orchestratorHandlers['orchestrator.send'](params as never, connection),
+        close: async (params, connection) => orchestratorHandlers['orchestrator.close'](params as never, connection),
+      }),
       ...asks.handlers<SessionSubscriber & BoardConnection>({ sessions, agents, shells }),
       ...removeAsks.handlers<SessionSubscriber & BoardConnection>(),
       ...documents.handlers<SessionSubscriber & BoardConnection>({ sessions, agents, shells }),

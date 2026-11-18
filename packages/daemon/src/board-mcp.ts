@@ -1,6 +1,7 @@
 // The board as an MCP server (ADR-0010): a few tools over the same board-ops the CLI uses, and instructions that say
 // once where the agent is and to read `agent-board --help` for the rest. One set of handlers, two transports: stdio
 // here (`agent-board mcp`), and Streamable HTTP in the daemon (`board-mcp-http.ts`).
+import { isAbsolute } from 'node:path';
 import { addSchedule, listSchedules, listTemplates, removeSchedule, removeTemplate, saveTemplate, setOwnSchedule } from './clock-ops.ts';
 import { listSteps, newSteps, readStepsCard, updateSteps, type StepsUpdate } from './steps-ops.ts';
 import { listMemories, listQueues, memoryHistory, newMemory, newQueue, queueHistory, readMemory, readQueue, updateMemory, updateQueue, type MemoryUpdate, type QueueUpdate } from './memory-ops.ts';
@@ -17,6 +18,7 @@ import {
   wakeAgent,
   defaultRolesView,
   prefabsView,
+  draftPrefab,
   prefabView,
   startPrefab,
   usageView,
@@ -32,6 +34,7 @@ import {
   identifyView,
   interruptAgent,
   setAgentEffort,
+  pinAgentExpanded,
   ticketWatches,
   giveAgentRole,
   continueAgent,
@@ -366,7 +369,11 @@ export const BOARD_MCP_TOOLS: Tool[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        summary: { type: 'string', maxLength: MAX_STATUS_LENGTH, description: 'What you are doing now, in a line.' },
+        summary: {
+          type: 'string',
+          maxLength: MAX_STATUS_LENGTH,
+          description: `What you are doing now, for your tile. Up to ${MAX_STATUS_LENGTH} characters, all shown: a longer line shrinks its text to fit, and a line over ${MAX_STATUS_LENGTH} is refused. Lead with what matters at a glance (the change you are making, then where it stands).`,
+        },
         description: { type: 'string', maxLength: MAX_PURPOSE_LENGTH, description: 'What you are for, kept until you change it ("Builds the morning overview window").' },
         character: {
           type: 'object',
@@ -1053,6 +1060,19 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
     },
   },
   {
+    name: 'pin_expanded',
+    description:
+      "Pin an agent's tile expanded, or unpin it with pinned false, as its tile's Pin expanded does. Pinned, it stays " +
+      'expanded where it is and at its size, opens again by itself after a restart, and nothing collapses, moves or ' +
+      'resizes it: other tiles and arrange go round it. A closed agent drops its pin. As `agent-board expand --pin`.',
+    inputSchema: {
+      type: 'object',
+      properties: { agent: AGENT_REF, pinned: { type: 'boolean', description: 'false to unpin it; true unless given.' } },
+      required: ['agent'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'ticket_watches',
     description:
       "Show a ticket's watches on its pull request, or change them, as its tile's Watches menu does: agent is the ticket's " +
@@ -1493,6 +1513,27 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
     },
   },
   {
+    name: 'prefab_draft',
+    description:
+      'Draft a crew prefab for the user from a .crew.json file (version 2) you wrote, checked as an imported file is, ' +
+      "with a line for each thing you assumed that they didn't say. The user opens it on the prefab's board and saves " +
+      'it or deletes it; nothing is saved, started or changed until then. Read prefabs and roles first for what they ' +
+      'have. As `agent-board prefab draft`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', description: 'The absolute path of the .crew.json file.' },
+        assumed: {
+          type: 'array',
+          items: { type: 'string' },
+          description: "What you assumed, a line each. Start one with a member's, input's or loop gate's id in brackets ('[reviewer] Stops at 3 rounds') when it is about that one.",
+        },
+      },
+      required: ['file'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'roles',
     description:
       "The app's default roles: a custom role's name and the template an agent started in it begins with, in any zone " +
@@ -1856,7 +1897,9 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
     }
     const agent = await setOwnStatus(session, summary, progress, done === true, character, category, description);
     const lines =
-      summary === undefined ? [] : [`Your tile now says: ${statusLine(agent.status!)}${agent.workFinishedAt === null ? '' : ', and that your work is finished'}`];
+      summary === undefined ? [] : [
+            `Your tile now says: "${statusLine(agent.status!)}" (${agent.status!.summary.length} of ${MAX_STATUS_LENGTH} characters, shown in full)${agent.workFinishedAt === null ? '' : ', and that your work is finished'}.`,
+          ];
     if (category !== undefined || done === true) lines.push(categoryAnswer(agent));
     if (description !== undefined) lines.push(purposeAnswer(agent));
     if (character !== undefined) {
@@ -1948,6 +1991,7 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
   },
   read: async (session, args) => (await readAgent(session, stringArg(args, 'agent'), stringArg(args, 'path', true))).text,
   interrupt: async (session, args) => (await interruptAgent(session, stringArg(args, 'agent'))).text,
+  pin_expanded: async (session, args) => (await pinAgentExpanded(session, stringArg(args, 'agent'), booleanArg(args, 'pinned') !== false)).text,
   set_effort: async (session, args) => (await setAgentEffort(session, stringArg(args, 'agent'), stringArg(args, 'effort'))).text,
   ticket_watches: async (session, args) =>
     (
@@ -2203,6 +2247,11 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
     return (await changeTodo(session, action === 'remove' ? 'rm' : action, args.line)).text;
   },
   remove_schedule: async (session, args) => (await removeSchedule(session, stringArg(args, 'schedule'))).text,
+  prefab_draft: async (session, args) => {
+    const file = stringArg(args, 'file');
+    if (!isAbsolute(file)) throw new BoardError('file must be an absolute path');
+    return (await draftPrefab(session, file, linesArg(args, 'assumed') ?? [])).text;
+  },
   prefabs: async (session, args) => {
     const name = stringArg(args, 'name', true);
     return (name === undefined ? await prefabsView(session) : await prefabView(session, name)).text;

@@ -6,7 +6,7 @@ import { fakeHarnessEnv } from '@agent-board/fake-harness';
 import { runBoardCommand } from '../src/board-cli.ts';
 import { daemonPaths } from '../src/paths.ts';
 import { BOARD_ERROR, MAX_MEMORY_VALUE, type Agent, type AgentUpdatedEvent, type BoardItem, type DaemonEvent, type MemoryData, type MemoryView, type QueueData, QUEUE_LATER } from '../src/protocol.ts';
-import { connectTestClient, recordEvents, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
+import { connectTestClient, onCheckout, recordEvents, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
 
 const SIZE = { cols: 120, rows: 40 };
 
@@ -851,11 +851,11 @@ describe('draining a queue', () => {
     const { client } = await boardDaemon();
     const repo = tempRepo();
     const zone = await client.call('zone.add', { path: repo, x: 2000, y: 0, name: 'web' });
-    // The drained agent's worktree is checked out with a hook that holds the start open until the test lets it go.
+    // The drained agent's worktree is checked out with a filter that holds the start open until the test lets it go.
     const flags = tempDataDir();
     const [checkingOut, go] = [join(flags, 'checking-out'), join(flags, 'go')];
     onTestFinished(() => writeFileSync(go, ''));
-    writeFileSync(join(repo, '.git', 'hooks', 'post-checkout'), `#!/bin/sh\ntouch '${checkingOut}'\nwhile [ ! -e '${go}' ]; do sleep 0.05; done\n`, { mode: 0o755 });
+    onCheckout(repo, `touch '${checkingOut}'; while [ ! -e '${go}' ]; do sleep 0.05; done`);
     const data = { title: 'Backlog', madeBy: { kind: 'user' }, audience: 'agents', noAgents: false, count: 0 };
     const card = await client.call('item.create', { kind: 'queue', zoneId: zone.id, x: 40, y: 80, width: 340, height: 244, data });
     const { job } = await client.call('queue.change', { id: card.id, change: { action: 'add', text: 'Fix the login' } });

@@ -2,8 +2,17 @@ import { describe, expect, it } from 'vitest';
 import { SETTINGS_CONTROLS, SETTINGS_GROUPS, settingsPaneFrom, sectionOf } from './settings-ia';
 
 describe('the Settings window’s groups', () => {
-  it('are the eight, in order', () => {
-    expect(SETTINGS_GROUPS.map((group) => group.name)).toEqual(['General', 'Board', 'Agents', 'Prefabs', 'Alerts', 'Usage', 'Accounts', 'Advanced']);
+  it('are these, in order', () => {
+    expect(SETTINGS_GROUPS.map((group) => group.name)).toEqual([
+      'General',
+      'Board',
+      'Agents',
+      'Prefabs',
+      'Alerts',
+      'Usage',
+      'Accounts',
+      'Advanced',
+    ]);
   });
 
   it('hold every control the app has, each in exactly one section: nothing is lost in the move', () => {

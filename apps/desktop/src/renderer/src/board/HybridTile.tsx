@@ -50,10 +50,10 @@ import { HandPlacedMark } from './HandPlacedMark';
 import { ShellsChip } from './ShellsChip';
 import { windowShells } from '../session/tabs';
 import { useRenameRequest } from './rename';
+import { CrewViewContext } from './crew-chip';
 import { useFittedLines } from './use-fitted-lines';
 import { splitReviewerName } from './tile-name';
 import { ClickOpensContext, TileActionsContext, type TileData, type TileProps } from './tile';
-import { CrewViewContext, crewsOf, hoverCrew, leaveCrew, useCrewHover, useCrewLit } from './crew-view';
 import { panesLabel } from '../session/panes';
 import { canRestart, canRestartLive, endedShellLabel } from '../session/RestartAgent';
 import { useReviews } from '../review/ReviewsProvider';
@@ -97,7 +97,7 @@ export const HybridTile = memo(function HybridTile({ id, tile, selected = false 
   const design = useTileDesign();
   if (tile.start !== undefined) return <StartTile id={id} start={tile.start} />;
   if (tile.agent !== undefined && tile.helpers !== undefined) {
-    return <TicketTile id={id} selected={selected} chat={tile.agent} helpers={tile.helpers} from={tile.from} crew={tile.crew} implementer={tile.implementer} />;
+    return <TicketTile id={id} selected={selected} chat={tile.agent} helpers={tile.helpers} from={tile.from} implementer={tile.implementer} />;
   }
   // A glance design, chosen in Settings, draws every agent's tile, under either look.
   if (tile.agent !== undefined && design === 'porthole') {
@@ -128,11 +128,7 @@ export const HybridTile = memo(function HybridTile({ id, tile, selected = false 
 function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, implementer }: { id: string; selected: boolean; agent: Agent; repo?: string } & Pick<TileData, 'from' | 'crew' | 'crewFlags' | 'tabs' | 'implementer'>) {
   const shows = useNeedsYouShows();
   const crewView = useContext(CrewViewContext);
-  // The crews it is in, as an orchestrator and as one started: lit while the orchestrator is focused.
-  const crewOf = crewsOf(agent.sessionId, crew !== undefined, from?.sessionId);
   const chip = from !== undefined && !crewView.framed.has(agent.sessionId);
-  useCrewHover(crew === undefined ? undefined : agent.sessionId);
-  const crewLit = useCrewLit(crewOf);
   const tileActions = useContext(TileActionsContext);
   const { expand, openAgent, popOutAgent, deleteAgent, openLink, openPullRequest, resumeAgent, sendUnsent, clearUnsent, typeFirstPrompt, trustFolder, resendUndelivered, clearUndelivered, restartAgent, rename, openReview, openGate, openPlan, openDoc, retryAgentStart, continueOnCredits } =
     tileActions;
@@ -372,10 +368,6 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
       data-reviewer={agent.reviewOf !== null || undefined}
       data-orchestrator={crew !== undefined || undefined}
       data-master={agent.master || undefined}
-      data-crew={crewOf}
-      data-crew-lit={crewLit || undefined}
-      onMouseEnter={crew === undefined ? undefined : () => hoverCrew(agent.sessionId)}
-      onMouseLeave={crew === undefined ? undefined : () => leaveCrew(agent.sessionId)}
       title={hoverCard !== undefined ? undefined : clickOpens !== 'expand' ? 'Double-click to open its session window' : 'Double-click to expand it here'}
       onDoubleClick={() => (clickOpens !== 'expand' ? openAgent(agent) : expand(id))}
     >
@@ -417,17 +409,11 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
           {about ?? 'No task yet'}
         </span>
       )}
-      {/* Not while it starts: the tile's room is its name, its step and its footer; its crew frame or the board's zone says whose it is. */}
+      {/* Not while it starts: the tile's room is its name, its step and its footer; its lead's crew count or the board's zone says whose it is. */}
       {!starting && (branchShown || chip || repo !== undefined) && (
         <span className="hybrid-tile-branch" title={agent.worktree}>
           {chip && (
-            <span
-              className="hybrid-tile-from"
-              data-testid="from-chip"
-              title={`Started by ${from.name}`}
-              onMouseEnter={() => hoverCrew(from.sessionId, 'chip')}
-              onMouseLeave={() => leaveCrew(from.sessionId)}
-            >
+            <span className="hybrid-tile-from" data-testid="from-chip" title={`Started by ${from.name}`}>
               ↳ from {from.name}
             </span>
           )}

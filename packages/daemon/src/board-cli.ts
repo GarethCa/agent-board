@@ -16,6 +16,7 @@ import {
   defaultRolesView,
   exportPrefab,
   importPrefab,
+  draftPrefab,
   prefabsView,
   prefabView,
   removePrefab,
@@ -30,6 +31,7 @@ import {
   identifyView,
   interruptAgent,
   setAgentEffort,
+  pinAgentExpanded,
   ticketWatches,
   giveAgentRole,
   continueAgent,
@@ -197,8 +199,9 @@ COMMANDS
   show <ref>            Everything about one zone, agent, shell, edge, item or connector.
   usage                 The 5-hour and weekly plan usage. See \`usage --help\`.
   status set <summary> [--progress <0-100>] [--done] [--pose <pose>]
-                        Set your own tile's status (agents only); --done says your work is
-                        finished; --pose your character's pose. See \`status --help\`.
+                        Set your own tile's status (agents only): what you are doing now, up
+                        to ${MAX_STATUS_LENGTH} characters, all shown on your tile. --done says
+                        your work is finished; --pose your character's pose. See \`status --help\`.
   needs-you [--] <reason> [--via <ref>] | --clear
                         Ask for a look: blocked, ready for review, or a decision needed. A
                         turn ending tells no one. See \`needs-you --help\`.
@@ -260,7 +263,7 @@ ORCHESTRATING
   Any agent can start, message, watch and close other agents, as a lead does with workers,
   in any zone: every agent, the ones the user started by hand too. The agents you start are
   linked to you on the board, and may start their own, at any depth. In a shell, or a
-  terminal outside agent-board, these act for the user on any agent. Each start, message, interrupt, effort, role, continue, restart, pause, wake and close
+  terminal outside agent-board, these act for the user on any agent. Each start, message, interrupt, effort, pin, role, continue, restart, pause, wake and close
   is logged for the user.
   \`agent-board help orchestrate\` shows the loop.
 
@@ -281,6 +284,9 @@ ORCHESTRATING
   read <ref> [<path>]   An agent's final message, or a file in its worktree.
   interrupt <ref>       Stop an agent's turn; it waits at its prompt.
   effort <ref> <level>  Change an agent's reasoning effort: low, medium, high, xhigh or max.
+  expand <ref> --pin | --unpin
+                        Pin an agent's tile expanded: it stays open where it is, at its size,
+                        and nothing collapses or moves it. --unpin frees it again.
   watches <ref> [<kind>=<mode>...] [--every <minutes>]
                         Show or change what a ticket watches on its pull request: reviews,
                         approvals, merge, checks; each off, tile, chat or both.
@@ -368,6 +374,8 @@ ORCHESTRATING
   prefab import <file> [--add [--replace]]
                         Show a .crew.json file whole; with --add, add it to the library.
                         \`prefab remove <name>\` removes one you added.
+  prefab draft <file> [--assumed <line>]...
+                        Draft a prefab for the user from a .crew.json file, with what you assumed.
   crew [ls]             The running crews: each one's round, whose turn it is, and its reviews.
   crew show|stop|round <crew>
                         One crew; stop its loop; or one more round (or a failed start again).
@@ -484,10 +492,11 @@ decision instead, use the MCP tool \`show_doc\` with plan.
   status: {
     usage:
       'agent-board status set [<summary>] [--agent <ref>] [--progress <0-100>] [--done] [--pose <pose> [--face <face>] [--prop <prop>]] [--category <category> [--label <text>] [--on "<who> · <ref>"]] [--description <text>] | status poses',
-    text: `Sets your own tile's status: one line, at most ${MAX_STATUS_LENGTH} characters, saying what you are doing
-now, as the change you are making ("Moving session ids to the daemon"), not the task you were
-given. Your tile shows it in place of your task. Set it once you understand the work, and again
-when its direction changes. --progress is how far through you are, 0 to 100.
+    text: `Sets your own tile's status: one line, at most ${MAX_STATUS_LENGTH} characters, all shown on your tile,
+saying what you are doing now, as the change you are making ("Moving session ids to the daemon"),
+not the task you were given. Your tile shows it in place of your task; a longer line shrinks its
+text to fit, and one over ${MAX_STATUS_LENGTH} is refused. Set it once you understand the work, and
+again when its direction changes. --progress is how far through you are, 0 to 100.
 
 Only an agent can, and only its own. Setting it again replaces it; a person editing it by hand
 is replaced the same way, whoever writes last. A summary that starts with a dash goes after --:
@@ -669,7 +678,7 @@ For a question with answers to pick from, use the MCP tool \`ask\`, which waits 
     usage: 'agent-board mcp',
     text: `Serves the board as MCP tools on stdio: whoami, board, connections, handoff, ask, present_plan,
 show_doc, set_status, needs_you, open_pr, record_pr, record_doc, pin, unpin and set_page, and for an agent's own live session, new_agent, send, wait, read,
-interrupt, set_effort, give_role, continue_on_credits, restart, pause, wake, close, handover, add_edge, remove_edge, move, arrange, map,
+interrupt, set_effort, pin_expanded, give_role, continue_on_credits, restart, pause, wake, close, handover, add_edge, remove_edge, move, arrange, map,
 zone_layout, add_note, edit_note, remove_note, pass_note, prefabs, roles, set_role and remove_role. The app adds it to the agents it starts; add it to another Claude
 with:
 
@@ -841,7 +850,7 @@ agent-board: see \`agent-board help orchestrate\`. It prints the new agent's ref
   prefab: {
     usage:
       'agent-board prefab [ls] [--json] | prefab show <name> [--json] | prefab export <name> [--out <path>] | ' +
-      'prefab import <file> [--add [--replace]] | prefab remove <name>',
+      'prefab import <file> [--add [--replace]] | prefab remove <name> | prefab draft <file> [--assumed <line>]...',
     text: `The app's crew prefabs: saved crew shapes, each its members (a role, harness, model and
 reasoning each), when each starts, and a round limit. One library for every board: the
 built-ins (Solo agent, Implementer + reviewer, Implementer + code + design reviewers, Spike +
@@ -857,9 +866,16 @@ its own, checked as a prompt is. \`prefab remove\` removes one that was added; a
 Adding and removing reach every board, so they are for the user (in a shell or terminal) or an
 orchestrator of the whole board, and are logged (\`agent-board activity\`).
 
+\`prefab draft\` is for any agent: it checks a .crew.json file as \`import\` does and gives it to the
+user as a draft, with a line for each thing you assumed that they didn't say (--assumed, once
+each; start one with an id in brackets, \`[reviewer] …\`, when it is about that member, input
+or loop gate). The user opens it on the prefab's board and saves it, or deletes it; nothing is
+saved, started or changed until then.
+
   --out <path>    Where \`export\` writes the file: <name>.crew.json here without. Never over a file.
   --add           Add the imported prefab to the library.
   --replace       With --add, replace a prefab added before under the same name.
+  --assumed <line>  With \`draft\`, one thing you assumed, as a line; give it once for each.
   --json          Print it as JSON.`,
   },
   crew: {
@@ -883,7 +899,7 @@ start; a reviewer paused, or stopped by a restart, is waited for. A stop flags i
 crew, in Needs you. It passes on only what its agents wrote, and approves, merges and draws
 nothing: merging is yours. Once its builder's pull request is merged, the crew closes its
 agents and their worktrees, unless you stopped it to take it over. Its builder's crew events
-(\`watch\`, \`wait --crew\`) include \`round\` and \`crew-stopped\`.
+(\`watch\`, \`wait --crew\`) include \`round\`, \`crew-waiting\` and \`crew-stopped\`.
 
 \`crew\` (or \`crew ls\`) lists the crews you reach, and \`crew show\` prints one: its round, whose turn it
 is, and each round's reviewers with their verdicts. \`crew stop\` stops its loop and leaves its
@@ -993,6 +1009,19 @@ ${READ_FLAGS}`,
     usage: 'agent-board interrupt <ref> [--json]',
     text: `Interrupts the agent's turn, as Ctrl-C in its terminal would: it waits at its prompt.
 
+  --json   Print the agent as JSON.`,
+  },
+  expand: {
+    usage: 'agent-board expand <ref> --pin | --unpin [--json]',
+    text: `Pins an agent's tile expanded, as its tile's Pin expanded does, or unpins it. Pinned, it stays
+expanded where it is and at its size, and opens again by itself after the app or the agent
+restarts, a window closes or the app reconnects. Nothing collapses it (Esc, a click elsewhere,
+Maximise, Pop out), and nothing moves or resizes it: other expanded tiles and arrange go round
+it. Pinning a collapsed tile expands it. A closed agent, its session ended with nothing left,
+drops its pin. Each pin and unpin is in the activity log.
+
+  --pin    Pin it expanded.
+  --unpin  Unpin it: it may be collapsed, moved and resized again.
   --json   Print the agent as JSON.`,
   },
   effort: {
@@ -1992,6 +2021,7 @@ const OPTIONS = {
   chat: { type: 'string' },
   add: { type: 'boolean' },
   replace: { type: 'boolean' },
+  assumed: { type: 'string', multiple: true },
 } as const;
 
 type Option = keyof typeof OPTIONS;
@@ -2010,7 +2040,7 @@ export const COMMAND_OPTIONS: Record<string, readonly Option[]> = {
   doc: ['title', 'board', 'plan'],
   new: ['zone', 'name', 'harness', 'model', 'effort', 'role', 'no-template', 'repo', 'branch', 'base', 'edges', 'issue', 'file', 'prefab', 'chat', 'description'],
   roles: ['file', 'zone'],
-  prefab: ['out', 'add', 'replace'],
+  prefab: ['out', 'add', 'replace', 'assumed'],
   crew: [],
   send: ['file', 'submit', 'clear'],
   wait: ['until', 'any', 'timeout', 'crew'],
@@ -2362,6 +2392,13 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
     case 'interrupt': {
       const ref = oneRef();
       return async (session) => print(await interruptAgent(session, ref));
+    }
+    case 'expand': {
+      const ref = oneRef();
+      if (values.pin === true && values.unpin === true) throw new UsageError('give --pin or --unpin, not both');
+      if (values.pin !== true && values.unpin !== true) throw new UsageError('give --pin or --unpin: agent-board expand <ref> --pin | --unpin');
+      const pinned = values.pin === true;
+      return async (session) => print(await pinAgentExpanded(session, ref, pinned));
     }
     case 'effort': {
       if (positionals.length !== 2) throw new UsageError('give an agent ref and a level: agent-board effort <ref> <level>');
@@ -3035,6 +3072,7 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
       const [sub = 'ls', ...rest] = positionals;
       if (sub !== 'export' && string('out') !== undefined) throw new UsageError('--out is only for `prefab export`');
       if (sub !== 'import' && (values.add !== undefined || values.replace !== undefined)) throw new UsageError('--add and --replace are only for `prefab import`');
+      if (sub !== 'draft' && values.assumed !== undefined) throw new UsageError('--assumed is only for `prefab draft`');
       const one = (what: string) => {
         if (rest.length === 0) throw new UsageError(`give ${what}`);
         return rest.join(' ');
@@ -3062,7 +3100,13 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
         const name = one('a prefab name');
         return async (session) => print(await removePrefab(session, name));
       }
-      throw new UsageError('the prefab commands are `prefab ls`, `prefab show`, `prefab export`, `prefab import` and `prefab remove`');
+      if (sub === 'draft') {
+        if (rest.length !== 1) throw new UsageError('give one .crew.json file');
+        const path = resolve(process.cwd(), rest[0]!);
+        const assumed = (values.assumed as string[] | undefined) ?? [];
+        return async (session) => print(await draftPrefab(session, path, assumed));
+      }
+      throw new UsageError('the prefab commands are `prefab ls`, `prefab show`, `prefab export`, `prefab import`, `prefab remove` and `prefab draft`');
     }
     case 'crew': {
       const [sub = 'ls', ...rest] = positionals;

@@ -103,6 +103,7 @@ import { TicketBoard, useBoardLevel } from './TicketBoard';
 import { PrefabBoard, type PrefabBoardStart } from '../crews/PrefabBoard';
 import { SaveAsPrefab } from '../crews/SaveAsPrefab';
 import { libraryBoard, newPrefab } from '../crews/prefab-board';
+import { draftedMessage, openDraft } from '../crews/prefab-drafts';
 import { keptFocus, levelOf, memberNodeId, zoomsInto, type TicketBoardFocus } from './ticket-board';
 import { oneAtATime } from './one-at-a-time';
 import { installWheelLatch } from './wheel-latch';
@@ -179,14 +180,15 @@ import { zoneDeleteText, type ZoneToDelete } from './editing/delete-zones';
 import { historyKey, itemChange, patched, useHistory, type BoardState, type Change, type DissolvedGroup } from './editing/use-history';
 import { cleanUpMessage, layoutChoiceStep, movedToDoneMessage, resizeMove, tileMoveStep, tileStepAction, zoneTidy } from './hand-moves';
 import { useSnapping } from './editing/use-snapping';
-import { tidySize, VIEW_FOLLOW_DELAY_MS } from './expanded';
+import { keptOnBoard as keptOnBoardOf, tidySize, VIEW_FOLLOW_DELAY_MS } from './expanded';
+import { expandedTrace, FIT_NOTED_MS } from './expanded-trace';
 import { tileOpenAction } from './click-opens';
 import { focusTerminalIn, pulseTile } from './tile-attention';
-import { crewFrames, crewMoves, frameableTiles, landingRects, selectedOrchestrators, withCrewFollowing } from './crews';
+import { crewFrames, crewMoves, frameableTiles, landingRects, withCrewFollowing } from './crews';
 import { restoreViewSettings, setViewSetting, useViewSettings } from './view-settings';
 import { ConnectionCountsContext, drawnEdges, edgeCounts, nextConnectionsView, shownEdges, typingInTile } from './connections-view';
 import { railOf, withRailSelected } from './rails';
-import { CrewFramesContext, CrewViewContext, selectCrews, typeInTile, type CrewView } from './crew-view';
+import { CrewViewContext, type CrewView } from './crew-chip';
 import { AgentNoteLookContext, type AgentNoteLook } from './items/agent-note-look';
 import { isSimplified, useSimplified } from '../design';
 import { agentNoteTethers, isTether, TETHER_EDGE_TYPE } from './items/agent-note-tethers';
@@ -235,7 +237,7 @@ import { RoleTemplatesDialog } from './RoleTemplatesDialog';
 import { DefaultRepoDialog } from './DefaultRepoDialog';
 import { useRestartBanner } from './RestartBanner';
 import { useBoardData, type SavedView } from './use-board-data';
-import { agentTitle, shellTitle, useBoardWindows } from './use-board-windows';
+import { agentTitle, shellTitle, useBoardWindows, type KeptOnBoard } from './use-board-windows';
 import { useExpandedTiles } from './use-expanded-tiles';
 import { boxedCorner, clearRooms, coveredView, fitView, followView, topChrome, UNCOVERED } from './view-follow';
 import { DEFAULT_REPRESENTATION, RepresentationProvider } from './representations';
@@ -244,7 +246,6 @@ import { TileMenuBoardContext } from './agent-tile-menu';
 import { HandPlacedContext } from './HandPlacedMark';
 import { ClickOpensContext, ShellFoldersContext, TicketViewsContext, TileActionsContext, type ShellFolders, type TileActions, type TileData, type TileNodeType } from './tile';
 import {
-  agentOfTile,
   DRAGGED_TILE_Z_INDEX,
   drawnIn,
   EXTERNAL_NODE_PREFIX,
@@ -318,6 +319,8 @@ const nodeTypes: NodeTypes = {
 };
 /** How long the toast a Clean up shows stays up: long enough to reach its Undo. */
 const CLEAN_UP_TOAST_MS = 8000;
+/** How long the toast that an agent drafted a prefab stays up: long enough to reach its Open on its board. */
+const DRAFTED_TOAST_MS = 15000;
 
 /** How long a tile's hidden connections stay shown after the pointer leaves it, to reach one. */
 const HOVER_GRACE_MS = 400;
@@ -513,13 +516,35 @@ function BoardView() {
   const prefabSaysEdited = useCallback((edited: boolean) => {
     prefabEdited.current = edited;
   }, []);
+  /** Opens a draft an agent made on its prefab's board: not while another holds changes, as opening one closes a drafter started for it. */
+  const openDraftById = useCallback(
+    (id: string) => {
+      if (prefabEdited.current) {
+        toasts.show({ id: 'prefab-open', tone: 'info', message: 'Save or leave the prefab that’s open first: its changes aren’t saved.' });
+        return;
+      }
+      openDraft(id).then(openPrefab, (failure: unknown) => toasts.show({ id: 'prefab-open', tone: 'error', message: `Could not open the draft: ${errorMessage(failure)}` }));
+    },
+    [openPrefab, toasts],
+  );
+  // As an agent drafts a prefab, wherever it was asked: the toast opens it.
+  useEffect(
+    () =>
+      window.agentBoard.orchestrators.onDraft((event) => {
+        if (event.type !== 'prefabDraft.added') return;
+        toasts.show({ id: `prefab-draft:${event.draft.id}`, message: draftedMessage(event.draft), lingerMs: DRAFTED_TOAST_MS, action: { label: 'Open on its board', onClick: () => openDraftById(event.draft.id) } });
+      }),
+    [openDraftById, toasts],
+  );
   // Save as prefab…, open beside the agent's tile it was asked from.
   const [savingPrefab, setSavingPrefab] = useState<Agent>();
   /** The builder of a crew just started, until its tile is on the board to show. */
   const [crewStarted, setCrewStarted] = useState<string>();
   // Keeps the library followed, and the board's right-click menu current with it; a Classic zone's ⋯ follows it itself.
   usePrefabs();
-  const { windows, windowsRestored, windowsRef, showWindow, closeWindow, popOut, popOutTabWindow, openShell, openAgent, poppedOut, onShellChange } = useBoardWindows();
+  /** Set once the expanded tiles are: a pinned expanded agent's tile is shown in place of its session window. */
+  const keptOnBoard = useRef<KeptOnBoard>(() => false);
+  const { windows, windowsRestored, windowsRef, showWindow, closeWindow, popOut, popOutTabWindow, openShell, openAgent, poppedOut, onShellChange } = useBoardWindows(keptOnBoard);
   // Read when ⌘K opens a reviewer beside its pull request.
   const rounds = useReviews();
   /** The view settings every window shares: what a double-click opens, how agent notes look, which connections and tethers are drawn. */
@@ -541,8 +566,6 @@ function BoardView() {
   const typingNow = useRef<string>(undefined);
   const followTyping = useCallback((target: EventTarget | null) => {
     typingNow.current = typingInTile(target);
-    // An orchestrator's tile typed in stops focusing its crew: no dim around it, no crew box.
-    typeInTile(agentOfTile(typingNow.current));
     if (connectionsRef.current !== 'all') setTypingTile(typingNow.current);
   }, []);
   const hoverTile = useCallback((id: string | undefined) => {
@@ -575,17 +598,6 @@ function BoardView() {
   const crewsKey = savedFrames.map((frame) => frame.members.join(' ')).join('\n');
   const framedKey = savedFrames.flatMap((frame) => frame.members).join(' ');
   const crewView = useMemo<CrewView>(() => ({ framed: new Set(framedKey.split(' ').filter(Boolean)) }), [framedKey]);
-  // The selected orchestrators keep their crews focused (framed, lit, the rest dimmed), dragged or not.
-  const selectedCrews = selectedOrchestrators(nodes).join(' ');
-  useEffect(() => {
-    // Read the keyboard again: a field that went with its tile may have taken it away without saying so.
-    typeInTile(agentOfTile(typingInTile(document.activeElement)));
-    selectCrews(selectedCrews.split(' ').filter(Boolean));
-  }, [selectedCrews]);
-  useEffect(() => () => {
-    selectCrews([]);
-    typeInTile(undefined);
-  }, []);
   const crewBlocks = useMemo(
     () => (crewsKey === '' ? [] : crewsKey.split('\n').map((members) => members.split(' ').map((id) => tileNodeId('agent', id)))),
     [crewsKey],
@@ -593,6 +605,15 @@ function BoardView() {
   /** Where the changes put each node they moved since the drag began, snapped: ahead of what the board has drawn. */
   const placed = useRef(new Map<string, XYPosition>());
   const flowStore = useStoreApi<BoardNode>();
+  // The expanded-tile trace reads the view from here.
+  useEffect(
+    () =>
+      expandedTrace.watchView(() => {
+        const [x, y, zoom] = flowStore.getState().transform;
+        return { x, y, zoom };
+      }),
+    [flowStore],
+  );
   /**
    * React Flow's node changes applied, with an orchestrator's crew dragged along with it. A replace is laid over the
    * board's node as it is by then, from the copy React Flow made it from (read now, before that copy catches up).
@@ -658,6 +679,7 @@ function BoardView() {
   const bringIntoView = useCallback(
     (rect: Rect) => {
       const { minZoom } = flowStore.getState();
+      expandedTrace.noteView('bringIntoView');
       void setViewport(fitView(rect, clearView(), minZoom, getZoom()), { duration: motionDuration(tokenNumber('--motion-base')) });
     },
     [flowStore, setViewport, getZoom, clearView],
@@ -670,6 +692,7 @@ function BoardView() {
     (rect: Rect) => {
       const { minZoom } = flowStore.getState();
       const duration = motionDuration(tokenNumber('--motion-base'));
+      expandedTrace.noteView('flyTo');
       void setViewport(fitView(rect, clearView(), minZoom, Math.max(getZoom(), READABLE_ZOOM)), { duration });
       return duration;
     },
@@ -786,6 +809,7 @@ function BoardView() {
     expandedRef,
     tileSizesRef,
     unfoldedRef,
+    pinnedRef,
     restoreExpanded,
     expand,
     bringTileToFront,
@@ -799,17 +823,19 @@ function BoardView() {
     allowOverlap,
     freeOverlaps,
   } = useExpandedTiles({ nodes, loaded, agents, shells, externals, windows, windowsRestored, relayout, crews: crewBlocks });
+  keptOnBoard.current = (sessionId, path) => {
+    const nodeId = tileNodeId('agent', sessionId);
+    if (!keptOnBoardOf(nodeId, pinnedRef.current, expandedRef.current)) return false;
+    expandedTrace.kept(path, [nodeId]);
+    bringTileToFront(nodeId);
+    return true;
+  };
   /** Whether reaching a helper of `ticket` (⌘K, Needs you) zooms into its board, as `zoomsInto` says for the views shown now. */
   const ticketViewsRef = useRef(ticketViewsShown);
   ticketViewsRef.current = ticketViewsShown;
   const openAsRef = useRef(ticketTilesOpenAs);
   openAsRef.current = ticketTilesOpenAs;
   const zoomsIn = useCallback((ticket: string) => zoomsInto(ticket, levelRef.current, ticketViewsRef.current, openAsRef.current), []);
-  /** The crew frames as drawn, for the zones: round where their tiles are drawn, pushed aside by an expanded tile or not. */
-  const shownFrames = useMemo(
-    () => crewFrames(frameableTiles(nodes), shown.filter(isSessionTile)),
-    [nodes, shown],
-  );
   // Each project's heading under the Simplified design: how many of its agents need you, and the rest by status. A
   // folded zone's chip reads it in both designs, with the external sessions it hides counted too.
   const needsYouShows = useNeedsYouShows();
@@ -1026,7 +1052,9 @@ function BoardView() {
           // nor under the toolbar.
           const top = domNode === null || container.current === null ? 0 : topChrome(domNode, container.current);
           const next = followView(rect, { x, y, zoom }, { width, height, minZoom }, clearView(true), top);
-          if (next !== undefined) void setViewport(next, { duration: motionDuration(tokenNumber('--motion-base')) });
+          if (next === undefined) return;
+          expandedTrace.noteView('followExpand');
+          void setViewport(next, { duration: motionDuration(tokenNumber('--motion-base')) });
         }, VIEW_FOLLOW_DELAY_MS);
       },
       // Its session window, maximised: an agent's or a shell tile's (an external session has none).
@@ -1042,7 +1070,7 @@ function BoardView() {
         history.record([[historyKey.unfolded(nodeId), { type: 'unfolded', open: !open }, { type: 'unfolded', open }]]);
         setUnfolded(nodeId, open);
         // Folding a tile that is expanded in place closes that too.
-        if (folded) collapse(nodeId);
+        if (folded) collapse(nodeId, 'fold');
       },
       resizeTile(nodeId, size, place) {
         const node = nodesRef.current.find((known) => known.id === nodeId);
@@ -1134,6 +1162,11 @@ function BoardView() {
           agentHeard,
           report(muted ? "mute the agent's notifications" : "unmute the agent's notifications"),
         ),
+      setPinnedExpanded(sessionId, pinned) {
+        // Pinned while compact, it opens now, not once the daemon says so.
+        if (pinned) expand(tileNodeId('agent', sessionId));
+        void window.agentBoard.agents.setPinnedExpanded(sessionId, pinned).then(agentHeard, report(pinned ? 'pin the agent expanded' : 'unpin the agent'));
+      },
       setEffort: (sessionId, effort) =>
         void window.agentBoard.agents.setEffort(sessionId, effort).then(({ agent, applies }) => {
           agentHeard(agent);
@@ -3124,6 +3157,7 @@ function BoardView() {
       },
       crewLibrary: (zone: Zone) => setCrewFlow({ kind: 'library', zone }),
       editPrefab: (prefab) => openPrefab(prefab === null ? { prefab: newPrefab(), replaces: null } : libraryBoard(prefab)),
+      describeCrew: (zone: Zone) => setCrewFlow({ kind: 'describe', zone }),
       newTicket: (zone: Zone) => setCrewFlow({ kind: 'ticket', zone }),
       // Under what stays outside it, selected so it can be dragged where it is wanted; the daemon keeps it to one a zone.
       addStageBoard: (zone: Zone) => {
@@ -3299,7 +3333,7 @@ function BoardView() {
       switchExpanded(fromNodeId, { kind, id }) {
         const nodeId = tileNodeId(kind, id);
         if (nodesRef.current.every((known) => known.id !== nodeId)) return false;
-        collapse(fromNodeId);
+        collapse(fromNodeId, 'switchExpanded');
         tileActions.expand(nodeId);
         focusTerminalIn(nodeId);
         return true;
@@ -3309,7 +3343,7 @@ function BoardView() {
         const node = getNodes().filter(isZone).find((known) => known.id === zoneId);
         if (node === undefined) return false;
         toMainBoard();
-        if (collapseNodeId !== undefined) collapse(collapseNodeId);
+        if (collapseNodeId !== undefined) collapse(collapseNodeId, 'showZone');
         bringIntoView(layoutOf(node));
         setCurrentZone(zoneId);
         return true;
@@ -3323,9 +3357,10 @@ function BoardView() {
         const zone = startableZones().find((known) => known.id === zoneId) ?? zoneInView() ?? startableZones()[0];
         if (zone !== undefined) setNewAgent({ zone, name });
       },
-      startCrew(name, zoneId) {
+      startCrew(name, zoneId, describe) {
         // A guess at where, so the prompt box shows it in its Zone, to change: the window's zone, else the one in view.
         const suggested = startableZones().find((known) => known.id === zoneId) ?? zoneInView();
+        if (describe === true) return setCrewFlow({ kind: 'describe', suggested });
         if (name === null) return setCrewFlow({ kind: 'library', suggested });
         const prefab = prefabNamed(name);
         if (prefab !== undefined) setCrewFlow({ kind: 'prompt', prefab, suggested });
@@ -3360,12 +3395,13 @@ function BoardView() {
     else if (boardRequest.kind === 'newAgent') boardCommands.newAgentNamed(boardRequest.name, boardRequest.zoneId);
     // One already open may hold a typed prompt or unsaved edits, which a pop-out's request mustn't throw away.
     else if (boardRequest.kind === 'crew') {
-      if (crewFlow === undefined) boardCommands.startCrew(boardRequest.prefab, boardRequest.zoneId);
+      if (crewFlow === undefined) boardCommands.startCrew(boardRequest.prefab, boardRequest.zoneId, boardRequest.describe);
     }
     // Likewise a prefab's board already open, which may hold changes not saved yet: it says so.
     else if (boardRequest.kind === 'prefab') openPrefab({ prefab: boardRequest.prefab, replaces: boardRequest.replaces });
+    else if (boardRequest.kind === 'prefabDraft') openDraftById(boardRequest.id);
     else showWindow(boardRequest.target);
-  }, [loaded, boardRequest, boardCommands, showWindow, crewFlow, openPrefab]);
+  }, [loaded, boardRequest, boardCommands, showWindow, crewFlow, openPrefab, openDraftById]);
 
   /** How an agent starts from the issue card `item`: the New agent dialog, the repo picker, or not now. */
   const issueStartOf = useCallback((item: BoardItem, card: IssueCardData) => {
@@ -3597,6 +3633,7 @@ function BoardView() {
     const by = panClear({ left: Math.min(...xs) - board.left, right: Math.max(...xs) - board.left }, board.width, coveredView(domNode, container.current).right, inset * 2);
     if (by === 0) return;
     const [x, y, zoom] = flowStore.getState().transform;
+    expandedTrace.noteView('revealFlowEdge');
     void setViewport({ x: x - by, y, zoom }, { duration: tokenNumber('--motion-base') });
   }, [shownFlowEdgeId, flowStore, getInternalNode, flowToScreenPosition, setViewport]);
   /** Who is handing off along a live edge, and who is receiving. */
@@ -3709,7 +3746,6 @@ function BoardView() {
                       <ConnectionCountsContext value={hiddenCounts}>
                       <CrewViewContext value={crewView}>
                       <AgentNoteLookContext value={agentNoteLook}>
-                      <CrewFramesContext value={shownFrames}>
                       <ShelvesContext value={shelvesActions}>
                       <ProjectSummaryContext value={projectSummary}>
                       <NewNoteContext value={newNoteAt}>
@@ -3885,7 +3921,12 @@ function BoardView() {
                               fitView={CAPTURE_FRAME === undefined && fitOnLoad}
                               fitViewOptions={{ maxZoom: 1 }}
                               defaultViewport={CAPTURE_FRAME === undefined ? savedViewport : captureViewport(CAPTURE_FRAME)}
+                              onInit={() => {
+                                if (CAPTURE_FRAME === undefined && fitOnLoad) expandedTrace.noteView('fitOnLoad', 'board', FIT_NOTED_MS);
+                              }}
+                              onMoveStart={(event, viewport) => expandedTrace.moveStarted(event !== null, viewport)}
                               onMoveEnd={(_event, { x, y, zoom }) => {
+                                expandedTrace.moveEnded({ x, y, zoom });
                                 boardSettled();
                                 if (CAPTURE_FRAME === undefined) saveViewport({ x, y, zoom });
                               }}
@@ -3976,7 +4017,6 @@ function BoardView() {
                       </NewNoteContext>
                       </ProjectSummaryContext>
                       </ShelvesContext>
-                      </CrewFramesContext>
                       </AgentNoteLookContext>
                       </CrewViewContext>
                       </ConnectionCountsContext>
@@ -4175,6 +4215,7 @@ function BoardView() {
               key={`${crewFlow.kind}:${crewFlow.kind === 'prompt' ? crewFlow.prefab.name : ''}:${crewFlow.zone?.id ?? ''}:${crewFlow.suggested?.id ?? ''}`}
               start={crewFlow}
               zones={nodes.filter(isZone).map((node) => node.data.zone).filter((zone) => zone.clone === null)}
+              agents={agentsRef.current.filter((agent) => agent.endedAt === null).map(({ sessionId, name, zoneId }) => ({ sessionId, name, zoneId }))}
               onStarted={(sessionId) => {
                 setCrewFlow(undefined);
                 setCrewStarted(sessionId);
@@ -4275,7 +4316,7 @@ function BoardView() {
               onResumed={(agent) => {
                 const nodeId = tileNodeId('external', resumingExternal.session.id);
                 externalGone(resumingExternal.session.id);
-                collapse(nodeId);
+                collapse(nodeId, 'externalResumed');
                 agentHeard(agent);
                 setResumingExternal(undefined);
               }}

@@ -28,11 +28,11 @@ type MemoryQueueMethod = `board.${'new' | 'list' | 'read' | 'change'}${'Memory' 
 
 /**
  * The `board.*` methods here; a question and a plan wait on the user, so `asks.ts` has them, `gate-actions.ts` opening a
- * pull request, `steps.ts` the steps cards, and `memory-queue.ts` the memories and queues.
+ * pull request, `steps.ts` the steps cards, `memory-queue.ts` the memories and queues, and `prefab-drafts.ts` a prefab's draft.
  */
 type BoardMethods = Pick<
   DaemonMethods,
-  Exclude<Extract<keyof DaemonMethods, `board.${string}`>, 'board.ask' | 'board.presentPlan' | 'board.showDoc' | 'board.openPullRequest' | 'board.newSteps' | 'board.readSteps' | 'board.updateSteps' | MemoryQueueMethod | 'board.remind' | 'board.readTodos' | 'board.changeTodo'>
+  Exclude<Extract<keyof DaemonMethods, `board.${string}`>, 'board.ask' | 'board.presentPlan' | 'board.showDoc' | 'board.openPullRequest' | 'board.newSteps' | 'board.readSteps' | 'board.updateSteps' | MemoryQueueMethod | 'board.remind' | 'board.readTodos' | 'board.changeTodo' | 'board.draftPrefab'>
 >;
 
 /**

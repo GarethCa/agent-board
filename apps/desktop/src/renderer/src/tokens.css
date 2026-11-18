@@ -230,6 +230,9 @@
   --glance-done-ring: color-mix(in srgb, var(--success) 55%, transparent);
   /* The Porthole's round window, small enough that the name, not the robot, leads the tile */
   --porthole-size: 32px;
+  /* A glance tile's line: a fixed box, three lines at body size or four on the tight line its smaller steps take */
+  --glance-line-box: 60px;
+  --glance-line-tight: 15px;
   --shadow-glance-tray: 0 0 0 1px var(--border); /* the tray of a glance tile's tools */
   --glance-ring-width: 3px; /* the ring round what wants the user, a pixel heavier than the rest */
   --porthole-fill: var(--state-idle-soft);
@@ -874,6 +877,9 @@
   --size-quick-insert: 300px; /* the / palette at the pointer */
   --size-gallery-shape: 148px; /* a shape's cell in the component gallery */
   --size-gallery-shape-height: 112px;
+  --size-gallery-prefab-boards: 1440px; /* the gallery's prefab boards, side to side */
+  --size-gallery-prefab-board: 420px; /* a built-in's prefab board in the gallery */
+  --size-gallery-prefab-board-wide: 640px; /* the gallery's first prefab boards, a whole graph */
   --size-quick-insert-list: 260px; /* its results' tallest, before they scroll */
   --size-role-templates: 760px; /* a zone's role templates dialog: the roles beside the editor */
   --size-prefab-editor: 1080px; /* a crew prefab's flow editor: the diagram beside the picked member */
@@ -920,6 +926,9 @@
   --size-prefabs-icon: 34px; /* a prefab's icon in its row of Settings › Prefabs */
   --prefab-side-top: calc(var(--island-inset) * 2 + var(--island-height)); /* a prefab board's panel starts under its top islands */
   --prefab-line-picked: 3px; /* a selected line on a prefab's own board */
+  --size-prefab-number: 64px; /* a number typed in a prefab board's panel: rounds, minutes */
+  --prefab-gate-edge: 2px; /* round a loop gate's diamond */
+  --prefab-chip-edge: 1.5px; /* round a loop gate's rule */
   --size-ticket-board-gallery-width: 960px; /* a ticket's own board as the gallery draws it: a small window's worth */
   --size-ticket-board-gallery-height: 520px;
   --size-ticket-helper-card: 150px; /* a helper's card in an opened ticket's strip, narrowest */

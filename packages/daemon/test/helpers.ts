@@ -121,6 +121,19 @@ export function git(cwd: string, ...args: string[]): string {
 }
 
 /**
+ * Makes every checkout of `repo`'s files (a new worktree's included) run the shell command `command` first: a smudge
+ * filter on a file committed for it. A test's hold on a checkout, where a hook would do but the board runs none.
+ */
+export function onCheckout(repo: string, command: string): void {
+  git(repo, 'config', 'filter.on-checkout.smudge', `${command}; cat`);
+  git(repo, 'config', 'filter.on-checkout.clean', 'cat');
+  writeFileSync(join(repo, '.gitattributes'), 'checkout.txt filter=on-checkout\n');
+  writeFileSync(join(repo, 'checkout.txt'), 'checked out\n');
+  git(repo, 'add', '.gitattributes', 'checkout.txt');
+  git(repo, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '--quiet', '--no-verify', '-m', 'hold checkouts');
+}
+
+/**
  * The shell test daemons run: /bin/sh on macOS, where that is bash in POSIX mode. Linux's is often dash, which reports no
  * command status, so there it is bash run under the name `sh`, which behaves the same and reads no rc files.
  */

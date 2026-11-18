@@ -270,7 +270,10 @@ PTY.
   at its prompt (or after a failed turn). A fire time is skipped, and recorded so, while it is still working,
   rate-limited (typing would fail the same way), waiting for you, or the user has a draft at its prompt: text typed
   into its terminal and not yet submitted with Enter or cleared with Ctrl-C or Ctrl-U (`src/terminal-input.ts`;
-  focus, mouse and arrow-key reports don't count).
+  focus, mouse and arrow-key reports don't count). Ctrl-U (which the app sends for ⌘⌫ too) clears only the wrapped
+  row the cursor is on, up to the cursor, so it ends only a draft the board can count: one line, typed with the cursor
+  at its end, short enough for one row of the terminal's width. A draft of several lines (Shift+Enter, a paste), one
+  that wraps, or one whose cursor moved stays a draft until Enter or Ctrl-C.
 - **An ended agent is relaunched.** When a fire time comes and the agent's session has ended (stopped, crashed, or
   lost with a daemon restart), the daemon starts its harness again in its worktree under the same session id, with
   the schedule's prompt as its first message and a new hook token. Claude gets `--resume <id>`, so it carries on its

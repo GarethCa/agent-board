@@ -71,6 +71,13 @@ describe('activityText', () => {
     expect(activityText(line({ action: 'set-role', outcome: 'refused', targetName: null }))).toBe('tried to set a default role');
   });
 
+  it('says what the user let a crew do at its Your OK, or at an input it waited for', () => {
+    expect(activityText(line({ action: 'crew-go-on', targetName: 'Build' }))).toBe('let the crew Build go on');
+    expect(activityText(line({ action: 'crew-send-back', targetName: 'Build' }))).toBe('sent back the work of the crew Build');
+    expect(activityText(line({ action: 'crew-go-on-without', targetName: 'Build' }))).toBe('let the crew Build go on without what was missing');
+    expect(activityText(line({ action: 'crew-go-on', outcome: 'refused', targetName: null }))).toBe('tried to let a crew go on');
+  });
+
   it('says what it tried when refused, and names no one when there was no one', () => {
     expect(activityText(line({ outcome: 'refused', reason: 'outside its zone' }))).toBe('tried to start web impl');
     expect(activityText(line({ outcome: 'refused', targetId: null, targetName: null }))).toBe('tried to start an agent');

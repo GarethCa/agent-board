@@ -241,6 +241,7 @@ describe('subagents on a Hybrid tile', () => {
       earlierConversations: [],
       hibernated: null,
       muted: false,
+      pinnedExpanded: false,
       seen: false,
       issue: null,
       createdAt: new Date().toISOString(),

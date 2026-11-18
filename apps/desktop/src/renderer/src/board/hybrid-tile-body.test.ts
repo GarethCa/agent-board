@@ -173,10 +173,10 @@ describe('what tile B says at rest', () => {
     expect(render(galleryAgent('waiting'))).not.toContain('data-warn');
   });
 
-  it('lays flat only its own shadow, not the halo of the Captain, an orchestrator or a lit crew', () => {
+  it('lays flat only its own shadow, not the halo of the Captain or an orchestrator', () => {
     const flat = /\.hybrid-tile-agent\[data-flat\]([^{]*)\{([^}]*)\}/.exec(css);
     expect(flat?.[2]).toContain('box-shadow: none');
-    for (const halo of ['[data-orchestrator]', '[data-master]', '[data-crew-lit]']) expect(flat?.[1]).toContain(halo);
+    for (const halo of ['[data-orchestrator]', '[data-master]']) expect(flat?.[1]).toContain(halo);
     expect(css).toMatch(/\.hybrid-tile-mark\[data-warn\] \.hybrid-tile-word \{\s*color: var\(--state-rate-limited-ink\)/);
   });
 

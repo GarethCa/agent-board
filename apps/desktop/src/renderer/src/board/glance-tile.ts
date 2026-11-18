@@ -93,7 +93,9 @@ export function glanceFace(agent: Agent, shows: NeedsYouShows, implementer?: Imp
   const calm = calmFace(agent, shows, implementer);
   const state = glanceStateOf(calm.status, agent, needsYouKind(agent, shows) === 'permission');
   const word = GLANCE_WORDS[state];
-  const line = calm.line === word ? (agent.status === null || agent.status.summary.trim() === '' ? null : statusLine(agent.status)) : calm.line;
+  // Its status line is its summary alone: its bar shows the progress, so a line at the cap still fits its box.
+  const summary = agent.status === null || agent.status.summary.trim() === '' ? null : agent.status.summary;
+  const line = calm.line === word ? summary : agent.status !== null && calm.line === statusLine(agent.status) ? summary : calm.line;
   return { status: calm.status, state, level: GLANCE_LEVELS[state], word, line: line ?? lastLine(agent), action: actionOf(agent, state, calm.action) };
 }
 

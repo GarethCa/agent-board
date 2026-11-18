@@ -7,7 +7,7 @@ import { galleryAgent } from './TileGallery';
 
 const AT = '2026-01-01T00:00:00.000Z';
 
-const line = (summary: string): Agent['status'] => ({ summary, progress: null, updatedAt: AT, setBy: null });
+const line = (summary: string, progress: number | null = null): Agent['status'] => ({ summary, progress, updatedAt: AT, setBy: null });
 const ISSUE: Agent['issue'] = { provider: 'linear', id: 'ACME-18', title: 'Workbench light theme and brand assets', url: '' };
 const PR = (state: 'open' | 'merged', checks: 'passing' | 'pending'): Agent['pullRequests'][number] => ({ number: 43, title: 'Fix the login redirect', url: '', state, checks });
 
@@ -20,7 +20,7 @@ export const PORTHOLE_TILES: Record<GlanceState, { agent: Agent; implementer?: T
     agent: {
       ...galleryAgent('needs-permission'),
       name: 'Clean the build',
-      permissions: [{ id: 'ask', toolName: 'Bash', toolInput: { command: 'rm -rf dist' }, subagent: null, requestedAt: AT, heldUntil: null, asksInTerminal: false, sessionGrant: null, dialog: null, plan: null, questions: null }],
+      permissions: [{ id: 'ask', toolName: 'Bash', toolInput: { command: 'rm -rf apps/desktop/out && pnpm --filter desktop build && pnpm --filter daemon build' }, subagent: null, requestedAt: AT, heldUntil: null, asksInTerminal: false, sessionGrant: null, dialog: null, plan: null, questions: null }],
     },
   },
   failed: { agent: { ...galleryAgent('failed'), name: 'Migrate the schema', notice: 'Stopped while running the migration.' } },
@@ -41,24 +41,27 @@ export const WORKING_REVIEWER: { agent: Agent; implementer: Agent } = {
   implementer: PORTHOLE_TILES.review.implementer!,
 };
 
-/** A reviewer at work whose name takes two lines: its eye still follows its word, clear of the corner its buttons take. */
+/** A reviewer at work whose name is cut short: its eye still follows its word, clear of the corner its buttons take. */
 export const REVIEWER_LONG: Agent = { ...WORKING_REVIEWER.agent, sessionId: 'porthole-reviewer-long', name: 'Review the dev server restart under launchd' };
 
 // Each shot takes in the subagents perched on the tile's top edge.
 const PERCH_ROOM = { paddingTop: 'var(--space-4-5)' };
 
-/** A tile with the most to fit: a name on two lines, a long line, a long ticket and pull request, and a repo outside its zones. */
+/** A line as long as an agent can set, every character of which its tile shows. */
+export const AT_THE_CAP = 'Running checks: two of three suites passed, and the third waits on the macOS runner to come back before the merge lands.';
+
+/** A tile with the most to fit: a name cut short, a line at the cap with its progress after it, a long ticket and pull request, and a repo outside its zones. */
 const LONG: Agent = {
   ...PORTHOLE_TILES.working.agent,
   sessionId: 'porthole-long',
   name: 'Restart the dev server under launchd once its config moves',
   issue: { provider: 'linear', id: 'ACME-1824', title: 'Move the dev server config', url: '' },
   pullRequests: [{ number: 12_345, title: 'Restart the dev server under launchd', url: '', state: 'open', checks: 'pending' }],
-  status: line('Running checks: two of three suites passed, and the third waits on the macOS runner to come back'),
+  status: line(AT_THE_CAP, 40),
 };
 const LONG_REPO = 'desktop-companion-workbench';
 
-/** An agent's tile in the Porthole design in each glance state, then two reviewers at work (one with a two-line name) and one with the most to fit: the gallery shows them, at rest and on hover. */
+/** An agent's tile in the Porthole design in each glance state, then two reviewers at work (one with a long name) and one with the most to fit: the gallery shows them, at rest and on hover. */
 export function PortholeTileGallery() {
   return (
     <div className="tile-gallery" data-testid="porthole-tile-gallery">

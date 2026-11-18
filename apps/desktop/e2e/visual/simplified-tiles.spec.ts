@@ -7,8 +7,8 @@ import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone, type L
 import { RENDER_ARGS, RENDER_ENV, VIEWPORT, ignorePointer, pinFonts, pinNow, pinRandomText, settle } from '../render.ts';
 import { scratch } from '../scratch.ts';
 import { centreOf, drag, settledBox } from '../board-helpers.ts';
-import { openSettings, settingsSection } from '../settings-helpers.ts';
-import { SHOT, needsBaselines, viewSettled, nodesStill, coloursSettled, THEMES, launchGallery, shootSimplifiedNotes } from './shared.ts';
+import { settingsSection } from '../settings-helpers.ts';
+import { SHOT, needsBaselines, viewSettled, nodesStill, coloursSettled, THEMES, launchGallery, openSettingsForShot, shootSimplifiedNotes } from './shared.ts';
 
 test.use({ viewport: null });
 
@@ -62,7 +62,7 @@ for (const { theme, suffix } of THEMES) {
     const appearance: Record<string, string> = theme === 'dark' ? { AGENT_BOARD_APPEARANCE: 'dark' } : {};
     const { app, window } = await launch(dataDir, { ...RENDER_ENV, ...appearance }, RENDER_ARGS, { design: 'simplified' });
     try {
-      const settings = await openSettings(window, 'alerts.notifications');
+      const settings = await openSettingsForShot(window, 'alerts.notifications');
       await settings.emulateMedia({ colorScheme: theme });
       await expect.poll(() => settings.evaluate(() => document.documentElement.dataset.theme)).toBe(theme);
       await expect(settings.getByLabel('Notify me when')).toBeVisible();
@@ -601,7 +601,7 @@ for (const { theme, suffix } of [
       await restorePointer();
 
       // The terminal card, every note at once, picked in the Settings window.
-      const settings = await openSettings(window, 'board.notes');
+      const settings = await openSettingsForShot(window, 'board.notes');
       await settingsSection(settings, 'Agent notes').getByRole('button', { name: 'Terminal' }).click();
       // A click on bare board leaves nothing selected, as in the document card's shot.
       await window.mouse.click(VIEWPORT.width - 120, VIEWPORT.height / 2);

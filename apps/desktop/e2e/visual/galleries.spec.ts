@@ -217,6 +217,32 @@ for (const { theme, suffix } of THEMES) {
   }
 }
 
+// A prefab's own board drawn as a graph, in both designs: Design, build, review, as it opens and with a loop gate
+// picked, and the built-ins that loop or lead.
+for (const { theme, suffix } of THEMES) {
+  for (const design of ['classic', 'simplified'] as const) {
+    const shot = `prefab-board${design === 'simplified' ? '-simplified' : ''}${suffix}`;
+    test(`a prefab's own board as a graph: the prefab board gallery, ${design}, ${theme}`, async () => {
+      needsBaselines(shot);
+      const dataDir = tempDataDir();
+      const { app, window } = await launchGallery(dataDir, theme, undefined, design === 'simplified' ? { design } : {});
+      try {
+        const gallery = window.getByTestId('prefab-board-gallery');
+        await gallery.scrollIntoViewIfNeeded();
+        await expect(gallery).toBeVisible();
+        await expect(gallery.getByTestId('prefab-gate').first()).toBeVisible();
+        await pinFonts(window);
+        await ignorePointer(window);
+        await settle(window);
+        await expect.soft(gallery).toHaveScreenshot(`${shot}.png`, SHOT);
+      } finally {
+        await app.close();
+        await removeDataDir(dataDir);
+      }
+    });
+  }
+}
+
 // The crew library and a crew's prompt box, in both designs.
 for (const { theme, suffix } of THEMES) {
   for (const design of ['classic', 'simplified'] as const) {

@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useId, useImperativeHandle, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type Ref } from 'react';
 import * as RadixDialog from '@radix-ui/react-dialog';
 import { pullRequestOfUrl, type Agent, type BoardItem, type OpenPullRequest, type Shell, type Zone } from '@agent-board/daemon/protocol';
-import { CircleDot, FileText, GitPullRequest, Globe, Link, MessageCircleDashed, Plus, Search, Settings, LibraryBig, ListFilter, Shapes, StickyNote, type LucideIcon } from 'lucide-react';
+import { CircleDot, FileText, GitPullRequest, Globe, Link, MessageCircleDashed, MessageSquareText, Plus, Search, Settings, LibraryBig, ListFilter, Shapes, StickyNote, type LucideIcon } from 'lucide-react';
 import { CrewFaces } from '../crews/icons';
 import { usePrefabs } from '../crews/prefab-store';
 import { SESSION_SURFACES } from '../board/board-shortcuts';
@@ -93,8 +93,8 @@ export interface SpotlightProps<C> {
   /** Whether a new agent can start from here: "New agent named …" is offered only then. */
   canStartAgent: boolean;
   onNewAgent(context: C, name: string): void;
-  /** Opens the prompt box of a crew from the prefab named, or with none, the crew library. */
-  onCrew(context: C, prefab: string | null): void;
+  /** Opens the prompt box of a crew from the prefab named, or with none, the crew library; with `describe`, Describe a crew. */
+  onCrew(context: C, prefab: string | null, describe?: boolean): void;
 }
 
 interface Opened<C> {
@@ -255,7 +255,7 @@ export function Spotlight<C>({ ref, agents, shells, zones, windows, ticketItems,
     if (subject.kind === 'action' && subject.action === 'newAgent') return onNewAgent(opened.place.context, '');
     // The field opens over where ⌘K was pressed, and gives the focus back there.
     if (subject.kind === 'action' && subject.action === 'parkThought') return openParkThought(opened.restore);
-    if (subject.kind === 'crew') return onCrew(opened.place.context, subject.prefab);
+    if (subject.kind === 'crew') return onCrew(opened.place.context, subject.prefab, subject.describe === true);
     const shown =
       subject.kind === 'setting' || subject.kind === 'action'
         ? window.agentBoard.setup.openSettings(subject.kind === 'setting' ? subject.pane : undefined).then(
@@ -537,7 +537,9 @@ function Row({ id, row, active, compact = false, onHover, onPick }: { id: string
         {subject.kind === 'filter' ? (
           <ListFilter />
         ) : subject.kind === 'crew' ? (
-          crewMembers === undefined ? (
+          subject.describe === true ? (
+            <MessageSquareText />
+          ) : crewMembers === undefined ? (
             <LibraryBig />
           ) : (
             <CrewFaces members={crewMembers} most={3} />

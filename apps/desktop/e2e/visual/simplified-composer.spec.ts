@@ -4,8 +4,7 @@ import { agents, launch, listFinishedTurns, sessionWindow, spawnAgent, tile, TUR
 import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone, type LaunchOptions } from '../launch.ts';
 import { RENDER_ARGS, RENDER_ENV, VIEWPORT, ignorePointer, pinFonts, pinRandomText, settle } from '../render.ts';
 import { scratch } from '../scratch.ts';
-import { openSettings } from '../settings-helpers.ts';
-import { SHOT, needsBaselines, pinChatTimes, THEMES } from './shared.ts';
+import { SHOT, needsBaselines, openSettingsForShot, pinChatTimes, THEMES } from './shared.ts';
 
 test.use({ viewport: null });
 
@@ -486,7 +485,7 @@ for (const { theme, suffix } of [
       await window.emulateMedia({ colorScheme: theme });
       await expect(window.locator('html')).toHaveAttribute('data-design', 'simplified');
       await pinFonts(window);
-      const settings = await openSettings(window);
+      const settings = await openSettingsForShot(window);
       await settings.emulateMedia({ colorScheme: theme });
       await expect.poll(() => settings.evaluate(() => document.documentElement.dataset.theme)).toBe(theme);
       await pinFonts(settings);

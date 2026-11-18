@@ -88,9 +88,39 @@ export function collapseTile(expanded: ExpandedTiles, id: string): ExpandedTiles
   return expanded.some((entry) => entry.id === id) ? expanded.filter((entry) => entry.id !== id) : expanded;
 }
 
-/** Returns the expanded tile in front to compact: Esc, one at a time. */
-export function collapseFront(expanded: ExpandedTiles): ExpandedTiles {
-  return expanded.length === 0 ? expanded : expanded.slice(0, -1);
+/**
+ * The expanded tile Esc compacts, one at a time: the one in front, passing over those pinned expanded, which
+ * it keeps open. `kept` lists the pinned tiles it passed over, front first.
+ */
+export function frontToCollapse(expanded: ExpandedTiles, pinned: ReadonlySet<string>): { front: string | undefined; kept: string[] } {
+  const kept: string[] = [];
+  for (let index = expanded.length - 1; index >= 0; index -= 1) {
+    const { id } = expanded[index]!;
+    if (!pinned.has(id)) return { front: id, kept };
+    kept.push(id);
+  }
+  return { front: undefined, kept };
+}
+
+/**
+ * Whether the tile is kept on the board in place of its session window: pinned expanded, and open. One pinned
+ * while in its window has no tile open to show: that window is shown.
+ */
+export function keptOnBoard(id: string, pinned: ReadonlySet<string>, expanded: ExpandedTiles): boolean {
+  return pinned.has(id) && expanded.some((entry) => entry.id === id);
+}
+
+/**
+ * The tiles pinned expanded that must open: each on the board and not yet expanded, but for one its session
+ * window has (`windowed`), shown, docked or popped out.
+ */
+export function pinnedToOpen(
+  pinned: ReadonlySet<string>,
+  expanded: ExpandedTiles,
+  present: ReadonlySet<string>,
+  windowed: ReadonlySet<string>,
+): string[] {
+  return [...pinned].filter((id) => present.has(id) && !windowed.has(id) && !expanded.some((entry) => entry.id === id));
 }
 
 /** Sets the expanded tile's size, within the least and greatest. */

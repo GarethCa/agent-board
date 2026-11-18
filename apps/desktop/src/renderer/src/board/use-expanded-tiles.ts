@@ -6,12 +6,13 @@ import {
   allowingOverlap,
   bringToFront,
   collapsedBetween,
-  collapseFront,
   collapseTile,
   expandTile,
+  frontToCollapse,
   keepExpanded,
   keepOverlaps,
   keepSizes,
+  pinnedToOpen,
   rememberSize,
   resizeExpanded,
   windowedExpanded,
@@ -20,6 +21,7 @@ import {
   type ExpandedTiles,
   type OverlapsAllowed,
 } from './expanded';
+import { expandedTrace } from './expanded-trace';
 import { keepTileSizes, withTileSize, type TileSize, type TileSizes } from './tile-size';
 import { keepUnfolded, withUnfolded, type Unfolded } from './fold';
 import { forgetTicketsShown } from './ticket-shown';
@@ -73,6 +75,17 @@ export function useExpandedTiles({ nodes, loaded, agents, shells, externals, win
   unfoldedRef.current = unfolded;
   const expandedRef = useRef(expanded);
   expandedRef.current = expanded;
+  const isExpanded = (nodeId: string) => expandedRef.current.some((entry) => entry.id === nodeId);
+  /** The tiles pinned expanded, by node id: nothing but the user's Unpin, then Collapse, folds one. */
+  const pinnedKey = agents.flatMap((agent) => (agent.pinnedExpanded ? [tileNodeId('agent', agent.sessionId)] : [])).join('\n');
+  const pinned = useMemo<ReadonlySet<string>>(() => new Set(pinnedKey === '' ? [] : pinnedKey.split('\n')), [pinnedKey]);
+  const pinnedRef = useRef(pinned);
+  pinnedRef.current = pinned;
+  /** `tiles` less the pinned ones, which `path` would have collapsed: traced as kept. */
+  const unpinned = (path: string, tiles: readonly string[], trigger?: string) => {
+    expandedTrace.kept(path, tiles.filter((id) => pinnedRef.current.has(id) && isExpanded(id)), trigger);
+    return tiles.filter((id) => !pinnedRef.current.has(id));
+  };
   /** The tiles that were expanded when their session window opened, to be expanded again when it closes (saved with the view). */
   const [hidden, setHidden] = useState<ExpandedTiles>([]);
   /** Which tile the user dragged onto which, one of the two expanded: the two may overlap. */
@@ -110,7 +123,7 @@ export function useExpandedTiles({ nodes, loaded, agents, shells, externals, win
    * The nodes as drawn: the expanded tiles kept apart and what they would cover moved clear of them until they collapse
    *, a crew as one, never saved.
    */
-  const shown = useDisplaced(nodes, expanded, overlapsAllowed, crews, tileSizes);
+  const shown = useDisplaced(nodes, expanded, overlapsAllowed, crews, tileSizes, pinned);
   const shownRef = useRef(shown);
   shownRef.current = shown;
 
@@ -138,24 +151,36 @@ export function useExpandedTiles({ nodes, loaded, agents, shells, externals, win
        * Collapses the tile; not a ticket tile in the terminal view, which rests open (`restsInTerminal`): only the user's
        * own way back, `setTicketView`, puts that back to its card.
        */
-      collapse(nodeId: string) {
+      collapse(nodeId: string, via?: string) {
+        const path = via === undefined ? 'collapse' : `collapse.${via}`;
+        if (unpinned(path, [nodeId]).length === 0) return;
         if (inTerminalRef.current(nodeId)) return;
+        if (isExpanded(nodeId)) expandedTrace.noteCollapse(path, [nodeId]);
         setExpanded((current) => collapseTile(current, nodeId));
       },
-      /** Collapses the expanded tile in front, if any, from the user's Esc: a ticket tile in the terminal view is switched to its card, and stays one. */
+      /**
+       * Collapses the expanded tile in front, if any, from the user's Esc: a ticket tile in the terminal view is switched
+       * to its card, and stays one. Those pinned expanded stay open: it collapses the one in front of the rest.
+       */
       collapseFrontTile() {
-        const front = expandedRef.current.at(-1)?.id;
-        if (front !== undefined && inTerminalRef.current(front)) setTicketViews((current) => withTicketView(current, front, 'card'));
-        setExpanded(collapseFront);
+        const { front, kept } = frontToCollapse(expandedRef.current, pinnedRef.current);
+        expandedTrace.kept('collapseFront', kept);
+        if (front === undefined) return;
+        expandedTrace.noteCollapse('collapseFront', [front]);
+        if (inTerminalRef.current(front)) setTicketViews((current) => withTicketView(current, front, 'card'));
+        setExpanded((current) => collapseTile(current, front));
       },
       /**
        * Switches a ticket tile to the card, the terminal or the board, and it keeps that view: the terminal expands it in
        * place; the card, and the board (which rests as the card), collapse it to the card at rest.
        */
       setTicketView(nodeId: string, view: TicketView) {
+        if (view !== 'terminal' && unpinned(`ticketView.${view}`, [nodeId]).length === 0) return;
         setTicketViews((current) => withTicketView(current, nodeId, view));
-        if (view !== 'terminal') setExpanded((current) => collapseTile(current, nodeId));
-        else {
+        if (view !== 'terminal') {
+          if (isExpanded(nodeId)) expandedTrace.noteCollapse(`ticketView.${view}`, [nodeId]);
+          setExpanded((current) => collapseTile(current, nodeId));
+        } else {
           setExpanded((current) => expandTile(current, nodeId, expandedSizesRef.current));
           setOverlapsAllowed((current) => withoutOverlaps(current, [nodeId]));
         }
@@ -185,6 +210,7 @@ export function useExpandedTiles({ nodes, loaded, agents, shells, externals, win
   useEffect(() => {
     if (!loaded || shells === undefined) return;
     const present = presentTiles(agents, shells, externals);
+    expandedTrace.noteCollapse('keepExpanded', expandedRef.current.flatMap((entry) => (present.has(entry.id) ? [] : [entry.id])), 'tile-gone');
     setExpanded((current) => keepExpanded(current, present));
     setExpandedSizes((current) => keepSizes(current, present));
     setTileSizes((current) => keepTileSizes(current, present));
@@ -192,6 +218,18 @@ export function useExpandedTiles({ nodes, loaded, agents, shells, externals, win
     setUnfolded((current) => keepUnfolded(current, agents));
     setTicketViews((current) => keepTicketViews(current, present));
   }, [loaded, agents, shells, externals]);
+  // A tile pinned expanded is open whenever it is on the board: pinned while compact, or back after a restart of the app
+  // or its agent, a reconnect or its session window closed. Not while its session window has it, nor before the saved
+  // windows are back.
+  useEffect(() => {
+    if (!loaded || !windowsRestored || shells === undefined || pinned.size === 0) return;
+    const present = presentTiles(agents, shells, externals);
+    const windowed = new Set([...windows.map((entry) => tileNodeId(entry.kind === 'shell' ? 'shell' : 'agent', entry.id)), ...hidden.map((entry) => entry.id)]);
+    const opening = pinnedToOpen(pinned, expanded, present, windowed);
+    if (opening.length === 0) return;
+    setExpanded((current) => opening.reduce((open, id) => expandTile(open, id, expandedSizesRef.current), current));
+    setOverlapsAllowed((current) => withoutOverlaps(current, opening));
+  }, [loaded, windowsRestored, pinned, agents, shells, externals, windows, hidden, expanded]);
   // A ticket tile in the terminal view is expanded in place, its terminal drawn by the expanded tile; not while its
   // session window has it, nor before the setting that says which view it opens in is read.
   useEffect(() => {
@@ -211,8 +249,10 @@ export function useExpandedTiles({ nodes, loaded, agents, shells, externals, win
     if (!settingsLoaded) return;
     const before = openAsBefore.current;
     openAsBefore.current = openAs;
-    const leaving = before === undefined ? [] : ticketsLeavingTerminal(ticketsRef.current, overRef.current, ticketViewsRef.current, before, openAs);
-    if (leaving.length > 0) setExpanded((current) => leaving.reduce(collapseTile, current));
+    const leaving = before === undefined ? [] : unpinned('ticketsLeavingTerminal', ticketsLeavingTerminal(ticketsRef.current, overRef.current, ticketViewsRef.current, before, openAs), 'open-as-changed');
+    if (leaving.length === 0) return;
+    expandedTrace.noteCollapse('ticketsLeavingTerminal', leaving.filter(isExpanded), 'open-as-changed');
+    setExpanded((current) => leaving.reduce(collapseTile, current));
   }, [settingsLoaded, openAs]);
   // Saved as they change, to open again after a restart.
   const saveExpanded = useMemo(() => viewSaver((value) => window.agentBoard.view.set(VIEW_KEYS.expanded, value), SAVE_EXPANDED_DELAY_MS), []);
@@ -255,6 +295,7 @@ export function useExpandedTiles({ nodes, loaded, agents, shells, externals, win
     const collapsed = collapsedBetween(lastExpanded.current, expanded);
     lastExpanded.current = expanded;
     if (collapsed.length === 0) return;
+    expandedTrace.collapsed(collapsed);
     setOverlapsAllowed((current) => withoutOverlaps(current, collapsed));
     // A ticket tile collapsed, or gone, opens on its chat again.
     forgetTicketsShown(collapsed);
@@ -272,10 +313,13 @@ export function useExpandedTiles({ nodes, loaded, agents, shells, externals, win
     };
     const next = windowedExpanded(expanded, hidden, windowed, present);
     if (next.hidden !== hidden) setHidden(next.hidden);
-    if (next.expanded !== expanded) setExpanded(next.expanded);
+    if (next.expanded !== expanded) {
+      expandedTrace.noteCollapse('windowedExpanded', collapsedBetween(expanded, next.expanded), 'session-window');
+      setExpanded(next.expanded);
+    }
   }, [loaded, windowsRestored, windows, expanded, hidden, agents, shells, externals]);
 
-  return { shown, shownRef, expandedRef, tileSizesRef, unfoldedRef, restoreExpanded, ticketViewsShown, ...actions };
+  return { shown, shownRef, expandedRef, tileSizesRef, unfoldedRef, pinnedRef, restoreExpanded, ticketViewsShown, ...actions };
 }
 
 /** The node ids of the session tiles on the board. */

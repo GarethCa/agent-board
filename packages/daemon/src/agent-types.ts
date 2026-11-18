@@ -208,6 +208,8 @@ export interface AgentHost {
   link(sessionId: string, issueId: string | null): Promise<Agent>;
   /** Mutes the agent's OS notifications, or unmutes them. */
   setMuted(sessionId: string, muted: boolean): Agent;
+  /** Pins the agent's tile expanded, or unpins it: as `agent.setPinnedExpanded`. */
+  setPinnedExpanded(sessionId: string, pinned: boolean): Agent;
   /** Sets the agent's reasoning effort, and says when it takes it: as `agent.setEffort`. */
   setEffort(sessionId: string, effort: Effort | null): Promise<{ agent: Agent; applies: EffortApplies }>;
   /** Types the reasoning effort the agent waits to be given at its prompt, if it is ready for it now (call on each change of it). */
@@ -448,6 +450,7 @@ export interface AgentRow extends PositionColumns {
   state: SessionState;
   notice: string | null;
   muted: number;
+  pinned_expanded: number;
   seen: number;
   issue_provider: LinkedIssue['provider'] | null;
   issue_id: string | null;

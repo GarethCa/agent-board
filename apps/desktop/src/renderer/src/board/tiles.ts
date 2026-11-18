@@ -40,12 +40,6 @@ const TILE_PREFIXES: Record<TileKind, string> = { agent: AGENT_NODE_PREFIX, shel
  */
 export const tileNodeId = (kind: TileKind, id: string): string => tileSizeKey(kind, id);
 
-/** The agent (by session id) a node id is the tile of, or undefined for any other node, or none. */
-export function agentOfTile(nodeId: string | undefined): string | undefined {
-  const subject = nodeId === undefined ? undefined : tileSubject(nodeId);
-  return subject?.kind === 'agent' ? subject.id : undefined;
-}
-
 /** What decides whether a ticket's chat draws as its ticket's card. */
 type CardFields = Pick<Agent, 'startup' | 'undelivered' | 'trustFolder' | 'untypedPrompt' | 'unsent' | 'hooksSilent'>;
 
@@ -372,7 +366,8 @@ export function withTiles(
         : before?.resizing === true
           ? { width: before.width ?? open.width, height: before.height ?? open.height }
           : { width: open.width, height: open.height }),
-      draggable: entry.draggable,
+      // Pinned expanded, it stays where it is.
+      draggable: entry.draggable && !(open !== undefined && entry.data.agent?.pinnedExpanded === true),
       data: sameData(before?.data, open === undefined ? entry.data : { ...entry.data, expanded: true as const }),
       zIndex: rank !== undefined ? EXPANDED_Z_INDEX + rank : before?.dragging === true ? DRAGGED_TILE_Z_INDEX : TILE_Z_INDEX,
     };

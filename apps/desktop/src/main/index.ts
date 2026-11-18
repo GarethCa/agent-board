@@ -15,6 +15,7 @@ import { DAEMON_IPC, WINDOW_IPC, WINDOW_QUERY, type RestartDaemonResult, type Wi
 import { registerAgentIpc, registerAgentOpening } from './agents';
 import { markAppWindow } from './app-windows';
 import { traceNotificationClick } from './click-trace';
+import { EXPANDED_TRACE_FILE, registerExpandedTrace } from './expanded-trace';
 import { registerAppearance } from './appearance';
 import { registerDesign } from './design';
 import { registerTechnical } from './technical';
@@ -346,6 +347,8 @@ const overviewWindow = registerOverviewWindow({
   isFullScreen: boardFullScreen,
 });
 holdQuitForViewSaves();
+// What collapses an expanded tile, or moves the view without the user, kept beside the daemon's log to find out why.
+registerExpandedTrace(join(dataDir, EXPANDED_TRACE_FILE));
 registerViewIpc(view, (key, value) => {
   if (key === VIEW_KEYS.extendedShortcuts) extendedShortcuts = value !== false;
 });

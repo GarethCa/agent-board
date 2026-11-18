@@ -77,11 +77,11 @@ describe('spotlightGroups before anything is typed', () => {
 describe('spotlightGroups once something is typed', () => {
   it('flattens into one ranked list of sessions and zones, a match in the name first', () => {
     const byName = agent('Docs revisions', { zoneId: 'z2' });
-    const byBranch = agent('Nightly', { branch: 'rev-cleanup' });
-    const groups = spotlightGroups('rev', { agents: [byBranch, byName, agent('Other')], shells: [shell('review-tools')], zones, shows: 'turns' });
+    const byBranch = agent('Nightly', { branch: 'revis-cleanup' });
+    const groups = spotlightGroups('revis', { agents: [byBranch, byName, agent('Other')], shells: [shell('revision-tools')], zones, shows: 'turns' });
     expect(groups).toHaveLength(1);
     expect(groups[0]!.label).toBeUndefined();
-    expect(names(groups[0]!.rows)).toEqual(['review-tools', 'Docs revisions', 'Nightly']);
+    expect(names(groups[0]!.rows)).toEqual(['revision-tools', 'Docs revisions', 'Nightly']);
   });
 
   it('marks where the name matched', () => {
@@ -110,7 +110,7 @@ describe('spotlightGroups once something is typed', () => {
 
   it('finds what an agent says only by a whole run of letters, not scattered ones', () => {
     const chatty = agent('One', { lastMessage: 'Refactored the event loop, then verified it' });
-    expect(spotlightGroups('rev', { agents: [chatty], shells: [], zones, shows: 'turns' })).toEqual([]);
+    expect(spotlightGroups('rfv', { agents: [chatty], shells: [], zones, shows: 'turns' })).toEqual([]);
     expect(names(spotlightGroups('event loop', { agents: [chatty], shells: [], zones, shows: 'turns' })[0]!.rows)).toEqual(['One']);
   });
 
@@ -385,6 +385,7 @@ describe('the Crews group', () => {
     expect(crews('spike')).toEqual([{ kind: 'crew', prefab: 'Spike + reviewer' }]);
     expect(crews('try an')).toEqual([{ kind: 'crew', prefab: 'Spike + reviewer' }]);
     expect(crews('library')).toEqual([{ kind: 'crew', prefab: null }]);
+    expect(crews('describe')).toEqual([{ kind: 'crew', prefab: null, describe: true }]);
     expect(crews('crew', { simplified: true })).toEqual(expect.arrayContaining([{ kind: 'crew', prefab: 'Implementer + reviewer' }, { kind: 'crew', prefab: null }]));
   });
 

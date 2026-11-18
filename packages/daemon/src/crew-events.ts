@@ -16,6 +16,9 @@ const MAX_DETAIL_LENGTH = 200;
 /** Most events one answer carries; the rest follow from its cursor. */
 const MAX_EVENTS_PER_ANSWER = 100;
 
+/** The crew events a running crew logs of its builder (`CrewEventLog.crewNews`). */
+export type CrewNewsKind = Extract<CrewEventKind, 'round' | 'crew-waiting' | 'crew-clash' | 'crew-stopped'>;
+
 /** A logged event, with the agents above its agent in their crew as it happened, so it reaches them once it is gone. */
 export interface LoggedEvent extends CrewEvent {
   /** Its agent's `spawnedBy`, then theirs, as it happened. */
@@ -46,8 +49,8 @@ export interface CrewEventLog {
    * this run is news. What its first read finds was there before, so a restart announces nothing.
    */
   pullRequestsRead(sessionId: string, own: readonly PullRequest[], first: boolean): void;
-  /** A running crew's news (`round`, `crew-stopped`), as an event of its builder, the agent `sessionId`. */
-  crewNews(sessionId: string, kind: 'round' | 'crew-stopped', detail: string): void;
+  /** A running crew's news (`round`, `crew-waiting`, `crew-clash`, `crew-stopped`), as an event of its builder, the agent `sessionId`. */
+  crewNews(sessionId: string, kind: CrewNewsKind, detail: string, gate?: string): void;
   /**
    * The events after `since` (a cursor, `now` or `all`), oldest first, at most `MAX_EVENTS_PER_ANSWER` of those `keep`
    * takes; the cursor to go on from; and whether some were lost: dropped already, or `since` is from another run.
@@ -123,12 +126,12 @@ export function createCrewEventLog(options: CrewEventLogOptions): CrewEventLog {
     return found;
   };
 
-  const log = (agent: Pick<Agent, 'sessionId' | 'name'>, leads: readonly string[], kind: CrewEventKind, detail: string | null) => {
+  const log = (agent: Pick<Agent, 'sessionId' | 'name'>, leads: readonly string[], kind: CrewEventKind, detail: string | null, gate?: string) => {
     seq += 1;
     // One line each, as `watch` prints them: a question or a final message may run to many.
     const line = detail === null ? null : oneLine(detail);
     const shown = line === null || line.length <= MAX_DETAIL_LENGTH ? line : `${line.slice(0, MAX_DETAIL_LENGTH - 1).trimEnd()}…`;
-    events.push({ cursor: `${run}.${seq}`, at: now().toISOString(), sessionId: agent.sessionId, name: agent.name, kind, detail: shown, leads });
+    events.push({ cursor: `${run}.${seq}`, at: now().toISOString(), sessionId: agent.sessionId, name: agent.name, kind, detail: shown, leads, ...(gate === undefined ? {} : { gate }) });
     if (events.length > MAX_CREW_EVENTS) events.splice(0, events.length - MAX_CREW_EVENTS);
   };
 
@@ -174,10 +177,10 @@ export function createCrewEventLog(options: CrewEventLogOptions): CrewEventLog {
       }
     },
 
-    crewNews(sessionId, kind, detail) {
+    crewNews(sessionId, kind, detail, gate) {
       const agent = last.get(sessionId) ?? options.agent(sessionId);
       if (agent === undefined) return;
-      log(agent, leadsOf.get(sessionId) ?? options.leads(agent), kind, detail);
+      log(agent, leadsOf.get(sessionId) ?? options.leads(agent), kind, detail, gate);
     },
 
     forget(sessionId) {

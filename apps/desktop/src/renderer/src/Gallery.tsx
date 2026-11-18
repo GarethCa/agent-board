@@ -4,6 +4,7 @@ import { PortholeTileGallery } from './board/PortholeTileGallery';
 import { ShelfTileGallery } from './board/ShelfTileGallery';
 import { MemoryGallery } from './board/items/MemoryGallery';
 import { QueueGallery } from './board/items/QueueGallery';
+import { PrefabBoardGallery } from './crews/PrefabBoardGallery';
 import { CrewGallery, PrefabGallery, TicketGallery } from './crews/PrefabGallery';
 import { StatusMarkGallery } from './board/StatusMarkGallery';
 import { CrowdedOrchestratorGallery, TileGallery } from './board/TileGallery';
@@ -47,6 +48,7 @@ export function Gallery() {
       <TicketOpenReadGallery />
       <PortholeTileGallery />
       <ShelfTileGallery />
+      <PrefabBoardGallery />
       <GalleryFoot />
     </div>
   );

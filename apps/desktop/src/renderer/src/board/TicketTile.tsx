@@ -9,7 +9,6 @@ import { useNowForSince } from '../inbox/use-now';
 import { useMenuBarSection } from '../keys/menu-bar-bridge';
 import { dropKey, dropOver as dropOverValue } from '../session/shell-moves';
 import { useAgentTileMenu } from './agent-tile-menu';
-import { crewsOf, hoverCrew, leaveCrew, useCrewHover, useCrewLit } from './crew-view';
 import { FrostMark } from './FrostMark';
 import { HandPlacedMark } from './HandPlacedMark';
 import { menuBarAgentEntries, withoutRename } from './menu-model';
@@ -26,7 +25,7 @@ import { useTileShows } from './view-settings';
 import { useFittedLines } from './use-fitted-lines';
 import { TicketWatchesMenu, WatchIcons } from './TicketWatches';
 
-type TicketTileProps = { id: string; selected: boolean; chat: Agent; helpers: readonly Agent[] } & Pick<TileData, 'from' | 'crew' | 'implementer'>;
+type TicketTileProps = { id: string; selected: boolean; chat: Agent; helpers: readonly Agent[] } & Pick<TileData, 'from' | 'implementer'>;
 
 /**
  * A ticket's tile at rest: one chat with its helpers folded inside it, as a card. Its ticket and title, one line of what
@@ -35,7 +34,7 @@ type TicketTileProps = { id: string; selected: boolean; chat: Agent; helpers: re
  * flat and stays until removed. It keeps the agent tile's root and data, so the board finds, drops onto and measures it
  * as it does that one, in Classic and Simplified alike.
  */
-export function TicketTile({ id, selected, chat, helpers, from, crew, implementer }: TicketTileProps) {
+export function TicketTile({ id, selected, chat, helpers, from, implementer }: TicketTileProps) {
   const shows = useNeedsYouShows();
   const actions = useContext(TileActionsContext);
   const { expand, openAgent, rename, openPullRequest, resumeAgent, readWatches } = actions;
@@ -44,12 +43,6 @@ export function TicketTile({ id, selected, chat, helpers, from, crew, implemente
   const clickOpens = useContext(ClickOpensContext);
   const dropOver = dropOverValue.use();
   const look = useTileShows();
-  // The crews it is in, as the lead of the helpers it started and as one an orchestrator started: lit while either is
-  // focused, so the dim for the tiles outside a focused crew passes it by, as it does any agent tile in the crew.
-  // Hovering it focuses its helpers' crew, as hovering any lead's tile does.
-  const crewOf = crewsOf(chat.sessionId, crew !== undefined, from?.sessionId);
-  useCrewHover(crew === undefined ? undefined : chat.sessionId);
-  const crewLit = useCrewLit(crewOf);
   const face = ticketFace(chat, helpers, shows, { simplified: useSimplified() });
   // Its title is its ticket's while it has one, which a rename of its chat would not change: no rename is offered then.
   const ownRenaming = useRenaming(chat.name, (name) => rename({ kind: 'agent', sessionId: chat.sessionId }, name));
@@ -94,10 +87,6 @@ export function TicketTile({ id, selected, chat, helpers, from, crew, implemente
         data-corner={look.cornerAlways ? undefined : 'hover'}
         data-seen={(chat.seen && waitsForYou(chat, shows)) || undefined}
         data-needs-you={face.needsYouNow || undefined}
-        data-crew={crewOf}
-        data-crew-lit={crewLit || undefined}
-        onMouseEnter={crew === undefined ? undefined : () => hoverCrew(chat.sessionId)}
-        onMouseLeave={crew === undefined ? undefined : () => leaveCrew(chat.sessionId)}
         title={card !== undefined ? undefined : clickOpens !== 'expand' ? 'Double-click to open its session window' : 'Double-click to expand it here'}
         onDoubleClick={openOnDoubleClick}
       >

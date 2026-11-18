@@ -35,8 +35,8 @@
   outline-offset: calc(-1 * var(--queue-drop-edge));
 }
 
-/* Done, it lies flat: no shadow, a hairline edge. Its crew's halo and a hand-off's receiving ring, both shadows, still show. */
-.hybrid-tile-agent.shelf-tile[data-glance='done']:not([data-orchestrator], [data-master], [data-crew-lit], [data-handoff]) {
+/* Done, it lies flat: no shadow, a hairline edge. An orchestrator's halo and a hand-off's receiving ring, both shadows, still show. */
+.hybrid-tile-agent.shelf-tile[data-glance='done']:not([data-orchestrator], [data-master], [data-handoff]) {
   border-color: var(--border);
   box-shadow: none;
 }
@@ -70,7 +70,7 @@
   min-height: 0;
   /* Nothing in it ever slides under the band. */
   overflow: hidden;
-  padding: var(--space-3) var(--space-3) var(--space-2) var(--space-3);
+  padding: var(--space-3) var(--space-3) var(--space-1-5);
 }
 
 .shelf-tile-head {
@@ -81,71 +81,45 @@
   min-width: 0;
 }
 
-/* Its name at one size whatever its length, a step under the mock's, on two lines at most. */
+/* Its name at one size whatever its length, on one line, cut short with an ellipsis. */
 .shelf-tile .hybrid-tile-name {
+  display: block;
   min-width: 0;
+  overflow: hidden;
   padding-inline-end: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  -webkit-line-clamp: none;
   font-size: var(--font-size-md-plus);
   font-weight: var(--weight-bold);
   letter-spacing: normal;
   line-height: var(--leading-snug);
 }
 
-/* What it is doing or asks, on two lines at most (its clamp, which the fitting keeps while it measures): one when its
-   name takes two, so the tile keeps its size. It asks only for its own lines, never the room a tile with no tags leaves. */
-.shelf-tile-line {
-  display: -webkit-box;
+/* Its ticket, pull request and repo ride in the band, after its word: the chips shorten before the word does, never past
+   a few characters, clipped at their edge so they never run under the next, and the repo gives way first. */
+.shelf-tile-band .ui-chip {
   flex: 0 1 auto;
-  min-height: 0;
-  max-height: calc(2 * var(--space-4-5));
+  min-width: var(--space-7);
   overflow: hidden;
-  color: var(--text-soft);
-  font-size: var(--font-size-md);
-  line-height: var(--space-4-5);
-  overflow-wrap: anywhere;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-}
-
-/* A command it asks to run, as the command. */
-.shelf-tile-line[data-command] {
-  font-family: var(--font-mono);
-  font-size: var(--font-size-sm);
-}
-
-.shelf-tile-meta {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: var(--space-1);
-  min-width: 0;
-  overflow: hidden;
-}
-
-.shelf-tile-meta .ui-chip {
   border-radius: var(--radius-sm);
   font-size: var(--font-size-badge);
 }
 
-/* Its crew's flags, the jobs it holds past the first, and its repo outside its zones: quiet, after its tags. */
-.shelf-tile-meta :is(.glance-tile-crew-flags, .glance-tile-more) {
-  flex: none;
-  color: var(--muted);
+.shelf-tile-band :is(.glance-tile-repo, .glance-tile-crew-flags, .glance-tile-more) {
+  color: inherit;
   font-size: var(--font-size-badge);
-  font-weight: var(--weight-semibold);
+  font-weight: var(--weight-medium);
+  opacity: 0.7;
 }
 
-.shelf-tile-meta .glance-tile-repo {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  color: var(--muted);
-  font-size: var(--font-size-badge);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+/* With its action showing, its PR chip gives way so the ticket keeps its room; the PR is still in its menu. */
+.shelf-tile:has(.shelf-tile-act):is(:hover, :focus-within) .shelf-tile-band .ui-chip[data-mono],
+.react-flow__node.selected .shelf-tile:has(.shelf-tile-act) .shelf-tile-band .ui-chip[data-mono] {
+  display: none;
 }
 
-/* The band: its state's glyph and word, how long it has been in it at the end. */
+/* The band: its state's glyph and word, its ticket and pull request, how long it has been in its state at the end. */
 .shelf-tile-band {
   display: flex;
   flex: none;
@@ -159,6 +133,7 @@
   font-size: var(--font-size-sm);
   font-weight: var(--weight-bold);
   white-space: nowrap;
+  overflow: hidden;
 }
 
 .shelf-tile-band[data-level='1'] {
@@ -196,12 +171,11 @@
   flex: none;
 }
 
-/* Its word always shows whole: a long age, or a next run with its date, gives way instead. */
+/* Its word always shows whole; its age shortens with an ellipsis only once the chips and the repo have given way. */
 .shelf-tile-age {
-  flex: 0 1 auto;
   min-width: 0;
+  max-width: 100%;
   overflow: hidden;
-  margin-inline-start: auto;
   text-overflow: ellipsis;
   font-weight: var(--weight-medium);
   font-variant-numeric: tabular-nums;
@@ -243,9 +217,6 @@
 
 /* Its one action, at the band's end in the time's place. */
 .shelf-tile-act {
-  position: absolute;
-  right: var(--space-1-5);
-  bottom: var(--space-0-5);
   display: flex;
 }
 

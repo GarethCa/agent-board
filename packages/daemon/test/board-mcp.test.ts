@@ -71,7 +71,7 @@ describe('the board MCP server in an agent', () => {
     // whoami, over MCP, and `agent-board identify`, in its shell, both find it in its zone.
     expect(screen.match(/you {6}agent:\w+ {2}Moving session ids to the daemon {2}\(an agent\)\n/g)).toHaveLength(2);
     expect(screen).toContain(`zone     zone:${zone.id.slice(0, 4)}`);
-    expect(screen).toContain('Your tile now says: Moving session ids to the daemon · 10%');
+    expect(screen).toContain('Your tile now says: "Moving session ids to the daemon · 10%"');
     expect(screen).toContain('status set: Moving session ids to the daemon · 20%');
   });
 
@@ -192,6 +192,8 @@ describe('the board MCP tools and the agent-board CLI', () => {
     { tool: 'read', command: 'read', positional: ['agent', 'path'] },
     { tool: 'interrupt', command: 'interrupt', positional: ['agent'] },
     { tool: 'set_effort', command: 'effort', positional: ['agent', 'effort'] },
+    // The CLI's --pin and --unpin are the tool's pinned.
+    { tool: 'pin_expanded', command: 'expand', positional: ['agent'], renamed: { pinned: 'pin' }, options: ['pin'] },
     // The CLI's <kind>=<mode> words are the tool's watches object.
     { tool: 'ticket_watches', command: 'watches', positional: ['agent', 'watches'], renamed: { every_minutes: 'every' } },
     { tool: 'give_role', command: 'role', positional: ['agent', 'role'], renamed: { send_template: 'send-template' } },
@@ -269,6 +271,7 @@ describe('the board MCP tools and the agent-board CLI', () => {
     { tool: 'usage', command: 'usage', options: [] },
     { tool: 'roles', command: 'roles', options: [] },
     { tool: 'prefabs', command: 'prefab', positional: ['name'], options: [] },
+    { tool: 'prefab_draft', command: 'prefab', positional: ['file'], options: ['assumed'] },
     { tool: 'set_role', command: 'roles', positional: ['name'], renamed: { template: 'file' } },
     { tool: 'remove_role', command: 'roles', positional: ['name'], options: ['zone'] },
   ];

@@ -133,6 +133,14 @@ any case, as `default_roles` is: not one per board, so every board has the same 
 never mean different things, and a field the parser drops can't survive in a row. The built-ins are not rows: they live
 in the code, so a new release can change them, and no row may take a built-in's name.
 
+**Prefab drafts**: a draft an agent made is a row of `prefab_drafts` (migration 0104): its prefab's `.crew.json`
+text, written out by the file's own parser as a library row is and read with it again, so a later release may refuse a
+row (Settings counts the ones it can't read rather than dropping them); what the drafter assumed, as JSON; the drafter's
+tile and name; and whether opening it closes the drafter. A draft never expires: it stays until the user saves it (it
+then becomes a library row like any other, and the draft is deleted) or deletes it. At most 50 wait at once.
+`prefab_drafters` holds the sessions Describe a crew… started to draft, so only those close as their draft opens, and
+only once.
+
 **Running crews**: a crew started from a prefab with reviewers at the hand-off is a row of `crews` (migration
 `0076_crews`): the prefab's `.crew.json` text as it was started, so editing or removing the prefab later changes no
 running crew; its zone, its starter (null for the user), its builder's session, the prompt, its round and round limit,
@@ -140,6 +148,14 @@ whose turn it is (`phase`, since `phase_at`), and why it stopped. Each reviewer 
 with its round and, once read, its review's verdict, text and open blockers. Neither table points at `agents` with a
 key: a crew keeps its history when the user deletes one of its agents. The loop reads what happened while the daemon
 was down from the agents' files on its next start.
+
+**Crew runs**: a crew runs its prefab's graph, so where it is in it is kept as JSON in `crews.run` (migration
+`0103_crew_runs`, default `'{}'`): each member's agent and since when its hand-off counts, each loop gate's round,
+limit, words and late deciders, what each wait-for-all member holds, what waits at each Your OK, and the deliveries not
+yet made. The round columns still hold its first loop gate's round and limit (0 for none) and the phase, so an older
+daemon on the database reads the crew as before; a crew whose `run` is `'{}'` (started by an older daemon) is read back
+from those columns and `crew_reviewers`. A decider that is the same agent each round keeps one `crew_reviewers` row,
+moved on to the round it now decides.
 
 **Update**: a session window's panes are kept in a table of their own, `window_layouts` (migration
 `0039_window_layouts`), one row per owner (`owner_kind`, `owner_id`, as a tab's), holding `WindowLayout` JSON: a split

@@ -43,6 +43,7 @@ import {
   OctagonX,
   Palette,
   Pause,
+  MessageSquareText,
   Pencil,
   Pin,
   PinOff,
@@ -274,7 +275,7 @@ export interface TileBoardActions {
   show(sessionId: string): void;
 }
 
-type AgentTileMenuActions = AgentMenuActions & Pick<TileActions, 'interruptAgent' | 'stopAgent' | 'openPullRequest'>;
+type AgentTileMenuActions = AgentMenuActions & Pick<TileActions, 'interruptAgent' | 'stopAgent' | 'openPullRequest' | 'setPinnedExpanded'>;
 
 /** What an agent tile's menu is drawn from: its agent menu's input, and what it does to the tile on the board. */
 export interface AgentTileMenuInput extends AgentMenuInput {
@@ -351,9 +352,19 @@ function reviewGateEntries(input: AgentTileMenuInput): ModelEntry[] {
   return [...checks, ...(checks.length > 0 && gates.length > 0 ? ['separator' as const] : []), ...gates];
 }
 
+/** Pin expanded, or Unpin: pinned, it stays open where it is, at its size. A closed agent has none to pin. */
+function pinExpandedEntry(agent: Agent, actions: AgentTileMenuActions): ModelEntry[] {
+  if (agent.pinnedExpanded) {
+    return [{ id: 'pin-expanded', label: 'Unpin', icon: <PinOff />, hint: 'Then it can be collapsed, moved and resized', onSelect: () => actions.setPinnedExpanded(agent.sessionId, false) }];
+  }
+  if (isClosed(agent)) return [];
+  return [{ id: 'pin-expanded', label: 'Pin expanded', icon: <Pin />, hint: 'It stays open where it is, at its size', onSelect: () => actions.setPinnedExpanded(agent.sessionId, true) }];
+}
+
 /** Arrange ▸: the tile's z-order (its keys still work), Align, which takes two or more, and its place on the board. */
 function arrangeEntries({ nodeId, agent, board, actions }: AgentTileMenuInput): ModelEntry[] {
   const place: ModelEntry[] = [
+    ...pinExpandedEntry(agent, actions),
     ...(isClosed(agent) ? [{ id: 'fold', label: 'Fold to a chip', icon: <FoldVertical />, onSelect: () => actions.setFolded(nodeId, true) }] : []),
     ...(board.leadPin === undefined
       ? []
@@ -773,6 +784,8 @@ export interface ZoneBindingActions {
   crewLibrary(zone: Zone): void;
   /** Opens a prefab on its own board to change it (a built-in as its copy), or a new one with `null`. */
   editPrefab(prefab: LibraryPrefab | null): void;
+  /** Opens Describe a crew: an agent drafts a prefab, a new one starting in the zone. */
+  describeCrew(zone: Zone): void;
   /** Opens the New ticket sheet: one ticket tile, from a ticket prefab, starting in the zone. */
   newTicket(zone: Zone): void;
   /** Adds the zone's stage board, which holds the work its agents started (one to a zone). */
@@ -1146,6 +1159,8 @@ interface CrewPicks {
   start(prefab: string): void;
   library(): void;
   edit?(prefab: LibraryPrefab | null): void;
+  /** Opens Describe a crew, for an agent to draft one. */
+  describe?(): void;
 }
 
 /** How long a prefab saved is marked new in the menus. */
@@ -1193,6 +1208,7 @@ const prefabEntries = (prefabs: readonly LibraryPrefab[], picks: CrewPicks, why?
       'separator',
     ]),
     ...(edit === undefined ? [] : [{ id: 'make-prefab', label: 'Make a prefab…', icon: <Pencil />, onSelect: () => edit(null) }]),
+    ...(picks.describe === undefined ? [] : [{ id: 'describe-crew', label: 'Describe a crew…', icon: <MessageSquareText />, onSelect: picks.describe }]),
     { id: 'crew-library', label: edit === undefined ? 'Library…' : 'Crew library…', icon: <LibraryBig />, onSelect: picks.library },
   ];
 };
@@ -1225,7 +1241,7 @@ const crewRow = (zone: Zone, actions: Pick<ZoneMenuActions, 'startCrew' | 'crewL
 export function newAgentMenu(
   zone: Zone,
   noAgents: string | undefined,
-  actions: Pick<ZoneMenuActions, 'startCrew' | 'crewLibrary' | 'editPrefab'> & { newAgent(zone: Zone): void },
+  actions: Pick<ZoneMenuActions, 'startCrew' | 'crewLibrary' | 'editPrefab' | 'describeCrew'> & { newAgent(zone: Zone): void },
   now = Date.now(),
 ): ModelEntry[] {
   return [
@@ -1233,7 +1249,12 @@ export function newAgentMenu(
     'separator',
     ...prefabEntries(
       currentPrefabs(),
-      { start: (prefab) => actions.startCrew(prefab, zone), library: () => actions.crewLibrary(zone), edit: actions.editPrefab },
+      {
+        start: (prefab) => actions.startCrew(prefab, zone),
+        library: () => actions.crewLibrary(zone),
+        edit: actions.editPrefab,
+        describe: () => actions.describeCrew(zone),
+      },
       noAgents,
       now,
     ),

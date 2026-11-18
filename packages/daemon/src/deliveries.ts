@@ -1,8 +1,7 @@
 import { systemClock, type Clock } from './clock.ts';
 import { recount } from './counts.ts';
-import { handoffLine } from './handoff-text.ts';
+import { handOffMessage } from './handoff-text.ts';
 import { refOf } from './crew-flags.ts';
-import { markSender } from './sender-marker.ts';
 import { invalidParams } from './params.ts';
 import { FIRST_PROMPT, questionPrompt, type Agent, type Harness, type PermissionPrompt } from './protocol.ts';
 import type { RunStart } from './schedules.ts';
@@ -251,6 +250,8 @@ interface DeliveryOptions<Row extends DeliveryRow> {
    * their last key); undefined with none there. Without it, any draft (`promptNow` typing) holds them back.
    */
   draftHeldFor?(sessionId: string): number | undefined;
+  /** Whether a line the user sent the agent mid-turn waits in its harness, still to be taken up as a prompt of its own. */
+  userQueued?(sessionId: string): boolean;
   /** What resolves once a pause of the agent under way has ended its session; undefined while none is. */
   pausing(sessionId: string): Promise<void> | undefined;
   /** Tells every client the agent changed. */
@@ -338,10 +339,11 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
   const draftHolds = (sessionId: string) =>
     options.draftHeldFor === undefined ? options.promptNow(sessionId) === 'typing' : (options.draftHeldFor(sessionId) ?? 0) > 0;
   /**
-   * Whether the user is at the agent's prompt: a draft of theirs holds it, or they pressed a key in its terminal lately.
-   * Nothing but their own is typed there then, so nothing runs into what they type.
+   * Whether the user is at the agent's prompt: a draft of theirs holds it, they pressed a key in its terminal lately, or
+   * a line they sent mid-turn is still to be taken up. Nothing but their own is typed there then, so nothing runs into
+   * what they type.
    */
-  const userTyping = (sessionId: string) => draftHolds(sessionId) || typedLately(sessionId);
+  const userTyping = (sessionId: string) => draftHolds(sessionId) || typedLately(sessionId) || options.userQueued?.(sessionId) === true;
   /** Per agent handing off, how many of its deliveries are still landing: it shows `handing-off` until none are. */
   const handingOff = new Map<string, number>();
   /** Per agent, the answer being typed into its terminal, so the next waits for it. */
@@ -1524,7 +1526,8 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
       const reason = row.ended_at !== null ? undefined : unsent.has(to) ? UNSENT_REASON : whyNotReadyNow(to, row, true);
       if (reason !== undefined) return { started: false, reason, busy: true };
       const fromName = getRow(from)?.name ?? 'another agent';
-      const line = markSender('hand-off', fromName, refOf({ sessionId: from }), handoffLine(fromName, name, text));
+      const line = handOffMessage(fromName, refOf({ sessionId: from }), name, text);
+      if (line === undefined) return { started: false, reason: 'there was nothing to send' };
       recount(handingOff, from, 1);
       announce(from);
       try {

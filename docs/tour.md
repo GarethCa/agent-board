@@ -114,11 +114,11 @@ An agent can lead other agents the way you would: start one with a task, wait fo
 
 - **On by default, per zone.** A zone's ⋯ menu has **Stop agents orchestrating** / **Let agents orchestrate**. With it on, an agent in the zone may start agents in any zone, and steer any agent an orchestrator started, anywhere on the board; agents you started it reaches only in its zone. Switch it off and they stop at their next call. Or grant it one agent at a time from your own terminal: `agent-board orchestrate on agent:22a7 --scope zone` (`repo` and `board` widen the scope).
 - **Crews go any depth.** An agent an orchestrator starts runs in its own worktree and branch, and leads its own crew as its zone allows, however deep in a crew it is. Its permission prompts come to your **Needs you** inbox, never to the orchestrator.
-- **Crew frames.** An orchestrator's agents sit beside it in a dashed frame labelled with its name, which moves with it. **Settings › Board › Crews** can show a "from" chip on each agent instead.
+- **Crews.** An orchestrator's agents sit beside it and move with it, and its tile counts them. One that sits away from it carries a "↳ from" chip naming it. Hovering or selecting an orchestrator changes no other tile.
 - **An Activity tab.** The orchestrator's session window gets an **Activity** tab listing what it started, sent, interrupted and closed, and what it tried and was refused, with why.
 
 <p align="center">
-  <img src="assets/screenshots/orchestrator-crew.png" alt="An orchestrator's tile with a badge counting its two workers, which sit beside it in a dashed frame labelled with the orchestrator's name" width="880">
+  <img src="assets/screenshots/orchestrator-crew.png" alt="An orchestrator's tile with a badge counting its two workers, which sit beside it" width="880">
 </p>
 
 An orchestrator cannot answer a permission prompt, type raw keys, change a permission mode or a setting, or open a message with a command such as `/model` or `!`. It runs as you, so this limits what the board offers it, not what a determined agent could do on your machine ([ADR-0011](adr/0011-orchestrators.md)).
