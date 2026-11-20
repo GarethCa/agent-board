@@ -91,6 +91,39 @@ describe('stageOf', () => {
     expect(stageOf([agent('a', closed), agent('b', { state: 'running' })], 'explicit')).toBe('doing');
   });
 
+  it('keeps merged work on Doing while one of its open agents waits on someone, its orchestrator too', () => {
+    const toOrchestrator = { id: 1, reason: 'Part merged: what next?', at: at(4), to: 'orchestrator' as const, via: null };
+    const waiting = agent('a', { state: 'waiting', finishedAt: at(3), ledBy: 'lead', flag: toOrchestrator, pullRequests: [pr('merged')] });
+    expect(stageOf([waiting], 'explicit')).toBe('doing');
+    expect(stageOf([waiting], 'turns')).toBe('doing');
+    // Idle and finished, nobody asked: its work is over.
+    expect(stageOf([agent('a', { state: 'waiting', finishedAt: at(3), ledBy: 'lead', pullRequests: [pr('merged')] })], 'explicit')).toBe('done');
+    // A flag left on an agent that has closed holds nothing open.
+    expect(stageOf([agent('a', { ...closed, flag: toOrchestrator, pullRequests: [pr('merged')] })], 'explicit')).toBe('done');
+  });
+
+  it('keeps work with one pull request merged and another still open on Waiting, not Done', () => {
+    const idle = { state: 'waiting' as const, finishedAt: at(3) };
+    expect(stageOf([agent('a', { ...idle, pullRequests: [pr('merged'), pr('open')] })], 'explicit')).toBe('waiting');
+    expect(stageOf([agent('a', { ...idle, pullRequests: [pr('merged')] }), agent('b', { ...idle, pullRequests: [pr('draft')] })], 'explicit')).toBe('waiting');
+    expect(stageOf([agent('a', { ...closed, pullRequests: [pr('merged'), pr('open')] })], 'explicit')).toBe('waiting');
+    // A merged pull request alone, its agents idle and finished: its work is over.
+    expect(stageOf([agent('a', { ...idle, pullRequests: [pr('merged')] })], 'explicit')).toBe('done');
+  });
+
+  it('keeps a failure on Doing while its real pull request is still open, though a part merged', () => {
+    const crashed = { endedAt: at(30), exitCode: 1, state: 'failed' as const, finishedAt: at(3) };
+    expect(stageOf([agent('a', { ...crashed, pullRequests: [pr('merged'), pr('open')] })], 'explicit')).toBe('doing');
+    expect(stageOf([agent('a', { ...crashed, pullRequests: [pr('merged')] })], 'explicit')).toBe('done');
+  });
+
+  it('waits, as with an open pull request alone, while a part merged and its open agent waits on its orchestrator', () => {
+    const toOrchestrator = { id: 1, reason: 'Part merged: what next?', at: at(4), to: 'orchestrator' as const, via: null };
+    const builder = { state: 'waiting' as const, finishedAt: at(3), ledBy: 'lead', flag: toOrchestrator };
+    expect(stageOf([agent('a', { ...builder, pullRequests: [pr('merged'), pr('open')] })], 'explicit')).toBe('waiting');
+    expect(stageOf([agent('a', { ...builder, pullRequests: [pr('open')] })], 'explicit')).toBe('waiting');
+  });
+
   it('puts work not started and waiting on no one on To do', () => {
     expect(stageOf([agent('a')], 'explicit')).toBe('todo');
     expect(stageOf([agent('a', { state: 'scheduled' })], 'explicit')).toBe('todo');

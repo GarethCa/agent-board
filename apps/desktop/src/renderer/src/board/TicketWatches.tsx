@@ -39,15 +39,17 @@ interface WatchesMenuProps {
   watch: TicketWatch;
   onChange(change: TicketWatchChange): void;
   onRead(): void;
+  /** Its eye's class, as the tile's corner sorts its buttons. */
+  className?: string;
 }
 
 const anyOn = (watch: TicketWatch) => TICKET_WATCH_KINDS.some((kind) => watch.settings[kind].tile || watch.settings[kind].chat);
 
-/** The eye on a ticket's tile, at rest or opened: its chat's Watches menu, changed and read through the tile's actions. */
-export function TicketWatchesMenu({ chat, name }: { chat: Agent; name: string }) {
+/** The eye on a ticket's tile, in its corner at rest or its header opened: its chat's Watches menu, changed and read through the tile's actions. */
+export function TicketWatchesMenu({ chat, name, className }: { chat: Agent; name: string; className?: string }) {
   const { setWatches, readWatches } = useContext(TileActionsContext);
   if (chat.watch === undefined) return null;
-  return <WatchesMenu name={name} watch={chat.watch} onChange={(change) => setWatches(chat.sessionId, change)} onRead={() => readWatches(chat.sessionId)} />;
+  return <WatchesMenu name={name} watch={chat.watch} className={className} onChange={(change) => setWatches(chat.sessionId, change)} onRead={() => readWatches(chat.sessionId)} />;
 }
 
 /** The ticket's Watches menu, from the eye in its header: `WatchesSheet` in a popover. */
@@ -55,7 +57,7 @@ function WatchesMenu(props: WatchesMenuProps) {
   const [open, setOpen] = useState(false);
   return (
     <Popover open={open} onOpenChange={setOpen} content={<WatchesSheet {...props} />} aria-label={`What ${props.name} watches`} side="bottom" align="end" className="ticket-watches-popover">
-      <TileButton icon={<Eye />} aria-label="Watches" title="What it watches on its pull request" />
+      <TileButton className={props.className} icon={<Eye />} aria-label="Watches" title="What it watches on its pull request" />
     </Popover>
   );
 }

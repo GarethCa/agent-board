@@ -13,6 +13,8 @@ import {
   ITEM_INSET,
   freeTileSlot,
   expandedSizesFrom,
+  expandedRoomFrom,
+  EXPANDED_TILE_SIZE,
   isFolded,
   unfoldedFrom,
   leastZoneSize,
@@ -573,5 +575,28 @@ describe('expandedSizesFrom', () => {
     const saved = [{ id: 'agent:a', width: 960, height: 600 }, { id: 'shell:b', width: 0, height: 600 }, { id: 3, width: 1, height: 1 }, null, 'x'];
     expect(expandedSizesFrom(saved)).toEqual({ 'agent:a': { width: 960, height: 600 } });
     expect(expandedSizesFrom(null)).toEqual({});
+  });
+});
+
+describe('expandedRoomFrom', () => {
+  it('keeps room for the tiles open now, those whose session window took them, and those pinned expanded, each at its expanded size', () => {
+    const room = expandedRoomFrom({
+      expanded: [{ id: 'agent:open', width: 1000, height: 640 }],
+      // Hidden while its window is open: back at this size once it closes. One also open now is at its size now.
+      hidden: [{ id: 'agent:windowed', width: 1200, height: 700 }, { id: 'agent:open', width: 700, height: 400 }],
+      // The size each was last let go at: a pinned tile not yet open opens at it, or at the default.
+      sizes: { 'agent:pinned': { width: 1100, height: 660 }, bad: 3 },
+      pinned: ['agent:pinned', 'agent:fresh', 'agent:open'],
+    });
+    expect(room).toEqual({
+      'agent:open': { width: 1000, height: 640 },
+      'agent:windowed': { width: 1200, height: 700 },
+      'agent:pinned': { width: 1100, height: 660 },
+      'agent:fresh': EXPANDED_TILE_SIZE,
+    });
+  });
+
+  it('is empty with nothing saved', () => {
+    expect(expandedRoomFrom({ expanded: null, hidden: undefined, sizes: 'x', pinned: [] })).toEqual({});
   });
 });

@@ -78,6 +78,8 @@ const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}
   character: null,
   workCategory: null,
   purpose: null,
+  renamed: null,
+  described: null,
   workFinishedAt: null,
   flag: null,
   ...fields,

@@ -53,7 +53,7 @@ describe('collapsing an expanded tile', () => {
 
   /** An expanded tile drawn in its board node, which takes the focus. */
   function expanded(log: string[]) {
-    const node = { isConnected: true, hasAttribute: () => true, matches: () => true, focus: () => log.push('focus tile') };
+    const node = { isConnected: true, dataset: { id: 'tile:agent:a' }, hasAttribute: () => true, matches: () => true, focus: () => log.push('focus tile') };
     const surface = { matches: (selector: string) => selector === '.expanded-tile', closest: () => node, dataset: {} };
     return { node, surface: surface as unknown as HTMLElement };
   }
@@ -78,5 +78,14 @@ describe('collapsing an expanded tile', () => {
     leaveToTile(expanded(log).surface, () => log.push('collapse'));
     for (const frame of frames) frame();
     expect(log).toEqual(['focus tile', 'collapse', 'focus tile']);
+  });
+
+  it(`with a way to select, leaves its tile the board's one selection once it has gone`, () => {
+    const log: string[] = [];
+    vi.stubGlobal('requestAnimationFrame', () => 0);
+    const { node, surface } = expanded(log);
+    vi.stubGlobal('document', { activeElement: node, body: {} });
+    leaveToTile(surface, () => log.push('collapse'), (nodeId) => log.push(`select ${nodeId}`));
+    expect(log).toEqual(['focus tile', 'collapse', 'select tile:agent:a']);
   });
 });

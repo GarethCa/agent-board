@@ -39,7 +39,7 @@ export type TileData = {
   implementer?: Agent;
   /** The tabs of the agent's session window, when it has any: its shells chip lists their shells. */
   tabs?: Shell[];
-  /** For a ticket's chat (`Agent.ticketChat`) drawn as its ticket's card, the helpers it holds, in order: they have no tiles of their own. */
+  /** For a ticket's chat (`Agent.ticketChat`) drawn as its ticket's tile, the helpers it holds, in order: they have no tiles of their own, and the chat's tile shows their asks. */
   helpers?: Agent[];
 };
 

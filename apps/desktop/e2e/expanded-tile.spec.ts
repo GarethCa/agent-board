@@ -244,7 +244,9 @@ test('a Claude agent tile expands in place with its details and live terminal, m
     expect(width).toBeGreaterThan(EXPANDED_WIDTH);
     await expect.poll(() => savedExpanded(window)).toContain(`"width":${width}`);
 
-    // Collapse returns it to its tile; the terminal detaches and the session keeps running.
+    // Collapse, the header's last button and a –, returns it to its tile; the terminal detaches and the session keeps running.
+    await expect(expandedTile(window).locator('.expanded-tile-head button').last()).toHaveAttribute('data-testid', 'back-to-tile');
+    await expect(expandedTile(window).getByTestId('back-to-tile').locator('svg')).toHaveClass(/lucide-minus/);
     await expandedTile(window).getByRole('button', { name: 'Collapse', exact: true }).click();
     await expect(expandedTile(window)).toHaveCount(0);
     await expect(tile(window)).toBeVisible();

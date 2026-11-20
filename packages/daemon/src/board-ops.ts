@@ -1774,6 +1774,25 @@ export async function setAgentEffort(session: BoardSession, ref: string, effort:
 }
 
 /**
+ * `rename`: renames any agent's tile, `me` for the caller's own, and sets what it is for (`description`, '' clears
+ * it): either or both. The last rename wins; the tile's hover card says who made it and when.
+ */
+export async function renameAgent(session: BoardSession, ref: string, change: { name?: string | undefined; description?: string | undefined }): Promise<BoardView> {
+  if (change.name === undefined && change.description === undefined) throw new BoardError('give a new name, a --description, or both');
+  const { token, agent } = await orchestratorTarget(session, ref);
+  await session.client.call('orchestrator.rename', {
+    token,
+    sessionId: agent.sessionId,
+    ...(change.name === undefined ? {} : { name: change.name }),
+    ...(change.description === undefined ? {} : { description: change.description }),
+  });
+  const fresh = await freshAgentLine(session, agent.sessionId);
+  const renamed = change.name === undefined || fresh.agent.name === agent.name ? '' : `Renamed ${agent.name} to ${fresh.agent.name}. `;
+  const about = change.description === undefined ? '' : `\n${purposeAnswer(fresh.agent, 'Its')}`;
+  return { text: `${renamed}${fresh.line}${about}`, json: agentJson(fresh.refs, fresh.agent, session.caller) };
+}
+
+/**
  * `expand --pin` / `--unpin`: pins the agent's tile expanded, or unpins it, as its tile's Pin expanded does. Pinned, it
  * stays expanded where it is, at its size, and opens again by itself; nothing collapses, moves or resizes it.
  */

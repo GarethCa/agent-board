@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { setExtendedShortcuts } from '../keys/extended-shortcuts';
-import { boardKey, boardShortcut, quickInsertAt } from './board-shortcuts';
+import { boardKey, boardShortcut, escapeCollapsesFront, quickInsertAt } from './board-shortcuts';
 
 const press = (key: string, keys: Partial<Record<'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey' | 'repeat', boolean>> = {}) => ({
   key,
@@ -107,5 +107,23 @@ describe('/ and the palette', () => {
     const board = { x: 100, y: 50, width: 800, height: 600 };
     expect(quickInsertAt({ x: 300, y: 200 }, board)).toEqual({ x: 300, y: 200 });
     expect(quickInsertAt(undefined, board)).toEqual({ x: 500, y: 350 });
+  });
+});
+
+/** An element with the focus: its tag, and the selectors it is inside. */
+const focused = (tagName: string, inside: string[] = []) => ({ tagName, closest: (selector: string) => (inside.includes(selector) ? {} : null) }) as unknown as Element;
+
+describe('Esc collapsing the expanded tile in front', () => {
+  it('does with the focus on nothing, the page or the board, a tile on it too; not off the board', () => {
+    expect(escapeCollapsesFront(null, undefined)).toBe(true);
+    expect(escapeCollapsesFront(focused('BODY'), undefined)).toBe(true);
+    expect(escapeCollapsesFront(focused('DIV', ['.react-flow']), undefined)).toBe(true);
+    expect(escapeCollapsesFront(focused('BUTTON'), undefined)).toBe(false);
+  });
+
+  it('does not with the focus on the tile ⌘K flew to, away from the expanded one; on another, it does', () => {
+    const picked = focused('DIV', ['.react-flow']);
+    expect(escapeCollapsesFront(picked, picked)).toBe(false);
+    expect(escapeCollapsesFront(focused('DIV', ['.react-flow']), picked)).toBe(true);
   });
 });

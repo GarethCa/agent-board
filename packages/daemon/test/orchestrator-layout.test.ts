@@ -5,7 +5,7 @@ import { createFakeGitHub, FAKE_GITHUB_STATE } from '@agent-board/tracker/testin
 import { agentNoteSize } from '../src/agent-notes.ts';
 import { BOARD_ARRANGE_GAP } from '../src/arrange-board.ts';
 import { CLUSTER_LABEL_SIZE } from '../src/board-arrange.ts';
-import { AGENT_TILE_SIZE, clearOf, overlaps as rectsOverlap, CREW_GAP, GRID_COLUMN as COLUMN, GRID_ORIGIN as FIRST, gridPoint, PERCH_ROOM, RAIL_GAP, ROW_STEP, sizedFootprint, SPACING_GAPS, TILE_GAP, tileSizeKey, tileSlot, ZONE_PADDING, type Rect } from '../src/board-layout.ts';
+import { AGENT_TILE_SIZE, clearOf, freeTileSlot, zoneGrid, overlaps as rectsOverlap, CREW_GAP, GRID_COLUMN as COLUMN, GRID_ORIGIN as FIRST, gridPoint, PERCH_ROOM, RAIL_GAP, ROW_STEP, sizedFootprint, SPACING_GAPS, TILE_GAP, tileSizeKey, tileSlot, ZONE_PADDING, type Rect } from '../src/board-layout.ts';
 import type { DaemonClient } from '../src/client.ts';
 import { spotBesideAgent } from '../src/orchestrator-layout.ts';
 import type { DaemonCall } from '../src/protocol.ts';
@@ -1064,6 +1064,44 @@ describe('the zone map and arranging by itself', () => {
     expect(Math.min(...map.things.map((thing) => thing.x))).toBe(SPACING_GAPS.roomy.padding);
   });
 
+  it('slots a tile with no place clear of the room of a tile its session window has, as the board slots it', async () => {
+    const setup = await layoutDaemon();
+    const me = await lead(setup, setup.zone.id);
+    const held = await userAgent(setup.client, setup.zone.id, 'held');
+    const pad = SPACING_GAPS.normal.padding;
+    await setup.client.call('agent.move', { sessionId: me.agent.sessionId, zoneId: setup.zone.id, x: pad, y: 1400 });
+    await setup.client.call('agent.move', { sessionId: held.sessionId, zoneId: setup.zone.id, x: pad, y: pad + PERCH_ROOM });
+    const room = { width: 1000, height: 640 };
+    await setup.client.call('view.set', { key: 'expandedTiles.hidden', value: [{ id: tileSizeKey('agent', held.sessionId), ...room }] });
+    const fresh = await userAgent(setup.client, setup.zone.id, 'fresh');
+    const zone = (await setup.client.call('zone.list')).find((each) => each.id === setup.zone.id)!;
+    const map = await me.connection.call('orchestrator.map', { token: me.token });
+    const slotted = map.things.find((thing) => thing.key === tileSizeKey('agent', fresh.sessionId))!;
+    // The board slots it with the same call, round the same rooms (tiles.test.ts).
+    const taken = [
+      { x: pad, y: 1400, ...AGENT_TILE_SIZE },
+      { x: pad, y: pad + PERCH_ROOM, ...room },
+    ];
+    expect({ x: slotted.x, y: slotted.y }).toEqual(freeTileSlot(zone.width, taken, AGENT_TILE_SIZE, zoneGrid(zone.spacing ?? 'normal')));
+    expect(clearOf({ x: slotted.x, y: slotted.y, ...AGENT_TILE_SIZE }, [taken[1]!], 0)).toBe(true);
+  });
+
+  it('reports a tile inside the room of one its session window has as an overlap, as nothing pushes it aside', async () => {
+    const setup = await layoutDaemon();
+    const me = await lead(setup, setup.zone.id);
+    const held = await userAgent(setup.client, setup.zone.id, 'held');
+    const near = await userAgent(setup.client, setup.zone.id, 'near');
+    const pad = SPACING_GAPS.normal.padding;
+    await setup.client.call('agent.move', { sessionId: me.agent.sessionId, zoneId: setup.zone.id, x: pad, y: 1400 });
+    await setup.client.call('agent.move', { sessionId: held.sessionId, zoneId: setup.zone.id, x: pad, y: pad + PERCH_ROOM });
+    await setup.client.call('agent.move', { sessionId: near.sessionId, zoneId: setup.zone.id, x: pad + 500, y: pad + PERCH_ROOM });
+    const pair = [tileSizeKey('agent', held.sessionId), tileSizeKey('agent', near.sessionId)].sort();
+    const overlapping = async () => (await me.connection.call('orchestrator.map', { token: me.token })).overlaps.map((each) => [...each].sort());
+    expect(await overlapping()).not.toContainEqual(pair);
+    await setup.client.call('view.set', { key: 'expandedTiles.hidden', value: [{ id: pair.find((key) => key.endsWith(held.sessionId))!, width: 1000, height: 640 }] });
+    expect(await overlapping()).toContainEqual(pair);
+  });
+
   it('keeps what an arrange was asked for as the orchestrator’s settings, for a bare arrange after', async () => {
     const setup = await layoutDaemon();
     const { me } = await crewWithLanes(setup);
@@ -1109,7 +1147,7 @@ describe('the zone map and arranging by itself', () => {
     const open = { width: 960, height: 600 };
     await setup.client.call('view.set', { key: 'expandedTiles', value: [{ id: key(me.agent), ...open }] });
     await me.connection.call('orchestrator.arrange', { token: me.token, auto: true });
-    const crew = [];
+    const crew: Agent[] = [];
     for (const name of ['one', 'two', 'three']) crew.push(await me.connection.call('orchestrator.spawn', { token: me.token, name }));
     const rects = await rectsIn(setup.client, setup.zone.id);
     const at = { ...rects.get('lead')!, ...open };
@@ -2851,5 +2889,45 @@ describe('a zone on the Spine rule, with an orchestrator', () => {
     await client.call('agent.move', { sessionId: mine.sessionId, zoneId: zone.id, ...nudged, byHand: true });
     await new Promise((resolve) => setTimeout(resolve, RULE_SETTLE_MS * 3));
     expect(await positionOf(client, mine.sessionId)).toMatchObject(nudged);
+  });
+  it('lays its crew clear of every expanded tile at its expanded size: pinned but not open, and hidden while its session window is open', async () => {
+    const key = (agent: Agent) => tileSizeKey('agent', agent.sessionId);
+    const setup = await layoutDaemon();
+    const { client, zone } = setup;
+    const me = await lead(setup, zone.id, 'orch', 'orchestrator' as Agent['role']);
+    const pinned = await me.connection.call('orchestrator.spawn', { token: me.token, name: 'pinned', role: 'implementer' });
+    const windowed = await me.connection.call('orchestrator.spawn', { token: me.token, name: 'windowed', role: 'implementer' });
+    const crew: Agent[] = [];
+    for (const name of ['one', 'two', 'three']) crew.push(await me.connection.call('orchestrator.spawn', { token: me.token, name, role: 'implementer' }));
+    await client.call('agent.move', { sessionId: me.agent.sessionId, zoneId: zone.id, x: PAD, y: PAD + PERCH_ROOM });
+    await client.call('orchestrator.zoneLayout', { zoneId: zone.id, mode: 'spine' });
+    const firstLine = PAD + AGENT_TILE_SIZE.width + SPINE_GAPS.normal.across + SPINE_GAPS.normal.band;
+    await vi.waitFor(async () => expect((await positionOf(client, crew[0]!.sessionId)).x).toBeGreaterThanOrEqual(firstLine), { timeout: 5000 });
+    // Pinned where the first band stood, at the size it was last let go at, and not open just now (the app has yet to
+    // open it again); the other expanded, then taken by its session window, so it opens again once that closes.
+    const pinnedSize = { width: 1100, height: 660 };
+    const windowedSize = { width: 1000, height: 640 };
+    await client.call('agent.move', { sessionId: pinned.sessionId, zoneId: zone.id, x: firstLine, y: PAD + PERCH_ROOM });
+    await client.call('orchestrator.pinExpanded', { sessionId: pinned.sessionId, pinned: true });
+    await client.call('view.set', { key: 'expandedTiles.sizes', value: { [key(pinned)]: pinnedSize } });
+    await client.call('view.set', { key: 'expandedTiles', value: [] });
+    await client.call('view.set', { key: 'expandedTiles.hidden', value: [{ id: key(windowed), ...windowedSize }] });
+
+    await client.call('orchestrator.arrange', { zoneId: zone.id });
+    const rects = await rectsIn(client, zone.id);
+    rects.set('pinned', { ...rects.get('pinned')!, ...pinnedSize });
+    rects.set('windowed', { ...rects.get('windowed')!, ...windowedSize });
+    expectNoOverlap(rects);
+    // Nothing moves when it lays the zone out again.
+    await client.call('orchestrator.arrange', { zoneId: zone.id });
+    const again = await rectsIn(client, zone.id);
+    for (const name of ['one', 'two', 'three', 'orch']) expect(again.get(name)).toEqual(rects.get(name));
+    // Its session window closed, the tile opens again at the same size: the rule finds the room already kept, and moves nothing.
+    await client.call('view.set', { key: 'expandedTiles.hidden', value: [] });
+    await client.call('view.set', { key: 'expandedTiles', value: [{ id: key(windowed), ...windowedSize }] });
+    await new Promise((resolve) => setTimeout(resolve, RULE_SETTLE_MS * 3));
+    const reopened = await rectsIn(client, zone.id);
+    const at = ({ x, y }: Rect) => ({ x, y });
+    for (const name of ['one', 'two', 'three', 'orch', 'windowed', 'pinned']) expect(at(reopened.get(name)!)).toEqual(at(rects.get(name)!));
   });
 });

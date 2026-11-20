@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent, AgentState, NeedsYouShows, PullRequest, TicketWatch, TicketWatchNews } from '@agent-board/daemon/protocol';
 import { galleryAgent } from './TileGallery';
-import { helperIcon, midRowFits, TICKET_ASKS, ticketAsk, ticketFace, type TicketAsk } from './ticket-tile';
+import { ticketHead, ticketTileAsk, helperIcon, midRowFits, TICKET_ASKS, ticketAsk, ticketFace, type TicketAsk } from './ticket-tile';
 
 const AT = '2026-11-14T09:00:00.000Z';
 const SHOWS: NeedsYouShows = 'explicit';
@@ -71,7 +71,7 @@ describe('the ticket tile’s face', () => {
   it('rolls a helper’s question up into the ticket, and opens that helper', () => {
     const builder = helper('builder', 'waiting', { ask, lastMessage: 'Retry for two minutes or five?' });
     const face = ticketFace(chat('running'), [builder], SHOWS);
-    expect(face).toMatchObject({ ask: 'needs-you', word: 'Needs you', flat: false, line: 'builder asks: Retry for two minutes or five?', needsYouNow: true });
+    expect(face).toMatchObject({ ask: 'needs-you', word: 'Needs you', flat: false, line: 'Its builder asks: Retry for two minutes or five?', needsYouNow: true });
     expect(face.button).toEqual({ kind: 'open', label: 'Answer', prominent: true });
     expect(face.asker.sessionId).toBe('builder');
   });
@@ -140,7 +140,7 @@ describe('the ticket tile’s face', () => {
 
   it('asks to resume a helper a restart stopped, and says who it is without saying it asks', () => {
     const face = ticketFace(chat('idle'), [helper('builder', 'stopped-by-restart')], SHOWS);
-    expect(face).toMatchObject({ ask: 'needs-you', line: 'builder: Stopped by a restart · Resume carries it on', button: { kind: 'wake', label: 'Resume', prominent: true } });
+    expect(face).toMatchObject({ ask: 'needs-you', line: 'Its builder: Stopped by a restart · Resume carries it on', button: { kind: 'wake', label: 'Resume', prominent: true } });
     expect(face.asker.sessionId).toBe('builder');
   });
 
@@ -246,6 +246,54 @@ describe('the ticket tile’s watches', () => {
 
   it('keeps the builds mark’s word while no watch is on', () => {
     expect(ticketFace(chat('running', { chatKind: 'implementer' }), [], SHOWS).buildsWord).toBe(true);
+  });
+});
+
+describe('a helper’s ask on its ticket’s tile', () => {
+  it('names the helper who asks by its role, with what it asks, and Answer opens that helper', () => {
+    const reviewer = helper('lens', 'waiting', { role: 'reviewer', ask, lastMessage: 'Keep the old order after a reload?' });
+    const rolled = ticketTileAsk(chat('running'), [helper('builder', 'running'), reviewer], SHOWS);
+    expect(rolled).toMatchObject({ word: 'Needs you', dot: true, line: 'Its reviewer asks: Keep the old order after a reload?', button: { kind: 'open', label: 'Answer', prominent: true }, needsYouNow: true });
+    expect(rolled?.asker.sessionId).toBe('lens');
+  });
+
+  it('calls a design helper its designer, and any other its builder', () => {
+    const designer = helper('pen', 'waiting', { roleName: 'Designer', ask, lastMessage: 'Which mock?' });
+    expect(ticketTileAsk(chat('running'), [designer], SHOWS)?.line).toBe('Its designer asks: Which mock?');
+    expect(ticketTileAsk(chat('running'), [helper('b', 'waiting', { ask, lastMessage: 'Which file?' })], SHOWS)?.line).toBe('Its builder asks: Which file?');
+  });
+
+  it('is none while no helper needs the user, or while the chat itself does, whose own ask its tile shows', () => {
+    expect(ticketTileAsk(chat('running'), [helper('builder', 'running')], SHOWS)).toBeUndefined();
+    expect(ticketTileAsk(chat('waiting', { ask }), [helper('builder', 'waiting', { ask })], SHOWS)).toBeUndefined();
+  });
+
+  it('asks Ready to merge with Merge, and New review with Read, from the chat itself and with no dot, standing up in their own colours', () => {
+    const merge = ticketTileAsk(chat('idle', { workCategory: ready, pullRequests: [pr(647)], status: status('Approved. Checks pass.') }), [helper('builder', 'done', { endedAt: AT })], SHOWS);
+    expect(merge).toMatchObject({ word: 'Ready to merge', wordKind: 'merge', flat: false, dot: false, line: 'Approved. Checks pass.', button: { kind: 'merge', label: 'Merge' }, needsYouNow: false });
+    expect(merge?.asker.sessionId).toBe('chat');
+    const review = ticketTileAsk(chat('running', { watch: watch({ news: [news('reviews', 'sam reviewed')], ask: 'new-review' }) }), [], SHOWS);
+    expect(review).toMatchObject({ word: 'New review', wordKind: 'new', flat: false, dot: false, line: 'sam reviewed on #648.', button: { kind: 'read', label: 'Read' } });
+  });
+
+  it('says a merged ticket is Done, with its pull request, lying flat', () => {
+    const merged = ticketTileAsk(chat('idle', { pullRequests: [pr(645, 'merged')] }), [helper('builder', 'done', { endedAt: AT })], SHOWS);
+    expect(merged).toMatchObject({ word: 'Done', dot: false, flat: true, line: 'Merged as #645.', button: undefined });
+  });
+
+  it('keeps its needs-you look off once the helper was seen', () => {
+    expect(ticketTileAsk(chat('running'), [helper('builder', 'waiting', { ask, seen: true })], SHOWS)?.needsYouNow).toBe(false);
+  });
+});
+
+describe('a ticket’s name and about line', () => {
+  it('shows the ticket’s title as the name of a chat named after its ticket alone, and its id alone in the about line', () => {
+    expect(ticketHead(chat('running', { name: 'ACME-726', purpose: null, description: '' }))).toEqual({ name: 'Ticket tiles', id: 'ACME-726', about: undefined });
+  });
+
+  it('keeps a chat’s own name, its about line its id and what it is for', () => {
+    expect(ticketHead(chat('running', { name: 'Retry flow', purpose: null, description: '' }))).toEqual({ name: 'Retry flow', id: 'ACME-726', about: 'Ticket tiles' });
+    expect(ticketHead(chat('running', { name: 'ACME-726', purpose: 'Cap the retries', description: '' })).about).toBe('Cap the retries');
   });
 });
 

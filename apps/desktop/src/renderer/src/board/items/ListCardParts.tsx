@@ -110,7 +110,11 @@ interface ListCardIconViewProps {
   children?: ReactNode;
 }
 
-/** Folded to its icon: the glyph on a big round face with its count, its name under it. A click opens the peek. */
+/**
+ * Folded to its icon: the glyph on a big round face with its count, its name under it. A click opens the peek; a press
+ * that moves drags the card, face and all, as the face is most of what is drawn (React Flow eats the click that ends a
+ * drag, so the peek stays shut).
+ */
 export function ListCardIconView({ glyph, title, scope, zoneColor, lift = 1, count, sub, empty, pulse, tab, testId, onOpen, children }: ListCardIconViewProps) {
   return (
     <div
@@ -122,7 +126,7 @@ export function ListCardIconView({ glyph, title, scope, zoneColor, lift = 1, cou
       style={lift > 1 ? ({ '--listcard-lift': lift } as CSSProperties) : undefined}
     >
       {children}
-      <button type="button" className="listcard-icon-face nodrag" aria-label={`${title}: open its peek`} onClick={onOpen}>
+      <button type="button" className="listcard-icon-face" aria-label={`${title}: open its peek`} onClick={onOpen}>
         <ListCardFace glyph={glyph} count={count} big pulse={pulse} tab={tab} />
       </button>
       <b className="listcard-icon-name">{title}</b>

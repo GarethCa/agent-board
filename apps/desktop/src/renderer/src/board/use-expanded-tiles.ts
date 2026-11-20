@@ -7,6 +7,7 @@ import {
   bringToFront,
   collapsedBetween,
   collapseTile,
+  expandedRoom,
   expandTile,
   frontToCollapse,
   keepExpanded,
@@ -88,6 +89,10 @@ export function useExpandedTiles({ nodes, loaded, agents, shells, externals, win
   };
   /** The tiles that were expanded when their session window opened, to be expanded again when it closes (saved with the view). */
   const [hidden, setHidden] = useState<ExpandedTiles>([]);
+  /** The expanded tiles a tidy keeps room for: open, hidden by their session window, or pinned (`expandedRoom`). */
+  const room = useMemo(() => expandedRoom(expanded, hidden, expandedSizes, pinned), [expanded, hidden, expandedSizes, pinned]);
+  const roomRef = useRef(room);
+  roomRef.current = room;
   /** Which tile the user dragged onto which, one of the two expanded: the two may overlap. */
   const [overlapsAllowed, setOverlapsAllowed] = useState<OverlapsAllowed>(new Map());
   /** The ticket tiles switched by hand to the card, the terminal or the board: the rest show as Settings says. */
@@ -319,7 +324,7 @@ export function useExpandedTiles({ nodes, loaded, agents, shells, externals, win
     }
   }, [loaded, windowsRestored, windows, expanded, hidden, agents, shells, externals]);
 
-  return { shown, shownRef, expandedRef, tileSizesRef, unfoldedRef, pinnedRef, restoreExpanded, ticketViewsShown, ...actions };
+  return { shown, shownRef, expandedRef, roomRef, tileSizesRef, unfoldedRef, pinnedRef, restoreExpanded, ticketViewsShown, ...actions };
 }
 
 /** The node ids of the session tiles on the board. */

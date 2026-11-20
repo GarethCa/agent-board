@@ -259,6 +259,32 @@ export function expandedSizesFrom(saved: unknown): Record<string, Size> {
   return sizes;
 }
 
+/**
+ * The view state key the board keeps the expanded tiles whose session window is open under, as `EXPANDED_VIEW_KEY` has
+ * them: each is expanded again, at that size, once its window closes.
+ */
+export const EXPANDED_HIDDEN_VIEW_KEY = 'expandedTiles.hidden';
+
+/** The view state key the board keeps the size each tile was last let go at while expanded under, by `tileSizeKey`: it opens at that size again. */
+export const EXPANDED_SIZES_VIEW_KEY = 'expandedTiles.sizes';
+
+/** An expanded tile's size when it first opens: room for a terminal to read and its details strip. */
+export const EXPANDED_TILE_SIZE: Size = { width: 960, height: 600 };
+
+/**
+ * The room each expanded tile takes in a layout, by `tileSizeKey`: every tile open now (`expanded`) at its size; every
+ * one whose session window took it (`hidden`), at the size it opens at again; and every one pinned expanded that is
+ * neither, at the size it was last let go at (`sizes`), else the default. So a tile laid out round one keeps clear of
+ * it however the one is shown just now, and nothing moves when it opens again.
+ */
+export function expandedRoomFrom(saved: { expanded: unknown; hidden: unknown; sizes: unknown; pinned: readonly string[] }): Record<string, Size> {
+  const remembered = expandedSizesFrom(
+    typeof saved.sizes === 'object' && saved.sizes !== null ? Object.entries(saved.sizes).map(([id, size]) => ({ ...(typeof size === 'object' ? size : {}), id })) : [],
+  );
+  const pinned = Object.fromEntries(saved.pinned.map((key) => [key, remembered[key] ?? EXPANDED_TILE_SIZE]));
+  return { ...pinned, ...expandedSizesFrom(saved.hidden), ...expandedSizesFrom(saved.expanded) };
+}
+
 /** Whether the board draws the agent as a chip: closed, and not unfolded by the user. */
 export const isFolded = (agent: Pick<Agent, 'endedAt' | 'state' | 'sessionId' | 'shellSessionId' | 'shellHarness'>, unfolded: ReadonlySet<string>): boolean =>
   isClosed(agent) && !unfolded.has(tileSizeKey('agent', agent.sessionId));

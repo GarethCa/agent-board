@@ -367,7 +367,7 @@ const scripts: Record<FakeScenario, Script> = {
    * which returns at once, then ends its turn; the decision is typed at its prompt later. `Steps, then wait on <n>: …` puts up
    * a steps card of those lines and waits on its step n. `Steps: <line> ;; <line> …`
    * prints its board token, then puts up a steps card of those lines with `steps_new` and ends its turn. `Memory: <title>` and `Queue: <title>` print its board
-   * token, then put up a memory or a queue of that title with `memory_new` or `queue_new`, and end its turn. `Record PR: <url>` records that pull request on its sidebar with `record_pr`, and ends its turn. `Pins: <path>` writes and shows that Markdown file, then pins it as `Report`, a `shot.png` beside
+   * token, then put up a memory or a queue of that title with `memory_new` or `queue_new`, and end its turn. `Record PR: <url>` records that pull request on its sidebar with `record_pr`, and ends its turn. `Rename: <ref> | <name>` renames that agent's tile with `rename`, and ends its turn. `Pins: <path>` writes and shows that Markdown file, then pins it as `Report`, a `shot.png` beside
    * it, a link to `http://localhost:9/preview` and a note labelled `Test logins`. `Clock: <json>` prints its board
    * token, then changes its own clock with `clock_set` and those arguments, and ends its turn on the reply.
    */
@@ -408,6 +408,9 @@ const scripts: Record<FakeScenario, Script> = {
       await session.runShell('echo "identity:$AGENT_BOARD_IDENTITY:end"');
       return say(await session.callMcpTool('agent-board', 'clock_set', JSON.parse(clocked) as Record<string, unknown>));
     }
+    // `Rename: <ref> | <name>` renames that agent's tile with `rename`.
+    const renamed = /^Rename: (.*) \| (.*)/.exec(prompt);
+    if (renamed !== null) return say(await session.callMcpTool('agent-board', 'rename', { agent: renamed[1]!, name: renamed[2]! }));
     const recorded = /^Record PR: (.*)/.exec(prompt)?.[1];
     if (recorded !== undefined) return say(await session.callMcpTool('agent-board', 'record_pr', { url: recorded }));
     const givenUp = /^Ask and give up: (.*)/.exec(prompt)?.[1];

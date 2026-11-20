@@ -23,7 +23,8 @@ const pullRequest = (branch: string, reviews: FakeGitHubPullRequest['reviews'] =
 });
 
 // Its card at rest, its card opened in place, and its terminal: the one ask is the same in each.
-for (const view of ['card', 'opened card', 'terminal'] as const) {
+// At rest a ticket is an ordinary agent tile, with no watches on its face: they show once it is opened.
+for (const view of ['opened card', 'terminal'] as const) {
   test(`a ticket's watches, from its ${view}: off until turned on in its Watches menu, a new review its one ask with Read, and Read clears it`, async () => {
     const github = createFakeGitHub({ ...FAKE_GITHUB_STATE, pullRequests: [] });
     const { dir, repo, env } = scratch('waiting');
@@ -47,14 +48,14 @@ for (const view of ['card', 'opened card', 'terminal'] as const) {
       // The window has no way to start a ticket's chat yet: it starts as an agent's own `new` would.
       const chat = await daemon.call('agent.spawn', { zoneId: zone!.id, name: 'chat', ticketChat: true, cols: 120, rows: 40 });
       const card = window.locator('[data-ticket-tile]');
-      const ticket = view === 'card' ? card : window.locator(`[data-testid="expanded-tile"][data-session-id="${chat.sessionId}"]`);
+      const ticket = window.locator(`[data-testid="expanded-tile"][data-session-id="${chat.sessionId}"]`);
       if (view === 'opened card') {
         await expect(card).toHaveAttribute('data-session-id', chat.sessionId, { timeout: TURN_MS });
         await card.hover();
         await card.getByRole('button', { name: 'Expand' }).click();
       }
       await expect(ticket).toHaveAttribute('data-session-id', chat.sessionId, { timeout: TURN_MS });
-      if (view !== 'card') await expect(ticket).toHaveAttribute('data-ticket-open', view === 'terminal' ? 'terminal' : 'card', { timeout: TURN_MS });
+      await expect(ticket).toHaveAttribute('data-ticket-open', view === 'terminal' ? 'terminal' : 'card', { timeout: TURN_MS });
       if (view === 'opened card') {
         // Opened in place, the view follows it clear of the minimap: its footer, where the one ask goes, shows.
         const minimap = (await window.locator('.board-minimap').boundingBox())!;
@@ -90,8 +91,6 @@ for (const view of ['card', 'opened card', 'terminal'] as const) {
       await expect(menu).toBeHidden();
 
       await expect(ticket.getByTestId('tile-state-word')).toHaveText('New review');
-      // Opened, it has no line of its own: its chat or its terminal is.
-      if (view === 'card') await expect(ticket.getByTestId('tile-description')).toHaveText('sam requested changes on #214.');
       await expect(ticket.locator('[data-testid="ticket-watch-icon"][data-kind="reviews"]')).toHaveAttribute('data-tone', 'new');
       const read = ticket.getByTestId('tile-act');
       await expect(read).toHaveText('Read');

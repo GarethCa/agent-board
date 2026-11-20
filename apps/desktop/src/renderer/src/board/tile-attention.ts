@@ -1,5 +1,5 @@
-// Drawing the eye to a tile ⌘K picked: a pulse once the board has flown to it, and the focus in its terminal once it
-// has expanded. Both wait for React Flow to draw the node, which it only does once it is in view.
+// Drawing the eye to a tile ⌘K picked: a pulse once the board has flown to it, and the focus on it. Both wait for React
+// Flow to draw the node, which it only does once it is in view.
 import { tokenNumber } from '../theme';
 
 /** How long to look for a node to be drawn before giving up: the board moving to it, an expanded tile laid out. */
@@ -35,7 +35,25 @@ export function pulseTile(nodeId: string, delayMs: number): void {
   );
 }
 
-/** Puts the focus in the terminal of the tile's node, once it is drawn expanded. */
-export function focusTerminalIn(nodeId: string): void {
-  whenDrawn(nodeId, '.expanded-tile .xterm-helper-textarea', (terminal) => terminal.focus());
+/** The tile node `focusTile` gave the focus, until it loses it. */
+let picked: HTMLElement | undefined;
+
+/** The tile node `focusTile` gave the focus, while it keeps it: Esc there is not the board's. */
+export const pickedTile = (): HTMLElement | undefined => (picked?.isConnected === true ? picked : undefined);
+
+/**
+ * Puts the focus on the tile's node after `delayMs` (the board flying there), unless something has taken it meanwhile:
+ * only from nothing, or the page.
+ */
+export function focusTile(nodeId: string, delayMs: number): void {
+  setTimeout(() => {
+    const active = document.activeElement;
+    if (active !== null && active !== document.body) return;
+    whenDrawn(nodeId, '', (node) => {
+      node.focus({ preventScroll: true });
+      if (document.activeElement !== node) return;
+      picked = node;
+      node.addEventListener('blur', () => (picked = picked === node ? undefined : picked), { once: true });
+    });
+  }, delayMs);
 }

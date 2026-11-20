@@ -1,14 +1,15 @@
 import { useContext, useRef, type ReactNode } from 'react';
 import { NodeResizeControl, ResizeControlVariant, type ControlPosition } from '@xyflow/react';
-import { ChevronLeft, ChevronRight, GitMerge, GitPullRequest, Hammer, Minimize2, Ticket } from 'lucide-react';
+import { ChevronLeft, ChevronRight, GitMerge, GitPullRequest, Hammer, Ticket } from 'lucide-react';
 import { chatBuilds } from '@agent-board/daemon/ticket-tiles';
 import type { Agent, PullRequest } from '@agent-board/daemon/protocol';
 import { useLeaveKeys } from '../keys/escape-hatch';
 import { useSimplified } from '../design';
 import { useNeedsYouShows } from '../needs-you-setting';
 import { SessionBody } from '../session/SessionBody';
-import { Chip, IconButton } from '../ui';
+import { Chip } from '../ui';
 import { useAgentTileMenu } from './agent-tile-menu';
+import { BackToTileButton } from './BackToTile';
 import { CAPTURE_FRAME } from './capture-mode';
 import { EXPANDED_MAX_SIZE, EXPANDED_MIN_SIZE, resizeAllowed, type ExpandedParent } from './expanded';
 import { FrostMark } from './FrostMark';
@@ -17,9 +18,8 @@ import { frostedClasses } from './paused';
 import { TileActionsContext, type TileProps } from './tile';
 import { stopPropagation, TileMenu } from './tile-parts';
 import { ticketFace } from './ticket-tile';
-import { HELPER_ICONS, HelperCard, TicketViewSwitch, useSwitchTicketView, useTicketView, viewRows } from './ticket-parts';
+import { HELPER_ICONS, HelperCard, OneButton, TicketViewSwitch, useSwitchTicketView, useTicketView, viewRows } from './ticket-parts';
 import { useTicketShown } from './ticket-shown';
-import { OneButton } from './TicketTile';
 import { boardRow, ticketChatEntries, ticketMenuEntries } from './ticket-chat-menu';
 import { shownHelper, type TicketView } from './ticket-view';
 import { useViewSettingsLoaded } from './view-settings';
@@ -134,7 +134,7 @@ function TicketOpenTileShown({ id, tile, parent, standIn }: TicketOpenTileProps)
         <span className="nodrag">
           <TileMenu entries={entries} onOpen={menu.reread} />
         </span>
-        {!terminal && <IconButton icon={<Minimize2 />} size="sm" variant="secondary" aria-label="Collapse" tooltip="Back to its card; the session keeps running" onClick={() => collapse(id, 'button')} />}
+        {!terminal && <BackToTileButton from={root} leave={() => collapse(id, 'button')} label="Collapse" />}
       </header>
       {helper !== undefined && <Breadcrumb helper={helper} onBack={() => show(undefined)} kind={face.helpers.find((each) => each.sessionId === helper.sessionId)?.kind} />}
       <div className="ticket-open-main" data-view={view}>

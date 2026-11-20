@@ -4,7 +4,8 @@ import type { PointerMode } from '../chrome/CreateToolbar';
 import { inOverlay } from '../keys';
 import { useEscStep, type EscPress } from '../keys/esc-ladder';
 import { pressed } from '../keys/registry';
-import { boardKey, CONTROLS } from './board-shortcuts';
+import { boardKey, CONTROLS, escapeCollapsesFront } from './board-shortcuts';
+import { pickedTile } from './tile-attention';
 import { tileOpenAction, type ClickOpens } from './click-opens';
 import type { SelectionSummary } from './editing/use-editing';
 import { isItemNode } from './items/items';
@@ -100,15 +101,13 @@ export function useBoardShortcuts({
   }, [loaded, setTool, renameRequest, createItem, pointer, boardCentre, screenToFlowPosition, pickMode, cycleConnections, openQuickInsert, openCheatSheet, arrangeBoard]);
 
   // Escape, not typing: puts the armed tool down, even with a menu taking the same press; or else, with the board (or
-  // nothing) focused, not a menu or dialog (which close on their own Escape), collapses the expanded tile in front.
+  // nothing) focused, not a menu or dialog (which close on their own Escape) nor the tile ⌘K gave the focus, collapses
+  // the expanded tile in front.
   const boardEscape = (event: EscPress) => loaded && boardKey(event as KeyboardEvent)?.kind === 'escape';
   useEscStep('tool', (event) => boardEscape(event) && tool !== undefined, () => setTool(undefined));
   useEscStep(
     'frontTile',
-    (event) => {
-      const active = document.activeElement;
-      return boardEscape(event) && (active === null || active === document.body || active.closest('.react-flow') !== null);
-    },
+    (event) => boardEscape(event) && escapeCollapsesFront(document.activeElement, pickedTile()),
     () => collapseFrontTile(),
   );
 

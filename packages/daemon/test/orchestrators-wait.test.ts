@@ -93,6 +93,12 @@ function host(agents = new Map<string, Agent>(), stubs: Partial<HostAgents> = {}
       setStatus: () => {
         throw new Error('not here');
       },
+      setName: () => {
+        throw new Error('not here');
+      },
+      setPurpose: () => {
+        throw new Error('not here');
+      },
       ...stubs,
     },
     zones: () => [],

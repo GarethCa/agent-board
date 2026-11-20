@@ -12,6 +12,16 @@ export const KEY_BLOCKERS = '[role="dialog"], [role="alertdialog"], [data-testid
 /** What a click on a node presses rather than the node itself: its buttons, fields and links, and what takes input. */
 export const CONTROLS = 'button, a, input, textarea, select, [role="menuitem"], .nodrag, .editable-name';
 
+/**
+ * Whether Esc, with nothing nearer to undo, collapses the expanded tile in front: with the focus on nothing, or on the
+ * board, but not on the tile ⌘K flew to and gave the focus (`picked`), away from the expanded one, which would close
+ * out of sight.
+ */
+export function escapeCollapsesFront(active: Element | null, picked: Element | undefined): boolean {
+  if (active === null || active.tagName === 'BODY') return true;
+  return active !== picked && active.closest('.react-flow') !== null;
+}
+
 /** What each of the board's single keys asks of it, by its registry entry. */
 const SHORTCUTS: readonly (readonly [KeyId, BoardShortcut])[] = [
   ['edit.escape', { kind: 'escape' }],

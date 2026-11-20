@@ -154,6 +154,8 @@ export interface StatusUpdate {
   category?: WorkCategorySet;
   /** What it is for (`Agent.purpose`); '' clears it. */
   purpose?: string;
+  /** Who set what it is for, kept for its hover card, when not the status's `setBy`: the user's side sets no line of its own. */
+  purposeBy?: string | null;
 }
 
 export interface AgentHost {
@@ -226,8 +228,16 @@ export interface AgentHost {
   flag(sessionId: string, reason: string, via: string | null): Agent;
   /** Drops the agent's flag, if it has one. */
   clearFlag(sessionId: string): Agent;
-  /** Renames the agent's tile. */
-  setName(sessionId: string, name: string): Agent;
+  /**
+   * Renames the agent's tile, keeping who did it (`Agent.renamed`): `by` an agent's or shell's name, `you` (the
+   * default) for the user in the app, null for the agent itself. The same name again changes nothing.
+   */
+  setName(sessionId: string, name: string, by?: string | null): Agent;
+  /**
+   * Sets what the agent is for (`Agent.purpose`), trimmed to one line and at most `MAX_PURPOSE_LENGTH`; '' clears it.
+   * Keeps who did it (`Agent.described`), `by` as `setName` takes it.
+   */
+  setPurpose(sessionId: string, purpose: string, by: string | null): Agent;
   /**
    * Gives the agent a role, as typed (`parseRole`), or none with null: its tile's badge, and whatever is keyed on the
    * role, take it at once. Only the role changes: the session isn't restarted, and no template is sent to it.
@@ -499,6 +509,9 @@ export interface AgentRow extends PositionColumns {
   work_category_set_by: string | null;
   /** What it says it is for (`setStatus` with a purpose): null while it has none. */
   purpose: string | null;
+  /** Who last renamed it and set what it is for (`TileChange` as JSON): null before either. */
+  renamed: string | null;
+  described: string | null;
   /** The pose it set for its character (`setStatus` with a character): all null while it has none. */
   character_pose: string | null;
   character_face: string | null;

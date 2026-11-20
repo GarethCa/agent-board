@@ -38,13 +38,14 @@ const openWindows = (window: Page) =>
   });
 
 /**
- * Opens the ticket's own board from its tile's ⋯ menu, once the tile shows its `helpers`: as cards in the open tile's
- * strip (a live chat opens as its terminal), or as icons on the card. A tile still drawing a helper that has just joined
+ * Opens the ticket's own board from its tile's ⋯ menu, once the ticket has its `helpers`. A tile still drawing a helper that has just joined
  * can drop a menu opened over it, so the press is tried again until the menu is up.
  */
 async function openAsBoard(window: Page, chatId: string, helpers = 1): Promise<void> {
   const tile = window.locator(`[data-session-id="${chatId}"]`).filter({ has: window.getByRole('button', { name: 'More' }) }).first();
-  await expect(tile.locator('[data-testid="ticket-helper-card"], [data-testid="ticket-helper"]')).toHaveCount(helpers);
+  await expect
+    .poll(() => window.evaluate(async (id) => (await globalThis.window.agentBoard.agents.list()).filter((agent) => agent.ticket === id).length, chatId), { timeout: 30_000 })
+    .toBe(helpers);
   const item = window.getByRole('menuitem', { name: 'Open as board' });
   await expect(async () => {
     if (await item.isVisible()) return;

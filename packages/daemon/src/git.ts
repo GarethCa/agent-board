@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { join } from 'node:path';
 
 export interface GitResult {
   ok: boolean;
@@ -55,6 +56,13 @@ export function runGit(dir: string, args: string[], timeoutMs?: number, extraEnv
  * on. Call it before pushing `ref` with `runGit`. Succeeds with nothing done when `ref`'s tree tracks no file with LFS
  * (no `filter=lfs` in any of its `.gitattributes`), or this machine has no `git lfs`; fails, with its message, when the
  * upload does, as a push then would leave the remote with pointers to files it doesn't have.
+ *
+ * Also fails, uploading nothing, when a `.lfsconfig` Git LFS could read sets a key that could choose where to upload
+ * (see `REFUSED_LFSCONFIG_KEY`): that file is part of the branch, so an agent could point the daemon's upload, and the
+ * credentials git would offer for it, at a server of its choosing. Refused rather than pinned to origin's endpoint, as
+ * pinning would mean redoing Git LFS's own working-out of that endpoint (ssh, aliases, the repo's own settings). The
+ * check runs before `git lfs push`, which reads the files again: an agent still running in `dir` could write one in
+ * between, a small window this doesn't close.
  */
 export async function pushLfsObjects(dir: string, remote: string, ref: string): Promise<GitResult> {
   const nothing = { ok: true, stdout: '', stderr: '' };
@@ -62,5 +70,41 @@ export async function pushLfsObjects(dir: string, remote: string, ref: string): 
   if (!tracked.ok) return nothing;
   const installed = await runGit(dir, ['lfs', 'version']);
   if (!installed.ok) return nothing;
+  const refusedKeys = await refusedLfsConfigKeys(dir, ref);
+  if (refusedKeys.length > 0) {
+    const stderr = `.lfsconfig sets ${refusedKeys.join(', ')}, which can choose the server Git LFS uploads to; the board won't upload with it. Remove those keys, or push this branch yourself.`;
+    return { ok: false, stdout: '', stderr };
+  }
   return runGit(dir, ['lfs', 'push', remote, ref]);
+}
+
+/**
+ * The `.lfsconfig` keys `pushLfsObjects` refuses. Current Git LFS takes three endpoint keys from that file: `lfs.url`,
+ * `lfs.pushurl` and `remote.<name>.lfsurl`. It ignores `remote.<name>.lfspushurl` and `url.<base>.(push)insteadOf`
+ * there, which are refused anyway, for an older Git LFS that read every key. Git LFS reads the file with `--includes`,
+ * so `include.path` and `includeIf.<condition>.path` are refused too: the file they name can set any of the others.
+ * Names come back from `git config` with the section and key lowercased and the subsection as written.
+ */
+const REFUSED_LFSCONFIG_KEY = /^(lfs\.(push)?url|remote\..+\.lfs(push)?url|url\..+\.(push)?insteadof|include\.path|includeif\..+\.path)$/i;
+
+/**
+ * The refused keys (`REFUSED_LFSCONFIG_KEY`) set in any `.lfsconfig` Git LFS might read for a push of `ref` from `dir`:
+ * the worktree's file, which it reads first, then the index's, `HEAD`'s and `ref`'s. Includes aren't followed, as any
+ * include is refused, and a read that fails still counts the keys git listed before it stopped (a malformed file lists
+ * the entries above its bad line).
+ */
+async function refusedLfsConfigKeys(dir: string, ref: string): Promise<string[]> {
+  const top = await runGit(dir, ['rev-parse', '--show-toplevel']);
+  const sources = [
+    ...(top.ok ? [['--file', join(top.stdout, '.lfsconfig')]] : []),
+    ['--blob', ':.lfsconfig'],
+    ['--blob', 'HEAD:.lfsconfig'],
+    ['--blob', `${ref}:.lfsconfig`],
+  ];
+  const keys = new Set<string>();
+  for (const source of sources) {
+    const listed = await runGit(dir, ['config', '--no-includes', ...source, '--list', '--name-only']);
+    for (const key of listed.stdout.split('\n')) if (REFUSED_LFSCONFIG_KEY.test(key)) keys.add(key);
+  }
+  return [...keys];
 }

@@ -13,24 +13,40 @@ const DESIGNS = [
 
 for (const { design, prefix, opened, zoomed, read } of DESIGNS) {
   for (const { theme, suffix } of THEMES) {
-    test(`a ticket's tile: its ticket and title, one line, its helpers as icons and one ask, at rest, needing you, ready to merge and merged, ${design}, ${theme}`, async () => {
+    test(`a ticket's tile: its chat's agent tile with its ticket in its about line and one ask, at rest, needing you, ready to merge and merged, ${design}, ${theme}`, async () => {
       needsBaselines(`${prefix}${suffix}`);
       const dataDir = tempDataDir();
       const { app, window } = await launchGallery(dataDir, theme, undefined, design === 'simplified' ? { design } : {});
       try {
         const gallery = window.getByTestId('ticket-tile-gallery');
+        // Each design draws a ticket as its chat's agent tile, a helper's ask rolled up on it: who asks and what, in a line
+        // that keeps its room, and a button that answers that helper.
         await expect(gallery.locator('[data-ticket-tile]')).toHaveCount(4);
-        // A helper's question rolls up into its ticket: the tile asks, and its button answers that helper.
-        await expect(window.getByTestId('ticket-tile-needs-you').getByTestId('tile-act')).toHaveText('Answer');
-        // Needing you, its corner stays a hover overlay, so the title keeps at least half its head, not a few letters.
-        const head = await window.getByTestId('ticket-tile-needs-you').locator('.hybrid-tile-head').boundingBox();
-        const title = await window.getByTestId('ticket-tile-needs-you').locator('.hybrid-tile-head .hybrid-tile-name').boundingBox();
-        expect(title!.width).toBeGreaterThanOrEqual(head!.width / 2);
-        await expect(window.getByTestId('ticket-tile-ready-to-merge').getByTestId('tile-act')).toHaveText('Merge');
-        await expect(window.getByTestId('ticket-tile-merged').getByTestId('agent-tile')).toHaveAttribute('data-flat', 'true');
+        const needsYou = window.getByTestId('ticket-tile-needs-you');
+        if (design === 'classic') {
+          await expect(needsYou.getByTestId('tile-act')).toHaveText('Answer');
+          // Needing you, its title keeps at least half its head beside the buttons, on one line.
+          const head = await needsYou.locator('.hybrid-tile-head').boundingBox();
+          const title = await needsYou.locator('.hybrid-tile-head .hybrid-tile-name').boundingBox();
+          expect(title!.width).toBeGreaterThanOrEqual(head!.width / 2);
+          // Ready to merge stands up; only the merged one lies flat.
+          await expect(window.getByTestId('ticket-tile-ready-to-merge').getByTestId('tile-act')).toHaveText('Merge');
+          await expect(window.getByTestId('ticket-tile-ready-to-merge').getByTestId('agent-tile')).not.toHaveAttribute('data-flat');
+          await expect(window.getByTestId('ticket-tile-merged').getByTestId('agent-tile')).toHaveAttribute('data-flat', 'true');
+        }
         await pinFonts(window);
         await ignorePointer(window);
         await settle(window);
+        // As shot: the line naming who asks shows whole above its footer, which keeps its button on the state's row.
+        const asks = needsYou.getByText(/Its builder asks: /);
+        await expect(asks).toBeVisible();
+        if (design === 'classic') {
+          const line = (await asks.boundingBox())!;
+          const mark = (await needsYou.getByTestId('tile-mark').boundingBox())!;
+          const act = (await needsYou.getByTestId('tile-act').boundingBox())!;
+          expect(line.y + line.height).toBeLessThanOrEqual(mark.y);
+          expect(Math.abs(act.y + act.height / 2 - (mark.y + mark.height / 2))).toBeLessThan(mark.height / 2);
+        }
         await expect.soft(gallery).toHaveScreenshot(`${prefix}${suffix}.png`, SHOT);
       } finally {
         await app.close();

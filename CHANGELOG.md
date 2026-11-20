@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.6.32 (2026-11-20)
+
+- A folded memory or queue drags by its face
+- – takes the expanded view and the session window back to the tile
+- Any agent renames any agent and sets its description, with who did it in the tile's hover card
+- A ticket is one agent tile, and a helper that needs you shows on it
+- Refuse the LFS upload when a branch's .lfsconfig names where to upload
+- Arrange and the zone layout keep room for every expanded tile at its true size, pinned or not
+- A ticket with one PR merged and another open shows Waiting, not Done
+- A merged ticket stays on Doing while its agent waits on its orchestrator
+- ⌘K from an expanded tile flies to and selects the pick, and the tile stays expanded
+
 ## v0.6.31 (2026-11-18)
 
 - Settings shots hide the groups the public build cuts, so both builds share one baseline

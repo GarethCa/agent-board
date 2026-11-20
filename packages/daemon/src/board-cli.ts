@@ -31,6 +31,7 @@ import {
   identifyView,
   interruptAgent,
   setAgentEffort,
+  renameAgent,
   pinAgentExpanded,
   ticketWatches,
   giveAgentRole,
@@ -284,6 +285,8 @@ ORCHESTRATING
   read <ref> [<path>]   An agent's final message, or a file in its worktree.
   interrupt <ref>       Stop an agent's turn; it waits at its prompt.
   effort <ref> <level>  Change an agent's reasoning effort: low, medium, high, xhigh or max.
+  rename <ref> [<name>] [--description <text>]
+                        Rename any agent's tile (me for yours), or set what it is for.
   expand <ref> --pin | --unpin
                         Pin an agent's tile expanded: it stays open where it is, at its size,
                         and nothing collapses or moves it. --unpin frees it again.
@@ -510,7 +513,8 @@ prompt clears it.
 As an orchestrator, --agent <ref> sets the line of an agent in your crew (the agents you started,
 and theirs) instead of your own, and its tile says who set it. Keep your crew's lines current: what
 each is doing now, from what you see of it. The latest write wins, its own or yours. An agent
-outside your crew is refused.
+outside your crew is refused, but for --description alone: any agent may set any agent's
+description, as \`rename\` does, and its tile's hover card says who set it.
 
 --pose sets the pose your tile's character strikes, with or without a summary: thinking,
 running-a-tool, reading, writing or testing for the work you are doing now, and
@@ -678,7 +682,7 @@ For a question with answers to pick from, use the MCP tool \`ask\`, which waits 
     usage: 'agent-board mcp',
     text: `Serves the board as MCP tools on stdio: whoami, board, connections, handoff, ask, present_plan,
 show_doc, set_status, needs_you, open_pr, record_pr, record_doc, pin, unpin and set_page, and for an agent's own live session, new_agent, send, wait, read,
-interrupt, set_effort, pin_expanded, give_role, continue_on_credits, restart, pause, wake, close, handover, add_edge, remove_edge, move, arrange, map,
+interrupt, set_effort, rename, pin_expanded, give_role, continue_on_credits, restart, pause, wake, close, handover, add_edge, remove_edge, move, arrange, map,
 zone_layout, add_note, edit_note, remove_note, pass_note, prefabs, roles, set_role and remove_role. The app adds it to the agents it starts; add it to another Claude
 with:
 
@@ -1033,6 +1037,20 @@ a permission prompt, or with you typing at it, takes it once it is free, never t
 A Codex agent, or an ended one, takes it when next started. A restart keeps it.
 
   --json   Print the agent as JSON, with when it applies.`,
+  },
+  rename: {
+    usage: 'agent-board rename <ref> [<name>] [--description <text>] [--json]',
+    text: `Renames an agent's tile, \`me\` for your own, and with --description sets what it is for:
+either or both. Any agent may rename any agent, one the user named or started by hand too; the
+last rename wins. The tile shows the new name at once, everywhere it is listed; its hover card
+says who renamed it and when, and what it was called before. A name another agent, a shell or a
+zone already has (case aside) is refused, naming what has it, and so are \`me\` and names shaped
+as refs (agent:…). A name is one line: line breaks become spaces, and one holding ⟨ or ⟩ or
+starting with [agent-board] is refused. Each rename is in the activity log.
+
+  --description <text>
+                   What it is for, in up to 80 characters; "" clears it.
+  --json           Print the agent as JSON.`,
   },
   watches: {
     usage: 'agent-board watches <ref> [<kind>=<mode>...] [--every 2|5|15] [--json]',
@@ -2066,6 +2084,7 @@ export const COMMAND_OPTIONS: Record<string, readonly Option[]> = {
   remind: ['mine'],
   queue: ['kind', 'front', 'link', 'file', 'for-user', 'most', 'body', 'result'],
   watches: ['every'],
+  rename: ['description'],
 };
 
 /** A command's result: what it prints, and its exit code (0 for a bare string). */
@@ -2404,6 +2423,13 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
       if (positionals.length !== 2) throw new UsageError('give an agent ref and a level: agent-board effort <ref> <level>');
       const [ref, level] = positionals as [string, string];
       return async (session) => print(await setAgentEffort(session, ref, level));
+    }
+    case 'rename': {
+      if (positionals.length < 1 || positionals.length > 2) {
+        throw new UsageError('give an agent ref (me for yours) and a name: agent-board rename <ref> [<name>] [--description <text>]');
+      }
+      const [ref, name] = positionals as [string, string | undefined];
+      return async (session) => print(await renameAgent(session, ref, { name, description: values.description as string | undefined }));
     }
     case 'watches': {
       if (positionals.length === 0) throw new UsageError('give a ticket: agent-board watches <ref> [<kind>=<mode>...] [--every <minutes>]');

@@ -9,6 +9,7 @@ import { CalmButton } from './CalmTile';
 import { TileRobot } from './CommandFigure';
 import { HandoffsContext } from './flow-edges';
 import { glanceFace, type GlanceFace } from './glance-tile';
+import { ticketTileAsk } from './ticket-tile';
 import { JobTicket, useHeldJobs } from './items/taken-jobs';
 import { useJobDropOver } from './items/queue-board';
 import { useBoardCommands } from './commands';
@@ -31,7 +32,7 @@ import { HandPlacedMark } from './HandPlacedMark';
 import { FrostMark } from './FrostMark';
 import { frostedClasses } from './paused';
 
-export type GlanceTileProps = { id: string; selected: boolean; agent: Agent } & Pick<TileData, 'repo' | 'from' | 'crew' | 'crewFlags' | 'implementer'>;
+export type GlanceTileProps = { id: string; selected: boolean; agent: Agent } & Pick<TileData, 'repo' | 'from' | 'crew' | 'crewFlags' | 'implementer' | 'helpers'>;
 
 /** What a glance design draws, each part wired already, so a design only lays them out. */
 export interface GlanceParts {
@@ -78,6 +79,7 @@ export function GlanceTileFrame({
   crew,
   crewFlags,
   implementer,
+  helpers,
   design,
   children,
 }: GlanceTileProps & { design: string; children(parts: GlanceParts): ReactNode }) {
@@ -96,15 +98,20 @@ export function GlanceTileFrame({
   const fitted = useFittedLines();
   const held = useHeldJobs(agent.sessionId);
   const commands = useBoardCommands();
-  const face = glanceFace(agent, shows, implementer);
+  // A ticket's chat speaks for a helper it holds that needs the user, as the helper has no tile: its state, who asks and
+  // what, and its action, which answers the helper.
+  const rolled = helpers === undefined ? undefined : ticketTileAsk(agent, helpers, shows);
+  const asker = rolled?.dot === true ? rolled.asker : agent;
+  const asked = glanceFace(asker, shows, asker === agent ? implementer : undefined);
+  const face = asker === agent ? asked : { ...asked, line: rolled?.line ?? asked.line };
   const { status } = face;
   // Its times are re-read as each would read differently: once a minute, never by the second.
   const sinceNow = useNowForSince(agent.stateSince);
   const towardNow = useNowToward(agent.schedule?.enabled === true ? agent.schedule.nextRunAt : null);
   const times = calmTimes(agent, Math.max(sinceNow, towardNow), QUIET_TILE);
   const progress = tileProgress(agent, QUIET_TILE);
-  const quick = quickAskOf(agent);
-  const dialog = quick === undefined ? tileDialogOf(agent) : undefined;
+  const quick = quickAskOf(asker);
+  const dialog = quick === undefined ? tileDialogOf(asker) : undefined;
   const sending = handoffs.sending.has(agent.sessionId) && status !== 'needs-you';
   const card = lastMessageCard(agent);
   const open = () => (clickOpens !== 'expand' ? openAgent(agent) : expand(id));
@@ -139,11 +146,11 @@ export function GlanceTileFrame({
     // Its ask opens from its chip, beside the tile, in the button's place.
     action:
       quick !== undefined ? (
-        <TileQuickAsk sessionId={agent.sessionId} name={agent.name} ask={quick} />
+        <TileQuickAsk sessionId={asker.sessionId} name={asker.name} ask={quick} />
       ) : dialog !== undefined ? (
-        <TileDialogAsk sessionId={agent.sessionId} name={agent.name} prompt={dialog} onOpen={() => openAgent(agent)} />
+        <TileDialogAsk sessionId={asker.sessionId} name={asker.name} prompt={dialog} onOpen={() => openAgent(asker)} />
       ) : face.action !== null ? (
-        <CalmButton action={face.action} agent={agent} actions={tileActions} open={open} className="glance-tile-action" />
+        <CalmButton action={face.action} agent={asker} actions={tileActions} open={asker === agent ? open : () => openAgent(asker)} className="glance-tile-action" />
       ) : null,
     times,
     tags: <GlanceTags agent={agent} />,
@@ -197,7 +204,8 @@ export function GlanceTileFrame({
         data-job-drop={jobDrop || undefined}
         data-muted={agent.muted}
         data-seen={(agent.seen && waitsForYou(agent, shows)) || undefined}
-        data-needs-you={needsYouNow(agent, shows) || undefined}
+        data-needs-you={needsYouNow(agent, shows) || rolled?.needsYouNow || undefined}
+        data-ticket-tile={helpers === undefined ? undefined : ''}
         data-handoff={sending ? 'sending' : handoffs.receiving.has(agent.sessionId) ? 'receiving' : undefined}
         data-reviewer={agent.reviewOf !== null || undefined}
         data-orchestrator={crew !== undefined || undefined}

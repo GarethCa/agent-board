@@ -9,6 +9,7 @@ import {
   sinceLabel,
   stateAge,
   tileDetails,
+  tileHistory,
   tileProgress,
   tileShowsFrom,
   tileShowsWith,
@@ -162,6 +163,26 @@ describe('the hover card’s details', () => {
   it('holds nothing the tile already shows', () => {
     expect(tileDetails(agent({ trustedByZone: true, status: setBy }), FULL_TILE, true)).toEqual([]);
     expect(tileDetails(agent({ branch: '' }), QUIET_TILE, false)).toEqual([]);
+  });
+});
+
+describe('the hover card’s history', () => {
+  const at = new Date(NOW);
+  at.setHours(18, 5, 0, 0);
+  const change = (by: string | null, from: string | null) => ({ by, at: at.toISOString(), from });
+
+  it('says who renamed the tile, when, and what it was called', () => {
+    expect(tileHistory({ renamed: change('Lead', 'helper'), described: null }, at.getTime())).toEqual(['Renamed by Lead, 18:05 (was helper)']);
+    expect(tileHistory({ renamed: change(null, 'helper'), described: null }, at.getTime())).toEqual(['Renamed by itself, 18:05 (was helper)']);
+  });
+
+  it('says who set what it is for only when another did', () => {
+    expect(tileHistory({ renamed: null, described: change('you', null) }, at.getTime())).toEqual(['Description set by you, 18:05']);
+    expect(tileHistory({ renamed: null, described: change(null, 'old') }, at.getTime())).toEqual([]);
+  });
+
+  it('is empty for a tile nobody renamed', () => {
+    expect(tileHistory({ renamed: null, described: null }, NOW)).toEqual([]);
   });
 });
 

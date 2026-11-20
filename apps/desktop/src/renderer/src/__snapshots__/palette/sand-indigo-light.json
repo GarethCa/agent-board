@@ -435,7 +435,6 @@
   "board --ansi-bright-white": "#eeeeec",
   "board --shadow-tile": "0 1px 0 rgb(40 32 16 / 12%), 0 3px 0 -1px rgb(40 32 16 / 7%), 0 6px 0 -3px rgb(40 32 16 / 4%)",
   "board --shadow-raised": "0 1px 0 rgb(40 32 16 / 12%), 0 3px 0 -1px rgb(40 32 16 / 7%), 0 6px 0 -3px rgb(40 32 16 / 4%)",
-  "board --shadow-ticket-stack": "0 12px 0 -8px #fdfdfc, 0 12px 0 -7px #dad9d6, 0 24px 0 -16px #fdfdfc, 0 24px 0 -15px #dad9d6",
   "board --shadow-control": "0 1px 0 rgb(43 42 39 / 7%), 0 1px 2px rgb(43 42 39 / 5%)",
   "board --shadow-primary": "0 1px 0 rgb(30 50 140 / 25%), inset 0 1px 0 rgb(255 255 255 / 18%)",
   "board --shadow-input": "inset 0 1px 1px rgb(43 42 39 / 4%)",
