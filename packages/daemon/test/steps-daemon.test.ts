@@ -79,6 +79,7 @@ describe('steps cards an agent puts up through the board MCP', () => {
     const folded = await client.call('item.update', { id: card.id, width: 120, height: 120, data: { collapsed: true, openSize: { width: 360, height: 420 } } });
     expect(dataOf(folded)).toMatchObject({ collapsed: true, openSize: { width: 360, height: 420 } });
     await expect(client.call('item.update', { id: card.id, data: { openSize: { width: 360, height: '420' } } })).rejects.toThrow(/openSize must be \{ width, height \}/);
+    await expect(client.call('item.update', { id: card.id, data: { foldedSize: { width: 240 } } })).rejects.toThrow(/foldedSize must be \{ width, height \}/);
   });
 
   it("lets the agent tick its own to-dos, wait on the user's, and add steps; told once the user ticks", async () => {

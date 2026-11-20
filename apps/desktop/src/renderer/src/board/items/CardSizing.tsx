@@ -1,15 +1,17 @@
 // What a memory, queue and steps card share to be sized by the user: the handles round it, and a fade on a list that
 // scrolls past its edge.
-import { useCallback, useRef } from 'react';
+import { useCallback, useRef, type CSSProperties, type ReactNode } from 'react';
 import { NodeResizer } from '@xyflow/react';
 import type { CardSize } from '@agent-board/daemon/protocol';
-import { fadeEdges, wholeRowsHeight } from './card-size';
+import { fadeEdges, foldedBounds, pictureScale, wholeRowsHeight } from './card-size';
 
 interface CardResizerProps {
-  /** Shown while the card is selected and open: a folded one is its icon, which keeps its size. */
+  /** Shown while the card is selected. */
   visible: boolean;
-  /** The least it can be made: its head and a row or so still show. */
+  /** The least it can be made open: its head and a row or so still show. Folded, `picture` sets its bounds. */
   least: CardSize;
+  /** Folded, the icon's own size: the card is resized as a picture, its shape kept, from half to four times it. */
+  picture?: CardSize;
   /** Told as a handle is first pulled, with the frame the card had then. */
   onResizeStart?(frame: { width: number; height: number }): void;
   /** Told as the handle moves, with the frame it gives. */
@@ -19,17 +21,37 @@ interface CardResizerProps {
 }
 
 /** The handles on each edge and corner of a selected card, as a sticky's and a document's. */
-export function CardResizer({ visible, least, onResizeStart, onResize, onResized }: CardResizerProps) {
+export function CardResizer({ visible, least, picture, onResizeStart, onResize, onResized }: CardResizerProps) {
+  const bounds = picture === undefined ? { least, most: undefined } : foldedBounds(picture);
   return (
     <NodeResizer
       isVisible={visible}
       color="var(--sticky-resizer)"
-      minWidth={least.width}
-      minHeight={least.height}
+      keepAspectRatio={picture !== undefined}
+      minWidth={bounds.least.width}
+      minHeight={bounds.least.height}
+      maxWidth={bounds.most?.width}
+      maxHeight={bounds.most?.height}
       onResizeStart={(_event, { width, height }) => onResizeStart?.({ width, height })}
       onResize={onResize === undefined ? undefined : (_event, { width, height }) => onResize({ width, height })}
       onResizeEnd={(_event, { x, y, width, height }) => onResized({ x, y, width, height })}
     />
+  );
+}
+
+/**
+ * A folded card as a picture on the board: its icon drawn at its own size (`picture`) and scaled to fill its frame (the
+ * node's size while a handle pulls it, else the saved `item`'s), so a bigger icon is the same icon, bigger, name and all.
+ * The board's zoom scales it as it does everything else. Open (no `picture`), the card is drawn as it is.
+ */
+export function FoldedPicture({ picture, width, height, item, children }: { picture: CardSize | undefined; width?: number; height?: number; item: CardSize; children: ReactNode }) {
+  if (picture === undefined) return children;
+  const frame = { width: width ?? item.width, height: height ?? item.height };
+  const style = { width: picture.width, height: picture.height, '--picture-scale': pictureScale(frame, picture) } as CSSProperties;
+  return (
+    <div className="folded-picture" data-testid="folded-picture" style={style}>
+      {children}
+    </div>
   );
 }
 

@@ -98,7 +98,7 @@ test('a zone on status shelves: a stack per unit of work on its shelf, the lead 
     expect(await places(page)).toEqual(saved);
   } finally {
     await app.close();
-    removeDataDir(dataDir);
+    await removeDataDir(dataDir);
   }
 });
 
@@ -162,6 +162,6 @@ test('a zone in clusters: each unit of work its tiles together, what needs you f
     expect(await places(page)).toEqual(saved);
   } finally {
     await app.close();
-    removeDataDir(dataDir);
+    await removeDataDir(dataDir);
   }
 });

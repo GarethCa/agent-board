@@ -146,7 +146,7 @@ test("an agent's window opens shell tabs beside its run (⌘T, + menu, a package
     await expect(windowPanes(again).nth(1).getByTestId('session-tab')).toHaveText(['sh 2']);
   } finally {
     await (relaunched ?? app).close();
-    removeDataDir(dataDir);
+    await removeDataDir(dataDir);
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -181,7 +181,7 @@ test("the + menu holds Split under the Simplified design, headed 'Open in this p
     }
   } finally {
     await app.close();
-    removeDataDir(dataDir);
+    await removeDataDir(dataDir);
     rmSync(dir, { recursive: true, force: true });
   }
 });

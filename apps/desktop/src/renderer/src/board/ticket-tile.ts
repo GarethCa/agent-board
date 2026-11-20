@@ -3,10 +3,12 @@
 // which its opened tile and its board draw; and a helper's ask, which its chat's agent tile shows at rest. Pure, so the
 // rules are unit-tested.
 import { chatBuilds } from '@agent-board/daemon/ticket-tiles';
+import type { HumanStatus } from '@agent-board/daemon/human-status';
 import { needsYouKind, needsYouNow, shortIssueId, statusLine, type Agent, type NeedsYouShows, type PullRequest } from '@agent-board/daemon/protocol';
 import { agentPill, TILE_STATE_LABELS } from '../states';
-import { FLAT_STATES, TILE_STATE_WORDS, tileAbout, tileButton, tileNow, tileState, type TileButton, type TileState } from './tile-headline';
+import { FLAT_STATES, tileAbout, tileButton, tileNow, tileState, tileWord, type TileButton, type TileState } from './tile-headline';
 import { watchIcons, watchLine, type WatchIcon } from './ticket-watch-view';
+import { asleep, frozenKind, type FrozenKind } from './paused';
 
 /** The one thing a ticket tile asks for, most urgent first: the first that holds is the one it shows. */
 export const TICKET_ASKS = ['needs-you', 'ready-to-merge', 'new-review', 'working'] as const;
@@ -48,6 +50,8 @@ export interface HelperIcon {
   word: string;
   /** The line under its name on its card: its status line, else its state. */
   line: string;
+  /** How it is frozen, for the badge on its icon: a snowflake, a clock, a tick or a warning. Undefined while it is live. */
+  frozen?: FrozenKind;
 }
 
 const HELPER_WORDS: Record<HelperState, string> = { you: 'needs you', working: 'working', done: 'done', failed: 'failed', sleep: 'idle' };
@@ -66,8 +70,11 @@ const HELPER_STATES: Record<TileState, HelperState> = { 'needs-you': 'you', thin
 
 /** A helper as its ticket tile draws it. */
 export function helperIcon(agent: Agent, shows: NeedsYouShows): HelperIcon {
-  const state = HELPER_STATES[stateOf(agent, shows)];
-  const word = capitalised(HELPER_WORDS[state]);
+  const tile = stateOf(agent, shows);
+  const state = HELPER_STATES[tile];
+  const frozen = frozenKind(agent, shows);
+  // Exited on an error, or its clock waking it, its word says so: Exited, Scheduled.
+  const word = frozen === 'exited' || frozen === 'scheduled' ? tileWord(agent, tile) : capitalised(HELPER_WORDS[state]);
   return {
     sessionId: agent.sessionId,
     kind: helperKind(agent),
@@ -76,6 +83,7 @@ export function helperIcon(agent: Agent, shows: NeedsYouShows): HelperIcon {
     name: agent.name,
     word,
     line: agent.status === null ? word : statusLine(agent.status),
+    ...(frozen === undefined ? {} : { frozen }),
   };
 }
 
@@ -87,6 +95,8 @@ export interface TicketButton {
   kind: 'open' | 'merge' | 'wake' | 'read';
   label: string;
   prominent: boolean;
+  /** Shown only while the tile is hovered or holds the focus: its helper's Wake now, as its clock wakes it anyway. */
+  onHover?: true;
 }
 
 /** How its state word is drawn: by its dot's colour. */
@@ -168,7 +178,7 @@ export function ticketFace(chat: Agent, helpers: readonly Agent[], shows: NeedsY
     line: news ? watched.text : ticketLine(chat, helpers, ask, chatState, helperStates, asker, merged ? pr : undefined, shows),
     news,
     ask,
-    word: ask !== 'working' ? ASK_WORDS[ask] : merged ? 'Done' : working ? 'Working' : TILE_STATE_WORDS[chatState],
+    word: ask !== 'working' ? ASK_WORDS[ask] : merged ? 'Done' : working ? 'Working' : tileWord(chat, chatState),
     wordKind: ask !== 'working' ? WORD_KINDS[ask] : working ? 'run' : chatState === 'failed' ? 'failed' : 'rest',
     flat,
     button: ask === 'new-review' ? { kind: 'read', label: 'Read', prominent: true } : (button ?? (news ? { kind: 'read', label: 'Read', prominent: false } : undefined)),
@@ -240,6 +250,8 @@ export interface TicketTileAsk {
   pullRequest: { owner: Agent; pr: PullRequest } | undefined;
   /** A helper asks and has not been seen: the tile's needs-you look. */
   needsYouNow: boolean;
+  /** Its pull request merged: Done, whatever its chat does now. */
+  merged: boolean;
 }
 
 /**
@@ -252,10 +264,28 @@ export function ticketTileAsk(chat: Agent, helpers: readonly Agent[], shows: Nee
   const face = ticketFace(chat, helpers, shows);
   const owner = face.pr === undefined ? undefined : [chat, ...helpers].find((each) => each.pullRequests.includes(face.pr!));
   const pullRequest = owner === undefined ? undefined : { owner, pr: face.pr! };
-  const said = { word: face.word, wordKind: face.wordKind, flat: face.flat, line: face.line, button: face.button, pullRequest };
+  const said = { word: face.word, wordKind: face.wordKind, flat: face.flat, line: face.line, button: face.button, pullRequest, merged: face.merged };
   if (face.ask === 'needs-you' && face.asker !== chat) return { ...said, asker: face.asker, dot: true, needsYouNow: needsYouNow(face.asker, shows) };
   if (face.ask === 'working' && !face.news && !face.merged) return undefined;
   return { ...said, asker: chat, dot: false, needsYouNow: false };
+}
+
+/** Ready to merge, New review or merged: the ticket's own ask that a Simplified, Porthole or Shelf tile shows in Classic's word. */
+export function ticketSaysDone(own: Pick<TicketTileAsk, 'wordKind' | 'merged'>): boolean {
+  return own.merged || own.wordKind === 'merge' || own.wordKind === 'new';
+}
+
+/**
+ * The status a Simplified, Porthole or Shelf tile shows for its ticket's own ask (`ticketTileAsk` with no dot), from the
+ * chat's own: Ready to merge, New review and a merged Done take the done mark, never Needs you, a paused chat or a failed
+ * one, so the tile asks only with its word and its button. News alone keeps the chat's own status, Needs you included,
+ * save that a working chat reads working.
+ */
+export function ticketStatus(own: Pick<TicketTileAsk, 'wordKind' | 'merged'>, status: HumanStatus): HumanStatus {
+  if (ticketSaysDone(own)) return 'done';
+  if (own.wordKind === 'run') return 'working';
+  if (own.wordKind === 'failed') return 'problem';
+  return status;
 }
 
 /**
@@ -278,9 +308,8 @@ function asks(agent: Agent, shows: NeedsYouShows): boolean {
 function ticketButton(ask: TicketAsk, asker: Agent, chatState: TileState, merged: boolean, shows: NeedsYouShows): TicketButton | undefined {
   if (ask === 'ready-to-merge') return { kind: 'merge', label: 'Merge', prominent: true };
   if (ask === 'needs-you') {
-    if (asker.state === 'hibernated') return { kind: 'wake', label: 'Wake', prominent: true };
-    // Resume carries on its conversation, as the usual tile's Resume does.
-    if (asker.state === 'stopped-by-restart') return { kind: 'wake', label: 'Resume', prominent: true };
+    // Paused or stopped by a restart, Wake carries on its conversation.
+    if (asleep(asker)) return { kind: 'wake', label: 'Wake', prominent: true };
     return { kind: 'open', label: asks(asker, shows) ? 'Answer' : 'Open', prominent: true };
   }
   if (merged) return undefined;

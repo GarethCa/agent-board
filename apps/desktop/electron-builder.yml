@@ -1,4 +1,4 @@
-# Packages the built app (out/) as an unsigned macOS .app, or on Linux a .deb and a tar.gz,: `pnpm package`.
+# Packages the built app (out/) as a macOS .app, or on Linux a .deb and a tar.gz,: `pnpm package`.
 appId: io.github.garethca.agent-board
 productName: agent-board
 directories:
@@ -13,7 +13,9 @@ asar: false
 npmRebuild: false
 mac:
   target: dir
-  # Unsigned: a local build for this machine, never distributed.
+  # Not signed here: a local build for this machine, never distributed. electron-builder leaves it ad hoc signed, and
+  # `pnpm package` then signs it with this Mac's own certificate if it has one (scripts/app-install/local-signing.ts),
+  # so macOS keeps its folder answers across builds.
   identity: null
   category: public.app-category.developer-tools
   # The brand's macOS icon: the art on the macOS icon grid, made into the .icns (brand/BRAND.md).
@@ -26,7 +28,8 @@ mac:
 electronFuses:
   runAsNode: true
   enableCookieEncryption: true
-  # Changing a fuse breaks the build's ad hoc signature, which Apple silicon needs to launch it at all.
+  # Changing a fuse breaks the build's ad hoc signature, which Apple silicon needs to launch it at all. The local
+  # signing step comes after the fuses are set, so it signs the fused binary.
   resetAdHocDarwinSignature: true
 # Linux (x86-64): a .deb installs the app in /opt/agent-board with `agent-board` on PATH (`pnpm package` installs it with
 # apt on Debian and Ubuntu: scripts/app-install/linux-install.ts); the tar.gz is the same files

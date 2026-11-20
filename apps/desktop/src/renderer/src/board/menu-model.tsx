@@ -31,6 +31,7 @@ import {
   Hash,
   Layers,
   LayoutDashboard,
+  LayoutGrid,
   Broom,
   Undo2,
   Link2,
@@ -50,9 +51,9 @@ import {
   Play,
   Plug,
   Plus,
-  RotateCcw,
   Rows3,
   Settings2,
+  TimerOff,
   UserRound,
   LayoutTemplate,
   ShieldCheck,
@@ -70,6 +71,7 @@ import {
   LibraryBig,
   SquareKanban,
   SendHorizontal,
+  AppWindow,
 } from 'lucide-react';
 import { CrewFaces } from '../crews/icons';
 import { currentPrefabs, prefabGroupHeading, prefabGroups } from '../crews/prefab-store';
@@ -85,6 +87,11 @@ import {
   HARNESS_EFFORTS,
   ZONE_LAYOUT_CHOICES,
   zoneLayoutChoiceOf,
+  ARRANGE_ITEM_KINDS,
+  ARRANGE_PLACEMENTS,
+  placementsOf,
+  type ArrangeItemKind,
+  type ArrangePlacement,
   type Agent,
   type AgentState,
   type Effort,
@@ -107,10 +114,10 @@ import { EFFORT_HINTS, EFFORT_LABELS, ROLE_LABELS, roleText } from './AgentSetup
 import { gated } from '../gate/gate-view';
 import { runGateShortcut } from '../session/window-keys';
 import { keyText } from '../keys/registry';
-import { canRestart } from '../session/RestartAgent';
-import type { ClickOpens } from './click-opens';
+import { openAgentTile, type ClickOpens } from './click-opens';
+import { checksLabel } from './tile-footer';
 import { folderLabel } from './folders';
-import { pauseControl } from './paused';
+import { asleep, pauseControl, wakeAct, wakeLabel } from './paused';
 import type { Reorder } from './editing/arrange';
 import { sessionControls, type ControlId } from '../session/controls';
 import type { TileActions } from './tile';
@@ -132,6 +139,15 @@ export function menuIds(entries: readonly ModelEntry[]): string[] {
   });
 }
 
+/**
+ * An agent's first open row: under the pop-up setting, Open, which pops it up as a click on its tile does (its pop-up
+ * holds Expand and Pop out); under the others, the way a click on the tile doesn't.
+ */
+function agentOpen({ nodeId, agent, clickOpens, actions }: { nodeId: string; agent: Agent; clickOpens: ClickOpens; actions: Pick<TileActions, 'expand' | 'openAgent' | 'popUp'> }): ModelEntry {
+  if (clickOpens === 'popup') return { id: 'open', label: 'Open', icon: <AppWindow />, onSelect: () => actions.popUp(agent) };
+  return otherOpen(clickOpens, () => actions.expand(nodeId), () => actions.openAgent(agent));
+}
+
 /** The ⋯ menu's way to do, once, what a click on the tile doesn't: expand it in place, or open its window. */
 function otherOpen(clickOpens: ClickOpens, expand: () => void, open: () => void): ModelEntry {
   return clickOpens === 'expand'
@@ -143,9 +159,11 @@ type AgentMenuActions = Pick<
   TileActions,
   | 'expand'
   | 'openAgent'
+  | 'popUp'
   | 'popOutAgent'
   | 'setFolded'
-  | 'restartAgent'
+  | 'wakeAgent'
+  | 'turnClockOff'
   | 'resumeAgent'
   | 'continueOnCredits'
   | 'pauseAgent'
@@ -193,16 +211,35 @@ function reviewEntries({ agent, rounds, actions }: AgentMenuInput): ModelEntry[]
   ];
 }
 
-/** An agent's menu: how to open it, its run (restart, resume, credits, pause), its settings, its reviews and gate, and Delete. */
+/**
+ * Wake for the agent, by what it does (`wakeAct`): Wake for one asleep, done or exited, Wake now for one its clock wakes;
+ * none for one at work, or a reviewer whose round ended. Wake fresh, when there is one, goes under it.
+ */
+function wakeEntries(agent: Agent, actions: Pick<AgentMenuActions, 'wakeAgent'>): ModelEntry[] {
+  const act = wakeAct(agent);
+  if (act === undefined) return [];
+  const { label, hint } = wakeLabel(act);
+  return [{ id: act === 'run-now' ? 'wake-now' : 'wake', label, icon: <Play />, hint, onSelect: () => void actions.wakeAgent(agent) }];
+}
+
+/** Its clock's rows: Schedule… while it has none, else Edit its clock… and, while the clock is on, Turn its clock off. */
+function clockEntries(agent: Agent, actions: Pick<AgentMenuActions, 'scheduleAgent' | 'turnClockOff'>): ModelEntry[] {
+  if (agent.schedule === null) return [{ id: 'schedule', label: 'Schedule…', icon: <Clock />, onSelect: () => actions.scheduleAgent(agent) }];
+  return [
+    { id: 'schedule', label: 'Edit its clock…', icon: <Clock />, onSelect: () => actions.scheduleAgent(agent) },
+    ...(agent.schedule.enabled ? [{ id: 'clock-off', label: 'Turn its clock off', icon: <TimerOff />, hint: 'It keeps the clock; turn it on again from Edit its clock…', onSelect: () => actions.turnClockOff(agent) }] : []),
+  ];
+}
+
+/** An agent's menu: how to open it, its run (restart, credits, pause or wake), its settings, its reviews and gate, and Delete. */
 export function agentMenu(input: AgentMenuInput): ModelEntry[] {
-  const { nodeId, agent, clickOpens, gate, rename, actions } = input;
+  const { nodeId, agent, gate, rename, actions } = input;
   const pause = pauseControl(agent);
   return [
-    otherOpen(clickOpens, () => actions.expand(nodeId), () => actions.openAgent(agent)),
+    agentOpen(input),
     { id: 'pop-out', label: 'Pop out', icon: <SquareArrowOutUpRight />, onSelect: () => actions.popOutAgent(agent) },
     ...(isClosed(agent) ? [{ id: 'fold', label: 'Fold to a chip', icon: <FoldVertical />, onSelect: () => actions.setFolded(nodeId, true) }] : []),
-    ...(canRestart(agent) ? [{ id: 'restart', label: 'Restart agent', icon: <RotateCcw />, onSelect: () => actions.restartAgent(agent.sessionId) }] : []),
-    ...(agent.state === 'stopped-by-restart' ? [{ id: 'resume', label: 'Resume agent', icon: <RotateCcw />, onSelect: () => void actions.resumeAgent(agent.sessionId) }] : []),
+    ...(wakeAct(agent) === 'restart' ? wakeEntries(agent, actions) : []),
     ...(continuesOnCredits(agent) ? [{ id: 'continue-on-credits', label: 'Continue on credits', icon: <Coins />, onSelect: () => void actions.continueOnCredits(agent.sessionId) }] : []),
     ...(pause === undefined
       ? []
@@ -213,7 +250,8 @@ export function agentMenu(input: AgentMenuInput): ModelEntry[] {
         ]),
     'separator',
     { id: 'rename', label: 'Rename', icon: <Pencil />, shortcut: keyText('tile.rename'), onSelect: rename },
-    { id: 'schedule', label: agent.schedule === null ? 'Schedule…' : 'Edit schedule…', icon: <Clock />, onSelect: () => actions.scheduleAgent(agent) },
+    ...(wakeAct(agent) === 'run-now' ? wakeEntries(agent, actions) : []),
+    ...clockEntries(agent, actions),
     { id: 'link-issue', label: agent.issue === null ? 'Link issue…' : 'Change issue…', icon: <Hash />, onSelect: () => actions.linkIssue(agent) },
     {
       id: 'mute',
@@ -229,6 +267,21 @@ export function agentMenu(input: AgentMenuInput): ModelEntry[] {
     'separator',
     { id: 'delete', label: 'Delete agent', icon: <Trash2 />, danger: true, onSelect: () => actions.deleteAgent(agent.sessionId) },
   ];
+}
+
+/**
+ * Its pull requests as rows, the ones it made and then the ones it pushed to, each with its state and checks, opening
+ * it in a PR tab: what the tile's PR chips say, for a menu (the pop-up's ⋯).
+ */
+export function pullRequestEntries(agent: Agent, actions: Pick<TileActions, 'openPullRequest'>): ModelEntry[] {
+  const row = (pr: Agent['pullRequests'][number], pushed: boolean): ModelEntry => ({
+    id: `pr-${pr.number}`,
+    label: `${pushed ? 'Pushed to pull request' : 'Pull request'} #${pr.number}`,
+    icon: <GitPullRequest />,
+    hint: `${pr.state}, ${checksLabel(pr)}`,
+    onSelect: () => actions.openPullRequest(agent, pr),
+  });
+  return [...agent.pullRequests.map((pr) => row(pr, false)), ...agent.pushedPullRequests.map((pr) => row(pr, true))];
 }
 
 /** Its Run gate row, for an agent with a worktree of its own: disabled while a run is under way. */
@@ -308,11 +361,13 @@ function nextStep(input: AgentTileMenuInput): ModelEntry[] {
         label: 'Go to its question',
         icon: <MessageCircleQuestion />,
         hint: 'Opens it, to answer there',
-        onSelect: () => (clickOpens === 'expand' ? actions.expand(nodeId) : actions.openAgent(agent)),
+        onSelect: () => openAgentTile(clickOpens, actions, nodeId, agent),
       },
     ];
-  const pause = pauseControl(agent);
-  if (pause?.action === 'wake') return [{ id: 'wake', label: 'Wake', icon: <Play />, hint: pause.hint, onSelect: () => void actions.resumeAgent(agent.sessionId) }];
+  const wake = wakeEntries(agent, actions);
+  // One its clock wakes has its clock's rows under Wake now, in place of Settings' own.
+  if (wakeAct(agent) === 'run-now') return [...wake, ...clockEntries(agent, actions)];
+  if (wake.length > 0) return wake;
   if (agent.reviewOf !== null && review?.status === 'ready')
     return [{ id: 'open-review', label: 'Open review', icon: <FileCheck />, hint: 'Its doc is in', onSelect: () => actions.openReview(agent.reviewOf!) }];
   return [];
@@ -330,8 +385,6 @@ function runEntries(agent: Agent, actions: AgentTileMenuActions): ModelEntry[] {
       ? [{ id: 'interrupt', label: 'Interrupt', icon: <Zap />, disabled: !interrupt.enabled, hint: interrupt.hint, onSelect: () => actions.interruptAgent(agent.sessionId) }]
       : []),
     ...(pause === undefined ? [] : [{ id: 'pause', label: 'Pause', icon: <Pause />, disabled: !pause.enabled, hint: pause.hint, onSelect: () => void actions.pauseAgent(agent.sessionId) }]),
-    ...(canRestart(agent) ? [{ id: 'restart', label: 'Restart agent', icon: <RotateCcw />, onSelect: () => actions.restartAgent(agent.sessionId) }] : []),
-    ...(agent.state === 'stopped-by-restart' ? [{ id: 'resume', label: 'Resume agent', icon: <RotateCcw />, onSelect: () => void actions.resumeAgent(agent.sessionId) }] : []),
     ...(continuesOnCredits(agent) ? [{ id: 'continue-on-credits', label: 'Continue on credits', icon: <Coins />, onSelect: () => void actions.continueOnCredits(agent.sessionId) }] : []),
   ];
   const stopping: ModelEntry[] =
@@ -392,7 +445,8 @@ function arrangeEntries({ nodeId, agent, board, actions }: AgentTileMenuInput): 
 function settingsEntries(agent: Agent, rename: () => void, actions: AgentTileMenuActions): ModelEntry[] {
   return [
     { id: 'rename', label: 'Rename', icon: <Pencil />, shortcut: keyText('tile.rename'), onSelect: rename },
-    { id: 'schedule', label: agent.schedule === null ? 'Schedule…' : 'Edit schedule…', icon: <Clock />, onSelect: () => actions.scheduleAgent(agent) },
+    // One its clock wakes has them at the top, under Wake now.
+    ...(wakeAct(agent) === 'run-now' ? [] : clockEntries(agent, actions)),
     { id: 'link-issue', label: agent.issue === null ? 'Link issue…' : 'Change issue…', icon: <Hash />, onSelect: () => actions.linkIssue(agent) },
     {
       id: 'mute',
@@ -428,12 +482,12 @@ function savePrefabEntry({ agent, actions }: AgentTileMenuInput): ModelEntry {
  * beside a tile. No row answers, approves or nudges the agent: each does only what is pressed.
  */
 export function agentTileMenu(input: AgentTileMenuInput): ModelEntry[] {
-  const { nodeId, agent, clickOpens, rename, actions, board } = input;
+  const { agent, rename, actions, board } = input;
   const run = runEntries(agent, actions);
   const review = reviewGateEntries(input);
   return [
     ...nextStep(input),
-    otherOpen(clickOpens, () => actions.expand(nodeId), () => actions.openAgent(agent)),
+    agentOpen(input),
     { id: 'pop-out', label: 'Pop out', icon: <SquareArrowOutUpRight />, onSelect: () => actions.popOutAgent(agent) },
     'separator',
     ...(run.length === 0 ? [] : [{ id: 'run', label: 'Run', icon: <Play />, entries: run }]),
@@ -454,7 +508,7 @@ export function agentTileMenu(input: AgentTileMenuInput): ModelEntry[] {
 }
 
 /** What an agent tile's menu is shaped by under Classic: the six states, and Failed and Stopped, which lead with their own. */
-type TileMenuState = 'thinking' | 'needs-you' | 'waiting' | 'idle' | 'done' | 'paused' | 'failed' | 'stopped';
+type TileMenuState = 'thinking' | 'needs-you' | 'waiting' | 'idle' | 'done' | 'paused' | 'failed';
 
 const THINKING_STATES: ReadonlySet<AgentState> = new Set<AgentState>(['running', 'thinking', 'starting', 'handing-off', 'on-command']);
 
@@ -486,8 +540,9 @@ function waitsOn({ agent, rounds, related, board, actions }: AgentTileMenuInput)
 /** Which of its states an agent tile's menu is shaped by. */
 function tileMenuState(input: AgentTileMenuInput): TileMenuState {
   const { agent } = input;
-  if (agent.state === 'hibernated') return 'paused';
-  if (agent.endedAt !== null) return agent.state === 'failed' ? 'failed' : agent.state === 'stopped-by-restart' ? 'stopped' : 'done';
+  // Stopped by a restart reads as paused: it is frosted, and Wake carries it on.
+  if (asleep(agent)) return 'paused';
+  if (agent.endedAt !== null) return agent.state === 'failed' ? 'failed' : 'done';
   if (needsYou(input)) return 'needs-you';
   if (THINKING_STATES.has(agent.state)) return 'thinking';
   if (agent.state === 'failed') return 'failed';
@@ -516,7 +571,7 @@ function withTopHint(entry: ModelEntry): ModelEntry {
  */
 function stateRows(input: AgentTileMenuInput, run: readonly ModelEntry[]): { rows: ModelEntry[]; replaces: string[] } {
   const { nodeId, agent, clickOpens, review, actions } = input;
-  const open = () => (clickOpens === 'expand' ? actions.expand(nodeId) : actions.openAgent(agent));
+  const open = () => openAgentTile(clickOpens, actions, nodeId, agent);
   const openRow = (hint?: string): ModelEntry => ({ id: 'open', label: 'Open', icon: <SquareArrowOutUpRight />, ...(hint === undefined ? {} : { hint }), onSelect: open });
   const just = (rows: ModelEntry[]) => ({ rows: rows.map(withTopHint), replaces: [] });
   switch (tileMenuState(input)) {
@@ -528,6 +583,8 @@ function stateRows(input: AgentTileMenuInput, run: readonly ModelEntry[]): { row
     case 'paused':
       return just(nextStep(input));
     case 'waiting': {
+      // One its clock wakes leads with Wake now and its clock's rows.
+      if (wakeAct(agent) === 'run-now') return just(nextStep(input));
       const on = waitsOn(input)!;
       return { rows: [{ id: 'waits-on', label: 'Show what it waits on', icon: <Eye />, hint: on.hint, onSelect: on.show ?? open }], replaces: on.replaces === undefined ? [] : [on.replaces] };
     }
@@ -541,12 +598,11 @@ function stateRows(input: AgentTileMenuInput, run: readonly ModelEntry[]): { row
         ...(pr === undefined ? [] : [{ id: 'open-pr', label: `Open pull request #${pr.number}`, icon: <GitPullRequest />, hint: pr.title, onSelect: () => actions.openPullRequest(agent, pr) }]),
         ...rowsWithId(reviewEntries(input), 'open-review'),
       ];
-      return just(finished.length > 0 ? finished : [openRow()]);
+      // A done agent's Wake starts it again here, before what it left.
+      return just([...wakeEntries(agent, actions), ...(finished.length > 0 ? finished : [openRow()])]);
     }
     case 'failed':
-      return just([openRow('Opens it, to see what failed')]);
-    case 'stopped':
-      return just(rowsWithId(run, 'resume'));
+      return just([...wakeEntries(agent, actions), openRow('Opens it, to see what failed')]);
   }
 }
 
@@ -560,6 +616,8 @@ export function menuBarAgentEntries(entries: readonly ModelEntry[]): ModelEntry[
 
 /** A tile's menu with no Rename, at any depth: for a tile whose name is not its own to change. */
 export const withoutRename = (entries: readonly ModelEntry[]): ModelEntry[] => without(entries, new Set(['rename']));
+/** The rows without those `ids`, in submenus too, tidied of the separators and headings left with nothing. */
+export const withoutRows = (entries: readonly ModelEntry[], ids: readonly string[]): ModelEntry[] => without(entries, new Set(ids));
 
 /** The menu without the rows `taken` names, at any depth: no heading left over nothing, no separator left at an end or doubled, no empty group. */
 function without(entries: readonly ModelEntry[], taken: ReadonlySet<string>): ModelEntry[] {
@@ -588,13 +646,13 @@ function without(entries: readonly ModelEntry[], taken: ReadonlySet<string>): Mo
  * answers, approves or nudges the agent. Simplified keeps `agentTileMenu`.
  */
 export function stateTileMenu(input: AgentTileMenuInput): ModelEntry[] {
-  const { nodeId, agent, clickOpens, rename, actions, board, related } = input;
+  const { agent, rename, actions, board, related } = input;
   const run = runEntries(agent, actions);
   const first = stateRows(input, run);
   const reviewGate = reviewGateEntries({ ...input, related: [] });
   const shows = related.map((tile): ModelEntry => ({ id: `show-${tile.sessionId}`, label: tile.label, icon: <LocateFixed />, onSelect: () => board.show(tile.sessionId) }));
   const body: ModelEntry[] = [
-    otherOpen(clickOpens, () => actions.expand(nodeId), () => actions.openAgent(agent)),
+    agentOpen(input),
     { id: 'pop-out', label: 'Pop out', icon: <SquareArrowOutUpRight />, onSelect: () => actions.popOutAgent(agent) },
     'separator',
     ...(run.length === 0 ? [] : [{ id: 'run', label: 'Run', icon: <Play />, entries: run }]),
@@ -755,6 +813,8 @@ export interface ZoneBindingActions {
    * clusters (which moves no tile's saved place).
    */
   setLayoutMode(zone: Zone, choice: ZoneLayoutChoice): void;
+  /** Keeps `placement` as where the zone's arrange puts its items of `kind`, from its next arrange on. */
+  setPlacement(zone: Zone, kind: ArrangeItemKind, placement: ArrangePlacement): void;
   /** Folds it to a chip: its agents that can pause are paused and its terminals let go. */
   fold(zone: Zone): void;
   /** Unfolds it. Its paused agents stay paused unless `wake` is asked for. */
@@ -920,6 +980,54 @@ function layoutModeEntries(zone: Zone, actions: Pick<ZoneMenuActions, 'setLayout
   }));
 }
 
+/** Each kind of item an arrange places, as the zone's Arrange items menu names it. */
+const ITEM_KIND_LABELS: Record<ArrangeItemKind, string> = {
+  notes: 'Agent notes',
+  files: 'Files and cards',
+  clocks: 'Clocks',
+  todos: 'To-dos',
+  queues: 'Queues',
+  memory: 'Memory',
+  steps: 'Steps',
+  stickies: 'Stickies',
+  shapes: 'Shapes',
+  text: 'Text',
+};
+
+/** Each place an arrange can put a kind of item, and what it means. */
+const PLACEMENT_LABELS: Record<ArrangePlacement, { label: string; hint: string }> = {
+  cluster: { label: 'Beside its agent', hint: "In its agent's lane; down the side if no agent here made it" },
+  sidebar: { label: 'Down the side', hint: 'One column beside the lanes' },
+  top: { label: 'Under the top row', hint: 'Grouped after the top row, before the lanes' },
+  stay: { label: 'Where it is', hint: 'Arrange leaves it, and lays the rest out round it' },
+};
+
+/**
+ * Arrange items ▸: a row per kind of item, saying where the zone's arrange puts it (its own pick, else where every
+ * zone does), and in it the places to pick from, the one in use ticked.
+ */
+function placementRow(zone: Zone, actions: Pick<ZoneMenuActions, 'setPlacement'>): ModelEntry {
+  const placements = placementsOf(zone.placements);
+  return {
+    id: 'placements',
+    label: 'Arrange items',
+    icon: <LayoutGrid />,
+    hint: 'Where an arrange puts each kind',
+    entries: ARRANGE_ITEM_KINDS.map((kind) => ({
+      id: `place-${kind}`,
+      label: ITEM_KIND_LABELS[kind],
+      detail: PLACEMENT_LABELS[placements[kind]].label,
+      entries: ARRANGE_PLACEMENTS.map((placement) => ({
+        id: `place-${kind}-${placement}`,
+        label: PLACEMENT_LABELS[placement].label,
+        hint: PLACEMENT_LABELS[placement].hint,
+        checked: placements[kind] === placement,
+        onSelect: () => actions.setPlacement(zone, kind, placement),
+      })),
+    })),
+  };
+}
+
 /**
  * The tab's Clean up ▾ menu: Clean up now, the zone's layout and spacing, and where the spacing for new zones is set, named as it is
  * (`newZones`, read as the menu opens).
@@ -1036,6 +1144,7 @@ export function zoneMenu({ zone, folded, themeFill, rename, stageBoard = false, 
       icon: <Rows3 />,
       entries: [{ heading: 'Layout' }, ...layoutModeEntries(zone, actions), 'separator', { heading: 'Spacing' }, ...spacingEntries(zone, actions)],
     },
+    placementRow(zone, actions),
     ...stageBoardRows(zone, stageBoard, actions),
     ...foldRows(zone, actions),
     { id: 'rename', label: 'Rename', icon: <Pencil />, onSelect: rename },
@@ -1393,6 +1502,7 @@ export function projectMenu(input: ProjectMenuInput): ModelEntry[] {
       ],
     },
     { id: 'layout', label: 'Layout', icon: <LayoutDashboard />, entries: layoutModeEntries(zone, actions) },
+    placementRow(zone, actions),
     ...stageBoardRows(zone, input.stageBoard ?? false, actions),
     ...foldRows(zone, actions),
     issues,

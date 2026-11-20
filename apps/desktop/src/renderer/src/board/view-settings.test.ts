@@ -25,8 +25,8 @@ afterEach(() => {
 });
 
 describe('the board view settings', () => {
-  it('start as the board has always opened', () => {
-    expect(DEFAULT_VIEW_SETTINGS).toEqual({ clickOpens: 'window', connections: 'all', tethers: false, agentNoteLook: 'document', gpuTerminals: true, keepTerminals: false, tileShows: QUIET_TILE, chatRunsShow: 'always', ticketTilesOpenAs: 'terminal' });
+  it('start with a double-click opening the pop-up, the rest as the board has always opened', () => {
+    expect(DEFAULT_VIEW_SETTINGS).toEqual({ clickOpens: 'popup', connections: 'all', tethers: false, agentNoteLook: 'document', gpuTerminals: true, keepTerminals: false, tileShows: QUIET_TILE, chatRunsShow: 'always', ticketTilesOpenAs: 'terminal' });
   });
 
   it('change at once and are saved in the view state under their keys', () => {
@@ -43,7 +43,7 @@ describe('the board view settings', () => {
   it('keep the same object while nothing changes, so a subscriber does not render again', () => {
     stubView();
     const before = viewSettings();
-    setViewSetting('clickOpens', 'window');
+    setViewSetting('clickOpens', 'popup');
     restoreViewSettings({ tethers: 'nonsense' });
     expect(viewSettings()).toBe(before);
   });

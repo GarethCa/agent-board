@@ -11,6 +11,7 @@ import { withConnectorChange } from './connectors/endpoints';
 import { connectionsViewFrom, type ConnectionsView } from './connections-view';
 import { agentNoteLookFrom, type AgentNoteLook } from './items/agent-note-look';
 import { expandedFrom, overlapsFrom, sizesFrom, type ExpandedSizes, type ExpandedTiles, type OverlapsAllowed } from './expanded';
+import { putDownFrom, type PutDown } from './put-down';
 import { withItem, withItemChange } from './items/items';
 import { placeholderCount, placeholderStickies, placeholderTiles } from './placeholders';
 import { withSavedPlace, type Place } from './saved-place';
@@ -45,6 +46,8 @@ export interface SavedView {
   tileSizes: TileSizes;
   unfolded: Unfolded;
   overlapsAllowed: OverlapsAllowed;
+  /** The tiles put down while tiles were expanded (`PutDown`). */
+  putDown: PutDown;
   /** The ticket tiles switched by hand to the card or the terminal. */
   ticketViews: TicketViews;
   clickOpens: ClickOpens;
@@ -219,9 +222,10 @@ export function useBoardData({ setNodes, report, setNotice, onShellChange, resto
         window.agentBoard.view.get(VIEW_KEYS.unfolded),
         window.agentBoard.view.get(VIEW_KEYS.hiddenExpanded),
         window.agentBoard.view.get(VIEW_KEYS.ticketViews),
-      ]).catch(() => [null, null, null, null, null, null, null, null, null, null, null] as const),
+        window.agentBoard.view.get(VIEW_KEYS.putDown),
+      ]).catch(() => [null, null, null, null, null, null, null, null, null, null, null, null] as const),
     ]).then(
-      ([zones, loadedAgents, loadedExternals, items, listedShells, listedConnectors, [viewport, savedExpanded, savedClickOpens, savedSizes, savedOverlaps, savedTileSizes, savedConnections, savedAgentNoteLook, savedUnfolded, savedHidden, savedTicketViews]]) => {
+      ([zones, loadedAgents, loadedExternals, items, listedShells, listedConnectors, [viewport, savedExpanded, savedClickOpens, savedSizes, savedOverlaps, savedTileSizes, savedConnections, savedAgentNoteLook, savedUnfolded, savedHidden, savedTicketViews, savedPutDown]]) => {
         if (cancelled) return;
         const search = window.location.search;
         // Items after zones: a child node needs its parent first.
@@ -244,6 +248,7 @@ export function useBoardData({ setNodes, report, setNotice, onShellChange, resto
           tileSizes: tileSizesFrom(savedTileSizes),
           unfolded: unfoldedFrom(savedUnfolded),
           overlapsAllowed: overlapsFrom(savedOverlaps),
+          putDown: putDownFrom(savedPutDown),
           ticketViews: ticketViewsFrom(savedTicketViews),
           clickOpens: clickOpensFrom(savedClickOpens),
           connections: connectionsViewFrom(savedConnections),

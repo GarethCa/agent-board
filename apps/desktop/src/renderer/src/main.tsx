@@ -25,6 +25,9 @@ import { CharacterChangeDemo, CharacterLooksGallery, CharacterStylesGallery } fr
 import { CharactersSetting } from './chrome/CharactersSetting';
 import { NeedsYouStepsGallery } from './inbox/NeedsYouStepsGallery';
 import { TodoGallery } from './board/items/TodoGallery';
+import { LongTextGallery } from './board/LongTextGallery';
+import { LongTextPanelsGallery } from './board/LongTextPanelsGallery';
+import { LongTextMenusGallery } from './board/LongTextMenusGallery';
 import { ReadingGallery } from './doc/ReadingGallery';
 import { CrewCardGallery } from './board/items/CrewCardGallery';
 import { QueueHandOnGallery } from './board/items/QueueGallery';
@@ -142,6 +145,21 @@ createRoot(root).render(
           // A page of its own too: a to-do list in each of its looks, open and folded.
           <div className="gallery">
             <TodoGallery />
+          </div>
+        ) : location.hash === '#gallery-long-text' ? (
+          // A page of its own: every board item with long text in every field, to check that none runs past its box.
+          <div className="gallery">
+            <LongTextGallery />
+          </div>
+        ) : location.hash === '#gallery-long-text-panels' ? (
+          // A page of its own: an agent's sidebar, the inbox and the zone bar with long text in every field.
+          <div className="gallery">
+            <LongTextPanelsGallery />
+          </div>
+        ) : location.hash === '#gallery-long-text-menus' ? (
+          // A page of its own: menus, ⌘K's rows, dialogs and Settings' controls with long text in every field.
+          <div className="gallery">
+            <LongTextMenusGallery />
           </div>
         ) : location.hash === '#gallery-reading' ? (
           // A page of its own: a long document read wide with its rail, scrolled to its findings, and narrow.

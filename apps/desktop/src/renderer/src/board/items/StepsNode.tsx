@@ -11,7 +11,7 @@ import { isTyping } from '../../keys/typing';
 import { ItemActionsContext, useOnlySelected, type ItemNodeType } from './items';
 import { StepsCard, type StepsCardActions } from './StepsCard';
 import { StepsFull } from './StepsFull';
-import { CardResizer } from './CardSizing';
+import { CardResizer, FoldedPicture } from './CardSizing';
 import { foldTo, heightPulled, keptFrame } from './card-size';
 import { zoomLook, type StepsLookup } from './steps-view';
 
@@ -43,7 +43,7 @@ function typedSteps(text: string): { title: string | null; steps: Step[] } {
  * corners; made taller than it starts, it keeps that height and its rows scroll within it. A double-click, ⌘↵ or its
  * toolbar opens every step in full (`StepsFull`).
  */
-export const StepsNode = memo(function StepsNode({ id, data, selected: picked, dragging }: NodeProps<ItemNodeType>) {
+export const StepsNode = memo(function StepsNode({ id, data, selected: picked, dragging, width, height }: NodeProps<ItemNodeType>) {
   const selected = useOnlySelected(picked);
   const { update, remove } = useContext(ItemActionsContext);
   const lookup = useContext(StepsLookupContext);
@@ -158,8 +158,9 @@ export const StepsNode = memo(function StepsNode({ id, data, selected: picked, d
       }}
     >
       <CardResizer
-        visible={selected && !collapsed && !writing && look !== 'icon'}
+        visible={selected && !writing && (collapsed || look !== 'icon')}
         least={STEPS_CARD_MIN_SIZE}
+        picture={collapsed ? STEPS_ICON_SIZE : undefined}
         onResizeStart={(frame) => {
           resizingNow.current = true;
           grownFrom.current = growing ? frame.height : undefined;
@@ -214,7 +215,9 @@ export const StepsNode = memo(function StepsNode({ id, data, selected: picked, d
           onClick={() => remove(item.id)}
         />
       </NodeToolbar>
-      <StepsCard data={card} lookup={lookup} look={look} selected={selected} sized={sized} steppedIn={steppedIn} writing={writing} actions={actions} error={error} />
+      <FoldedPicture picture={collapsed ? STEPS_ICON_SIZE : undefined} width={width} height={height} item={item}>
+        <StepsCard data={card} lookup={lookup} look={look} selected={selected} sized={sized} steppedIn={steppedIn} writing={writing} actions={actions} error={error} />
+      </FoldedPicture>
       {full && <StepsFull data={card} lookup={lookup} actions={actions} error={error} onClose={() => setFull(false)} />}
     </div>
   );

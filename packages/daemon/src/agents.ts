@@ -214,7 +214,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   const updateHadTurn = db.prepare('UPDATE agents SET had_turn = 1 WHERE session_id = ? AND had_turn = 0');
   const updateHooksSilent = db.prepare('UPDATE agents SET hooks_silent = ? WHERE session_id = ?');
   const selectHooksSilent = db.prepare('SELECT session_id FROM agents WHERE hooks_silent = 1');
-  const updateCutOff = db.prepare('UPDATE agents SET turn_cut_off = 0 WHERE session_id = ?');
+  const updateCutOff = db.prepare('UPDATE agents SET turn_cut_off = 0, turn_cut_off_asking = 0 WHERE session_id = ?');
   const updateTrustedByZone = db.prepare('UPDATE agents SET trusted_by_zone = 1 WHERE session_id = ?');
   const updateMuted = db.prepare('UPDATE agents SET muted = ? WHERE session_id = ?');
   const updatePinnedExpanded = db.prepare('UPDATE agents SET pinned_expanded = ? WHERE session_id = ?');
@@ -1172,6 +1172,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       state: shownState,
       notice: row.notice,
       cutOffMidTurn: row.turn_cut_off === 1,
+      cutOffAsking: row.turn_cut_off === 1 && row.turn_cut_off_asking === 1,
       hibernated: isHibernated(row)
         ? { at: row.hibernated_at!, ...pausedBy(row.hibernated_by) }
         : null,

@@ -1,6 +1,7 @@
 // What a memory and a queue share: the glyph on a round face with its count, the scope chip, the add box, the folded
 // icon and the peek's keys. Props-only, so the gallery draws them as the board does.
 import { useState, type CSSProperties, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
+import { Truncate } from '../../ui';
 
 /**
  * The glyph on its round face, with the count on it: what tells a memory or a queue apart, open or folded, at any zoom.
@@ -20,9 +21,9 @@ export function ListCardFace({ glyph, count, big = false, pulse = false, tab }: 
 /** Who may use it, as a chip: a zone's carries the zone's colour dot. */
 export function ScopeChip({ scope, zoneColor, testId }: { scope: string; zoneColor?: string; testId?: string }) {
   return (
-    <span className="listcard-scope" data-testid={testId} style={zoneColor === undefined ? undefined : ({ '--listcard-zone': zoneColor } as CSSProperties)}>
+    <span className="listcard-scope" data-testid={testId} title={scope} style={zoneColor === undefined ? undefined : ({ '--listcard-zone': zoneColor } as CSSProperties)}>
       {zoneColor !== undefined && <i className="listcard-zone-dot" aria-hidden="true" />}
-      {scope}
+      <Truncate text={scope} />
     </span>
   );
 }
@@ -96,8 +97,6 @@ interface ListCardIconViewProps {
   title: string;
   scope: string;
   zoneColor?: string;
-  /** How much bigger than the board's zoom its face draws, zoomed far out: it stays big enough to read. */
-  lift?: number;
   count: number;
   /** A line under the name in place of the scope chip: what an agent just did, or what an empty one asks for. */
   sub?: string;
@@ -115,22 +114,20 @@ interface ListCardIconViewProps {
  * that moves drags the card, face and all, as the face is most of what is drawn (React Flow eats the click that ends a
  * drag, so the peek stays shut).
  */
-export function ListCardIconView({ glyph, title, scope, zoneColor, lift = 1, count, sub, empty, pulse, tab, testId, onOpen, children }: ListCardIconViewProps) {
+export function ListCardIconView({ glyph, title, scope, zoneColor, count, sub, empty, pulse, tab, testId, onOpen, children }: ListCardIconViewProps) {
   return (
     <div
       className="listcard listcard-icon"
       data-testid={testId}
       data-empty={count === 0 || undefined}
-      data-lifted={lift > 1 || undefined}
       data-tab={tab !== undefined || undefined}
-      style={lift > 1 ? ({ '--listcard-lift': lift } as CSSProperties) : undefined}
     >
       {children}
       <button type="button" className="listcard-icon-face" aria-label={`${title}: open its peek`} onClick={onOpen}>
         <ListCardFace glyph={glyph} count={count} big pulse={pulse} tab={tab} />
       </button>
-      <b className="listcard-icon-name">{title}</b>
-      {sub !== undefined || count === 0 ? <span className="listcard-icon-sub">{sub ?? empty}</span> : <ScopeChip scope={scope} zoneColor={zoneColor} />}
+      <b className="listcard-icon-name" title={title}>{title}</b>
+      {sub !== undefined || count === 0 ? <span className="listcard-icon-sub" title={sub ?? empty}>{sub ?? empty}</span> : <ScopeChip scope={scope} zoneColor={zoneColor} />}
     </div>
   );
 }

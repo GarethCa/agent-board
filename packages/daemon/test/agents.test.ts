@@ -79,6 +79,8 @@ async function agentDaemon(
     questionsKeepDialog?: boolean;
     /** Its fake Claude's question dialog closes on a hook's allow but runs the call with no answers. */
     questionsDropAnswers?: boolean;
+    /** Its fake Claude asks as it does where only a person may allow a call: no suggestions, its dialog after its hooks. */
+    personOnlyPermissions?: boolean;
     /** How long after answers are sent to Claude's dialog the daemon waits for its call to run. */
     dialogTakeMs?: number;
   } = {},
@@ -112,6 +114,7 @@ async function agentDaemon(
       toolFails: options.toolFails,
       questionsKeepDialog: options.questionsKeepDialog,
       questionsDropAnswers: options.questionsDropAnswers,
+      personOnlyPermissions: options.personOnlyPermissions,
     }),
     permissionHoldMs: options.permissionHoldMs,
     dialogTakeMs: options.dialogTakeMs,
@@ -2228,6 +2231,32 @@ describe('the needs-you inbox', () => {
     const after = recorder.events.slice(decided).filter(isAgentUpdate);
     expect(after[0]!.agent).toMatchObject({ state: 'running', permissions: [] });
     expect(after.every((e) => e.agent.permissions.length === 0)).toBe(true);
+  });
+
+  it("answers at once a request only a person may allow, holding and listing nothing: Claude's own dialog then flags it", async () => {
+    const logged: string[] = [];
+    const { client, recorder } = await agentDaemon('permission', { personOnlyPermissions: true, log: (line) => logged.push(line) });
+    const zone = await addZone(client, tempRepo());
+    const agent = await spawnAttached(client, zone.id, 'Clean up');
+
+    // The fake draws its dialog only once its hook has answered: no hold, so it comes at once.
+    await recorder.waitForText(agent.sessionId, '(y/n)');
+    const notified = await recorder.waitFor(
+      (e): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.payload.notification_type === 'permission_prompt',
+    );
+    const asked = recorder.events.find((e): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.payload.hook_event_name === 'PermissionRequest');
+    expect(asked!.payload).not.toHaveProperty('permission_suggestions');
+    const before = recorder.events.slice(0, recorder.events.indexOf(notified)).filter(isAgentUpdate).filter((e) => e.agent.sessionId === agent.sessionId);
+    expect(before.every((e) => e.agent.permissions.length === 0 && e.agent.state !== 'needs-permission')).toBe(true);
+    expect(logged.some((line) => line.includes('Claude asks a person, not the board, to allow Bash'))).toBe(true);
+
+    // Its dialog is real, so its notification flags the agent, with nothing for the inbox to answer.
+    const flagged = await untilAgent(recorder, agent.sessionId, (a) => a.state === 'needs-permission', recorder.events.indexOf(notified));
+    expect(flagged.permissions).toEqual([]);
+    const typed = recorder.events.length;
+    await client.call('session.write', { sessionId: agent.sessionId, data: 'y\r' });
+    await recorder.waitForText(agent.sessionId, 'Removed dist.');
+    await untilState(recorder, agent.sessionId, 'idle', typed);
   });
 
   it('denies the tool call through its PermissionRequest, and refuses a second decision', async () => {

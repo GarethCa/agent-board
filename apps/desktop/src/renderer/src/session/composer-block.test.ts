@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { AGENT_STATES } from '@agent-board/daemon/protocol';
-import { composerBlock, composerPlaceholder } from './composer-block';
+import { composerBlock, composerPlaceholder, wakesAtText } from './composer-block';
 
 const live = { endedAt: null, state: 'idle', reviewOf: null } as const;
 
@@ -22,10 +22,10 @@ describe('composerBlock', () => {
     expect(composerBlock({ ...live, state: 'waiting', permissions })).toEqual({ reason: 'Its questions wait in its terminal', action: 'show-prompt' });
   });
 
-  it('offers to resume an agent a restart stopped', () => {
+  it('offers to wake an agent a restart stopped', () => {
     expect(composerBlock({ ...live, endedAt: '2026-10-11T10:00:00Z', state: 'stopped-by-restart' })).toEqual({
       reason: 'Stopped by a restart',
-      action: 'resume',
+      action: 'wake',
     });
   });
 
@@ -33,13 +33,35 @@ describe('composerBlock', () => {
     expect(composerBlock({ ...live, endedAt: '2026-10-11T10:00:00Z', state: 'hibernated' })).toBeUndefined();
   });
 
-  it('offers to restart an agent that ended', () => {
-    expect(composerBlock({ ...live, endedAt: '2026-10-11T10:00:00Z', state: 'done' })).toEqual({ reason: 'The agent has ended', action: 'restart' });
-    expect(composerBlock({ ...live, endedAt: '2026-10-11T10:00:00Z', state: 'failed' })).toEqual({ reason: 'The agent has ended', action: 'restart' });
+  it('wakes an agent that is done or exited, by a message or by Wake', () => {
+    expect(composerBlock({ ...live, endedAt: '2026-10-11T10:00:00Z', state: 'done' })).toEqual({ reason: 'Done. Wake carries on this conversation.', action: 'restart' });
+    expect(composerBlock({ ...live, endedAt: '2026-10-11T10:00:00Z', state: 'failed' })).toEqual({ reason: 'Stopped on an error. A message, or Wake, starts it again here.', action: 'restart' });
   });
 
-  it("offers a reviewer, whose round ended with it, no way to restart", () => {
+  it('offers a reviewer, whose round ended with it, and a harness running in its shell, no way to wake', () => {
     expect(composerBlock({ ...live, endedAt: '2026-10-11T10:00:00Z', state: 'done', reviewOf: 'impl-1' })).toEqual({ reason: 'The agent has ended' });
+    expect(composerBlock({ ...live, endedAt: '2026-10-11T10:00:00Z', state: 'done', shellHarness: 'claude' })).toEqual({ reason: 'The agent has ended' });
+  });
+});
+
+describe('wakesAtText', () => {
+  const clock = { clockId: 'c', cron: '30 22 * * *', prompt: 'Sweep', enabled: true, nextRunAt: '2026-10-11T22:30:00', lastRun: null, hibernates: false };
+
+  it('says when its clock wakes it, and that a message wakes it now', () => {
+    expect(wakesAtText({ state: 'scheduled', endedAt: null, schedule: clock })).toBe('Wakes at 22:30. A message wakes it now.');
+    expect(composerPlaceholder({ ...live, state: 'scheduled', queuedUntilUp: 0, schedule: clock })).toBe('Wakes at 22:30. A message wakes it now.');
+  });
+
+  it('says so of one its clock pauses between runs, or starts again once it has ended', () => {
+    const paused = { ...live, state: 'hibernated' as const, endedAt: '2026-10-11T06:34:00', queuedUntilUp: 0, schedule: { ...clock, hibernates: true } };
+    expect(composerPlaceholder(paused)).toBe('Wakes at 22:30. A message wakes it now.');
+    const done = { ...live, state: 'done' as const, endedAt: '2026-10-11T06:34:00', schedule: clock };
+    expect(composerBlock(done)).toEqual({ reason: 'Wakes at 22:30. A message wakes it now.', action: 'restart' });
+  });
+
+  it('says nothing once its clock is off', () => {
+    expect(wakesAtText({ state: 'scheduled', endedAt: null, schedule: { ...clock, enabled: false } })).toBeUndefined();
+    expect(wakesAtText({ state: 'idle', endedAt: null, schedule: clock })).toBeUndefined();
   });
 });
 
@@ -65,6 +87,6 @@ describe('composerPlaceholder', () => {
 
   it('gives the reason a blocked field is off, over a placeholder the caller gave', () => {
     expect(composerPlaceholder(agent({ state: 'needs-permission' }), 'Ask the Captain…')).toBe('Waiting on a permission prompt');
-    expect(composerPlaceholder(agent({ endedAt: '2026-10-11T10:00:00Z', state: 'done' }))).toBe('The agent has ended');
+    expect(composerPlaceholder(agent({ endedAt: '2026-10-11T10:00:00Z', state: 'done', reviewOf: 'impl-1' }))).toBe('The agent has ended');
   });
 });

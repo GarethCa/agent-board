@@ -9,7 +9,7 @@ const expandedTile = (page: Page) => page.getByTestId('expanded-tile');
 const liveSessions = (page: Page) => page.evaluate(() => window.agentBoard.sessions.list());
 const expandedScreen = (page: Page) => expandedTile(page).getByTestId('session-terminal').locator('.xterm-rows');
 
-test('an agent that exits drops its pane into a shell in its worktree, and Restart brings the agent back there, asking first while the shell runs something', async () => {
+test('an agent that exits drops its pane into a shell in its worktree, and Wake brings the agent back there, asking first while the shell runs something', async () => {
   const { dir, repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, { ...env, ...SHELL_ENV });
@@ -30,7 +30,7 @@ test('an agent that exits drops its pane into a shell in its worktree, and Resta
 
     // Its pane drops into a shell, marked as such, under the agent's last output.
     const banner = expandedTile(window).getByTestId('agent-exit-banner');
-    await expect(banner).toContainText('claude exited (code 0)');
+    await expect(banner).toContainText('Done. Wake carries on this conversation.');
     await expect(expandedTile(window).getByTestId('session-window-status')).toHaveText('ended · shell');
     await expect(expandedScreen(window)).toContainText('Which database should I use');
     // Typing works straight away, in the agent's worktree.
@@ -39,7 +39,7 @@ test('an agent that exits drops its pane into a shell in its worktree, and Resta
     await window.keyboard.press('Enter');
     await expect(expandedScreen(window)).toContainText(agent!.cwd);
 
-    // Something running in the shell: Restart from the tile's menu asks before it ends the shell.
+    // Something running in the shell: Wake from the tile's menu asks before it ends the shell.
     await window.keyboard.type('sleep 30');
     await window.keyboard.press('Enter');
     await expandedTile(window).locator('.session-window-head').click();
@@ -50,10 +50,10 @@ test('an agent that exits drops its pane into a shell in its worktree, and Resta
     await expect(tile(window).getByTestId('restart-agent')).toHaveCount(0);
     const [footer, card] = [await tile(window).locator('.hybrid-tile-footer').boundingBox(), await tile(window).boundingBox()];
     expect(footer!.y + footer!.height, 'footer bottom').toBeLessThanOrEqual(card!.y + card!.height + 0.5);
-    await tileAction(tile(window), 'Restart agent', 'Run');
-    const confirm = window.getByRole('alertdialog', { name: 'Restart agent?' });
+    await tileAction(tile(window), 'Wake');
+    const confirm = window.getByRole('alertdialog', { name: 'Wake it?' });
     await expect(confirm).toContainText('running something');
-    await confirm.getByRole('button', { name: 'Restart anyway' }).click();
+    await confirm.getByRole('button', { name: 'Wake anyway' }).click();
 
     // The shell goes, and the agent carries on its conversation in a live session of its own, in the same pane.
     await expect(confirm).toBeHidden();

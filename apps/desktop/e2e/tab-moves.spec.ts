@@ -214,7 +214,7 @@ test("a shell tab drags onto another agent's tile, the board and another window'
     expect(await running(window, pane)).toBe(true);
   } finally {
     await app.close();
-    removeDataDir(dataDir);
+    await removeDataDir(dataDir);
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -254,7 +254,7 @@ test("a pane of a shell tile's split drags out onto the board as a shell tile of
     expect(await running(window, pane)).toBe(true);
   } finally {
     await app.close();
-    removeDataDir(dataDir);
+    await removeDataDir(dataDir);
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -294,7 +294,7 @@ test("a shell tab drags out of an agent's session window onto the board beside i
     expect((await holderOf(window, pane))?.owner).toEqual({ kind: 'agent', id: impl!.sessionId });
   } finally {
     await app.close();
-    removeDataDir(dataDir);
+    await removeDataDir(dataDir);
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -386,7 +386,7 @@ test("a window's tabs drag onto a pane's edge to split it and onto another pane'
     await expect(panesOf(winAgain).nth(1).getByTestId('session-tab')).toHaveText([review!.name]);
   } finally {
     await (relaunched ?? app).close().catch(() => {});
-    removeDataDir(dataDir);
+    await removeDataDir(dataDir);
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -439,7 +439,7 @@ test("a tab dropped on the edge of a pane in another agent's window splits it th
     expect(await running(window, pane)).toBe(true);
   } finally {
     await app.close();
-    removeDataDir(dataDir);
+    await removeDataDir(dataDir);
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -501,7 +501,7 @@ test("a window whose shells can't be listed, or whose layout can't be read, says
     await expect(win.getByTestId('session-window-status')).toContainText('could not read how the window was laid out');
   } finally {
     await app.close();
-    removeDataDir(dataDir);
+    await removeDataDir(dataDir);
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -552,7 +552,7 @@ test("another agent shown as a tab in the background neither resizes its termina
     await expect.poll(() => seen(review!.sessionId)).toBe(true);
   } finally {
     await app.close();
-    removeDataDir(dataDir);
+    await removeDataDir(dataDir);
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -586,7 +586,7 @@ test("a tab split inside itself before windows had panes is laid out as panes as
     await expect.poll(async () => (await shells(window)).filter((shell) => shell.owner?.id === impl!.sessionId).map((shell) => JSON.stringify(shell.layout).match(/sessionId/g)!.length)).toEqual([1, 1]);
   } finally {
     await app.close();
-    removeDataDir(dataDir);
+    await removeDataDir(dataDir);
     rmSync(dir, { recursive: true, force: true });
   }
 });

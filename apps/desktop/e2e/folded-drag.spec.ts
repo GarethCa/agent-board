@@ -68,6 +68,6 @@ test('a folded memory, queue, steps card and to-do list drag by their faces, lan
     for (const item of folded) await expect(node(window, item)).toBeVisible();
   } finally {
     await app.close();
-    removeDataDir(dataDir);
+    await removeDataDir(dataDir);
   }
 });

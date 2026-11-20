@@ -310,6 +310,8 @@
 .ui-hint,
 .ui-error {
   margin: 0;
+  /* A hint or an error can quote a path, a link or a name: it wraps where it must. */
+  overflow-wrap: anywhere;
   font-size: var(--font-size-sm);
   line-height: var(--leading-snug);
 }
@@ -431,6 +433,7 @@
 }
 
 .ui-check {
+  max-width: 100%;
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
@@ -438,6 +441,12 @@
   font-size: var(--font-size-md);
   font-weight: var(--weight-regular);
   cursor: pointer;
+}
+
+/* A choice's words wrap, however long (a clone's path), beside its box. */
+.ui-check > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .ui-check:has(:disabled) {
@@ -658,6 +667,12 @@
   font-weight: var(--weight-bold);
 }
 
+.ui-choice > span:last-child {
+  /* A choice's words wrap inside its card, however long. */
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .ui-choice-detail {
   display: block;
   color: var(--muted);
@@ -719,7 +734,9 @@
 }
 
 .ui-dialog-title {
+  min-width: 0;
   margin: 0;
+  overflow-wrap: anywhere;
   font-size: var(--font-size-2xl);
   font-weight: var(--weight-bold);
   line-height: var(--leading-snug);
@@ -740,6 +757,8 @@
 
 .ui-dialog-body > p {
   margin: 0;
+  /* A dialog's words can name a long thing: a tile, a path, a link. */
+  overflow-wrap: anywhere;
   line-height: var(--leading-body);
 }
 
@@ -820,6 +839,8 @@
 .ui-menu {
   z-index: var(--layer-popover);
   min-width: var(--size-menu);
+  /* A row with a long label (a zone's or an agent's name) cuts it with an ellipsis rather than widen the menu. */
+  max-width: min(var(--size-menu-max), var(--radix-dropdown-menu-content-available-width, 100%));
   /* A menu taller than the window (a zone's ⋯ in a short one) scrolls inside it, every row still reachable. */
   max-height: var(--radix-dropdown-menu-content-available-height);
   overflow-y: auto;
@@ -927,12 +948,18 @@
   padding-block: var(--space-1-5);
 }
 
+/* Its label never wraps away from its icon: wider than the row, it ends in an ellipsis beside it. */
+.ui-menu-item[data-hinted='true'] > .ui-menu-text {
+  max-width: calc(100% - var(--icon-sm) - var(--space-2-25));
+}
+
 .ui-menu-hint {
   flex-basis: 100%;
   max-width: var(--size-menu);
   color: var(--muted);
   font-size: var(--font-size-xs);
   white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 /* A word marked beside a row's label, such as "new". */
@@ -1002,6 +1029,8 @@
 /* A heading over a group of a menu's rows, lined up with their labels. */
 .ui-menu-heading {
   padding: var(--space-1-5) var(--space-2) var(--space-0-5);
+  /* A heading can be a repo's path: it wraps where it must. */
+  overflow-wrap: anywhere;
 }
 
 .ui-menu-swatch-row {
@@ -1780,4 +1809,12 @@ button.ui-row:focus-visible {
   background: var(--raised);
   color: var(--text);
   box-shadow: var(--shadow-control);
+}
+
+/* One line that ends in an ellipsis when its box is too narrow (Truncate): it may shrink below its text in a flex row or a grid cell. */
+.ui-truncate {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

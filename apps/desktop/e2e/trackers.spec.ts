@@ -205,16 +205,23 @@ test('a zone takes its issues from a GitHub repo through gh, an agent starts fro
       (globalThis as { opened?: string[] }).opened = opened;
       shell.openExternal = async (url: string) => void opened.push(url);
     });
-    await pr.click();
+    // Beside the issue, the waiting mark and Open, one PR chip fits or folds into the +N by a few pixels of type: from
+    // either it opens the same PR tab.
+    const plus = agentTile.getByTestId('tile-folded');
+    await expect(pr.filter({ visible: true }).or(plus.filter({ visible: true }))).toBeVisible();
+    if (await pr.isVisible()) await pr.click();
+    else {
+      await plus.click();
+      await window.getByTestId('tile-folded-row').filter({ hasText: /^#41 / }).click();
+    }
     const prView = window.getByTestId('pr-view');
     await prView.getByRole('button', { name: 'GitHub' }).click();
     await expect
       .poll(() => app.evaluate(() => (globalThis as { opened?: string[] }).opened))
       .toEqual(['https://github.com/acme/app/pull/41']);
 
-    // The footer is one line. One PR fits beside its issue, its waiting mark and its Open button; three don't, so all
-    // three fold into its +N (the issue, the mark and the button never fold).
-    await expect(agentTile.getByTestId('tile-pr').filter({ visible: true })).toHaveText(['#41']);
+    // The footer is one line. Three PRs don't fit beside its issue, its waiting mark and its Open button, so all three
+    // fold into its +N (the issue, the mark and the button never fold).
     github.setState({
       ...FAKE_GITHUB_STATE,
       pullRequests: [pullRequest(44, { isDraft: true }), pullRequest(43, { state: 'MERGED' }), pullRequest(41)],

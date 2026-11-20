@@ -15,4 +15,5 @@ export { PanelRow } from './PanelRow';
 export { Section } from './Section';
 export { Segmented, type SegmentedOption } from './Segmented';
 export { Tabs, type Tab } from './Tabs';
+export { Truncate } from './Truncate';
 export { useSidewaysScroll } from './use-sideways-scroll';

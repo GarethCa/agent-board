@@ -356,14 +356,14 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     /** The kinds an agent reads only in its scope (ADR-0010): every other item is every connection's to hear. */
     const SCOPED_KINDS: ReadonlySet<BoardItem['kind']> = new Set(['steps', 'memory', 'queue', 'crew', 'todo']);
     /**
-     * Whether `client` hears `event`. An item's change or removal of a scoped kind reaches it only if its `item.list`
+     * Whether `client` hears `event`. An item's change or removal of a scoped kind (or a memory's read) reaches it only if its `item.list`
      * would list the item; a removal whose item isn't known, or one sent before the rule is set, reaches only a
      * connection that speaks for no agent.
      */
     const hears = (client: Socket, connection: BoardConnection, event: DaemonEvent, about: BoardItem | undefined): boolean => {
       if (client.destroyed) return false;
       if (event.type !== 'session.exited' && streamOnly.has(client)) return false;
-      if (event.type !== 'item.updated' && event.type !== 'item.removed') return true;
+      if (event.type !== 'item.updated' && event.type !== 'item.removed' && event.type !== 'memory.readBy') return true;
       if (connection.boardSession === undefined) return true;
       const item = event.type === 'item.updated' ? event.item : about;
       if (item !== undefined && !SCOPED_KINDS.has(item.kind)) return true;
@@ -1025,7 +1025,16 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       askWaits: (sessionId, askId, cardId) => asks.waitsOnCard(sessionId, askId, cardId),
     });
     // Memories and queues: their contents in their own tables, their scope as a steps card's.
-    const memoryQueue = createMemoryQueueHost({ sessions, agents, shells, db, log, call: (method, params) => call(method, params), place: (sessionId, size) => spotBesideAgent(call, sessionId, size) });
+    const memoryQueue = createMemoryQueueHost({
+      sessions,
+      agents,
+      shells,
+      db,
+      log,
+      call: (method, params) => call(method, params),
+      place: (sessionId, size) => spotBesideAgent(call, sessionId, size),
+      broadcast,
+    });
     late.memoryQueue = memoryQueue;
     // A running crew's card: the crew loop's own record of it, as a board item.
     const crewCards = createCrewCards({

@@ -63,13 +63,25 @@ export const MARK_CHARACTER_HEIGHT = 22;
  * An agent's status as the Simplified design draws it: its glyph, or with `character` given and a style picked the
  * agent's character acting it out, and always its word, so the status never rests on a shape or a colour alone.
  */
-export const StatusMark = memo(function StatusMark({ status, character }: { status: HumanStatus; character?: CharacterLook & { harness: Harness } }) {
+export const StatusMark = memo(function StatusMark({
+  status,
+  character,
+  word,
+  ask,
+}: {
+  status: HumanStatus;
+  character?: CharacterLook & { harness: Harness };
+  /** Its word in place of the status's own: a ticket's Ready to merge, New review or Done. */
+  word?: string | undefined;
+  /** A ticket's ask that stands up in its own colour: green to merge, blue for a new review. */
+  ask?: 'merge' | 'new';
+}) {
   const style = useCharacterStyle();
   const drawn = character !== undefined && style !== 'off' ? style : undefined;
   return (
-    <span className="status-mark" data-testid="status-mark" data-status={status} data-look={drawn ?? 'icons'}>
+    <span className="status-mark" data-testid="status-mark" data-status={status} data-ask={ask} data-look={drawn ?? 'icons'}>
       {drawn === undefined ? <StatusGlyph status={status} className="status-mark-glyph" /> : <TileCharacter {...character!} style={drawn} height={MARK_CHARACTER_HEIGHT} />}
-      <span className="status-mark-word">{HUMAN_STATUS_LABELS[status]}</span>
+      <span className="status-mark-word">{word ?? HUMAN_STATUS_LABELS[status]}</span>
     </span>
   );
 });

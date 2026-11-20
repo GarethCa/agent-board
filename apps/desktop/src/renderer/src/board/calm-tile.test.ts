@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { clockTime } from './items/agent-note';
 import type { Agent } from '@agent-board/daemon/protocol';
 import { calmFace, calmShellFace, shellPanesLine, technicalLine } from './calm-tile';
 import { galleryAgent, SHELL } from './TileGallery';
@@ -48,12 +49,23 @@ describe('calmFace', () => {
     expect(calmFace(agent, 'explicit')).toEqual({ status: 'needs-you', line: 'Plan to review: Selection strategy', action: { kind: 'plan', label: 'Read the plan', prominent: true } });
   });
 
-  it('offers Resume, filled, to an agent a restart stopped', () => {
-    expect(calmFace(working({ state: 'stopped-by-restart', endedAt: AT }), 'explicit')).toEqual({
-      status: 'needs-you',
+  it('calls an agent that exited on an error Exited, with how it ended on its line and a plain Wake', () => {
+    for (const exitCode of [1, 0]) {
+      const face = calmFace(working({ state: 'failed', endedAt: AT, exitCode, notice: null, schedule: null }), 'explicit');
+      expect(face).toMatchObject({ word: 'Exited', action: { kind: 'wake', label: 'Wake', prominent: false } });
+      expect(face.line).toMatch(/^Error/);
+    }
+  });
+
+  it("reads an agent a restart stopped as asleep, not Needs you: the word Stopped, and Wake as plain as a paused one's", () => {
+    const stopped = calmFace(working({ state: 'stopped-by-restart', endedAt: AT }), 'explicit');
+    expect(stopped).toEqual({
+      status: 'paused',
+      word: 'Stopped',
       line: 'Stopped when the app restarted',
-      action: { kind: 'resume', label: 'Resume', prominent: true },
+      action: { kind: 'wake', label: 'Wake', prominent: false },
     });
+    expect(stopped.action).toEqual(calmFace(working({ state: 'hibernated' }), 'explicit').action);
   });
 
   it('offers its open pull request for review once it has finished', () => {
@@ -75,6 +87,34 @@ describe('calmFace', () => {
   it('wakes a paused agent with a bordered button, never a filled one', () => {
     const agent = working({ state: 'hibernated', endedAt: AT, hibernated: { at: AT, by: 'you', byId: null } });
     expect(calmFace(agent, 'explicit')).toEqual({ status: 'paused', line: null, action: { kind: 'wake', label: 'Wake', prominent: false } });
+  });
+
+  it('wakes a done or exited agent with a bordered Wake, and gives a reviewer whose round ended none', () => {
+    const wake = { kind: 'wake', label: 'Wake', prominent: false };
+    expect(calmFace(working({ state: 'done', endedAt: AT }), 'explicit').action).toEqual(wake);
+    expect(calmFace(working({ state: 'failed', endedAt: AT, exitCode: 1 }), 'explicit').action).toEqual(wake);
+    expect(calmFace(working({ state: 'done', endedAt: AT, reviewOf: 'impl' }), 'explicit').action).toBeNull();
+    expect(calmFace(working({ state: 'done', endedAt: AT, shellHarness: 'claude' }), 'explicit').action).toBeNull();
+  });
+
+  it('says how and when an agent exited on an error, its code only when it is not 0', () => {
+    expect(calmFace(working({ state: 'failed', endedAt: AT, exitCode: 1, notice: null }), 'explicit').line).toBe(`Error (code 1) · ${clockTime(AT)}`);
+    expect(calmFace(working({ state: 'failed', endedAt: AT, exitCode: 0, notice: null }), 'explicit').line).toBe(`Error · ${clockTime(AT)}`);
+  });
+
+  it('gives an agent its clock wakes Wake now, shown on hover only, and none once its clock is off', () => {
+    const scheduled = { ...galleryAgent('scheduled'), subagents: [], pullRequests: [] };
+    expect(calmFace(scheduled, 'explicit').action).toEqual({ kind: 'wake', label: 'Wake now', prominent: false, onHover: true });
+    expect(calmFace({ ...scheduled, schedule: { ...scheduled.schedule!, enabled: false } }, 'explicit').action).toBeNull();
+  });
+
+  it('draws one its clock pauses between runs, or one ended with its clock on, as Scheduled with Wake now on hover', () => {
+    const { schedule } = galleryAgent('scheduled');
+    for (const sleeping of [working({ state: 'hibernated', endedAt: AT, schedule: { ...schedule!, hibernates: true } }), working({ state: 'done', endedAt: AT, schedule })]) {
+      const face = calmFace(sleeping, 'explicit');
+      expect(face.status).toBe('scheduled');
+      expect(face.action).toEqual({ kind: 'wake', label: 'Wake now', prominent: false, onHover: true });
+    }
   });
 
   it('offers to continue on credits, bordered, while a usage limit stops it', () => {
@@ -106,7 +146,8 @@ describe('calmFace', () => {
   });
 
   it('says when a scheduled agent runs next is the clock’s job, not the line', () => {
-    expect(calmFace(galleryAgent('scheduled'), 'explicit')).toEqual({ status: 'scheduled', line: null, action: null });
+    // Its one button, Wake now, shows only on hover.
+    expect(calmFace(galleryAgent('scheduled'), 'explicit')).toEqual({ status: 'scheduled', line: null, action: { kind: 'wake', label: 'Wake now', prominent: false, onHover: true } });
   });
 
   it('fills a button only while the agent needs you', () => {

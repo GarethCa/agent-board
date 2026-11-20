@@ -296,7 +296,7 @@ export function TodoCardView({ data, lookup, zoneName, look = 'card', steppedIn,
           <SquareCheckBig />
         </span>
         <b className="todo-title">To do</b>
-        {zoneName !== undefined && <span className="todo-zone">{zoneName}</span>}
+        {zoneName !== undefined && <span className="todo-zone" title={zoneName}>{zoneName}</span>}
         {count !== undefined && (
           <span className="todo-count" data-testid="todo-count" data-done={state === 'done' || undefined}>
             {count}

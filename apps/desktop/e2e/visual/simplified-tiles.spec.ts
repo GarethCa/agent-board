@@ -8,7 +8,7 @@ import { RENDER_ARGS, RENDER_ENV, VIEWPORT, ignorePointer, pinFonts, pinNow, pin
 import { scratch } from '../scratch.ts';
 import { centreOf, drag, settledBox } from '../board-helpers.ts';
 import { settingsSection } from '../settings-helpers.ts';
-import { SHOT, needsBaselines, viewSettled, nodesStill, coloursSettled, THEMES, launchGallery, openSettingsForShot, shootSimplifiedNotes } from './shared.ts';
+import { SHOT, expectWatermarkShows, needsBaselines, viewSettled, nodesStill, coloursSettled, THEMES, launchGallery, openSettingsForShot, shootSimplifiedNotes } from './shared.ts';
 
 test.use({ viewport: null });
 
@@ -29,6 +29,7 @@ for (const { theme, suffix } of THEMES) {
       for (const status of CALM_STATUSES) {
         await expect.soft(window.getByTestId(`simplified-tile-${status}`)).toHaveScreenshot(`simplified-tile-${status}${suffix}.png`, SHOT);
       }
+      await expectWatermarkShows(window, window.getByTestId('simplified-tile-scheduled').locator('.tile-frosted').first());
     } finally {
       await app.close();
       await removeDataDir(dataDir);
@@ -151,8 +152,8 @@ for (const { theme, suffix } of THEMES) {
       await restorePointer();
     } finally {
       await app.close();
-      rmSync(dir, { recursive: true, force: true });
       await removeDataDir(dataDir);
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 }

@@ -158,9 +158,11 @@ function ConfirmDialog({ asking, details, busy, onAnswer }: { asking: Asking; de
           The gate hasn't passed on {details.headCommit.slice(0, 7)}, this pull request's head: {details.gateBlocked}
         </p>
       )}
-      {merge
-        ? `Squash-merges ${details.repo}#${details.number} into ${details.baseRefName} at ${details.headCommit.slice(0, 7)}, the commit shown here: if anything was pushed since, GitHub refuses.`
+      <p>
+        {merge
+          ? `Squash-merges ${details.repo}#${details.number} into ${details.baseRefName} at ${details.headCommit.slice(0, 7)}, the commit shown here: if anything was pushed since, GitHub refuses.`
         : `Approves ${details.repo}#${details.number} on GitHub as your gh account, at ${details.headCommit.slice(0, 7)}, the commit shown here: if anything was pushed since, nothing is approved.`}
+      </p>
     </Dialog>
   );
 }

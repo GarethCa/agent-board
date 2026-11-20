@@ -1,6 +1,6 @@
 import { expect, type Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
-import { agents, closeAgent, launch, openSubmenu, spawnAgent, tile, tileAction, TURN_MS, zoneNamed, zones } from './agent-helpers.ts';
+import { agents, closeAgent, launch, spawnAgent, tile, tileAction, TURN_MS, zoneNamed, zones } from './agent-helpers.ts';
 import { test, pickFolderNext, removeDataDir, runDesign, tempDataDir, browseForZone } from './launch.ts';
 import { scratch } from './scratch.ts';
 
@@ -95,13 +95,11 @@ test('an agent that has only ended, its pane a live shell, keeps its tile and it
     const [agent] = await agents(window);
     await window.evaluate((id) => globalThis.window.agentBoard.agents.stop(id), agent!.sessionId);
     await expect(tile(window)).toHaveAttribute('data-state', 'done');
-    // On the Classic tile Restart is in its head; on the Simplified card, in its ⋯ menu.
-    if (runDesign() === 'simplified') {
-      await tile(window).getByRole('button', { name: 'More' }).click();
-      await openSubmenu(window, 'Run');
-      await expect(window.getByRole('menuitem', { name: 'Restart agent' })).toBeVisible();
-      await window.keyboard.press('Escape');
-    } else await expect(tile(window).getByRole('button', { name: 'Restart' })).toBeAttached();
+    // Wake is its tile's one button, and leads its ⋯ menu.
+    await expect(tile(window).getByTestId(runDesign() === 'simplified' ? 'tile-action' : 'wake')).toHaveText('Wake');
+    await tile(window).getByRole('button', { name: 'More' }).click();
+    await expect(window.getByRole('menuitem', { name: /^Wake/ }).first()).toBeVisible();
+    await window.keyboard.press('Escape');
     await expect(chip(window)).toHaveCount(0);
   } finally {
     await app.close();

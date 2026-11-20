@@ -1,7 +1,9 @@
 import { expect } from '@playwright/test';
 import type { BoardItem, MemoryView } from '@agent-board/daemon/protocol';
-import { withDaemon } from './board-helpers.ts';
-import { test, connectedDaemonPid, launchApp, removeDataDir, tempDataDir } from './launch.ts';
+import { agents, launch, spawnAgent, tile } from './agent-helpers.ts';
+import { tokenOf, withDaemon } from './board-helpers.ts';
+import { test, browseForZone, connectedDaemonPid, launchApp, pickFolderNext, removeDataDir, tempDataDir } from './launch.ts';
+import { scratch } from './scratch.ts';
 
 /** The board's one memory, with its entries, as the daemon has it. */
 function storedMemory(dataDir: string): Promise<MemoryView> {
@@ -142,21 +144,49 @@ test('M puts a memory at the pointer ready to type; it remembers what is typed, 
     await window.keyboard.press('Escape');
     await expect(peek).toBeHidden();
 
-    // Zoomed far out, its face stops shrinking: it still reads as a memory, with its count.
-    const face = icon.getByRole('button', { name: /open its peek/ });
-    const size = (await face.boundingBox())!.width;
-    for (let at = 0; at < 6; at++) await window.getByRole('button', { name: 'Zoom out' }).click();
-    await expect(icon).toHaveAttribute('data-lifted', 'true');
-    await expect.poll(async () => (await face.boundingBox())!.width).toBeGreaterThan(size * 0.55);
-    for (let at = 0; at < 6; at++) await window.getByRole('button', { name: 'Zoom in' }).click();
-    await expect(icon).not.toHaveAttribute('data-lifted');
-
     await icon.locator('.listcard-icon-name').click();
     await window.getByRole('button', { name: 'Open the card' }).click();
     await expect(card).toBeVisible();
     await expect.poll(async () => (await storedMemory(dataDir)).item.width).toBe(340);
     // Drawn anew, the card leaves the keyboard where it was: only a memory just made takes it.
     await expect(card.getByTestId('memory-add')).not.toBeFocused();
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+  }
+});
+
+test("an agent's read shows on its zone's memory: the foot says who read it and when, its hover card and full screen list them, and one pulse goes to the reader's tile", async () => {
+  const { repo, env } = scratch('orchestrate');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, env);
+  try {
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await spawnAgent(window, 'monorepo', 'Print your board identity', { name: 'Reader' });
+    await expect(tile(window)).toHaveCount(1);
+    const [reader] = await agents(window);
+    const token = await withDaemon(dataDir, (client) => tokenOf(client, reader!.sessionId));
+    // The agent makes its zone's memory, and the user writes in it: each on its own connection, as a token binds one.
+    const memory = await withDaemon(dataDir, (client) => client.call('board.newMemory', { token, title: 'monorepo memory' }));
+    await withDaemon(dataDir, (client) => client.call('memory.change', { id: memory.id, change: { action: 'add', text: 'Rerun a flaky test once' } }));
+    const card = window.getByTestId('memory-card');
+    await expect(card.locator('.listcard-row')).toHaveCount(1);
+    await expect(card.getByTestId('memory-read')).toHaveCount(0);
+
+    // The agent reads it: the foot counts it, and one pulse sets out for its tile, and is gone.
+    await withDaemon(dataDir, (client) => client.call('board.readMemory', { token, id: memory.id }));
+    await expect(card.getByTestId('memory-read')).toHaveText('Read by 1 · just now');
+    await expect(window.getByTestId('memory-read-pulse')).toHaveCount(1);
+    await expect(window.getByTestId('memory-read-pulse')).toHaveCount(0);
+
+    // The hover card, and full screen, say who read it.
+    await card.getByTestId('memory-read').hover();
+    await expect(window.locator('.ui-hover-card')).toContainText('Reader');
+    await card.getByRole('button', { name: 'Open full screen' }).click();
+    const readers = window.getByTestId('memory-full').getByTestId('memory-full-readers');
+    await expect(readers).toContainText('Read by 1 agent');
+    await expect(readers.getByRole('listitem')).toHaveText([/^Reader\s*just now$/]);
   } finally {
     await app.close();
     await removeDataDir(dataDir);

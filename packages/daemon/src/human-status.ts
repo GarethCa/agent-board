@@ -40,7 +40,7 @@ export const HUMAN_STATUS_BY_STATE: Record<AgentState, HumanStatus> = {
   waiting: 'done',
   done: 'done',
   'needs-permission': 'needs-you',
-  'stopped-by-restart': 'needs-you',
+  'stopped-by-restart': 'paused',
   failed: 'problem',
   'rate-limited': 'paused',
   hibernated: 'paused',
@@ -74,19 +74,20 @@ export function asksInWords(message: string): boolean {
 
 /**
  * An agent's status, one of six. Whatever waits on the user is Needs you, first: a permission prompt, a question, a
- * plan, a flag, every finished turn when the inbox lists them (`shows`), an agent a restart stopped, a last message
+ * plan, a flag, every finished turn when the inbox lists them (`shows`), a last message
  * at its prompt that asks something, and open changes waiting for review, at its prompt or ended as done. A reviewer at its
  * prompt asking none of that is Paused while `implementer`, the agent it reviews, works or is paused. An ended agent
  * is a Problem when the daemon says it failed, else Done, whatever its exit code (a stop can leave one). A crew member
  * at its prompt, its orchestrator live (`ledBy`), is Working "With" that orchestrator, which takes its turns, questions
- * and changes: only a permission prompt, a flag to the user or a restart that stopped it reach the user. The mapping
+ * and changes: only a permission prompt or a flag to the user reach the user. One a restart stopped is Paused, as a paused one is. The mapping
  * reads no harness: Claude's and Codex's agents share these states.
  */
 export function humanStatus(agent: HumanStatusFacts, shows: NeedsYouShows, implementer?: ImplementerFacts | null): HumanStatusReading {
   const kind = needsYouKind(agent, shows);
   if (kind !== null) return needsYou(kind === 'flagged' ? (agent.flag?.reason ?? null) : NEEDS_YOU_DETAILS[kind]);
   const { state } = agent;
-  if (state === 'stopped-by-restart') return needsYou('Stopped when the app restarted');
+  // Stopped by a restart, it sleeps as a paused one does: it waits to be woken, asking nothing.
+  if (state === 'stopped-by-restart') return { status: 'paused', detail: 'Stopped when the app restarted' };
   if (state === 'hibernated') return { status: 'paused', detail: null };
   if (state === 'failed' && agent.endedAt !== null) {
     return { status: 'problem', detail: agent.exitCode === null || agent.exitCode === 0 ? null : `Ended · exit ${agent.exitCode}` };

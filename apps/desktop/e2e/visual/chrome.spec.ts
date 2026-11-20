@@ -217,7 +217,9 @@ test('a finished agent says it finished, with what it is for under its name', as
     await expanded.getByRole('button', { name: 'Collapse', exact: true }).click();
     // What it is for stays under its name; its line says it finished.
     await expect(tile(window).getByTestId('tile-about')).toHaveText('Look around');
-    await expect(tile(window).getByTestId('tile-description')).toHaveText('Finished');
+    await expect(tile(window).getByTestId('tile-description')).toHaveText(/^Finished \d\d:\d\d$/);
+    // When it finished is the clock's: a fixed time keeps the shot the same from run to run.
+    await tile(window).getByTestId('tile-description').evaluate((line) => (line.textContent = 'Finished 18:02'));
     await pinRandomText(window);
     const restorePointer = await ignorePointer(window);
     await settle(window);
@@ -689,7 +691,7 @@ for (const { theme, suffix } of [
       await expect.poll(() => settings.evaluate(() => document.documentElement.dataset.theme)).toBe(theme);
       await pinFonts(settings);
       const section = settingsSection(settings, 'Agent tiles');
-      for (const name of ['Expand, Pop out and ⋯, without hovering', 'Who set its status line']) {
+      for (const name of ['Expand and ⋯, without hovering', 'Who set its status line']) {
         const toggle = section.getByRole('switch', { name });
         await toggle.click();
         await expect(toggle).toBeChecked();

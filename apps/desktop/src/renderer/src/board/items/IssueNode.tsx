@@ -2,7 +2,7 @@ import { createContext, memo, useContext } from 'react';
 import { NodeResizer, NodeToolbar, Position, type NodeProps } from '@xyflow/react';
 import { ExternalLink, Play, Trash2 } from 'lucide-react';
 import { issueCardData, shortIssueId, type BoardItem, type IssueCardData } from '@agent-board/daemon/protocol';
-import { Button, IconButton, Kbd, Tag } from '../../ui';
+import { Button, IconButton, Kbd, Tag, Truncate } from '../../ui';
 import { ItemActionsContext, type ItemNodeType } from './items';
 import { keyText } from '../../keys/registry';
 
@@ -61,8 +61,12 @@ export const IssueNode = memo(function IssueNode({ data, selected, dragging }: N
         />
       </NodeToolbar>
       <div className="issue-card-head">
-        <span className="issue-card-id">{shortIssueId(issue)}</span>
-        {issue.state !== '' && <Tag className="issue-card-state">{issue.state}</Tag>}
+        <Truncate className="issue-card-id" text={shortIssueId(issue)} />
+        {issue.state !== '' && (
+          <Tag className="issue-card-state" title={issue.state}>
+            {issue.state}
+          </Tag>
+        )}
       </div>
       <div className="issue-card-title" title={issue.title}>
         {issue.title}

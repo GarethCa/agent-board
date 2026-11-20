@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { GLANCE_STATES } from './glance-tile';
-import { portholeRing, portholeWordTone } from './porthole';
+import { galleryAgent } from './TileGallery';
+import { GLANCE_LEVELS, GLANCE_STATES, glanceFace, type GlanceState } from './glance-tile';
+import { portholeRing as ringOf, portholeWordTone as toneOf } from './porthole';
+
+// A state at its own level, as every live agent's face is.
+const portholeRing = (state: GlanceState) => ringOf({ state, level: GLANCE_LEVELS[state] });
+const portholeWordTone = (state: GlanceState) => toneOf({ state, level: GLANCE_LEVELS[state] });
 
 describe("a porthole's ring", () => {
   it('fills with colour only for the work waiting for the user: amber when it asks, red for a problem', () => {
@@ -29,5 +34,22 @@ describe("a porthole's state word", () => {
     expect(portholeWordTone('done')).toBe('done');
     expect(portholeWordTone('limit')).toBe('limit');
     expect(portholeWordTone('review')).toBe('quiet');
+  });
+});
+
+describe('an exited agent on a porthole', () => {
+  it('draws no problem ring and no red chip, whatever its exit code', () => {
+    for (const exitCode of [1, 0]) {
+      const face = glanceFace({ ...galleryAgent('failed'), endedAt: '2026-10-23T08:00:00Z', exitCode }, 'explicit');
+      expect(face.state).toBe('failed');
+      expect(ringOf(face)).toBe('plain');
+      expect(toneOf(face)).toBe('quiet');
+    }
+  });
+
+  it('keeps the loud ring for a failed start, which asks for Try again', () => {
+    const face = glanceFace({ ...galleryAgent('failed'), endedAt: '2026-10-23T08:00:00Z', exitCode: 1, startup: { failed: true, output: null } }, 'explicit');
+    expect(ringOf(face)).toBe('problem');
+    expect(toneOf(face)).toBe('chip');
   });
 });

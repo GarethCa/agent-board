@@ -189,6 +189,16 @@ export function lastReaderText(readers: MemoryReaders, now: Date): string | unde
   return readers.last === null ? undefined : `last: ${readers.last.name}, ${agoText(readers.last.at, now)}`;
 }
 
+/** The card's foot when agents have read it: "Read by 3 · 2 min ago", by its latest read. */
+export function readByText(readers: MemoryReaders, now: Date): string {
+  return readers.last === null ? `Read by ${readers.count}` : `Read by ${readers.count} · ${agoText(readers.last.at, now)}`;
+}
+
+/** Past the readers listed: "and 4 more"; nothing when every one is listed. */
+export function moreReadersText(count: number, listed: number): string | undefined {
+  return count > listed ? `and ${count - listed} more` : undefined;
+}
+
 /** The foot's count: "No entries yet", "1 entry", "14 entries · 2 pinned". */
 export function countText(entries: readonly MemoryEntry[]): string {
   if (entries.length === 0) return 'No entries yet';

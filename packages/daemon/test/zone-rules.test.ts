@@ -64,13 +64,15 @@ describe('what sets a zone off to be laid out by its rule again', () => {
     expect(zonesChangedBy({ type: 'agent.updated', agent: agent({ position: { x: 10, y: 10, z: 1 } }) }, inputs)).toEqual([]);
   });
 
-  it('is a zone changing its rule, width, folding or tiles placed by hand, never its place or height', () => {
+  it("is a zone changing its rule, width, folding, tiles placed by hand or where it puts its items, never its place or height", () => {
     const inputs: RuleInputs = new Map();
     expect(zonesChangedBy({ type: 'zone.updated', zone: zone() }, inputs)).toEqual(['z1']);
     expect(zonesChangedBy({ type: 'zone.updated', zone: zone({ x: 500, y: 90, height: 2000 }) }, inputs)).toEqual([]);
     expect(zonesChangedBy({ type: 'zone.updated', zone: zone({ folded: true }) }, inputs)).toEqual(['z1']);
     expect(zonesChangedBy({ type: 'zone.updated', zone: zone({ folded: true, handPlaced: ['agent:s1'] }) }, inputs)).toEqual(['z1']);
     expect(zonesChangedBy({ type: 'zone.updated', zone: zone({ folded: true, handPlaced: ['agent:s1'], width: 900 }) }, inputs)).toEqual(['z1']);
+    // The user picks where its to-dos go: the rule places them there now.
+    expect(zonesChangedBy({ type: 'zone.updated', zone: zone({ folded: true, handPlaced: ['agent:s1'], width: 900, placements: { todos: 'sidebar' } }) }, inputs)).toEqual(['z1']);
   });
 
   it('is a stage board coming, going, moving, resizing or changing who it holds; never another note', () => {
@@ -228,6 +230,26 @@ describe('a zone with a rule, on the daemon', () => {
     expect(await client.call('zone.restore', older as ReturnType<typeof zoneSnapshot>)).toMatchObject({ layoutRule: 'off' });
   });
 
+  it("places a lanes zone's items again as soon as the user picks where a kind goes", async () => {
+    const { client, web } = await ruleDaemon();
+    const lead = await client.call('agent.spawn', { zoneId: web.id, name: 'impl', ...SIZE });
+    const todo = await client.call('item.create', { kind: 'todo', zoneId: web.id, x: 900, y: 420, width: 160, height: 120, data: { owner: { kind: 'user' }, lines: [] } });
+    const itemAt = async () => {
+      const item = (await client.call('item.list')).find((each) => each.id === todo.id)!;
+      return { x: item.x, y: item.y };
+    };
+    await client.call('zone.configure', { id: web.id, layoutRule: 'lanes' });
+    await vi.waitFor(async () => expect(await itemAt()).not.toEqual({ x: 900, y: 420 }), { timeout: 5000 });
+    await new Promise((resolve) => setTimeout(resolve, RULE_SETTLE_MS * 4));
+    const onTop = await itemAt();
+    const agentAt = (await placeOf(client, lead.sessionId))!;
+    expect(onTop.y).toBeLessThan(agentAt.y);
+    // Down the side: the rule moves it at once, right of the lanes, with no agent coming or going.
+    await client.call('zone.configure', { id: web.id, placements: { todos: 'sidebar' } });
+    expect(onTop.x).toBeLessThan(agentAt.x);
+    await vi.waitFor(async () => expect((await itemAt()).x).toBeGreaterThan(agentAt.x), { timeout: 5000 });
+  });
+
   it("lays a new agent out in its lane, leaves one dragged there, and puts it back under the rule when asked", async () => {
     const { client, web } = await ruleDaemon();
     const first = await client.call('agent.spawn', { zoneId: web.id, name: 'impl', ...SIZE });
@@ -314,6 +336,11 @@ describe('a zone with a rule, on the daemon', () => {
     ]);
     expect((await client.call('orchestrator.arrange', { zoneId: web.id })).moved).toEqual([]);
     await expect(client.call('orchestrator.arrange', { zoneId: web.id, layout: 'grid' })).rejects.toThrow(/web keeps the Spine rule/);
+    // The rule places the zone's items itself, so it refuses where to place them, and tidying what the user dragged.
+    for (const items of [{ placements: { notes: 'sidebar' as const } }, { placements: { notes: 'sidebar' as const }, once: true }, { all: true }]) {
+      await expect(client.call('orchestrator.arrange', { zoneId: web.id, ...items })).rejects.toThrow(/web keeps the Spine rule, which places its items itself/);
+    }
+    expect((await zoneOf(client, web.id)).placements).toEqual({});
 
     // A band that goes moves the one under it up.
     await client.call('agent.delete', { sessionId: first.sessionId, force: true });

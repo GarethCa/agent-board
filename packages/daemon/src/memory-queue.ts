@@ -15,7 +15,7 @@ import { AGENT_TILE_SIZE, freeSpotFor } from './board-layout.ts';
 import { cutText } from './text-cut.ts';
 import { jobBrief, jobTextOf } from './memory-lines.ts';
 import type { Answered } from './deliveries.ts';
-import { invalidParams, optionalStringParam, paramsObject, stringParam } from './params.ts';
+import { invalidParams, optionalBooleanParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
 import {
   BOARD_ERROR,
   MAX_HISTORY_VERSIONS,
@@ -47,6 +47,8 @@ import {
   type HistoryVersion,
   type MemoryChange,
   type MemoryData,
+  type MemoryReadByEvent,
+  MAX_MEMORY_READERS_LISTED,
   type MemoryEntry,
   type MemoryReaders,
   type MemoryView,
@@ -97,8 +99,13 @@ export interface MemoryQueueHostOptions extends BoardCallerSources {
   call: DaemonCall;
   /** Where a new card of the agent's goes: beside its tile. */
   place(sessionId: string, size: { width: number; height: number }): Promise<BoardPlace | undefined>;
+  /** Tells the clients where the memory is that an agent read it (`memory.readBy`). */
+  broadcast?: (event: MemoryReadByEvent, about: BoardItem) => void;
   now?: () => Date;
 }
+
+/** The board hears of an agent's reads of one memory at most this often: one pulse, and its readers fetched anew. */
+const MEMORY_READ_EVERY_MS = 60_000;
 
 /** File versions are big: fewer of them are kept. */
 const MAX_FILE_VERSIONS = 5;
@@ -125,6 +132,16 @@ const sameWho = (a: StepsWho | null, b: StepsWho) => a !== null && a.kind === b.
 const whoName = (who: StepsWho) => (who.kind === 'user' ? 'the user' : who.name);
 const isWho = (who: unknown) => isObject(who) && (who.kind === 'user' || (who.kind === 'agent' && typeof who.sessionId === 'string' && typeof who.name === 'string'));
 const bytes = (text: string) => Buffer.byteLength(text);
+/**
+ * A memory refused as the zone has one: it names that one, to add to instead. A zone keeps one shared memory; a second
+ * is for a different subject the whole zone needs.
+ */
+const sharedMemory = (shared: BoardItem) =>
+  invalidParams(
+    `this zone already shares the memory “${(shared.data as unknown as MemoryData).title}” (${itemRef(shared)}): add to it with memory_update ` +
+      `(\`agent-board memory add ${itemRef(shared)} key: value\`), not a new memory for each ticket. ` +
+      'Make a second one only for a different subject the whole zone needs: memory_new with second: true (`agent-board memory new --second`).',
+  );
 
 function checkCommon(what: string, data: Record<string, unknown>): void {
   const fail = (problem: string) => invalidParams(`${what}'s ${problem}`);
@@ -133,6 +150,7 @@ function checkCommon(what: string, data: Record<string, unknown>): void {
   if (typeof data.noAgents !== 'boolean') throw fail('noAgents must be true or false');
   if (data.folded !== undefined && typeof data.folded !== 'boolean') throw fail('folded must be true or false');
   if (data.openSize !== undefined && !isCardSize(data.openSize)) throw fail('openSize must be { width, height }');
+  if (data.foldedSize !== undefined && !isCardSize(data.foldedSize)) throw fail('foldedSize must be { width, height }');
   if (!Number.isInteger(data.count) || (data.count as number) < 0) throw fail('count must be a whole number');
 }
 
@@ -316,6 +334,9 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
       'SELECT COUNT(DISTINCT session_id) AS n, name, MAX(at) AS at FROM memory_reads WHERE item_id = ? AND entry_id IN (SELECT id FROM memory_entries WHERE item_id = ?)',
     ),
     clearReads: db.prepare('DELETE FROM memory_reads WHERE entry_id = ?'),
+    readersList: db.prepare(
+      'SELECT session_id, name, MAX(at) AS at FROM memory_reads WHERE item_id = ? AND entry_id IN (SELECT id FROM memory_entries WHERE item_id = ?) GROUP BY session_id ORDER BY at DESC, session_id LIMIT ?',
+    ),
     jobs: db.prepare(`SELECT ${JOB_COLUMNS} FROM queue_jobs WHERE item_id = ? ORDER BY done_at IS NOT NULL, CASE WHEN done_at IS NULL THEN position END, done_at DESC, id`),
     job: db.prepare(`SELECT ${JOB_COLUMNS} FROM queue_jobs WHERE id = ?`),
     heldIn: db.prepare('SELECT COUNT(*) AS n FROM queue_jobs WHERE item_id = ? AND taken_by IS NOT NULL AND done_at IS NULL'),
@@ -442,13 +463,32 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
     return item;
   };
 
-  const newCard = async (me: Agent, kind: 'memory' | 'queue', rawTitle: string, audience?: QueueAudience): Promise<BoardItem> => {
+  const newCard = async (me: Agent, kind: 'memory' | 'queue', rawTitle: string, audience?: QueueAudience, second = false): Promise<BoardItem> => {
     const title = rawTitle.trim();
     if (title === '' || title.length > MAX_PLAN_TITLE_LENGTH) throw invalidParams(`title must be 1 to ${MAX_PLAN_TITLE_LENGTH} characters`);
     const size = kind === 'memory' ? MEMORY_CARD_SIZE : QUEUE_CARD_SIZE;
     const spot = (await options.place(me.sessionId, size)) ?? { zoneId: me.zoneId, x: 0, y: 0 };
     const data = { title, madeBy: agentWho(me), noAgents: false, count: 0, ...(kind === 'queue' ? { audience: audience ?? 'agents' } : {}) };
-    return options.call('item.create', { kind, ...spot, ...size, data });
+    const create = (): Promise<BoardItem> => options.call('item.create', { kind, ...spot, ...size, data });
+    if (kind !== 'memory' || second || spot.zoneId === null) return create();
+    // One zone's memories are made one at a time, so two agents asking together can't both find none.
+    return oneAtATime(`${spot.zoneId}\n${spot.ticket ?? ''}`, async () => {
+      // Only a memory this agent may read is the zone's shared one: the user's own (No agents) is neither named nor in the way.
+      const shared = (await itemsOf('memory')).find((item) => item.zoneId === spot.zoneId && (item.ticket ?? null) === (spot.ticket ?? null) && reads(me, item));
+      if (shared !== undefined) throw sharedMemory(shared);
+      return create();
+    });
+  };
+  const making = new Map<string, Promise<unknown>>();
+  const oneAtATime = <T>(key: string, run: () => Promise<T>): Promise<T> => {
+    const next = (making.get(key) ?? Promise.resolve()).catch(() => undefined).then(run);
+    making.set(key, next);
+    void next
+      .finally(() => {
+        if (making.get(key) === next) making.delete(key);
+      })
+      .catch(() => undefined);
+    return next;
   };
 
   // ---- memories ----
@@ -818,6 +858,8 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
   type ReadersRow = { n: number; name: string | null; at: string | null };
   const readersOf = (row: ReadersRow | undefined): MemoryReaders => ({ count: row?.n ?? 0, last: row?.name == null || row.at === null ? null : { name: row.name, at: row.at } });
 
+  /** When the board last heard of each agent's read of each memory (`item\nsession`): kept in memory, as only the event is limited. */
+  const toldAt = new Map<string, number>();
   /**
    * A memory's entries, or the one `entry` names, as `reader` (an agent; null for the user) reads them. An agent reads
    * what comes back whole: the one named, or, as it reads the memory, its facts and notes. A document it lists by its
@@ -830,11 +872,18 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
     const found = entry !== undefined || wanted === undefined || wanted === '' ? all : all.filter((row) => (row.key ?? '').toLowerCase().includes(wanted) || row.text.toLowerCase().includes(wanted));
     const listed = reader !== null && entry === undefined;
     const entries = found.map((row) => (listed && row.file ? { ...row, text: '', listed: { bytes: bytes(row.text), lines: row.text.split('\n').length } } : row));
-    if (reader !== null) {
+    const read = entries.filter((row) => row.listed === undefined);
+    if (reader !== null && read.length > 0) {
       const at = now();
       transaction(() => {
-        for (const read of entries) if (read.listed === undefined) sql.addRead.run(read.id, item.id, reader.sessionId, reader.name, at);
+        for (const row of read) sql.addRead.run(row.id, item.id, reader.sessionId, reader.name, at);
       });
+      const told = `${item.id}\n${reader.sessionId}`;
+      const last = toldAt.get(told);
+      if (last === undefined || Date.parse(at) - last >= MEMORY_READ_EVERY_MS) {
+        toldAt.set(told, Date.parse(at));
+        options.broadcast?.({ type: 'memory.readBy', itemId: item.id, reader: { sessionId: reader.sessionId, name: reader.name, at } }, item);
+      }
     }
     const byEntry = new Map((sql.entryReaders.all(item.id) as unknown as (ReadersRow & { entry_id: string })[]).map((row) => [row.entry_id, row]));
     return {
@@ -842,7 +891,12 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
       entries,
       readers: {
         memory: readersOf(sql.memoryReaders.get(item.id, item.id) as unknown as ReadersRow),
-        entries: Object.fromEntries(entries.map((read) => [read.id, readersOf(byEntry.get(read.id))])),
+        entries: Object.fromEntries(entries.map((row) => [row.id, readersOf(byEntry.get(row.id))])),
+        list: (sql.readersList.all(item.id, item.id, MAX_MEMORY_READERS_LISTED) as unknown as { session_id: string; name: string; at: string }[]).map((row) => ({
+          sessionId: row.session_id,
+          name: row.name,
+          at: row.at,
+        })),
       },
     };
   };
@@ -1077,7 +1131,7 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
       return {
         'board.newMemory': async (params, connection) => {
           const p = paramsObject(params);
-          return newCard(agentCaller(p, connection, true), 'memory', stringParam(p, 'title'));
+          return newCard(agentCaller(p, connection, true), 'memory', stringParam(p, 'title'), undefined, optionalBooleanParam(p, 'second') ?? false);
         },
         'board.listMemories': async (params, connection) => listFor('memory', agentCaller(paramsObject(params), connection, false)),
         'board.readMemory': async (params, connection) => {

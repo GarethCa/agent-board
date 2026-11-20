@@ -8,15 +8,22 @@ export function ClickOpensSetting() {
   const { clickOpens } = useViewSettings();
   return (
     <Fieldset legend="Double-clicking a tile opens">
-      <Hint>For agent and shell tiles. The tile&apos;s ⋯ menu offers the other way, and a Simplified window&apos;s ⋯ menu has Maximise and Restore.</Hint>
+      <Hint>For agent and shell tiles. The tile&apos;s ⋯ menu offers the other way, and a Simplified window&apos;s ⋯ menu has Maximise and Restore. A shell tile opens its session window under Pop-up.</Hint>
       <Choices aria-label="Double-clicking a tile opens">
         <Choice
           name="click-opens"
           label={
             <>
-              Session window <Tag tone="accent">default</Tag>
+              Pop-up <Tag tone="accent">default</Tag>
             </>
           }
+          detail="Its session over the dimmed board, which stays where it was. Esc, – or a click on the board goes back to the tile."
+          checked={clickOpens === 'popup'}
+          onChange={() => setViewSetting('clickOpens', 'popup')}
+        />
+        <Choice
+          name="click-opens"
+          label="Session window"
           detail="Over the board, at the size you left it, with Minimise, Pop out and Close."
           checked={clickOpens === 'window'}
           onChange={() => setViewSetting('clickOpens', 'window')}

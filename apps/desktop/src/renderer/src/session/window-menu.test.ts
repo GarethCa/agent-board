@@ -72,16 +72,18 @@ describe("an agent window's ⋯ menu", () => {
         }),
       );
 
-    it('keeps Restart for an agent that ended, at the top, with no End agent… and none of the tile’s ways to open it', () => {
+    it('keeps Wake for an agent that ended, at the top, with no End agent… and none of the tile’s ways to open it', () => {
       const rows = menuOf({ ...galleryAgent('done'), endedAt: AT });
-      expect(rows[0]).toBe('Restart agent');
+      expect(rows[0]).toBe('Wake');
       expect(rows).not.toContain('End agent…');
       for (const gone of ['Expand in place', 'Open window', 'Pop out', 'Fold to a chip', 'Rename']) expect(rows).not.toContain(gone);
       expect(rows.at(-1)).toBe('Delete agent');
     });
 
-    it('keeps Resume for an agent a restart stopped', () => {
-      expect(menuOf({ ...galleryAgent('stopped-by-restart'), endedAt: AT })).toContain('Resume agent');
+    it('keeps Wake for an agent a restart stopped', () => {
+      const rows = menuOf({ ...galleryAgent('stopped-by-restart'), endedAt: AT });
+      expect(rows).toContain('Wake');
+      expect(rows).not.toContain('Resume agent');
     });
 
     it('has End agent… above Delete, and Pause, for an agent at its prompt', () => {

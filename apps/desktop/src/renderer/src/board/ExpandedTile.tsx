@@ -25,15 +25,16 @@ import { useNeedsYouShows } from '../needs-you-setting';
 import { Button, Chip, IconButton, StatusPill, Tag } from '../ui';
 import { EXPANDED_MAX_SIZE, EXPANDED_MIN_SIZE, EXPANDED_SIZE, isNarrowTile, resizeAllowed, type ExpandedParent } from './expanded';
 import { BackToTileButton } from './BackToTile';
+import { headButtons, headDoubleClick } from './expanded-head';
 import { HarnessMark } from './HarnessMark';
 import { CommandFigure } from './CommandFigure';
 import { PullRequestChip } from './PullRequestChip';
 import { StatusMark } from './StatusMark';
 import { SubagentPerch } from './SubagentPerch';
-import { TileActionsContext, type TileProps } from './tile';
+import { ClickOpensContext, TileActionsContext, type TileProps } from './tile';
 import { dropKey } from '../session/shell-moves';
 import { CAPTURE_FRAME } from './capture-mode';
-import { FrostMark } from './FrostMark';
+import { FrostMark, FrozenOr } from './FrostMark';
 import { frostedClasses } from './paused';
 
 const stopPropagation = (event: MouseEvent) => event.stopPropagation();
@@ -55,7 +56,7 @@ export function ExpandedTile(props: TileProps & { parent: ExpandedParent }) {
 }
 
 function ExpandedTileShown({ id, tile, parent }: TileProps & { parent: ExpandedParent }) {
-  const { collapse, expand, resizeExpanded, maximise, popOutAgent, popOutShell, deleteAgent, deleteShell, dismissExternal, openLink, openPullRequest, setPinnedExpanded } =
+  const { collapse, expand, resizeExpanded, maximise, popUp, popOutAgent, popOutShell, deleteAgent, deleteShell, dismissExternal, openLink, openPullRequest, setPinnedExpanded } =
     useContext(TileActionsContext);
   const shows = useNeedsYouShows();
   const simplified = useSimplified();
@@ -101,14 +102,21 @@ function ExpandedTileShown({ id, tile, parent }: TileProps & { parent: ExpandedP
 
   const harness = tile.harness ?? 'shell';
   const name = agent?.name ?? shell?.name ?? external?.name ?? tile.label;
-  // Pinned expanded, it stays open where it is, at its size: no window, drag or resize takes it, and Unpin
-  // stands where Collapse was.
+  // Pinned expanded, it stays open where it is, at its size: no drag or resize moves it, and Unpin stands where Collapse
+  // was. Its window and pop-out still open, and it is back where it was, pinned, once they close.
   const pinned = agent?.pinnedExpanded === true;
-  const windowHint = pinned ? 'Pinned expanded: unpin it to open its window' : undefined;
+  const { maximise: maximiseButton, popOut: popOutButton, closer } = headButtons(tile);
+  const headOpens = headDoubleClick(useContext(ClickOpensContext), tile);
+  // On the header's own ground, not its buttons, its name or its chips.
+  const onHeadDoubleClick = (event: MouseEvent) => {
+    if (headOpens === undefined || (event.target as Element).closest('button, input, a, [contenteditable="true"]')) return;
+    if (headOpens.open === 'popUp' && tile.agent !== undefined) popUp(tile.agent, headOpens.path);
+    else maximise(tile, headOpens.path);
+  };
   return (
     <section
       ref={root}
-      className={agent ? frostedClasses('expanded-tile', agent) : 'expanded-tile'}
+      className={agent ? frostedClasses('expanded-tile', agent, shows) : 'expanded-tile'}
       data-testid="expanded-tile"
       data-pinned={pinned || undefined}
       data-harness={harness}
@@ -123,11 +131,11 @@ function ExpandedTileShown({ id, tile, parent }: TileProps & { parent: ExpandedP
       onDoubleClick={stopPropagation}
       onKeyDown={onKeyDown}
     >
-      <header className="session-window-head expanded-tile-head" tabIndex={extended ? -1 : undefined}>
+      <header className="session-window-head expanded-tile-head" tabIndex={extended ? -1 : undefined} onDoubleClick={onHeadDoubleClick}>
         <HarnessMark className="session-window-mark" harness={harness} />
         <SessionName agent={agent} shell={shell} name={name} title={name} nodeId={id} />
         {agent && <FrostMark agent={agent} />}
-        {agent && (simplified ? <StatusMark status={humanStatus(agent, shows).status} /> : <StatusPill {...agentPill(agent, shows)} />)}
+        {agent && <FrozenOr agent={agent}>{simplified ? <StatusMark status={humanStatus(agent, shows).status} /> : <StatusPill {...agentPill(agent, shows)} />}</FrozenOr>}
         {external && <StatusPill state={external.state} label={STATE_LABELS[external.state]} />}
         {/* Its shelves hold the branch, issue and pull requests, as in its window: the header says them only while they are on the rail. */}
         {!(shelves && !detailsCollapsed) && <HeadFacts simplified={simplified} agent={agent} shell={shell} external={external} openLink={openLink} openPullRequest={openPullRequest} />}
@@ -153,11 +161,11 @@ function ExpandedTileShown({ id, tile, parent }: TileProps & { parent: ExpandedP
             <GateControls agent={agent} visible />
           </span>
         )}
-        {content && <IconButton icon={<Maximize2 />} size="sm" aria-label="Maximise" tooltip={windowHint ?? 'Maximise into its session window'} disabled={pinned} onClick={() => maximise(tile)} />}
-        {popOut && <IconButton icon={<SquareArrowOutUpRight />} size="sm" aria-label="Pop out" tooltip={windowHint ?? 'Into its own window'} disabled={pinned} onClick={popOut} />}
+        {maximiseButton && <IconButton icon={<Maximize2 />} size="sm" aria-label={maximiseButton.label} tooltip={maximiseButton.tooltip} onClick={() => maximise(tile, maximiseButton.path)} />}
+        {popOutButton && popOut && <IconButton icon={<SquareArrowOutUpRight />} size="sm" aria-label={popOutButton.label} tooltip={popOutButton.tooltip} onClick={popOut} />}
         {remove && <IconButton icon={<Trash2 />} size="sm" variant="danger" aria-label={remove.label} tooltip={remove.label} onClick={remove.run} />}
         {/* Pinned, its pin, shown on, stands where Collapse was: the one way to unpin it from here. */}
-        {pinned ? (
+        {closer === 'unpin' ? (
           <IconButton
             icon={<Pin />}
             size="sm"

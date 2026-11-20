@@ -194,14 +194,14 @@ async function openBoardMenu(window: Page): Promise<Locator> {
  * Sets what a double-click on a tile opens, in the Settings window's Board › Opening tiles, and closes the window again
  * if it opened it, so the app is left with the windows it had.
  */
-export async function setClickOpens(window: Page, opens: 'Session window' | 'Maximised session window' | 'Expand in place'): Promise<void> {
+export async function setClickOpens(window: Page, opens: 'Pop-up' | 'Session window' | 'Maximised session window' | 'Expand in place'): Promise<void> {
   const wasOpen = window.context().pages().some(isSettingsWindow);
   const settings = await openSettings(window, 'board.opening');
   const choice = settings.getByRole('radiogroup', { name: 'Double-clicking a tile opens' }).getByRole('radio', { name: new RegExp(`^${opens}`) });
   await choice.check();
   await expect(choice).toBeChecked();
   // The board hears of the change from the Settings window a moment later: a double-click before then opens the old way.
-  const opensAs = { 'Session window': 'window', 'Maximised session window': 'maximised', 'Expand in place': 'expand' }[opens];
+  const opensAs = { 'Pop-up': 'popup', 'Session window': 'window', 'Maximised session window': 'maximised', 'Expand in place': 'expand' }[opens];
   await expect(window.locator('.board[data-click-opens]')).toHaveAttribute('data-click-opens', opensAs);
   if (!wasOpen) await settings.close();
 }
@@ -222,7 +222,7 @@ export async function sessionItems(window: Page): Promise<Locator> {
 
 /**
  * Picks the row whose name starts with `action` from a tile's More menu, inside the group `within` names where an agent's menu puts it there: Delete
- * agent at the top; Schedule…, Link issue… or Mute notifications in Settings; Restart agent in Run; Run gate or Review
+ * agent at the top; Schedule…, Link issue… or Mute notifications in Settings; Run gate or Review
  * its work in Review & gate; Fold to a chip in Arrange. A shell's menu has no groups.
  */
 export async function tileAction(tile: Locator, action: string, within?: string): Promise<void> {

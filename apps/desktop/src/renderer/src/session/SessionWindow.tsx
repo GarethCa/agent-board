@@ -34,6 +34,8 @@ import { useHomeDir } from './SessionDetails';
 import { tildify } from './live-folder';
 import { tokenNumber } from '../theme';
 import { clampFrame, defaultFrame, EDGES, fromFractions, resizeFrame, toFractions, type Bounds, type Edge, type Frame, type SavedFrame } from '../windows/window-frame';
+import { FrostMark, FrozenOr } from '../board/FrostMark';
+import { frostedClasses } from '../board/paused';
 
 /** Where the window's session is among its group's, and how to step to the others. */
 export interface WindowNav {
@@ -189,7 +191,7 @@ function SessionWindowShown({ content, title, placement, onClose, onDelete, onMi
       ref={root}
       role="dialog"
       aria-label="Session window"
-      className={`session-window session-window-${placement}`}
+      className={agent ? frostedClasses(`session-window session-window-${placement}`, agent, shows) : `session-window session-window-${placement}`}
       data-testid="session-window"
       data-session-id={content.kind === 'session' ? content.sessionId : undefined}
       data-shell-id={content.kind === 'shell' ? content.shellId : undefined}
@@ -225,7 +227,8 @@ function SessionWindowShown({ content, title, placement, onClose, onDelete, onMi
         {nav && <NavButtons nav={nav} />}
         {content.kind !== 'tabs' && <HarnessMark className="session-window-mark" harness={agent?.harness ?? 'shell'} />}
         <SessionName agent={agent} shell={shell} name={name} title={title} />
-        {agent && <StatusPill {...agentPill(agent, shows)} />}
+        {agent && <FrostMark agent={agent} />}
+        {agent && <FrozenOr agent={agent}><StatusPill {...agentPill(agent, shows)} /></FrozenOr>}
         {nav && <NavCount nav={nav} />}
         {/* The shelves' footer says its branch: while they show, the header doesn't say it too. */}
         {where !== undefined && (!shelves || detailsCollapsed) && (

@@ -594,6 +594,8 @@ body:has(.prefab-board) .ui-toasts {
 }
 
 .prefab-problems > li {
+  min-width: 0;
+  overflow-wrap: anywhere;
   display: flex;
   gap: var(--space-1-5);
   color: var(--warning-ink);
@@ -841,6 +843,7 @@ body:has(.prefab-board) .ui-toasts {
 .prefabs-name {
   display: flex;
   align-items: center;
+  min-width: 0;
   gap: var(--space-1-5);
   color: var(--text);
   font-weight: var(--weight-semibold);
@@ -849,6 +852,7 @@ body:has(.prefab-board) .ui-toasts {
 .prefabs-purpose {
   display: flex;
   align-items: center;
+  min-width: 0;
   gap: var(--space-1);
   overflow: hidden;
   color: var(--text-soft);
@@ -899,6 +903,8 @@ body:has(.prefab-board) .ui-toasts {
 
 .prefabs-ask {
   flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
   color: var(--text);
   font-size: var(--font-size-sm);
 }

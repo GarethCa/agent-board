@@ -97,8 +97,8 @@ describe('bringing the Captain back', () => {
     expect(captainRevival(master)).toBeUndefined();
   });
 
-  it('resumes one a restart stopped, wakes a paused one, and restarts one that exited', () => {
-    expect(captainRevival(ended({ state: 'stopped-by-restart' }))).toBe('resume');
+  it('wakes one a restart stopped or paused, and restarts one that exited', () => {
+    expect(captainRevival(ended({ state: 'stopped-by-restart' }))).toBe('wake');
     expect(captainRevival(ended({ state: 'hibernated' }))).toBe('wake');
     expect(captainRevival(ended({ state: 'done', shellHarness: null, reviewOf: null }))).toBe('restart');
   });

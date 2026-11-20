@@ -293,7 +293,7 @@ test('a shell tab drags out to a window of its own, from a pop-out onto another 
     await expect(sessionWindow(board)).toHaveAttribute('data-session-id', impl!.sessionId);
   } finally {
     await app.close();
-    removeDataDir(dataDir);
+    await removeDataDir(dataDir);
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -327,7 +327,7 @@ test("a pane of a shell tile's split drags out to a window of its own, and ⌘Z 
     expect(await running(window, pane)).toBe(true);
   } finally {
     await app.close();
-    removeDataDir(dataDir);
+    await removeDataDir(dataDir);
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -439,7 +439,7 @@ test("a web tab pops out into a tab window and back with its page as it was, nev
   } finally {
     await app.close();
     await server.close();
-    removeDataDir(dataDir);
+    await removeDataDir(dataDir);
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -500,7 +500,7 @@ test("a web tab dropped on a tile whose window isn't open keeps its cookies: its
   } finally {
     await app.close();
     await server.close();
-    removeDataDir(dataDir);
+    await removeDataDir(dataDir);
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -537,7 +537,7 @@ test('a tab window open as the app quits comes back, with its tabs, at the next 
   } finally {
     await app.close();
     await server.close();
-    removeDataDir(dataDir);
+    await removeDataDir(dataDir);
     rmSync(dir, { recursive: true, force: true });
   }
 });

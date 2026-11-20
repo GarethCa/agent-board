@@ -102,6 +102,20 @@ describe('schedules', () => {
     ]);
   });
 
+  it('runs a clock now when asked, in its history, keeping its next fire time', () => {
+    const { clock, schedules, runs, set } = scheduler();
+    set('c', { cron: '0 9 * * 1-5', prompt: 'Triage' });
+
+    clock.advanceTo(at(2026, 10, 10, 8, 0));
+    const after = schedules.runNow('c');
+    expect(runs).toEqual([{ clockId: 'c', agent: 'a', prompt: 'Triage', at: at(2026, 10, 10, 8, 0) }]);
+    expect(after).toMatchObject({ nextRunAt: at(2026, 10, 12, 9).toISOString(), runs: [expect.objectContaining({ outcome: 'started', firedAt: at(2026, 10, 10, 8, 0).toISOString() })] });
+    expect(schedules.runNow('gone')).toBeUndefined();
+    // Its fire time still comes, once.
+    clock.advanceTo(at(2026, 10, 12, 9));
+    expect(runs).toHaveLength(2);
+  });
+
   it("shows the next run, and the runs it has had, newest first", () => {
     const { clock, schedules, set, answer } = scheduler();
     set('c', { cron: '0 9 * * 1-5', prompt: 'Triage' });

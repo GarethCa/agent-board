@@ -533,6 +533,10 @@ describe('laying out the board from the command line', () => {
     await usage(['arrange', '--by', 'mood'], '--by must be issue, role, state');
     await usage(['arrange', '--layout', 'spiral'], '--layout must be rows, columns, cards, grid, wrap, masonry, treemap');
     await usage(['arrange', 'a', 'b'], 'give at most one zone ref');
+    await usage(['arrange', '--place', 'chairs=top'], '--place: no kind chairs; give notes, files, clocks');
+    await usage(['arrange', '--place', 'notes=away'], '--place: notes must be one of cluster, sidebar, top, stay');
+    await usage(['arrange', '--once'], '--once is for --place');
+    await usage(['arrange', '--place', 'notes'], '--place takes kind=placement pairs');
     await usage(['zone', 'add', '--name', 'x'], 'give --group');
     await usage(['zone', 'add', '--group'], 'give the group --name');
     await usage(['zone', 'add', '--group', '--name', 'x', '--size', 'big'], '--size is width,height');
@@ -563,6 +567,29 @@ describe('laying out the board from the command line', () => {
     expect(await run(env, 'arrange', 'board')).toMatchObject({ code: 0, out: expect.stringMatching(/^Arranged the board:\n[^]*zone:\S+ far at /) });
     expect(await run(env, 'arrange', 'board')).toMatchObject({ code: 0, out: 'The board was arranged already: nothing moved.\n' });
     expect(await run(env, 'arrange', 'board', '--by', 'role')).toMatchObject({ code: 1, err: expect.stringContaining('arrange board takes no --by') });
+    expect(await run(env, 'arrange', 'board', '--place', 'notes=top')).toMatchObject({ code: 1, err: expect.stringContaining('arrange board takes no --by, --layout, --auto, --place, --once or --all') });
+  });
+
+  it("places a zone's items where --place says, kept as the zone's unless --once, and the map says where each kind went", async () => {
+    const { env, client, shell } = await board();
+    await run(env, 'zone', 'add', '--group', '--name', 'Done', '--at', '0,2000', '--size', '900,500');
+    const group = (await client.call('zone.list')).find((zone) => zone.name === 'Done')!;
+    await run(env, 'move', ref('shell', shell.id), '--to', 'Done');
+    const todo = await client.call('item.create', { kind: 'todo', zoneId: group.id, x: 600, y: 300, width: 300, height: 196, data: { owner: { kind: 'user' }, lines: [] } });
+    const at = async () => {
+      const item = (await client.call('item.list')).find((each) => each.id === todo.id)!;
+      return { x: item.x, y: item.y };
+    };
+    const once = await run(env, 'arrange', 'Done', '--place', 'todos=stay', '--once');
+    expect(once).toMatchObject({ code: 0, out: expect.stringContaining('items  1 todos stay') });
+    expect(await at()).toEqual({ x: 600, y: 300 });
+    expect((await client.call('zone.list')).find((zone) => zone.id === group.id)!.placements).toEqual({});
+    expect(await run(env, 'arrange', 'Done')).toMatchObject({ code: 0, out: expect.stringContaining('items  1 todos top') });
+    const tidy = await at();
+    expect(tidy).not.toEqual({ x: 600, y: 300 });
+    expect(await run(env, 'arrange', 'Done', '--place', 'todos=sidebar')).toMatchObject({ code: 0, out: expect.stringContaining('items  1 todos sidebar') });
+    expect((await client.call('zone.list')).find((zone) => zone.id === group.id)!.placements).toEqual({ todos: 'sidebar' });
+    expect(await run(env, 'zone', 'map', 'Done')).toMatchObject({ code: 0, out: expect.stringContaining('items  1 todos sidebar') });
   });
 
   it('makes, changes and removes a group, moves a tile into it, arranges it and puts a note in it, as the user', async () => {

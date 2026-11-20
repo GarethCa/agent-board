@@ -60,8 +60,10 @@ export function FolderLine({ path, branch }: { path: string; branch: string | nu
     <>
       <FolderGit2 className="add-zone-row-icon" />
       <span className="add-zone-row-main">
-        <span className="add-zone-row-title">{folderLabel(path, undefined)}</span>
-        <span className="add-zone-row-detail add-zone-mono">
+        <span className="add-zone-row-title" title={path}>
+          {folderLabel(path, undefined)}
+        </span>
+        <span className="add-zone-row-detail add-zone-mono" title={branch === null ? path : `${path} · ${branch}`}>
           {path}
           {branch !== null && ` · ${branch}`}
         </span>

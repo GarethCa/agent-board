@@ -150,8 +150,8 @@ export function badgeLine(badge: TileBadge, shells: number): string {
   }
 }
 
-/** One child of the footer, as measured: a badge that can fold, the "+N" chip, or something that stays. */
-export type FooterItem = { kind: 'badge'; width: number; rank: number } | { kind: 'plus'; width: number } | { kind: 'fixed'; width: number };
+/** One child of the footer, as measured: a badge that can fold, the "+N" chip, a button shown only on hover, or something that stays. */
+export type FooterItem = { kind: 'badge'; width: number; rank: number } | { kind: 'plus'; width: number } | { kind: 'hover'; width: number } | { kind: 'fixed'; width: number };
 
 /** How many lines `items` take in a row `available` wide, wrapping like the footer's flex row; one wider than it shrinks to it. */
 function linesTaken(items: FooterItem[], available: number, gap: number): number {
@@ -186,4 +186,15 @@ export function foldCount({ items, available, gap, maxLines, plusShown }: { item
 export function setupText(badge: Extract<TileBadge, { kind: 'setup' }>): string {
   const effort = badge.effort === null && badge.pending === null ? null : `${badge.effort === null ? 'Default' : EFFORT_LABELS[badge.effort]}${badge.pending === null ? '' : '…'}`;
   return [...(badge.model === null ? [] : [modelLabel(badge.model)]), ...(effort === null ? [] : [effort])].join(' · ');
+}
+
+/**
+ * How the footer keeps to `maxLines`: whether its buttons shown only on hover give way, and how many badges then fold
+ * into the "+N". A hover button keeps its spot while everything fits, so showing it moves nothing; when it doesn't fit,
+ * it goes first and quietly (no "+N": what it does is in the tile's ⋯ too), so it never takes a badge's place.
+ */
+export function footerFold(fit: { items: FooterItem[]; available: number; gap: number; maxLines: number; plusShown: boolean }): { hoverHidden: boolean; folded: number } {
+  const folded = foldCount(fit);
+  if (folded === 0 || !fit.items.some((item) => item.kind === 'hover')) return { hoverHidden: false, folded };
+  return { hoverHidden: true, folded: foldCount({ ...fit, items: fit.items.filter((item) => item.kind !== 'hover') }) };
 }

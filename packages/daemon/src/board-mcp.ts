@@ -73,6 +73,7 @@ import {
   addNote,
   addShape,
   arrangeZone,
+  placeOption,
   setZoneLayout,
   connectItems,
   editConnector,
@@ -109,6 +110,8 @@ import {
   PAGE_TONES,
   AGENT_ROLES,
   ARRANGE_BYS,
+  ARRANGE_ITEM_KINDS,
+  ARRANGE_PLACEMENTS,
   CAPTURE_STYLES,
   CREW_EVENT_KINDS,
   ARRANGE_LAYOUTS,
@@ -178,6 +181,7 @@ export const BOARD_MCP_INSTRUCTIONS =
   'board and its commands; these tools are the few you need most. A turn ending tells no one: when you are blocked, ' +
   'your work is ready for review, or you need a decision, call `needs_you` with the reason in a line. Before you start, ' +
   'list memories with `memory_read`, then read what other agents left; before you finish or hand off, `memory_update` what the next one should know. ' +
+  'A zone shares one memory: add to it, and never start a memory of your own for a ticket. ' +
   'Something only the user can do, later (send a pull request for approval, restart the app), goes on their to-do list with `remind`. ' +
   'For a long watch, `clock_add` adds a clock of your own that messages you on a schedule; `clock_set` changes what your ' +
   'clock does with you after each run, or turns it off, with your reason; `save_clock_template` saves a clock to start new ones from.';
@@ -561,10 +565,16 @@ export const BOARD_MCP_TOOLS: Tool[] = [
   },
   {
     name: 'memory_new',
-    description: 'Put a new memory beside your tile: shared context that the agents of its zone (every agent, if it is loose) and the user read and write. As `agent-board memory new`.',
+    description:
+      'Put a new memory beside your tile: shared context that the agents of its zone (every agent, if it is loose) and the user read and write. ' +
+      'A zone shares one memory, which agents add to with memory_update: never start one for each ticket. While your zone has one, this is ' +
+      'refused, naming it; make a second only for a different subject the whole zone needs, with second. As `agent-board memory new`.',
     inputSchema: {
       type: 'object',
-      properties: { title: { type: 'string', maxLength: MAX_PLAN_TITLE_LENGTH, description: 'What it remembers, in a line.' } },
+      properties: {
+        title: { type: 'string', maxLength: MAX_PLAN_TITLE_LENGTH, description: 'What it remembers, in a line.' },
+        second: { type: 'boolean', description: 'Make it though the zone has a memory: for a different subject the whole zone needs.' },
+      },
       required: ['title'],
       additionalProperties: false,
     },
@@ -572,7 +582,7 @@ export const BOARD_MCP_TOOLS: Tool[] = [
   {
     name: 'memory_read',
     description:
-      'Read what other agents left before you start. Without memory, list the memories you can read (in your zone, and loose ones). ' +
+      'Read what other agents left before you start: your zone shares one memory. Without memory, list the memories you can read (in your zone, and loose ones). ' +
       'With memory, its facts in full, pinned first, then newest first, and its documents by title (search: only those holding it); ' +
       'with entry, that one in full (a document whole), or with history its versions, newest first. As `agent-board memory ls|read|history`.',
     inputSchema: {
@@ -592,8 +602,8 @@ export const BOARD_MCP_TOOLS: Tool[] = [
       'Change a memory: add remembers a fact ("key: value" with a one-word key replaces that key\'s value; else a note) or, ' +
       'with document (a title) or file, text kept whole (up to 1 MB), listed by title until read; edit changes an entry\'s text, ' +
       'key or pin; remove removes one; restore puts a version back (memory_read with history lists them); confirm says a stale ' +
-      "one is still true. Any agent that reads it may change any entry, the user's too. Add what the next agent should know before you " +
-      'finish. As `agent-board memory add|edit|rm|restore|confirm`.',
+      "one is still true. Any agent that reads it may change any entry, the user's too. Add what the next agent should know to your " +
+      "zone's memory before you finish, rather than a new memory. As `agent-board memory add|edit|rm|restore|confirm`.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -1239,13 +1249,18 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
   {
     name: 'arrange',
     description:
-      "Lay out your zone's tiles that you may move, on its grid: you, the shells and the clocks you or your crew made first " +
-      "(the user's clocks stay put), then a lane per issue or branch " +
+      "Lay out your zone's tiles that you may move, on its grid: you, the shells and the clocks you or your crew made first, " +
+      'then a lane per issue or branch ' +
       'ticket (its label; its implementer, reviewer and follow-up reviewer, each slot a column lining up down the lanes, a ' +
       'rail apart where an edge joins them; then a note you sign saying what each agent is doing), or a row per role or ' +
       'state. Arranging again moves the notes with their lanes, keeping any edited text, and fits the zone to what it ' +
-      'holds. It answers with the zone\'s map (see map). by, layout and auto are kept as your settings for the next ' +
-      'arrange. As `agent-board arrange`.',
+      'holds. It places the zone\'s items too, each kind as placements says: cluster, beside the agent that made it (an ' +
+      'agent note, the one it is about) in its lane after its tiles, down the sidebar if that agent is not in the zone or ' +
+      "it is the user's; sidebar, one column down the right of the crew, by kind; top, a row under the top row, by kind (in columns, the column after it); " +
+      'stay, left where it is. Until a zone says otherwise notes and files cluster; clocks, todos, queues, memory and steps ' +
+      'go top; stickies, shapes and text stay. An item the user dragged or turned stays unless all; one in the zone\'s free ' +
+      'area always does. It answers with the zone\'s map (see map), which says how many of each kind went where. by, ' +
+      'layout and auto are kept as your settings for the next arrange. As `agent-board arrange`.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1262,6 +1277,14 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
             'A row per group (rows, at first: by issue, lanes with a column per slot), a column per group (columns), a card per lane two or three across (cards), filling the zone (grid) with the tiles no edge joins, units joined by edges laid out as rows, or by issue each lane below the one before, its label and note in its first column and its tiles wrapping onto a new row after four (wrap; by role or state, as rows), each lane as wrap lays it out in the shortest of as many columns as fit the window (masonry), or each lane a block sized by its tiles in a treemap of the window\'s shape, 16:10 with none (treemap); masonry and treemap pack each role\'s or state\'s row as a lane.',
         },
         auto: { type: 'boolean', description: 'Arrange by itself after every agent you start, note you add and agent you close (true), or stop (false). Off at first.' },
+        placements: {
+          type: 'object',
+          description: "Where to place each kind of the zone's items, as { notes: 'sidebar' }: kept as the zone's for its next arrange, unless once.",
+          properties: Object.fromEntries(ARRANGE_ITEM_KINDS.map((kind) => [kind, { type: 'string', enum: [...ARRANGE_PLACEMENTS] }])),
+          additionalProperties: false,
+        },
+        once: { type: 'boolean', description: 'The placements given for this arrange only, not kept as the zone\'s.' },
+        all: { type: 'boolean', description: 'Tidy the items the user dragged or turned too, which an arrange otherwise leaves where they are.' },
       },
       additionalProperties: false,
     },
@@ -1832,6 +1855,25 @@ function autoArg(args: Record<string, unknown>): { auto?: string } {
   throw new BoardError('auto must be true or false');
 }
 
+/** A yes-or-no option of `arrange` (`once`, `all`): true or false, or as a model may send it, `"true"` or `"false"`. */
+function flagArg<Name extends 'once' | 'all'>(args: Record<string, unknown>, name: Name): Partial<Record<Name, true>> {
+  const value = args[name];
+  if (value === undefined || value === false || value === 'false') return {};
+  if (value === true || value === 'true') return { [name]: true } as Record<Name, true>;
+  throw new BoardError(`${name} must be true or false`);
+}
+
+/** `placements` as `arrange` takes it: each kind's placement, by kind; or a string of `kind=placement` pairs. */
+function placementsArg(args: Record<string, unknown>): { place?: Record<string, string> } {
+  const value = args.placements;
+  if (value === undefined) return {};
+  if (typeof value === 'string') return { place: placeOption(value) };
+  if (typeof value !== 'object' || value === null || Array.isArray(value) || !Object.values(value).every((each) => typeof each === 'string')) {
+    throw new BoardError('placements must say each kind\'s placement, as { "notes": "sidebar" }');
+  }
+  return { place: value as Record<string, string> };
+}
+
 /** `on_board` as a plan takes it: true or false, or not given. */
 function onBoardArg(args: Record<string, unknown>): { onBoard?: boolean } {
   if (args.on_board === undefined) return {};
@@ -2128,6 +2170,9 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
         by: stringArg(args, 'by', true),
         layout: stringArg(args, 'layout', true),
         ...autoArg(args),
+        ...placementsArg(args),
+        ...flagArg(args, 'once'),
+        ...flagArg(args, 'all'),
       })
     ).text,
   zone_screenshot: async (session, args) => {
@@ -2227,7 +2272,7 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
     return (await readStepsCard(session, card)).text;
   },
   steps_update: async (session, args) => (await updateSteps(session, stringArg(args, 'card'), stepsUpdateArg(args))).text,
-  memory_new: async (session, args) => (await newMemory(session, stringArg(args, 'title'))).text,
+  memory_new: async (session, args) => (await newMemory(session, stringArg(args, 'title'), args.second === true)).text,
   memory_read: async (session, args) => {
     const memory = stringArg(args, 'memory', true);
     const entry = stringArg(args, 'entry', true);

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { displaced, heldFrom, type Held } from './displace';
+import { displaced, geometryKey, heldFrom, redisplaced, type Held } from './displace';
 import type { ExpandedTiles, OverlapsAllowed } from './expanded';
 import type { TileSizes } from './tile-size';
 import type { BoardNode } from './tiles';
@@ -19,6 +19,9 @@ const NO_CREWS: readonly (readonly string[])[] = [];
 /** No tile pinned expanded. */
 const NOT_PINNED: ReadonlySet<string> = new Set();
 
+/** No tile put down while tiles are expanded. */
+const NONE_PUT: ReadonlySet<string> = new Set();
+
 /** No tile resized while compact. */
 const NO_SIZES: TileSizes = {};
 
@@ -27,7 +30,8 @@ const NO_SIZES: TileSizes = {};
  * `crews` moved as one, each of `pinned` kept where it is (`displaced`), the ones moved, and for a moment the ones going back, marked to ease there. While a drag or resize
  * is under way, everything starts from where it was drawn as it began (`held`), so starting one moves nothing. The
  * board's own nodes keep their places, so nothing moved is saved: a drag starts from where a node is drawn and ends
- * where it was dropped, as the board saves any drag.
+ * where it was dropped, as the board saves any drag. What was dropped is saved where it was drawn, pushed already: while
+ * a tile open then stays open it is not pushed with its row or column again (`putDown`), so it stays where it was put.
  */
 export function useDisplaced(
   nodes: BoardNode[],
@@ -36,6 +40,7 @@ export function useDisplaced(
   crews: readonly (readonly string[])[] = NO_CREWS,
   compactSizes: TileSizes = NO_SIZES,
   pinned: ReadonlySet<string> = NOT_PINNED,
+  putDown: ReadonlySet<string> = NONE_PUT,
 ): BoardNode[] {
   const changing = nodes.some((node) => node.dragging === true || node.resizing === true);
   /** The nodes, and where they were drawn, as last rendered with nothing changing: what a change starts from. */
@@ -50,10 +55,15 @@ export function useDisplaced(
     holding = undefined;
     setHeld(undefined);
   }
-  const shown = useMemo(
-    () => displaced(nodes, expanded, overlapsAllowed, holding ?? AT_REST, crews, compactSizes, pinned),
-    [nodes, expanded, overlapsAllowed, holding, crews, compactSizes, pinned],
+  // Laid out again only when what `displaced` reads changes: an agent's status line changing anywhere gives a new
+  // `nodes`, and the last layout is moved onto it as it was.
+  const geometry = geometryKey(nodes);
+  const laidOut = useMemo(
+    () => ({ nodes, shown: displaced(nodes, expanded, overlapsAllowed, holding ?? AT_REST, crews, compactSizes, pinned, putDown) }),
+    // `geometry` stands for `nodes`: the same key, the same layout.
+    [geometry, expanded, overlapsAllowed, holding, crews, compactSizes, pinned, putDown],
   );
+  const shown = useMemo(() => (laidOut.nodes === nodes ? laidOut.shown : redisplaced(nodes, laidOut.nodes, laidOut.shown)), [laidOut, nodes]);
   // Kept as it renders, not after an effect: a change in the very next render starts from this one.
   if (!changing) rest.current = { nodes, shown };
   // `displaced` keeps the nodes in order, and the ones it doesn't move as they were.

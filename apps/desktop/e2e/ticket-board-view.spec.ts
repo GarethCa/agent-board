@@ -21,7 +21,7 @@ async function openAs(window: Page, choice: 'Terminal' | 'Card' | 'Board'): Prom
   await settings.close();
 }
 
-test("with Board picked in Settings a ticket's tile rests as its card and a double-click takes the user into its board; its own switch overrides the setting, and Open as board goes in whatever the view", async () => {
+test("with Board picked in Settings a ticket's tile rests as its card and a double-click takes the user into its board; its own switch overrides the setting, and Open the ticket's board goes in whatever the view", async () => {
   const { repo, env } = scratch('output');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env);
@@ -62,8 +62,8 @@ test("with Board picked in Settings a ticket's tile rests as its card and a doub
     await expect(opened).toHaveAttribute('data-ticket-open', 'terminal');
     await expect.poll(views).toEqual({ [nodeId]: 'terminal' });
 
-    // Open as board goes in from the terminal view too, and leaves the tile's view as it was.
-    await menuRow(opened, 'Open as board');
+    // Open the ticket's board goes in from the terminal view too, and leaves the tile's view as it was.
+    await menuRow(opened, "Open the ticket's board");
     await expect(board).toBeVisible();
     await window.getByTestId('ticket-board-back').click();
     await expect(board).toBeHidden();

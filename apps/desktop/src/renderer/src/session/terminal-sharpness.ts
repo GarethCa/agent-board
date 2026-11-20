@@ -134,8 +134,8 @@ interface Core {
 export interface Sharpener {
   /** The terminal's renderer changed: on WebGL it starts following the zoom, and on the DOM renderer it stops. */
   setRenderer(renderer: 'webgl' | 'dom'): void;
-  /** The terminal is where it will stay, for now: draws for its scale and moves onto the device pixels. */
-  settle(): void;
+  /** The terminal is where it will stay, for now: draws for its scale and moves onto the device pixels. Whether it drew again. */
+  settle(): boolean;
   dispose(): void;
 }
 
@@ -145,7 +145,7 @@ const TILE_MOVE_SETTLE_MS = 100;
 const RESIZING = ['scale', 'transform', 'width', 'height'];
 const ARRIVALS = ['animationend', 'animationcancel', 'transitionend', 'transitioncancel'];
 
-const NO_SHARPENER: Sharpener = { setRenderer() {}, settle() {}, dispose() {} };
+const NO_SHARPENER: Sharpener = { setRenderer() {}, settle: () => false, dispose() {} };
 
 function isWebgl(renderer: Partial<WebglRenderer> | undefined): renderer is WebglRenderer {
   return renderer?._updateDimensions !== undefined && renderer._setCanvasDevicePixelDimensions !== undefined && renderer.renderRows !== undefined;
@@ -231,12 +231,12 @@ export function sharpen(terminal: Terminal, onRedrawn?: (startedAt: number) => v
       return effect.getKeyframes().some((frame) => RESIZING.some((property) => property in frame));
     });
 
-  const settle = () => {
-    if (renderer === undefined || !screen.isConnected) return;
+  const settle = (): boolean => {
+    if (renderer === undefined || !screen.isConnected) return false;
     const xterm = terminal.element;
-    if (xterm === undefined || xterm.offsetWidth === 0) return;
+    if (xterm === undefined || xterm.offsetWidth === 0) return false;
     watchTile();
-    if (moving()) return;
+    if (moving()) return false;
     const scale = screenZoom(xterm.getBoundingClientRect().width, parseFloat(browser.window.getComputedStyle(xterm).width));
     const dpr = browser.window.devicePixelRatio;
     // Where the screen would sit with no offset of its own.
@@ -247,11 +247,12 @@ export function sharpen(terminal: Terminal, onRedrawn?: (startedAt: number) => v
     const next = compute();
     if (before === undefined || next.device.cell.width !== before.device.cell.width || next.device.cell.height !== before.device.cell.height) {
       redraw();
-    } else {
-      // The same pixels for a zoom that hardly moved: only the transform changes.
-      current = next;
-      place();
+      return true;
     }
+    // The same pixels for a zoom that hardly moved: only the transform changes.
+    current = next;
+    place();
+    return false;
   };
 
   // A tile moved any way at all (dragged, arranged, undone, pushed aside) leaves the screen's corner off the device pixels.
@@ -311,15 +312,46 @@ export function sharpen(terminal: Terminal, onRedrawn?: (startedAt: number) => v
   };
 }
 
-const settledListeners = new Set<() => void>();
+/** Hears the board come to rest, and says whether that drew its terminal again. */
+type SettledListener = () => boolean | void;
 
-/** The board's viewport has come to rest: every terminal on it draws for the new zoom. */
-export function boardSettled(): void {
-  for (const listener of settledListeners) listener();
+const settledListeners = new Set<SettledListener>();
+/** The listeners still to hear the board come to rest, the next one first. */
+let settling: SettledListener[] = [];
+let nextFrame: number | undefined;
+
+const frame = (run: () => void): number =>
+  typeof requestAnimationFrame === 'function' ? requestAnimationFrame(run) : (setTimeout(run, 16) as unknown as number);
+const cancelFrame = (handle: number) => (typeof cancelAnimationFrame === 'function' ? cancelAnimationFrame(handle) : clearTimeout(handle));
+
+/** Tells the listeners still waiting, up to one that draws its terminal again: one terminal's redraw a frame. */
+function settleSome(): void {
+  nextFrame = undefined;
+  while (settling.length > 0) {
+    const listener = settling.shift()!;
+    if (settledListeners.has(listener) && listener() === true) break;
+  }
+  if (settling.length > 0) nextFrame = frame(settleSome);
 }
 
-/** Hears when the board's viewport comes to rest. Returns how to stop. */
-export function onBoardSettled(listener: () => void): () => void {
+/**
+ * The board's viewport has come to rest: every terminal on it draws for the new zoom, one a frame from the next frame on,
+ * so the frame after a pan or pinch never waits for them all. Terminals out of view draw nothing and take no frame.
+ */
+export function boardSettled(): void {
+  settling = [...settledListeners];
+  if (nextFrame === undefined) nextFrame = frame(settleSome);
+}
+
+/** The board's viewport has started moving: the terminals still to draw for the last zoom wait for the next rest. */
+export function boardMoving(): void {
+  settling = [];
+  if (nextFrame !== undefined) cancelFrame(nextFrame);
+  nextFrame = undefined;
+}
+
+/** Hears when the board's viewport comes to rest; `listener` returns true when it drew its terminal again. Returns how to stop. */
+export function onBoardSettled(listener: SettledListener): () => void {
   settledListeners.add(listener);
   return () => settledListeners.delete(listener);
 }

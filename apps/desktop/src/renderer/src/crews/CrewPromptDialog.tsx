@@ -1,7 +1,8 @@
 import { Users } from 'lucide-react';
 import { useRef, useState, type KeyboardEvent } from 'react';
 import { isOrchestratorRole, MAX_REVIEW_CAP, type LibraryPrefab, type Zone } from '@agent-board/daemon/protocol';
-import { Button, Dialog, ErrorText, Field, Hint, Kbd, Select, Tag, Textarea } from '../ui';
+import { Button, Dialog, ErrorText, Field, Hint, Kbd, Select, Tag, Textarea, Truncate } from '../ui';
+import { ZoneName } from '../board/ZoneName';
 import { keyText } from '../keys/registry';
 import { useAction } from '../use-action';
 import { bypassNoticeSeen, CodexBypassExplanation, markBypassNoticeSeen } from '../board/codex-notice';
@@ -135,7 +136,7 @@ export function CrewPromptDialog({ prefab, zones, zone: asked, suggested, onAddZ
           <span>
             {prefab.name}
             {asked !== undefined && ' in '}
-            {asked !== undefined && <span className="new-agent-zone">{asked.name}</span>}
+            {asked !== undefined && <ZoneName name={asked.name} />}
           </span>
         </span>
       }
@@ -240,7 +241,9 @@ export function CrewPromptDialog({ prefab, zones, zone: asked, suggested, onAddZ
                   </span>
                   <span className="crew-prompt-member-detail">{detail}</span>
                 </span>
-                <Tag>{when}</Tag>
+                <Tag title={when}>
+                  <Truncate text={when} title={null} />
+                </Tag>
               </li>
             );
           })}

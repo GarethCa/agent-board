@@ -165,6 +165,8 @@ const readsIn = (source: string) =>
  * those a library sets on its own elements, such as how much room Radix leaves a popover.
  */
 const LOCAL = [
+  // A folded card's icon, scaled as a picture to the frame it was resized to: the node sets it from its size.
+  '--picture-scale',
   // A board background's pattern: the board sets where it is and how big on a moving one, and the rules derive the rest.
   '--backdrop-x',
   '--backdrop-y',
@@ -197,6 +199,7 @@ const LOCAL = [
   '--radix-popover-content-available-width',
   '--radix-popover-content-available-height',
   '--radix-dropdown-menu-content-available-height',
+  '--radix-dropdown-menu-content-available-width',
   '--pane-top',
   '--pane-height',
   '--pane-strip',
@@ -253,6 +256,11 @@ const LOCAL = [
   '--ghost-y',
   '--chip-x',
   '--chip-y',
+  // Where a memory read's pulse sets out on the board, and how far it goes to its reader.
+  '--pulse-x',
+  '--pulse-y',
+  '--pulse-dx',
+  '--pulse-dy',
   // A theme's colours in its swatch in Settings, from the registry, as its tokens aren't the page's until it shows.
   '--preview-desk',
   '--preview-edge',
@@ -443,6 +451,25 @@ const SIMPLIFIED_PACK_SCOPES = THEME_SCOPES.filter(({ family }) => family !== un
 });
 /** Every look the app can show: each theme, and the Simplified design in each mode and over each theme pack. */
 const LOOKS = [...THEME_SCOPES, ...SIMPLIFIED_SCOPES, ...SIMPLIFIED_PACK_SCOPES];
+
+/** How far apart two colours look: CIE76 ΔE in Lab, D65. Around 2 is just noticeable side by side. */
+function deltaE(one: string, other: string): number {
+  const lab = (hex: string): [number, number, number] => {
+    const linear = (at: number) => {
+      const c = Number.parseInt(hex.slice(at, at + 2), 16) / 255;
+      return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    };
+    const [r, g, b] = [linear(1), linear(3), linear(5)];
+    const f = (t: number) => (t > 216 / 24389 ? Math.cbrt(t) : (t * 24389) / 27 / 116 + 16 / 116);
+    const x = f((0.4124 * r + 0.3576 * g + 0.1805 * b) / 0.95047);
+    const y = f(0.2126 * r + 0.7152 * g + 0.0722 * b);
+    const z = f((0.0193 * r + 0.1192 * g + 0.9505 * b) / 1.08883);
+    return [116 * y - 16, 500 * (x - y), 200 * (y - z)];
+  };
+  const [l1, a1, b1] = lab(one);
+  const [l2, a2, b2] = lab(other);
+  return Math.hypot(l1 - l2, a1 - a2, b1 - b2);
+}
 
 /**
  * A colour token's hex value in the first of `scope` that sets it (falling back to `:root`), following var() aliases.
@@ -836,20 +863,37 @@ describe.each(LOOKS)('text contrast in the $id look', ({ stack }) => {
     },
   );
 
-  // A paused tile's frost: the slate in its corners over its fill, as the CSS layers them. All its text is drawn in
-  // --text there, and its snowflake, a glyph, in the state's ink, held to 3:1.
-  describe('on a paused tile at its densest frost', () => {
+  // A frozen tile's frost: its kind's colour in its corners over its fill, as the CSS layers them. All its text is drawn
+  // in --text there, and its mark, a glyph, in its kind's ink, held to 3:1. An exited tile's error is in red: AA too.
+  describe.each([
+    { kind: 'paused', fill: '--frost-fill', frost: '--frost', corner: '--state-hibernated', mark: '--frost-mark' },
+    { kind: 'scheduled', fill: '--frost-scheduled-fill', frost: '--frost-scheduled', corner: '--state-scheduled', mark: '--frost-scheduled-mark' },
+    { kind: 'done', fill: '--frost-done-fill', frost: '--frost-done', corner: '--muted', mark: '--frost-done-mark' },
+    { kind: 'exited', fill: '--frost-exited-fill', frost: '--frost-exited', corner: '--warning', mark: '--frost-exited-mark' },
+  ])('on a $kind tile at its densest frost', ({ kind, fill, frost, corner, mark }) => {
     const frostPeak = () => {
-      const frost = /^color-mix\(in srgb, var\(--state-hibernated\) ([\d.]+)%, transparent\)$/.exec(scopes.get(':root')!.get('--frost')!.trim());
-      expect(frost, '--frost is the slate at a share, over nothing').not.toBeNull();
-      return mix(hexOf('--state-hibernated', stack), hexOf('--frost-fill', stack), Number(frost![1]) / 100);
+      const share = new RegExp(`^color-mix\\(in srgb, var\\(${corner}\\) ([\\d.]+)%, transparent\\)$`).exec(([...stack, ':root'].map((scope) => scopes.get(scope)?.get(frost)).find((value) => value !== undefined) ?? '').trim());
+      expect(share, `${frost} is ${corner} at a share, over nothing`).not.toBeNull();
+      return mix(hexOf(corner, stack), hexOf(fill, stack), Number(share![1]) / 100);
     };
     it('its text meets WCAG AA', () => {
       expect(contrast(hexOf('--text', stack), frostPeak())).toBeGreaterThanOrEqual(4.5);
     });
-    it('its snowflake reads at 3:1', () => {
-      expect(contrast(hexOf('--frost-mark', stack), frostPeak())).toBeGreaterThanOrEqual(3);
+    it('its mark reads at 3:1', () => {
+      expect(contrast(hexOf(mark, stack), frostPeak())).toBeGreaterThanOrEqual(3);
     });
+    it.runIf(kind === 'exited')('its red word and error line meet WCAG AA', () => {
+      expect(contrast(hexOf('--frost-exited-ink', stack), frostPeak())).toBeGreaterThanOrEqual(4.5);
+    });
+  });
+
+  // Toned down, the four frosts still differ by more than their glyphs: each pair of fills is apart to the eye side by
+  // side (ΔE 1.5; the dimmest dark packs leave the blue no more room and keep AA), as well as by glyph, edge and watermark.
+  it('tells the four frosts apart by their fills', () => {
+    const fills = ['--frost-fill', '--frost-scheduled-fill', '--frost-done-fill', '--frost-exited-fill'].map((fill) => [fill, hexOf(fill, stack)] as const);
+    for (const [i, [a, one]] of fills.entries()) {
+      for (const [b, other] of fills.slice(i + 1)) expect(deltaE(one, other), `${a} and ${b}`).toBeGreaterThanOrEqual(1.5);
+    }
   });
 
   // In the Settings window, an unchecked switch's track, a box's and a field's edge are the muted text mixed into the box.

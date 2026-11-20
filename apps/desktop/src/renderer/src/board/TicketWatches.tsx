@@ -1,7 +1,7 @@
-import { useContext, useState, type ReactNode } from 'react';
+import { useContext, useRef, useState, type ReactNode } from 'react';
 import { Check, Eye, GitMerge, Play, UserRound } from 'lucide-react';
 import { TICKET_WATCH_EVERY_MINUTES, TICKET_WATCH_KINDS, type Agent, type TicketWatch, type TicketWatchChange, type TicketWatchEvery, type TicketWatchKind } from '@agent-board/daemon/protocol';
-import { Button, Popover, Segmented, Switch } from '../ui';
+import { AnchoredPopover, Button, Popover, Segmented, Switch, type Measured } from '../ui';
 import { TileActionsContext } from './tile';
 import { TileButton } from './tile-parts';
 import { LABELLED_WATCHES, WATCH_ROWS, type WatchIcon } from './ticket-watch-view';
@@ -50,6 +50,23 @@ export function TicketWatchesMenu({ chat, name, className }: { chat: Agent; name
   const { setWatches, readWatches } = useContext(TileActionsContext);
   if (chat.watch === undefined) return null;
   return <WatchesMenu name={name} watch={chat.watch} className={className} onChange={(change) => setWatches(chat.sessionId, change)} onRead={() => readWatches(chat.sessionId)} />;
+}
+
+/**
+ * The ticket's Watches sheet opened from its ⋯ menu's Watches…, while `open`: beside its tile, pointed at the tile's
+ * frame, as the tile has no button of its own to point at.
+ */
+export function TicketWatchesPopover({ chat, name, open, onOpenChange }: { chat: Agent; name: string; open: boolean; onOpenChange(open: boolean): void }) {
+  const { setWatches, readWatches } = useContext(TileActionsContext);
+  const frame = useRef<Measured>({
+    getBoundingClientRect: () => document.querySelector(`.react-flow__node [data-ticket-tile][data-session-id="${CSS.escape(chat.sessionId)}"]`)?.getBoundingClientRect() ?? new DOMRect(),
+  });
+  if (chat.watch === undefined) return null;
+  return (
+    <AnchoredPopover anchor={{ measured: frame }} open={open} onOpenChange={onOpenChange} aria-label={`What ${name} watches`} side="right" align="start" className="ticket-watches-popover">
+      <WatchesSheet name={name} watch={chat.watch} onChange={(change) => setWatches(chat.sessionId, change)} onRead={() => readWatches(chat.sessionId)} />
+    </AnchoredPopover>
+  );
 }
 
 /** The ticket's Watches menu, from the eye in its header: `WatchesSheet` in a popover. */

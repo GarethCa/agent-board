@@ -17,6 +17,7 @@ import { errorMessage } from '../../../shared/errors';
 import { DetailsToggle } from './DetailsToggle';
 import { SessionName } from './SessionName';
 import type { WindowNav } from './SessionWindow';
+import { FrostMark, FrozenOr } from '../board/FrostMark';
 
 interface SimplifiedHeaderProps {
   sessionId: string;
@@ -58,7 +59,8 @@ export function SimplifiedHeader({ sessionId, agent, name, title, placement, nav
     <>
       {nav && <ZonePopUp nav={nav} sessionId={sessionId} />}
       <SessionName agent={agent} name={name} title={title} />
-      {status && <StatusMark status={status} />}
+      {agent && <FrostMark agent={agent} />}
+      {status && agent && <FrozenOr agent={agent}><StatusMark status={status} /></FrozenOr>}
       {agent && onChatControlsSlot && <span className="session-window-chat-controls" ref={onChatControlsSlot} />}
       <span className="session-window-head-fill" />
       <div className="session-window-controls" data-testid="session-window-controls">
@@ -95,9 +97,9 @@ function useBoardMenu(agent: Agent | undefined, placement: 'board' | 'own-window
 
 /**
  * The agent menu's rows a window has no use for, or has its own of: renaming is a click on the name it shows, and
- * opening, popping out and folding are the window's own.
+ * opening (its pop-up too), popping out and folding are the window's own.
  */
-const WINDOW_OWN = new Set(['expand', 'open-window', 'pop-out', 'fold', 'rename']);
+const WINDOW_OWN = new Set(['open', 'expand', 'open-window', 'pop-out', 'fold', 'rename']);
 
 /**
  * The ⋯ menu: the agent's run first, as its tile's menu has it, then this window's rows (into its own window or back
@@ -151,7 +153,7 @@ function tidy(entries: MenuEntry[]): MenuEntry[] {
 }
 
 /** The header's one action for what the agent is doing now: Stop (⌘.) while it works, Wake while paused, else none. */
-function StateAction({ agent, placement }: { agent: Agent; placement: 'board' | 'own-window' }) {
+export function StateAction({ agent, placement }: { agent: Agent; placement: 'board' | 'own-window' }) {
   const toast = useToast();
   // On the board, Wake is the board's own, as from the tile, so a second press while one is under way waits on it.
   const { resumeAgent } = useContext(TileActionsContext);

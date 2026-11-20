@@ -1,6 +1,6 @@
 {
   "name": "@agent-board/desktop",
-  "version": "0.6.32",
+  "version": "0.6.33",
   "private": true,
   "description": "An infinite board for your Claude Code and Codex sessions",
   "homepage": "https://github.com/GarethCa/agent-board#readme",
@@ -17,7 +17,7 @@
     "test:e2e": "playwright test --project app --project perf",
     "test:visual": "playwright test --project visual",
     "readme:screenshots": "playwright test --project readme",
-    "package": "rm -rf dist && electron-vite build && electron-builder --publish never $(node ../../scripts/app-install/builder-targets.ts) && node ../../scripts/app-install/main.ts",
+    "package": "rm -rf dist && electron-vite build && electron-builder --publish never $(node ../../scripts/app-install/builder-targets.ts) && node ../../scripts/app-install/sign.ts && node ../../scripts/app-install/main.ts",
     "test:e2e:packaged": "playwright test --project packaged"
   },
   "devDependencies": {

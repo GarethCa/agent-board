@@ -4,9 +4,11 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { BoardError, BoardRefs, callerTicket, connectorLine, connectorsIn, connectorsOnTicket, itemLine, itemPlace, readEveryBoard, ticketBoardName, REF_KINDS, resolveAgent, shapeSectionLines, zoneLine, type BoardSession, type BoardView, type RefKind } from './board-ops.ts';
+import { checkPlacements } from './params.ts';
 import {
   ARRANGE_BYS,
   ARRANGE_LAYOUTS,
+  type ArrangePlacements,
   CAPTURE_STYLES,
   CONNECTOR_STYLES,
   FILL_SLOT_COLORS,
@@ -169,6 +171,27 @@ export interface ArrangeOptions {
   layout?: string;
   /** `on` or `off`. */
   auto?: string;
+  /** Where to place each kind of the zone's items, by kind (`ARRANGE_ITEM_KINDS`): `cluster`, `sidebar`, `top` or `stay`. */
+  place?: Record<string, string>;
+  /** The placements for this arrange only, not kept as the zone's. */
+  once?: boolean;
+  /** Tidies the items the user dragged or turned too. */
+  all?: boolean;
+}
+
+/** `--place`'s `kind=placement` pairs, comma-separated, by kind. */
+export function placeOption(value: string): Record<string, string> {
+  return Object.fromEntries(
+    value
+      .split(',')
+      .map((pair) => pair.trim())
+      .filter((pair) => pair !== '')
+      .map((pair) => {
+        const [kind, placement, ...rest] = pair.split('=').map((part) => part.trim());
+        if (kind === undefined || placement === undefined || kind === '' || placement === '' || rest.length > 0) throw new BoardError(`--place takes kind=placement pairs, as notes=sidebar,clocks=top: not ${pair}`);
+        return [kind, placement] as const;
+      }),
+  );
 }
 
 /** Checks `arrange`'s options before anything connects. */
@@ -178,6 +201,8 @@ export function checkArrange(options: ArrangeOptions): void {
     throw new BoardError(`--layout must be ${ARRANGE_LAYOUTS.join(', ')}`);
   }
   if (options.auto !== undefined && options.auto !== 'on' && options.auto !== 'off') throw new BoardError('--auto must be on or off');
+  checkPlacements(options.place ?? {}, '--place', (message) => new BoardError(message));
+  if (options.once === true && options.place === undefined) throw new BoardError('--once is for --place: give where to place each kind for this arrange only');
 }
 
 /** The ref of a map's thing, by its key (`agent:<id>`, `item:<id>`); one of no ref kind as it is. */
@@ -333,11 +358,15 @@ export async function arrangeZone(session: BoardSession, zone: string | undefine
     ...(options.by === undefined ? {} : { by: options.by as (typeof ARRANGE_BYS)[number] }),
     ...(options.layout === undefined ? {} : { layout: options.layout as (typeof ARRANGE_LAYOUTS)[number] }),
     ...(options.auto === undefined ? {} : { auto: options.auto === 'on' }),
+    ...(options.place === undefined ? {} : { placements: options.place as Partial<ArrangePlacements> }),
+    ...(options.once === undefined ? {} : { once: options.once }),
+    ...(options.all === undefined ? {} : { all: options.all }),
   });
   const name = refs.board.zones.find((each) => each.id === result.zoneId)?.name ?? '';
   const moved = result.moved.map((each) => `  ${label(refs, each.target)} ${where(each.x, each.y)}`);
-  // Then the zone's map, so the layout can be checked at once: read afresh, with the labels and notes it made.
-  const map = await session.client.call('orchestrator.map', { token: session.token, zoneId: result.zoneId });
+  // Then the zone's map, so the layout can be checked at once: read afresh, with the labels and notes it made, and where
+  // this arrange placed each kind of item (for this arrange only, perhaps).
+  const map = { ...(await session.client.call('orchestrator.map', { token: session.token, zoneId: result.zoneId })), placed: result.placed };
   const after = new BoardRefs(await readEveryBoard(session.client));
   return {
     text: [
@@ -736,7 +765,7 @@ export async function removeConnector(session: BoardSession, ref: string): Promi
  * cards there, which stay put; nothing on the main board moves. It takes none of a zone's arrange options.
  */
 async function arrangeTicket(session: BoardSession, refs: BoardRefs, ticket: string, options: ArrangeOptions): Promise<BoardView> {
-  if (Object.values(options).some((value) => value !== undefined)) throw new BoardError("arrange of a ticket's board takes no --by, --layout or --auto: they are a zone's");
+  if (Object.values(options).some((value) => value !== undefined)) throw new BoardError("arrange of a ticket's board takes no --by, --layout, --auto, --place, --once or --all: they are a zone's");
   const result = await session.client.call('orchestrator.arrangeTicket', { token: session.token, ticket });
   const name = ticketBoardName(refs, ticket);
   const moved = result.moved.map((each) => `  ${label(refs, { kind: 'agent', id: each.sessionId })} ${where(each.x, each.y)}`);
@@ -751,7 +780,7 @@ async function arrangeTicket(session: BoardSession, refs: BoardRefs, ticket: str
  * for an orchestrator of the whole board. It takes none of a zone's arrange options.
  */
 async function arrangeWholeBoard(session: BoardSession, options: ArrangeOptions): Promise<BoardView> {
-  if (Object.values(options).some((value) => value !== undefined)) throw new BoardError('arrange board takes no --by, --layout or --auto: they are a zone\'s');
+  if (Object.values(options).some((value) => value !== undefined)) throw new BoardError('arrange board takes no --by, --layout, --auto, --place, --once or --all: they are a zone\'s');
   const result = await session.client.call('orchestrator.arrangeBoard', { token: session.token });
   const refs = new BoardRefs(await readEveryBoard(session.client));
   const zones = result.zones.map((each) => `  ${refs.of('zone', each.zoneId)} ${refs.board.zones.find((zone) => zone.id === each.zoneId)?.name ?? ''} ${where(each.x, each.y)}`);

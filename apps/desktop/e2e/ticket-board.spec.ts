@@ -46,7 +46,7 @@ async function openAsBoard(window: Page, chatId: string, helpers = 1): Promise<v
   await expect
     .poll(() => window.evaluate(async (id) => (await globalThis.window.agentBoard.agents.list()).filter((agent) => agent.ticket === id).length, chatId), { timeout: 30_000 })
     .toBe(helpers);
-  const item = window.getByRole('menuitem', { name: 'Open as board' });
+  const item = window.getByRole('menuitem', { name: "Open the ticket's board" });
   await expect(async () => {
     if (await item.isVisible()) return;
     await window.keyboard.press('Escape');
@@ -154,6 +154,58 @@ test("a ticket's tile zooms into its own board, with its helpers and a note on i
   } finally {
     await first.app.close().catch(() => {});
     await second?.app.close().catch(() => {});
+    await removeDataDir(dataDir);
+  }
+});
+
+test("a ticket's ⋯ opens its Watches sheet, and Close ticket… asks, then ends its chat and its helper", async () => {
+  test.setTimeout(90_000);
+  const { env, repo } = scratch('waiting');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, env);
+  try {
+    const zone = await addZone(window, repo);
+    const chat = await start(window, { zoneId: zone.id, prompt: 'Watch settings for a zone', ticketChat: true });
+    const helper = await start(window, { zoneId: zone.id, prompt: 'Build the watch settings', ticket: chat.sessionId, role: 'implementer' });
+    const ended = () =>
+      window.evaluate(
+        async (ids) => (await globalThis.window.agentBoard.agents.list()).filter((agent) => ids.includes(agent.sessionId) && agent.endedAt !== null).length,
+        [chat.sessionId, helper.sessionId],
+      );
+    const tile = window.locator(`[data-session-id="${chat.sessionId}"]`).filter({ has: window.getByRole('button', { name: 'More' }) }).first();
+    const menuItem = async (name: string) => {
+      const item = window.getByRole('menuitem', { name });
+      await expect(async () => {
+        if (await item.isVisible()) return;
+        await window.keyboard.press('Escape');
+        await tile.getByRole('button', { name: 'More' }).click({ timeout: 2_000 });
+        await expect(item).toBeVisible({ timeout: 2_000 });
+      }).toPass({ timeout: 20_000 });
+      await item.click();
+    };
+
+    // Watches… opens the sheet the eye used to.
+    await menuItem('Watches…');
+    const sheet = window.getByRole('dialog', { name: /^What .+ watches$/ });
+    await expect(sheet).toBeVisible();
+    await expect(sheet).toContainText('It never approves or merges.');
+    await window.keyboard.press('Escape');
+    await expect(sheet).toBeHidden();
+
+    // Close ticket… asks first: cancelled, nothing ends.
+    await menuItem('Close ticket…');
+    const ask = window.getByRole('alertdialog', { name: 'Close ticket?' });
+    await expect(ask).toContainText('and its 1 helper end');
+    await ask.getByRole('button', { name: 'Cancel' }).click();
+    await expect(ask).toBeHidden();
+    expect(await ended()).toBe(0);
+
+    // Confirmed, the chat and its helper both end.
+    await menuItem('Close ticket…');
+    await ask.getByRole('button', { name: 'Close ticket' }).click();
+    await expect.poll(ended, { timeout: TURN_MS }).toBe(2);
+  } finally {
+    await app.close().catch(() => {});
     await removeDataDir(dataDir);
   }
 });

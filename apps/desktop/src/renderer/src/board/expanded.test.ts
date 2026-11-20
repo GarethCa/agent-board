@@ -85,10 +85,18 @@ describe('expanded tiles', () => {
 
   it('keeps a tile on the board in place of its window only while it is pinned and open', () => {
     const expanded = expandTile([], 'pinned');
-    expect(keptOnBoard('pinned', new Set(['pinned']), expanded)).toBe(true);
-    expect(keptOnBoard('pinned', new Set(), expanded)).toBe(false);
+    expect(keptOnBoard('pinned', new Set(['pinned']), expanded, 'openAgent')).toBe(true);
+    expect(keptOnBoard('pinned', new Set(['pinned']), expanded, 'showWindow')).toBe(true);
+    expect(keptOnBoard('pinned', new Set(), expanded, 'openAgent')).toBe(false);
     // Pinned in its window: that window is shown.
-    expect(keptOnBoard('pinned', new Set(['pinned']), [])).toBe(false);
+    expect(keptOnBoard('pinned', new Set(['pinned']), [], 'openAgent')).toBe(false);
+  });
+
+  it("opens a pinned tile's window for the user's own Maximise, Pop out and pop-up", () => {
+    const expanded = expandTile([], 'pinned');
+    expect(keptOnBoard('pinned', new Set(['pinned']), expanded, 'popUp')).toBe(false);
+    expect(keptOnBoard('pinned', new Set(['pinned']), expanded, 'maximise')).toBe(false);
+    expect(keptOnBoard('pinned', new Set(['pinned']), expanded, 'popOut')).toBe(false);
   });
 
   it('opens each tile pinned expanded that is on the board, not open, and not in its session window', () => {
@@ -234,6 +242,24 @@ describe('windowedExpanded', () => {
     const next = windowedExpanded([b], [a], sets([]), present);
     expect(next.expanded).toEqual([b, a]);
     expect(next.hidden).toEqual([]);
+  });
+
+  it('hides a pinned tile while its window or pop-out has the session, so one terminal shows it, and gives it back pinned at its size', () => {
+    const pinned = new Set(['a']);
+    // Maximise on a pinned tile asks for its window: no pin keeps it on the board.
+    expect(keptOnBoard('a', pinned, [a, b], 'maximise')).toBe(false);
+    // The window open: the tile is out of the expanded tiles, and the pin does not open it again beside the window.
+    const open = windowedExpanded([a, b], [], sets(['a']), present);
+    expect(ids(open.expanded)).toEqual(['b']);
+    expect(open.hidden).toEqual([a]);
+    const windowed = new Set(['a', ...open.hidden.map((entry) => entry.id)]);
+    expect(pinnedToOpen(pinned, open.expanded, present, windowed)).toEqual([]);
+    // Closed: back at its size, still pinned, with nothing left for the pin to open.
+    const closed = windowedExpanded(open.expanded, open.hidden, sets([]), present);
+    expect(closed.expanded).toEqual([b, a]);
+    expect(closed.hidden).toEqual([]);
+    expect(pinnedToOpen(pinned, closed.expanded, present, new Set())).toEqual([]);
+    expect(keptOnBoard('a', pinned, closed.expanded, 'openAgent')).toBe(true);
   });
 
   it('leaves a tile whose window was compact, compact', () => {

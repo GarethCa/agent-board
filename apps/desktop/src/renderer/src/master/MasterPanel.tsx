@@ -203,16 +203,15 @@ function CaptainRevive({ master }: { master: Agent }) {
     return (
       <div className="agent-exit-banner" role="status">
         {exitText(master)}
-        <RestartAgent agent={master} label="Restart the Captain" testId="master-restart" />
+        <RestartAgent agent={master} label="Wake the Captain" testId="master-restart" />
       </div>
     );
   }
-  const resume = revival === 'resume';
   return (
     <div className="agent-exit-banner" role="status" data-testid="master-revive">
-      {resume ? 'The Captain was stopped by a restart' : 'The Captain is paused'}
+      {master.state === 'stopped-by-restart' ? 'The Captain was stopped by a restart' : 'The Captain is paused'}
       <Button size="xs" variant="primary" loading={busy} data-testid="master-resume" onClick={() => run(() => window.agentBoard.agents.resume(master.sessionId))}>
-        {resume ? 'Resume the Captain' : 'Wake the Captain'}
+        Wake the Captain
       </Button>
       {error && <ErrorText>{error}</ErrorText>}
     </div>
@@ -287,7 +286,7 @@ function Watching({ agents, zones, onShowAgent, onShowZone }: Pick<MasterPanelPr
 }
 
 /** What needs you, the Needs-you list's rows, then the master's latest digest note. */
-function ForYou({ panel, agents, zones, items, master, onOpenAgent, onOpenLink }: Pick<MasterPanelProps, 'agents' | 'zones' | 'items' | 'onOpenAgent' | 'onOpenLink'> & { panel: RefObject<HTMLElement | null>; master: Agent }) {
+export function ForYou({ panel, agents, zones, items, master, onOpenAgent, onOpenLink }: Pick<MasterPanelProps, 'agents' | 'zones' | 'items' | 'onOpenAgent' | 'onOpenLink'> & { panel: RefObject<HTMLElement | null>; master: Agent }) {
   const entries = needsYouEntries(agents, useNeedsYouShows());
   const now = useNow(entries.some((entry) => heldPrompts(entry.agent).length > 0));
   const digest = latestDigest(items, master.sessionId);

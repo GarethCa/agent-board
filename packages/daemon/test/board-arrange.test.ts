@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { arrangeTiles, CLUSTER_LABEL_SIZE, CLUSTER_NOTE_SIZE, parkClusters, ticketOfBranch, type ArrangeTile } from '../src/board-arrange.ts';
+import { arrangeTiles, CLUSTER_LABEL_SIZE, CLUSTER_NOTE_SIZE, lanesOf, parkClusters, ticketOfBranch, type ArrangeTile } from '../src/board-arrange.ts';
 import { AGENT_TILE_SIZE, clearOf, PERCH_ROOM, RAIL_GAP, ROW_STEP, sizedFootprint, SPACING_GAPS, TILE_GAP, ZONE_PADDING, type Point, type Rect } from '../src/board-layout.ts';
-import { ARRANGE_SPACINGS } from '../src/protocol.ts';
+import { ARRANGE_SPACINGS, type ArrangeItemKind } from '../src/protocol.ts';
 
 const COLUMN = AGENT_TILE_SIZE.width + TILE_GAP;
 /** Where a zone's first grid row starts. */
@@ -1393,5 +1393,190 @@ describe("arranging round the lead's own notes", () => {
     expect(notes(2).flatMap(({ id }) => (clearOf({ ...arranged.notes.get(id)!, ...NOTE }, [stay]) ? [] : [id]))).toEqual([]);
     expect(arrangeTiles([agent('a')], [], { by: 'issue', layout: 'rows', width: 1200, leadNotes: notes(3) }).notes.size).toBe(0);
     expect(arrangeTiles(crowd, links, { by: 'issue', layout: 'rows', width: 1200 }).notes.size).toBe(0);
+  });
+});
+
+describe("arranging a zone's items", () => {
+  const LAYOUTS = ['rows', 'grid', 'columns', 'cards', 'wrap', 'masonry', 'treemap'] as const;
+  const BYS = ['issue', 'role', 'state'] as const;
+  /** An item to place, of `itemKind`, where `place` says, at its own size. */
+  function item(id: string, itemKind: ArrangeItemKind, place: 'cluster' | 'top' | 'sidebar', fields: Partial<ArrangeTile> = {}): ArrangeTile {
+    return { ...agent(id), kind: 'item', state: null, itemKind, place, owner: null, size: { width: 240, height: 180 }, ...fields };
+  }
+  const shell = { ...agent('shell'), kind: 'shell' as const, state: null };
+  const lanes = [
+    agent('lead', { lead: true }),
+    shell,
+    agent('impl-a', { role: 'implementer', issue: 'ACME-1', createdAt: '2026-01-01' }),
+    agent('review-a', { role: 'reviewer', reviewOf: 'impl-a', issue: 'ACME-1', createdAt: '2026-01-01' }),
+    agent('impl-b', { role: 'implementer', issue: 'ACME-2', createdAt: '2026-01-02' }),
+  ];
+  const tops = [
+    item('memory', 'memory', 'top'),
+    item('todo', 'todos', 'top', { size: { width: 300, height: 260 } }),
+    item('clock', 'clocks', 'top', { size: { width: 200, height: 120 } }),
+    item('queue', 'queues', 'top'),
+  ];
+  const all = (tiles: readonly ArrangeTile[], arranged: ReturnType<typeof arrangeTiles>) => partsOf(arranged, tiles).map((part) => part.rect);
+
+  it('puts the top items in a row of their own under the top row, by kind, and the lanes below them', () => {
+    const tiles = [...lanes, ...tops];
+    const { positions } = arrangeTiles(tiles, [], { by: 'issue', layout: 'rows', width: 1200, clusters: true });
+    const head = Math.max(...['lead', 'shell'].map((id) => positions.get(id)!.y + AGENT_TILE_SIZE.height));
+    const row = tops.map((tile) => positions.get(tile.id)!);
+    expect(new Set(row.map((at) => at.y)).size).toBe(1);
+    expect(row[0]!.y).toBeGreaterThan(head);
+    // By kind: the clock, the to-do list, the queue, then the memory.
+    expect(['clock', 'todo', 'queue', 'memory'].map((id) => positions.get(id)!.x)).toEqual(['clock', 'todo', 'queue', 'memory'].map((id) => positions.get(id)!.x).toSorted((a, b) => a - b));
+    expect(positions.get('impl-a')!.y).toBeGreaterThanOrEqual(row[0]!.y + 260 + TILE_GAP);
+  });
+
+  it("puts an agent's notes and files in its lane, after the lane's tiles and before its note", () => {
+    const tiles = [...lanes, item('note-b', 'notes', 'cluster', { owner: 'impl-b' }), item('doc-a', 'files', 'cluster', { owner: 'review-a' }), item('note-a', 'notes', 'cluster', { owner: 'impl-a' })];
+    const { positions, clusters } = arrangeTiles(tiles, [], { by: 'issue', layout: 'rows', width: 1200, clusters: true });
+    expect(positions.get('note-a')!.y).toBe(positions.get('impl-a')!.y);
+    expect(positions.get('doc-a')!.y).toBe(positions.get('impl-a')!.y);
+    expect(positions.get('note-b')!.y).toBe(positions.get('impl-b')!.y);
+    // Notes before files, past every slot of the lanes, so lanes' items line up.
+    expect(positions.get('note-a')!.x).toBeGreaterThan(positions.get('review-a')!.x);
+    expect(positions.get('doc-a')!.x).toBeGreaterThan(positions.get('note-a')!.x);
+    expect(positions.get('note-b')!.x).toBe(positions.get('note-a')!.x);
+    const [a] = clusters;
+    expect(a!.members).toEqual(['impl-a', 'review-a']);
+    expect(a!.label).toBe('ACME-1');
+    expect(a!.noteAt.x).toBeGreaterThan(positions.get('doc-a')!.x);
+  });
+
+  it("puts the lead's items in the block beside the crew, and an item whose agent is not in the zone in the sidebar", () => {
+    const tiles = [...lanes, item('lead-doc', 'files', 'cluster', { owner: 'lead' }), item('stray', 'notes', 'cluster', { owner: 'gone' }), item('loose', 'files', 'cluster')];
+    const arranged = arrangeTiles(tiles, [], { by: 'issue', layout: 'rows', width: 1200, clusters: true, leadNotes: [{ id: 'lead-note', size: { width: 240, height: 200 } }] });
+    const crewRight = Math.max(...partsOf(arranged, lanes).map((part) => part.rect.x + part.rect.width));
+    const doc = arranged.positions.get('lead-doc')!;
+    expect(doc.y).toBe(arranged.notes.get('lead-note')!.y);
+    expect(doc.x).toBeGreaterThan(arranged.notes.get('lead-note')!.x);
+    expect(arranged.notes.get('lead-note')!.x).toBeGreaterThan(crewRight);
+    // The sidebar is past the lead's block, one column.
+    expect(arranged.positions.get('stray')!.x).toBeGreaterThan(doc.x + 240);
+    expect(arranged.positions.get('loose')!.x).toBe(arranged.positions.get('stray')!.x);
+  });
+
+  it('stacks the sidebar in one column down the right of everything, from the top, by kind', () => {
+    const side = [item('memory', 'memory', 'sidebar'), item('note', 'notes', 'sidebar'), item('clock', 'clocks', 'sidebar', { size: { width: 200, height: 120 } })];
+    const tiles = [...lanes, ...side];
+    const arranged = arrangeTiles(tiles, [], { by: 'issue', layout: 'rows', width: 1200, clusters: true });
+    const crewRight = Math.max(...partsOf(arranged, lanes).map((part) => part.rect.x + part.rect.width));
+    const at = (id: string) => arranged.positions.get(id)!;
+    expect(new Set(side.map((tile) => at(tile.id).x)).size).toBe(1);
+    expect(at('note').x).toBeGreaterThanOrEqual(crewRight + TILE_GAP);
+    expect(at('note').y).toBe(GRID_ROW_TOP);
+    // By kind: notes, then clocks, then memory, each below the one before.
+    expect(at('clock').y).toBeGreaterThanOrEqual(at('note').y + 180 + TILE_GAP);
+    expect(at('memory').y).toBeGreaterThanOrEqual(at('clock').y + 120 + TILE_GAP);
+    expect(arranged.size.width).toBe(at('note').x + 240 + ZONE_PADDING);
+  });
+
+  it('by role or state, puts an agent’s items in its row, after its row’s tiles', () => {
+    for (const by of ['role', 'state'] as const) {
+      const tiles = [...lanes, item('note-a', 'notes', 'cluster', { owner: 'review-a' })];
+      const { positions } = arrangeTiles(tiles, [], { by, layout: 'rows', width: 1200 });
+      expect(positions.get('note-a')!.y, by).toBe(positions.get('review-a')!.y);
+      const row = lanes.filter((tile) => positions.get(tile.id)!.y === positions.get('review-a')!.y);
+      expect(positions.get('note-a')!.x, by).toBeGreaterThan(Math.max(...row.map((tile) => positions.get(tile.id)!.x)));
+    }
+  });
+
+  const messy = [
+    ...lanes,
+    item('note-a', 'notes', 'cluster', { owner: 'impl-a' }),
+    item('doc-b', 'files', 'cluster', { owner: 'impl-b', size: { width: 420, height: 520 } }),
+    item('lead-doc', 'files', 'cluster', { owner: 'lead' }),
+    item('stray', 'notes', 'cluster', { owner: 'gone' }),
+    ...tops,
+    item('steps', 'steps', 'sidebar', { size: { width: 280, height: 340 } }),
+    item('sticky', 'stickies', 'sidebar'),
+  ];
+
+  it('places every item in every layout and grouping, clear of every other part and of what stays put', () => {
+    const stay = { x: 520, y: 900, width: 200, height: 200 };
+    for (const by of BYS) {
+      for (const layout of LAYOUTS) {
+        const arranged = arrangeTiles(messy, [], { by, layout, width: 1400, clusters: by === 'issue', obstacles: [stay], window: { width: 1600, height: 1000 } });
+        const label = `${by} ${layout}`;
+        expect(messy.filter((tile) => !arranged.positions.has(tile.id)).map((tile) => tile.id), label).toEqual([]);
+        const parts = all(messy, arranged);
+        const touching = parts.flatMap((rect, index) => (clearOf(rect, [...parts.filter((_, other) => other !== index), stay]) ? [] : [partsOf(arranged, messy)[index]!.id]));
+        expect(touching, label).toEqual([]);
+        expect(arranged.size.width, label).toBeGreaterThanOrEqual(Math.max(...parts.map((rect) => rect.x + rect.width)) + ZONE_PADDING);
+        expect(arranged.size.height, label).toBeGreaterThanOrEqual(Math.max(...parts.map((rect) => rect.y + rect.height)) + ZONE_PADDING);
+      }
+    }
+  });
+
+  it('keeps what each placement means in every layout and grouping: top under the top row, cluster by its agent, sidebar right of the rest', () => {
+    const agents = lanes.filter((tile) => tile.kind === 'agent' || tile.kind === 'shell');
+    for (const by of BYS) {
+      for (const layout of LAYOUTS) {
+        const arranged = arrangeTiles(messy, [], { by, layout, width: 1400, clusters: by === 'issue', window: { width: 1600, height: 1000 } });
+        const label = `${by} ${layout}`;
+        const rect = (id: string): Rect => ({ ...arranged.positions.get(id)!, ...(messy.find((tile) => tile.id === id)!.size ?? AGENT_TILE_SIZE) });
+        // The top row, then the items placed on top, then the lanes: down the zone, or across it in columns, whose lanes run down.
+        const [start, end] = layout === 'columns' ? (['x', 'width'] as const) : (['y', 'height'] as const);
+        const head = (by === 'issue' ? ['lead', 'shell'] : ['lead']).map(rect);
+        const crew = ['impl-a', 'review-a', 'impl-b', ...(by === 'issue' ? [] : ['shell'])].map(rect);
+        const top = tops.map((tile) => rect(tile.id));
+        for (const item of top) expect(item[start], `${label}: a top item past the top row`).toBeGreaterThanOrEqual(Math.max(...head.map((tile) => tile[start] + tile[end])));
+        for (const tile of crew) expect(tile[start], `${label}: a lane past the top items`).toBeGreaterThanOrEqual(Math.max(...top.map((item) => item[start] + item[end])));
+        // Each item placed beside its agent is in its agent's lane (by issue) or row (by role or state): only agents of
+        // that lane or row have their middle in the box round the item and its agent.
+        const groupOf = (tile: ArrangeTile) => (by === 'issue' ? tile.issue : by === 'role' ? tile.role : tile.state);
+        for (const [id, owner] of [
+          ['note-a', 'impl-a'],
+          ['doc-b', 'impl-b'],
+        ] as const) {
+          const own = agents.filter((tile) => !tile.lead && tile.kind === 'agent' && groupOf(tile) === groupOf(agents.find((other) => other.id === owner)!));
+          const box = [rect(id), rect(owner)];
+          const around = { x: Math.min(...box.map((part) => part.x)), y: Math.min(...box.map((part) => part.y)), width: 0, height: 0 };
+          around.width = Math.max(...box.map((part) => part.x + part.width)) - around.x;
+          around.height = Math.max(...box.map((part) => part.y + part.height)) - around.y;
+          const centred = (part: Rect) => [part.x + part.width / 2, part.y + part.height / 2] as const;
+          const inside = agents
+            .filter((tile) => {
+              const [x, y] = centred(rect(tile.id));
+              return !own.includes(tile) && x > around.x && x < around.x + around.width && y > around.y && y < around.y + around.height;
+            })
+            .map((tile) => tile.id);
+          expect(inside, `${label}: ${id} in ${owner}'s lane`).toEqual([]);
+        }
+        // The sidebar right of everything else laid out.
+        const rest = [...head, ...crew, ...top, ...['note-a', 'doc-b'].map(rect)];
+        for (const id of ['steps', 'sticky', 'stray']) expect(rect(id).x, `${label}: ${id} down the side`).toBeGreaterThanOrEqual(Math.max(...rest.map((part) => part.x + part.width)));
+      }
+    }
+  });
+
+  it('lays out the same when arranged again at the size the zone was fitted to, in every layout and grouping', () => {
+    for (const by of BYS) {
+      for (const layout of LAYOUTS) {
+        for (const width of [800, 1600]) {
+          const options = { by, layout, clusters: by === 'issue', window: { width: 1600, height: 1000 } };
+          const once = arrangeTiles(messy, [], { ...options, width });
+          const again = arrangeTiles(messy, [], { ...options, width: once.size.width });
+          expect([px(again.positions), again.size], `${by} ${layout} from ${width}`).toEqual([px(once.positions), once.size]);
+        }
+      }
+    }
+  });
+
+  it('lays out only items, with no crew, in a top row and a sidebar', () => {
+    const { positions, size } = arrangeTiles([...tops, item('side', 'notes', 'sidebar')], [], { by: 'issue', layout: 'rows', width: 600 });
+    expect(positions.get('clock')).toEqual(FIRST);
+    expect(positions.get('side')!.x).toBeGreaterThan(positions.get('memory')!.x + 240);
+    expect(size.width).toBe(positions.get('side')!.x + 240 + ZONE_PADDING);
+  });
+
+  it('leaves the items out of the lanes a map reads', () => {
+    const { top, lanes: read } = lanesOf([...lanes, ...tops, item('note-a', 'notes', 'cluster', { owner: 'impl-a' })], []);
+    expect(top.map((tile) => tile.id)).toEqual(['lead', 'shell']);
+    expect(read.map((lane) => lane.slots.implementer.map((tile) => tile.id))).toEqual([['impl-a'], ['impl-b']]);
   });
 });

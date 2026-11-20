@@ -66,6 +66,8 @@ export interface ScheduleHost {
   /** The clock's status, or null if there is no such clock. */
   status(clockId: string): ClockStatus | null;
   statuses(): ClockStatus[];
+  /** Fires the clock now, as its fire time would, keeping its next fire time; undefined for no such clock. */
+  runNow(clockId: string): ClockStatus | undefined;
   /** The agent's schedule: the clock that messages it, the soonest of them; null if none does. */
   forAgent(sessionId: string): AgentSchedule | null;
   /** The ids of the clocks that message the agent, or hand fresh agents' results to it. */
@@ -362,6 +364,14 @@ export function createScheduleHost(options: ScheduleHostOptions): ScheduleHost {
 
     status,
     statuses: () => (selectAll.all() as unknown as ItemRow[]).map((row) => status(row.id)!),
+
+    runNow(clockId) {
+      const row = selectOne.get(clockId) as ItemRow | undefined;
+      if (row === undefined) return undefined;
+      const now = clock.now();
+      fire(parsedRow(row), now, now);
+      return status(clockId) ?? undefined;
+    },
 
     forAgent(sessionId) {
       const rows = selectMessaging.all(sessionId) as unknown as ItemRow[];

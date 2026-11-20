@@ -102,7 +102,9 @@ export function IssuePicker({ zone, selected, onSelect }: IssuePickerProps) {
           <Tag tone="accent" mono>
             {shortIssueId(selected)}
           </Tag>
-          <span className="issue-picker-title">{selected.title}</span>
+          <span className="issue-picker-title" title={selected.title}>
+            {selected.title}
+          </span>
           <IconButton icon={<X />} size="sm" aria-label={`Clear ${selected.id}`} onClick={() => onSelect(undefined)} />
         </p>
       )}

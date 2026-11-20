@@ -71,6 +71,8 @@ test('a ticket starts from its prefab with either kind of chat, and its ⋯ swit
     // more than a window apart: the view is fitted round both, as the board draws only the tiles in view.
     await fitView(window);
     await footer.getByRole('button', { name: 'More' }).click();
+    // Chat kind ▸ names the kind it is, and holds the pick.
+    await window.getByRole('menuitem', { name: 'Chat kind: the implementer' }).hover();
     await expect(window.getByRole('menuitemradio', { name: /The implementer/ })).toHaveAttribute('aria-checked', 'true');
     await window.getByRole('menuitemradio', { name: /Its own lead/ }).click();
     await expect.poll(async () => (await chatNow(window, built.sessionId))?.chatKind, { timeout: TURN_MS }).toBe('lead');
@@ -88,6 +90,7 @@ test('a ticket starts from its prefab with either kind of chat, and its ⋯ swit
     expect(asked).toMatchObject({ chatKind: 'lead', chatSwitch: 'implementer' });
     await fitView(window);
     await footer.getByRole('button', { name: 'More' }).click();
+    await window.getByRole('menuitem', { name: 'Chat kind: its own lead' }).hover();
     await expect(window.getByRole('menuitemradio', { name: /The implementer/ })).toContainText('after the builder hands off');
     await window.keyboard.press('Escape');
 
@@ -97,7 +100,7 @@ test('a ticket starts from its prefab with either kind of chat, and its ⋯ swit
     await expect(footer.getByTestId('ticket-builds')).toBeVisible();
   } finally {
     await app.close();
-    removeDataDir(dataDir);
+    await removeDataDir(dataDir);
     rmSync(dir, { recursive: true, force: true });
   }
 });

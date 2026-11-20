@@ -5,6 +5,7 @@ import { tabWindowTitle } from '../session/tabs';
 import type { SurfaceMove } from '../session/shell-moves';
 import { windowsClosedBy } from '../windows/session-windows';
 import { useSessionWindows } from '../windows/SessionWindows';
+import type { WindowPath } from './expanded';
 
 /** What a shell tile's window calls it. */
 export function shellTitle(shell: Shell): string {
@@ -17,21 +18,21 @@ export function agentTitle(agent: Agent): string {
 }
 
 /** Whether an agent's tile stays on the board, opened by `path`, in place of its session window: handled if so. */
-export type KeptOnBoard = (sessionId: string, path: string) => boolean;
+export type KeptOnBoard = (sessionId: string, path: WindowPath) => boolean;
 
 /** No agent kept on the board. */
 const NONE_KEPT: RefObject<KeptOnBoard> = { current: () => false };
 
 /**
  * The board's session windows, as the board opens and closes them for its tiles: an agent's or shell's window, a tab
- * window, and the windows a shell change closes. An agent `kept` on the board (pinned expanded) opens no window: its
- * tile is shown instead, by whatever asked for the window (Maximise, Pop out, a notification, a message, ⌘K in a
- * popped-out window). Every way to a session window comes through here, so none can get past.
+ * window, and the windows a shell change closes. An agent `kept` on the board (pinned expanded) opens no window for
+ * opening its tile (Enter, ⌘K ↵), a notification, a message or ⌘K in a popped-out window: its tile is shown instead.
+ * The user's own Maximise and pop-outs still open it (`keptOnBoard` in expanded.ts). Every way to a session window comes through here, so none can get past.
  */
 export function useBoardWindows(kept: RefObject<KeptOnBoard> = NONE_KEPT) {
-  const { windows, restored: windowsRestored, show: showAnyWindow, close: closeWindow, popOut: popOutWindow } = useSessionWindows();
+  const { windows, restored: windowsRestored, show: showAnyWindow, close: closeWindow, minimise: minimiseWindow, popOut: popOutWindow } = useSessionWindows();
   const showWindow = useCallback(
-    (target: Parameters<typeof showAnyWindow>[0], path = 'showWindow') => {
+    (target: Parameters<typeof showAnyWindow>[0], path: WindowPath = 'showWindow') => {
       if (target.kind === 'session' && kept.current(target.id, path)) return;
       showAnyWindow(target);
     },
@@ -73,5 +74,5 @@ export function useBoardWindows(kept: RefObject<KeptOnBoard> = NONE_KEPT) {
     [closeWindow],
   );
 
-  return { windows, windowsRestored, windowsRef, showWindow, closeWindow, popOut, popOutTabWindow, openShell, openAgent, poppedOut, onShellChange };
+  return { windows, windowsRestored, windowsRef, showWindow, closeWindow, minimiseWindow, popOut, popOutTabWindow, openShell, openAgent, poppedOut, onShellChange };
 }

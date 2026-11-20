@@ -33,6 +33,15 @@ export async function tokenOf(client: DaemonClient, sessionId: string): Promise<
   return printed;
 }
 
+export type Rect = { x: number; y: number; width: number; height: number };
+
+/** A node's rect on the board, unscaled by the zoom: where React Flow draws it. */
+export const nodeRect = (node: Locator): Promise<Rect> =>
+  node.evaluate((element) => {
+    const [x, y] = (element as HTMLElement).style.transform.match(/-?[\d.]+/g)!.map(Number);
+    return { x: x!, y: y!, width: (element as HTMLElement).offsetWidth, height: (element as HTMLElement).offsetHeight };
+  });
+
 /** The element's box once it has stopped moving, e.g. after a viewport animation. */
 export async function settledBox(locator: Locator): Promise<Box> {
   let last = '';

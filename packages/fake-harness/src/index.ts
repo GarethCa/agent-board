@@ -110,6 +110,12 @@ export interface FakeHarnessEnvOptions {
   /** Claude's question dialog closes on its PermissionRequest hook's allow, but the call runs with no answers. Defaults to false. */
   questionsDropAnswers?: boolean;
   /**
+   * Claude asks for permission as it does where only a person may allow a call (its own safety check): its
+   * PermissionRequest carries no `permission_suggestions`, and its dialog is drawn only once its hooks have answered.
+   * Defaults to false.
+   */
+  personOnlyPermissions?: boolean;
+  /**
    * Take keys as they come rather than a line at a time, as the real TUIs do, so a line longer than a terminal's 1 KiB
    * line arrives; Claude then keeps only the bytes after the last whole KiB of a long line typed with no paste around it,
    * as Claude 2.1.312 did. Defaults to false.
@@ -204,6 +210,7 @@ export function fakeHarnessEnv(options: FakeHarnessEnvOptions): NodeJS.ProcessEn
     FAKE_HARNESS_TOOL_FAILS: options.toolFails ? '1' : '0',
     FAKE_HARNESS_QUESTIONS_KEEP_DIALOG: options.questionsKeepDialog ? '1' : '0',
     FAKE_HARNESS_QUESTIONS_DROP_ANSWERS: options.questionsDropAnswers ? '1' : '0',
+    ...(options.personOnlyPermissions ? { FAKE_HARNESS_PERMISSION_SUGGESTIONS: 'none' } : {}),
     FAKE_HARNESS_RATE_LIMIT_SCREEN: options.rateLimitScreen ?? '',
     FAKE_HARNESS_QUEUE_MID_TURN: options.queueMidTurn ? '1' : '0',
     FAKE_HARNESS_JOIN_QUEUED_MS: String(options.joinQueuedMs ?? 0),

@@ -15,10 +15,13 @@ export const VIEWPORT = { width: 1280, height: 800 };
 
 /**
  * Before each shot: motion off (the running characters' legs loop for ever, and a frame caught mid-swing differs by a
- * few dozen pixels), the fonts loaded, and two animation frames painted so the layout has settled.
+ * few dozen pixels), the fonts loaded, the board drawn sharp after a pan or zoom, and two animation frames painted so the
+ * layout has settled. While the board's camera moves, and a moment after, its moving layer is a picture the GPU stretches
+ * (`moving-layer.ts`): a shot taken then catches text drawn at the last scale, not this one.
  */
 export async function settle(page: Page) {
   await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.waitForFunction(() => document.querySelector<HTMLElement>('.react-flow__viewport')?.style.willChange !== 'transform');
   await page.evaluate(async () => {
     await document.fonts.ready;
     await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
@@ -68,6 +71,10 @@ export async function pinRandomText(page: Page) {
     }
     for (const element of document.querySelectorAll("[data-testid='setup-folder'] .agent-shelves-mono")) {
       for (const node of textNodes(element)) node.data = `…/${node.data.split('/').at(-1)!.replace(/-[0-9a-f]{6}$/, '-000000')}`;
+    }
+    // A tile's line that quotes a hand-off names its sender by its ref, which is new on every run.
+    for (const element of document.querySelectorAll('.hybrid-tile-now')) {
+      for (const node of textNodes(element)) node.data = node.data.replace(/agent:[0-9a-f]{8}/g, 'agent:00000000');
     }
     for (const element of document.querySelectorAll('.rail-token-note')) {
       for (const node of textNodes(element)) node.data = node.data.replace(/\d\d:\d\d/, '14:31');

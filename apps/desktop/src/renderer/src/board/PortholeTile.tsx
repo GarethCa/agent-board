@@ -26,9 +26,9 @@ export function PortholeTile(props: GlanceTileProps) {
   );
 }
 
-function PortholeFace({ face, status, look, name, reviewer, menu, expand, prompt, action, times, repo, tags, extras }: GlanceParts) {
+function PortholeFace({ face, status, ask, look, name, reviewer, menu, expand, prompt, action, times, repo, tags, extras }: GlanceParts) {
   const style = useCharacterStyle();
-  const tone = portholeWordTone(face.state);
+  const tone = portholeWordTone(face);
   const line = glanceLine(face.line, face.state);
   const word = (
     <>
@@ -44,7 +44,7 @@ function PortholeFace({ face, status, look, name, reviewer, menu, expand, prompt
           waits on the user's click to reach the agent takes the whole row, with its own buttons. */}
       {prompt ?? (
         <div className="porthole-body">
-          <span className="porthole-port" data-testid="porthole" data-ring={portholeRing(face.state)} data-look={style === 'off' ? 'icons' : style}>
+          <span className="porthole-port" data-testid="porthole" data-ring={portholeRing(face)} data-look={style === 'off' ? 'icons' : style}>
             {style === 'off' ? <StatusGlyph status={status} className="porthole-glyph" /> : <TileCharacter {...look} style={style} height={PORTHOLE_CHARACTER_HEIGHT} />}
           </span>
           <GlanceLine line={line} className="porthole-line" />
@@ -53,7 +53,7 @@ function PortholeFace({ face, status, look, name, reviewer, menu, expand, prompt
       <span className="porthole-meta" data-testid="tile-meta">
         {/* Its state word, then a reviewer's mark. */}
         <span className="porthole-state">
-          <span className="porthole-word" data-testid="tile-state" data-tone={tone}>
+          <span className="porthole-word" data-testid="tile-state" data-tone={tone} data-ask={ask}>
             {word}
           </span>
           {reviewer}

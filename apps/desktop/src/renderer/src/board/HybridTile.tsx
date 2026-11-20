@@ -27,7 +27,7 @@ import { agentSetupLine, branchLine, EFFORT_LABELS, effortText, modelLabel, role
 import { useNow, useNowForSince } from '../inbox/use-now';
 import { clockBadge } from './schedule';
 import { commandLine } from './command-row';
-import { BellOff, Brain, Check, ClipboardList, Clock, Coins, Expand, FileCheck, FileText, Folder, GitBranch, Hammer, Network, Pause, PenLine, Play, RefreshCw, RotateCcw, Search, ShieldCheck, SquareArrowOutUpRight, Timer, TriangleAlert } from 'lucide-react';
+import { BellOff, Brain, Check, ClipboardList, Clock, Coins, Expand, FileCheck, FileText, Folder, GitBranch, Hammer, Network, Pause, PenLine, Play, RefreshCw, Search, ShieldCheck, Timer, TriangleAlert } from 'lucide-react';
 import { Button, Chip, EditableName, FlowPill, HoverCard, RenameButton, Spinner, StatusPill, Tag, useRenaming, useSlowClickRename } from '../ui';
 import { useCharacterStyle } from './characters';
 import { TileCharacter } from './TileCharacter';
@@ -54,13 +54,14 @@ import { CrewViewContext } from './crew-chip';
 import { useFittedLines } from './use-fitted-lines';
 import { splitReviewerName } from './tile-name';
 import { ClickOpensContext, TileActionsContext, type TileData, type TileProps } from './tile';
+import { agentTileTip, answerTicket, openAgentTile } from './click-opens';
 import { panesLabel } from '../session/panes';
-import { canRestart, canRestartLive, endedShellLabel } from '../session/RestartAgent';
+import { canRestartLive, endedShellLabel } from '../session/RestartAgent';
 import { useReviews } from '../review/ReviewsProvider';
 import { roundsOf } from '../review/reviews';
 import { dropKey, dropOver as dropOverValue } from '../session/shell-moves';
-import { frostedClasses, pausedLine } from './paused';
-import { FrostMark } from './FrostMark';
+import { frostedClasses, pausedLine, WAKE_ENDED_HINT, WAKE_HINT, WAKE_NOW_HINT, wakeAct } from './paused';
+import { FrostMark, FrostWatermark } from './FrostMark';
 import { externalMenu, menuBarAgentEntries, shellMenu } from './menu-model';
 import { useAgentTileMenu } from './agent-tile-menu';
 import { useMenuBarSection } from '../keys/menu-bar-bridge';
@@ -68,8 +69,7 @@ import { CalmShellTile } from './CalmShellTile';
 import { CalmTile } from './CalmTile';
 import { ShelfTile } from './ShelfTile';
 import { ticketHead, ticketTileAsk } from './ticket-tile';
-import { TicketWatchesMenu } from './TicketWatches';
-import { boardRow, ticketChatEntries, ticketMenuEntries } from './ticket-chat-menu';
+import { useTicketChatMenu } from './use-ticket-chat-menu';
 import { OneButton as TicketOneButton, useSwitchTicketView, useTicketView, viewRows } from './ticket-parts';
 import { ResumeButton } from './RestartBanner';
 import { ShellFolderChip } from './shell-parts';
@@ -79,7 +79,7 @@ import { TileQuickAsk } from './TileQuickAsk';
 import { TileDialogAsk } from './DialogQuickAsk';
 import { pillShowsAge, sinceLabel, stateAge, tileDetails, tileHistory, tileProgress, timeToGo, type TileShows } from './tile-shows';
 import { useTileShows } from './view-settings';
-import { FLAT_STATES, reviewablePr, TILE_STATE_WORDS, tileAbout, tileMark, footerFoldKey, tileNow, tileSince, tileTime, type TileButton as OneButton } from './tile-headline';
+import { FLAT_STATES, reviewablePr, tileAbout, tileMark, footerFoldKey, tileNow, tileSince, tileTime, tileWord, type TileButton as OneButton } from './tile-headline';
 import { askOf, HooksSilentRow, lastMessageCard, nameClass, stopPropagation, TileButton, TileMenu, TrustRow, UndeliveredRow, UnsentRow, UntypedRow } from './tile-parts';
 
 /** How tall an agent's character stands at the leading edge of its tile's body, in px. */
@@ -130,7 +130,7 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
   const crewView = useContext(CrewViewContext);
   const chip = from !== undefined && !crewView.framed.has(agent.sessionId);
   const tileActions = useContext(TileActionsContext);
-  const { expand, openAgent, popOutAgent, deleteAgent, openLink, openPullRequest, resumeAgent, sendUnsent, clearUnsent, typeFirstPrompt, trustFolder, resendUndelivered, clearUndelivered, restartAgent, rename, openReview, openGate, openPlan, openDoc, retryAgentStart, continueOnCredits, readWatches } =
+  const { expand, openAgent, deleteAgent, openLink, openPullRequest, sendUnsent, clearUnsent, typeFirstPrompt, trustFolder, resendUndelivered, clearUndelivered, restartAgent, wakeAgent, rename, openReview, openGate, openPlan, openDoc, retryAgentStart, continueOnCredits, readWatches } =
     tileActions;
   const commands = useBoardCommands();
   const gate = useGateRun(agent.sessionId);
@@ -148,14 +148,11 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
   const shownName = starting && split.subtitle !== undefined ? { name: `${split.subtitle} · ${split.name}` } : split;
   const renaming = useRenaming(agent.name, (name) => rename({ kind: 'agent', sessionId: agent.sessionId }, name));
   const menu = useAgentTileMenu(id, agent, { from, implementer }, renaming.startSoon);
-  // A ticket's chat: its ⋯ menu switches its view, opens the ticket's board, where its helpers are, and switches what kind
-  // of chat it is.
+  // A ticket's chat: its ⋯ menu leads with the ticket's own items (its board, Watches…, its pull request, what kind of
+  // chat it is), and ends with Close ticket…, the one place a ticket closes.
   const ticketView = useTicketView(id);
   const switchView = useSwitchTicketView(id, agent.sessionId);
-  const menuEntries =
-    helpers === undefined
-      ? menu.entries
-      : ticketMenuEntries([...viewRows(ticketView, switchView), boardRow(() => tileActions.openTicketBoard(agent.sessionId))], ticketChatEntries(agent, (kind) => tileActions.setTicketChat(agent.sessionId, kind)), menu.entries);
+  const { entries: menuEntries, watches } = useTicketChatMenu(agent, helpers, viewRows(ticketView, switchView), menu.entries, head?.id ?? split.name);
   useMenuBarSection('agent', selected, menuBarAgentEntries(menuEntries));
   useRenameRequest(id, renaming);
   const nameClicks = useSlowClickRename(renaming, selected);
@@ -200,7 +197,7 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
   const tState = rolled?.dot === true ? 'needs-you' : mark.state;
   const about = head === undefined ? tileAbout(agent) : head.about;
   const ticketId = head?.id;
-  const nowLine = rolled === undefined ? tileNow(agent, tState) : rolled.line;
+  const nowLine = rolled === undefined ? tileNow(agent, tState, stateNow) : rolled.line;
   const stateTime = rolled?.dot === true ? tileTime(asker, 'needs-you', askerNow) : tileTime(agent, tState, stateNow);
   const pickedStyle = useCharacterStyle();
   // A row with a button of its own needs the tile's width more than the tile needs its character: its pill still says.
@@ -361,7 +358,7 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
   return (
     <HoverCard label={card?.label ?? 'Details'} content={hoverCard}>
     <div
-      className={frostedClasses('hybrid-tile hybrid-tile-agent', agent)}
+      className={frostedClasses('hybrid-tile hybrid-tile-agent', agent, shows)}
       data-testid="agent-tile"
       data-representation="hybrid"
       data-harness={agent.harness}
@@ -385,10 +382,11 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
       data-reviewer={agent.reviewOf !== null || undefined}
       data-orchestrator={crew !== undefined || undefined}
       data-master={agent.master || undefined}
-      title={hoverCard !== undefined ? undefined : clickOpens !== 'expand' ? 'Double-click to open its session window' : 'Double-click to expand it here'}
+      title={hoverCard !== undefined ? undefined : agentTileTip(clickOpens)}
       // In the board view, a double-click on a ticket takes the user into its board.
-      onDoubleClick={() => (helpers !== undefined && ticketView === 'board' ? tileActions.openTicketBoard(agent.sessionId) : clickOpens !== 'expand' ? openAgent(agent) : expand(id))}
+      onDoubleClick={() => (helpers !== undefined && ticketView === 'board' ? tileActions.openTicketBoard(agent.sessionId) : openAgentTile(clickOpens, tileActions, id, agent))}
     >
+      <FrostWatermark agent={agent} />
       {agent.master && (
         <span className="hybrid-tile-master-badge" data-testid="master-badge">
           CAPTAIN
@@ -398,22 +396,19 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
         {startup !== null && !startup.failed ? <Spinner /> : <HarnessMark className="hybrid-tile-icon" harness={agent.harness} />}
         <EditableName className={nameClass(shownName.name)} value={agent.name} title={agent.name} shown={shownName.name} renaming={renaming} clicks={nameClicks} label="Agent name" />
         <FrostMark agent={agent} />
-        {/* With the corner shown only on hover, the pencil goes in it, so the name takes the whole head at rest. */}
+        {/* With the corner always shown, the pencil sits beside the name; on hover, Rename is in ⋯, so the name takes the whole head at rest. */}
         {look.cornerAlways && <RenameButton renaming={renaming} />}
         {!look.mutedInFooter && agent.muted && <MutedBell />}
         <HandPlacedMark nodeId={id} />
+        {/* The same corner on every tile: Expand and ⋯, which holds the rest (Pop out, Wake, Rename and the like). */}
         <TileCorner>
-          {!look.cornerAlways && <RenameButton renaming={renaming} />}
           <TileButton icon={<Expand />} aria-label="Expand" title="Expand it here, with its terminal" onClick={() => expand(id)} />
-          <TileButton className="hybrid-tile-minor" icon={<SquareArrowOutUpRight />} aria-label="Pop out" title="Open its session in its own window" onClick={() => popOutAgent(agent)} />
-          {canRestart(agent) && (
-            <TileButton className="hybrid-tile-minor" icon={<RotateCcw />} aria-label="Restart" title="Restart it, carrying on its conversation" onClick={() => restartAgent(agent.sessionId)} />
+          {/* Done with its changes open, its footer's button is Review: Wake is here, as it is in ⋯. */}
+          {wakeAct(agent) === 'restart' && reviewablePr(agent) !== undefined && (
+            <TileButton className="hybrid-tile-minor" icon={<Play />} aria-label="Wake" title={WAKE_ENDED_HINT} onClick={() => void wakeAgent(agent)} />
           )}
-          {agent.state === 'stopped-by-restart' && (
-            <TileButton className="hybrid-tile-minor" icon={<RotateCcw />} aria-label="Resume" data-testid="resume" title="Resume it, carrying on its conversation" onClick={() => void resumeAgent(agent.sessionId)} />
-          )}
-          {helpers !== undefined && <TicketWatchesMenu chat={agent} name={ticketId ?? split.name} className="hybrid-tile-minor" />}
           <TileMenu entries={menuEntries} onOpen={menu.reread} />
+          {watches}
         </TileCorner>
       </div>
       {crew !== undefined && (
@@ -655,7 +650,7 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
                       onClick={() => openLink(badge.issue.url)}
                       onDoubleClick={stopPropagation}
                     >
-                      {shortIssueId(badge.issue)}
+                      <span className="hybrid-tile-badge-text">{shortIssueId(badge.issue)}</span>
                     </Chip>
                   );
                 case 'job':
@@ -698,7 +693,7 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
               ) : (
                 <>
                   {rolled?.dot === true && <span className="hybrid-tile-dot" data-testid="tile-dot" aria-hidden />}
-                  <span className="hybrid-tile-word" data-testid="tile-state-word">{rolled?.word ?? TILE_STATE_WORDS[tState]}</span>
+                  <span className="hybrid-tile-word" data-testid="tile-state-word">{rolled?.word ?? tileWord(agent, tState)}</span>
                   {stateTime !== undefined && <span className="hybrid-tile-when" data-testid="tile-when">· {stateTime}</span>}
                 </>
               )}
@@ -707,9 +702,9 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
             {rolled?.button !== undefined && (
               <TicketOneButton
                 button={rolled.button}
-                onOpen={() => openAgent(asker)}
+                onOpen={() => answerTicket(clickOpens, tileActions, agent, asker)}
                 onMerge={() => rolled.pullRequest !== undefined && openPullRequest(rolled.pullRequest.owner, rolled.pullRequest.pr)}
-                onWake={() => resumeAgent(asker.sessionId)}
+                onWake={() => wakeAgent(asker)}
                 onRead={() => readWatches(agent.sessionId)}
               />
             )}
@@ -721,7 +716,7 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
                   const pr = reviewablePr(agent);
                   if (pr !== undefined) openPullRequest(agent, pr);
                 }}
-                onWake={() => resumeAgent(asker.sessionId)}
+                onWake={() => wakeAgent(asker)}
               />
             )}
           </span>
@@ -771,7 +766,7 @@ const ROLE_ICONS: Record<AgentRole, ReactNode> = {
 /** A shell tile: plain shells in a zone's folder, or at home loose on the board, split into panes in its session window. */
 function ShellTile({ id, shell, selected }: { id: string; shell: Shell; selected: boolean }) {
   const tileActions = useContext(TileActionsContext);
-  const { expand, openShell, popOutShell, resumeShell, rename } = tileActions;
+  const { expand, openShell, resumeShell, rename } = tileActions;
   const clickOpens = useContext(ClickOpensContext);
   const renaming = useRenaming(shell.name, (name) => rename({ kind: 'shell', shellId: shell.id }, name));
   const dropOver = dropOverValue.use();
@@ -780,11 +775,13 @@ function ShellTile({ id, shell, selected }: { id: string; shell: Shell; selected
   const panes = paneIds(shell.layout).length;
   const live = panes - shell.endedPanes.length;
   const stopped = shell.stoppedPanes.length;
+  const look = useTileShows();
   return (
     <div
       className="hybrid-tile hybrid-tile-agent hybrid-tile-shell"
       data-testid="shell-tile"
       data-representation="hybrid"
+      data-corner={look.cornerAlways ? undefined : 'hover'}
       data-harness="shell"
       data-shell-id={shell.id}
       data-zone={shell.zoneId ?? ''}
@@ -797,11 +794,10 @@ function ShellTile({ id, shell, selected }: { id: string; shell: Shell; selected
       <div className="hybrid-tile-head">
         <HarnessMark className="hybrid-tile-icon" harness="shell" />
         <EditableName className={nameClass(shell.name)} value={shell.name} title={shell.name} renaming={renaming} clicks={nameClicks} label="Shell name" />
-        <RenameButton renaming={renaming} />
+        {look.cornerAlways && <RenameButton renaming={renaming} />}
         <HandPlacedMark nodeId={id} />
         <TileCorner>
           <TileButton icon={<Expand />} aria-label="Expand" title="Expand it here, with its panes" onClick={() => expand(id)} />
-          <TileButton className="hybrid-tile-minor" icon={<SquareArrowOutUpRight />} aria-label="Pop out" title="Open its terminal in its own window" onClick={() => popOutShell(shell)} />
           <TileMenu entries={shellMenu({ nodeId: id, shell, clickOpens, rename: renaming.startSoon, actions: tileActions })} />
         </TileCorner>
       </div>
@@ -853,11 +849,11 @@ function PausedLine({ hibernated }: { hibernated: NonNullable<Agent['hibernated'
 }
 
 /**
- * Its one button (tile B): Open, Review its pull request, or Wake. None of them answers, approves or nudges it: each opens
+ * Its one button (tile B): Open, Review its pull request, or Wake (Resume, for an agent a restart stopped). None of them answers, approves or nudges it: each opens
  * something for the user, or starts a paused agent again as Wake always has.
  */
 function OneTileButton({ button, onOpen, onReview, onWake }: { button: OneButton; onOpen(): void; onReview(): void; onWake(): Promise<void> }) {
-  if (button.kind === 'wake') return <WakeButton onWake={onWake} />;
+  if (button.kind === 'wake') return <WakeButton label={button.label} onHover={button.onHover === true} onWake={onWake} />;
   return (
     <Button
       size="xs"
@@ -874,8 +870,11 @@ function OneTileButton({ button, onOpen, onReview, onWake }: { button: OneButton
   );
 }
 
-/** A paused tile's Wake, in its footer: it starts again in its conversation. */
-function WakeButton({ onWake }: { onWake(): Promise<void> }) {
+/**
+ * Its Wake, in its footer: an asleep, done or exited agent starts again in its conversation; one its clock wakes runs now
+ * (Wake now), the button shown only while the tile is hovered or holds the focus.
+ */
+function WakeButton({ label, onHover, onWake }: { label: string; onHover: boolean; onWake(): Promise<void> }) {
   const [pending, setPending] = useState(false);
   return (
     <Button
@@ -883,7 +882,8 @@ function WakeButton({ onWake }: { onWake(): Promise<void> }) {
       icon={<Play />}
       className="hybrid-tile-wake nodrag"
       data-testid="wake"
-      title="Start it again, carrying on its conversation"
+      data-on-hover={onHover || undefined}
+      title={onHover ? WAKE_NOW_HINT : WAKE_HINT}
       disabled={pending}
       onClick={() => {
         setPending(true);
@@ -891,7 +891,7 @@ function WakeButton({ onWake }: { onWake(): Promise<void> }) {
       }}
       onDoubleClick={stopPropagation}
     >
-      Wake
+      {label}
     </Button>
   );
 }
@@ -913,15 +913,17 @@ function ResumeRow({ onResume }: { onResume(): Promise<void> }) {
  */
 function ExternalTile({ id, session }: { id: string; session: ExternalSession }) {
   const tileActions = useContext(TileActionsContext);
-  const { expand, resumeExternal } = tileActions;
+  const { expand } = tileActions;
   const { status } = session;
   const fitted = useFittedLines();
+  const look = useTileShows();
   const docs = [status?.handover && `handover ${status.handover}`, status?.reviewDoc && `review ${status.reviewDoc}`].filter(Boolean);
   return (
     <div
       className="hybrid-tile hybrid-tile-agent hybrid-tile-external"
       data-testid="external-tile"
       data-representation="hybrid"
+      data-corner={look.cornerAlways ? undefined : 'hover'}
       data-harness={session.harness}
       data-state={session.state}
       data-external-id={session.id}
@@ -934,13 +936,6 @@ function ExternalTile({ id, session }: { id: string; session: ExternalSession })
         <span className="hybrid-tile-name">{session.name}</span>
         <TileCorner>
           <TileButton icon={<Expand />} aria-label="Expand" title="Expand it here, with its details" onClick={() => expand(id)} />
-          <TileButton
-            className="hybrid-tile-minor"
-            icon={<Play />}
-            aria-label="Resume in agent-board"
-            title="Carry on this session here, as an agent with a terminal of its own"
-            onClick={() => resumeExternal(session)}
-          />
           <TileMenu entries={externalMenu(session, tileActions)} />
         </TileCorner>
       </div>

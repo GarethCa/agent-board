@@ -184,6 +184,22 @@ describe('zones over the socket', () => {
     expect((await client.call('zone.list')).find((each) => each.id === zone.id)?.spacing).toBe('compact');
   });
 
+  it("keeps where an arrange places each kind of a zone's items: none chosen until set, each kind changed on its own", async () => {
+    const client = await connectTestClient(await startTestDaemon());
+    const zone = await client.call('zone.addUnbound', { name: 'Ideas', ...at });
+    expect(zone.placements).toEqual({});
+
+    const sided = await client.call('zone.configure', { id: zone.id, placements: { notes: 'sidebar', clocks: 'stay' } });
+    expect(sided).toEqual({ ...zone, placements: { notes: 'sidebar', clocks: 'stay' } });
+    // A kind not given keeps what it had.
+    const topped = await client.call('zone.configure', { id: zone.id, placements: { notes: 'top' } });
+    expect(topped.placements).toEqual({ notes: 'top', clocks: 'stay' });
+    expect((await client.call('zone.list'))[0]!.placements).toEqual({ notes: 'top', clocks: 'stay' });
+
+    await expect(client.call('zone.configure', { id: zone.id, placements: { notes: 'away' } as never })).rejects.toThrow(/placements: notes must be one of cluster, sidebar, top, stay/);
+    await expect(client.call('zone.configure', { id: zone.id, placements: { chairs: 'top' } as never })).rejects.toThrow(/placements: no kind chairs; give notes, files, clocks/);
+  });
+
   it('keeps how a zone lays out what it holds: free until set, then shelves or clusters', async () => {
     const client = await connectTestClient(await startTestDaemon());
     const zone = await client.call('zone.addUnbound', { name: 'Ideas', ...at });

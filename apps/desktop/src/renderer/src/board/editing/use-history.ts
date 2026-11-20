@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef } from 'react';
-import type { ArrangeSpacing, BoardItem, CleanUpUndo, Connector, FlowEdge, PaneLayout, ShellPlace, TileMove, UpdateItemParams, WindowOwner, Zone, ZoneLayout, ZoneLayoutChoice, ZoneSnapshot } from '@agent-board/daemon/protocol';
+import type { ArrangeItemKind, ArrangePlacement, ArrangeSpacing, BoardItem, CleanUpUndo, Connector, FlowEdge, PaneLayout, ShellPlace, TileMove, UpdateItemParams, WindowOwner, Zone, ZoneLayout, ZoneLayoutChoice, ZoneSnapshot } from '@agent-board/daemon/protocol';
 import type { Placement, Surface } from '@agent-board/daemon/window-layout';
 import type { RenameTarget } from '../rename';
 import { emptyHistory, merged, record, redo, undo, withoutLastCreation, type History, type States, type Step } from './history';
@@ -20,13 +20,16 @@ export type BoardState =
   | { type: 'zoneLook'; look: ZoneLook }
   | { type: 'zoneSpacing'; spacing: ArrangeSpacing }
   | { type: 'zoneLayoutChoice'; choice: ZoneLayoutChoice }
+  // Where a zone's arrange puts its items of `kind`.
+  | { type: 'zonePlacement'; kind: ArrangeItemKind; placement: ArrangePlacement }
   | { type: 'zoneGroup'; group: DissolvedGroup }
   // A zone's Clean up: before it, what puts the zone back as it was (`undo`); after it, the zone cleaned up (`null`).
   // `sessionId`: a Move to Done of that agent's ticket alone, done again as one.
   | { type: 'cleanUp'; undo: CleanUpUndo | null; sessionId?: string }
   // `handPlaced`: for the place a drag left, whether the tile was placed by hand there (undone, a tile that was not is
-  // put back under its zone's layout rule). `free`: whether it was free in its zone's free area there.
-  | { type: 'tile'; move: TileMove; handPlaced?: boolean; free?: boolean }
+  // put back under its zone's layout rule). `free`: whether it was free in its zone's free area there. `putDown`: for
+  // a drop, the expanded tiles open then (`PutDown`), so a redo puts it down beside them again.
+  | { type: 'tile'; move: TileMove; handPlaced?: boolean; free?: boolean; putDown?: readonly string[] }
   | { type: 'tileSize'; size: { width: number; height: number } }
   | { type: 'unfolded'; open: boolean }
   | { type: 'name'; target: RenameTarget; name: string }
@@ -60,6 +63,7 @@ export const historyKey = {
   zoneLook: (id: string) => `zone-look:${id}`,
   zoneSpacing: (id: string) => `zone-spacing:${id}`,
   zoneLayoutChoice: (id: string) => `zone-layout-choice:${id}`,
+  zonePlacement: (id: string, kind: ArrangeItemKind) => `zone-placement:${kind}:${id}`,
   zoneGroup: (id: string) => `zone-group:${id}`,
   cleanUp: (id: string) => `zone-clean-up:${id}`,
   tile: (nodeId: string) => `tile:${nodeId}`,

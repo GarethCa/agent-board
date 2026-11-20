@@ -18,8 +18,10 @@ import {
   lastReaderText,
   matching,
   memoryData,
+  moreReadersText,
   newestWrite,
   newMemoryData,
+  readByText,
   readersOf,
   readersText,
   scopeText,
@@ -187,6 +189,14 @@ describe('a memory card', () => {
     expect(readersText(readersOf(undefined, 'e1'))).toBe('No agent has read it yet');
     expect(lastReaderText(readersOf(readers, 'e1'), NOW)).toBe('last: impl-634, 3 min ago');
     expect(lastReaderText(readersOf(readers, 'e3'), NOW)).toBeUndefined();
+  });
+
+  it("says on the card's foot how many agents read it and when the latest did, and how many more the list leaves out", () => {
+    expect(readByText({ count: 3, last: { name: 'impl-634', at: new Date(NOW.getTime() - 2 * 60_000).toISOString() } }, NOW)).toBe('Read by 3 · 2 min ago');
+    expect(readByText({ count: 1, last: { name: 'lead', at: NOW.toISOString() } }, NOW)).toBe('Read by 1 · just now');
+    expect(readByText({ count: 2, last: null }, NOW)).toBe('Read by 2');
+    expect(moreReadersText(24, 20)).toBe('and 4 more');
+    expect(moreReadersText(3, 3)).toBeUndefined();
   });
 
   it("shows and searches a file by its start: 40 lines, or 4000 characters of one huge line", () => {

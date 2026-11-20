@@ -161,6 +161,11 @@ export interface Zone {
   tracker: ZoneTracker | null;
   /** How far apart a Tidy, and an orchestrator's arrange, put what is in it (`SPACING_GAPS`). */
   spacing: ArrangeSpacing;
+  /**
+   * Where an arrange in it places each kind of its items (`ArrangePlacements`): only the kinds chosen, the rest taking
+   * `DEFAULT_ARRANGE_PLACEMENTS`. None until set.
+   */
+  placements: Partial<ArrangePlacements>;
   /** How it lays out what it holds (`ZONE_LAYOUT_MODES`). Free until set, for a new zone too. */
   layoutMode: ZoneLayoutMode;
   /**
@@ -404,6 +409,8 @@ export interface ZoneSettings {
   boardMcp: boolean;
   gateCommand: string | null;
   spacing: ArrangeSpacing;
+  /** Set kind by kind: a kind not given keeps what it had. */
+  placements: Partial<ArrangePlacements>;
   layoutMode: ZoneLayoutMode;
   layoutRule: ZoneLayoutRule;
 }
@@ -1997,6 +2004,11 @@ export interface Agent {
    */
   cutOffMidTurn?: boolean;
   /**
+   * Of an agent cut off mid-turn, whether it was on a permission prompt, asking rather than working: Wake all after a
+   * restart leaves it asleep. Absent from an older daemon.
+   */
+  cutOffAsking?: boolean;
+  /**
    * When it was paused (`agent.pause`, `orchestrator.pause`) and by whom: the orchestrator's name as it is now and its
    * session id, or both null for the user.
    * Set while it is `hibernated`; null once it wakes or is closed, and for an agent never paused.
@@ -3156,6 +3168,8 @@ export interface StepsData {
   collapsed?: boolean;
   /** The size the user gave it open, kept while it is folded so unfolding gives it back. */
   openSize?: CardSize;
+  /** The size the user gave its folded icon, kept while it is open so folding gives it back. */
+  foldedSize?: CardSize;
   /**
    * The agent's ask it was made from (Put on the board, or an ask that ended half-answered): while `ended` is null the
    * agent's call still waits, and Send answers it there instead of typing at its prompt.
@@ -3242,6 +3256,8 @@ export interface MemoryData {
   folded?: boolean;
   /** The size the user gave it open, kept while it is folded so unfolding gives it back. */
   openSize?: CardSize;
+  /** The size the user gave its folded icon, kept while it is open so folding gives it back. */
+  foldedSize?: CardSize;
 }
 
 /** How many times a job may be dropped back before a queue's drain leaves it for a person. */
@@ -3275,6 +3291,8 @@ export interface QueueData {
   folded?: boolean;
   /** The size the user gave it open, kept while it is folded so unfolding gives it back. */
   openSize?: CardSize;
+  /** The size the user gave its folded icon, kept while it is open so folding gives it back. */
+  foldedSize?: CardSize;
   drain?: QueueDrain;
 }
 
@@ -3384,15 +3402,26 @@ export interface MemoryReaders {
   last: { name: string; at: string } | null;
 }
 
+/** An agent that read a memory, by the name it had then, and when it last did. */
+export interface MemoryReader {
+  sessionId: string;
+  name: string;
+  at: string;
+}
+
+/** The most readers a memory's view lists, the latest first. */
+export const MAX_MEMORY_READERS_LISTED = 20;
+
 /** A memory, or a queue, with what it holds. */
 export interface MemoryView {
   item: BoardItem;
   entries: MemoryEntry[];
   /**
    * Who read them: an agent reads an entry when its whole text comes back to it (a fact or note as a memory is read, a
-   * document only when named). `entries` holds those of the entries given, by id.
+   * document only when named). `entries` holds those of the entries given, by id; `list` the memory's readers, the
+   * latest first, at most `MAX_MEMORY_READERS_LISTED`.
    */
-  readers: { memory: MemoryReaders; entries: Record<string, MemoryReaders> };
+  readers: { memory: MemoryReaders; entries: Record<string, MemoryReaders>; list: MemoryReader[] };
 }
 export interface QueueView {
   item: BoardItem;
@@ -3480,6 +3509,8 @@ export interface TodoData {
   folded?: boolean;
   /** The size it had open, kept while it is folded: the user may have given it one. */
   openSize?: CardSize;
+  /** The size the user gave its folded icon, kept while it is open so folding gives it back. */
+  foldedSize?: CardSize;
 }
 
 /**
@@ -4187,6 +4218,75 @@ export const ARRANGE_LAYOUTS = ['rows', 'columns', 'cards', 'grid', 'wrap', 'mas
 export type ArrangeLayout = (typeof ARRANGE_LAYOUTS)[number];
 
 /**
+ * The kinds of a zone's items an arrange places, each as its zone's placements say (`Zone.placements`): an agent's notes,
+ * files (documents, plans, images, link and issue cards), clocks the crew didn't make, to-do lists, queues, memory, step
+ * lists, stickies, shapes and text. A crew's own clocks go on the top row, as shells do, whatever their placement.
+ */
+export const ARRANGE_ITEM_KINDS = ['notes', 'files', 'clocks', 'todos', 'queues', 'memory', 'steps', 'stickies', 'shapes', 'text'] as const;
+export type ArrangeItemKind = (typeof ARRANGE_ITEM_KINDS)[number];
+
+/**
+ * Where an arrange puts the items of a kind: `cluster`, beside the agent they belong to (in its lane, after its tiles;
+ * the lead's in the block beside the crew), or in the sidebar when none in the zone does; `sidebar`, in one column down
+ * the zone's right, past the lanes; `top`, in a row under the top row of the lead, the shells and the clocks, above the
+ * lanes (in columns, the column after the top row's, left of the lanes); `stay`, left where they are, as everything is that the user dragged.
+ */
+export const ARRANGE_PLACEMENTS = ['cluster', 'sidebar', 'top', 'stay'] as const;
+export type ArrangePlacement = (typeof ARRANGE_PLACEMENTS)[number];
+export type ArrangePlacements = Record<ArrangeItemKind, ArrangePlacement>;
+
+/** Where each kind goes in a zone that set none (`Zone.placements` empty). */
+export const DEFAULT_ARRANGE_PLACEMENTS: ArrangePlacements = {
+  notes: 'cluster',
+  files: 'cluster',
+  clocks: 'top',
+  todos: 'top',
+  queues: 'top',
+  memory: 'top',
+  steps: 'top',
+  stickies: 'stay',
+  shapes: 'stay',
+  text: 'stay',
+};
+
+const ITEM_KIND_OF: Partial<Record<BoardItemKind, ArrangeItemKind>> = {
+  'agent-note': 'notes',
+  document: 'files',
+  plan: 'files',
+  image: 'files',
+  link: 'files',
+  issue: 'files',
+  clock: 'clocks',
+  todo: 'todos',
+  queue: 'queues',
+  memory: 'memory',
+  steps: 'steps',
+  sticky: 'stickies',
+  shape: 'shapes',
+  text: 'text',
+};
+
+/** The kind an arrange places an item of `kind` as; null for one it never moves (a crew card, a stage board, a Done line). */
+export const arrangeItemKind = (kind: BoardItemKind): ArrangeItemKind | null => ITEM_KIND_OF[kind] ?? null;
+
+/** Every kind's placement in a zone that set `set`: its own where it set one, the default where not. */
+export const placementsOf = (set: Partial<ArrangePlacements>): ArrangePlacements => ({ ...DEFAULT_ARRANGE_PLACEMENTS, ...set });
+
+/** The placements kept as `json`: only its known kinds with known placements, so a damaged or older value reads as none. */
+export const placementsFrom = (json: string): Partial<ArrangePlacements> => {
+  let value: unknown;
+  try {
+    value = JSON.parse(json);
+  } catch {
+    return {};
+  }
+  if (typeof value !== 'object' || value === null) return {};
+  return Object.fromEntries(
+    Object.entries(value).filter(([kind, place]) => (ARRANGE_ITEM_KINDS as readonly string[]).includes(kind) && (ARRANGE_PLACEMENTS as readonly string[]).includes(place as string)),
+  );
+};
+
+/**
  * What `orchestrator.arrange` did: the zone, its size now, and where each tile it moved went. `unmeasured` when it laid
  * the zone out from saved sizes and estimates alone: no app window measured what it draws (`layout.measured`), or a
  * lane's note wasn't measured in time.
@@ -4197,6 +4297,8 @@ export interface ArrangeResult {
   height: number;
   moved: LayoutMoved[];
   unmeasured: boolean;
+  /** Where it placed the zone's items, kind by kind, as `ZoneMap.placed` says. */
+  placed: ZoneMapPlaced[];
 }
 
 /** What an arrange of a ticket's own board did: the tiles it moved there, each to its new place on that board. */
@@ -4320,6 +4422,18 @@ export interface ZoneMap {
   offGrid: string[];
   /** The lane labels and notes an arrange made that lie away from the tiles they belong with: left behind. */
   stranded: string[];
+  /**
+   * Where an arrange as set places the zone's items, kind by kind: how many of each kind go where. An item placed beside
+   * an agent no longer in the zone goes down the sidebar, and one the user dragged or turned stays.
+   */
+  placed: ZoneMapPlaced[];
+}
+
+/** How many of a kind of a zone's items an arrange places so (`ZoneMap.placed`). */
+export interface ZoneMapPlaced {
+  kind: ArrangeItemKind;
+  placement: ArrangePlacement;
+  count: number;
 }
 
 /**
@@ -5897,7 +6011,14 @@ export interface DaemonMethods {
    * may not move (other tiles, notes, cards) stays put, and the rows keep clear of it; the zone then fits what it holds,
    * growing or shrinking. The same board arranges the same way.
    */
-  'orchestrator.arrange': { params: { token?: string; zoneId?: string; by?: ArrangeBy; layout?: ArrangeLayout; auto?: boolean }; result: ArrangeResult };
+  /**
+   * Arranges a zone: its crew, and its items where `placements` (the zone's, kind by kind) places them. `placements` given
+   * are kept as the zone's, unless `once`; `all` tidies the items the user dragged or turned too, which are otherwise left.
+   */
+  'orchestrator.arrange': {
+    params: { token?: string; zoneId?: string; by?: ArrangeBy; layout?: ArrangeLayout; auto?: boolean; placements?: Partial<ArrangePlacements>; once?: boolean; all?: boolean };
+    result: ArrangeResult;
+  };
   /** Lays out the whole board: its zones and its loose tiles, never what is in a zone. */
   'orchestrator.arrangeBoard': { params: { token?: string }; result: BoardArrangeResult };
   /**
@@ -6301,7 +6422,11 @@ export interface DaemonMethods {
    */
   'steps.send': { params: { id: string }; result: BoardItem };
   /** The live agent holding `token` puts a memory card beside its tile. Fails with `invalidParams` for a shell's token or an ended agent. */
-  'board.newMemory': { params: { token: string; title: string }; result: BoardItem };
+  /**
+   * A zone keeps one shared memory: while the zone the new one would land in has one, it is refused, naming that one,
+   * unless `second` says this is a different subject the whole zone needs.
+   */
+  'board.newMemory': { params: { token: string; title: string; second?: boolean }; result: BoardItem };
   /** The memories the agent holding `token` reads: in its zone and loose ones; none set to No agents. */
   'board.listMemories': { params: { token: string }; result: BoardItem[] };
   /**
@@ -6441,6 +6566,11 @@ export interface DaemonMethods {
   'item.delete': { params: { id: string }; result: null };
   /** Every clock's status. */
   'clock.list': { params: undefined; result: ClockStatus[] };
+  /**
+   * Runs the clock now, as its next fire time would: its run goes in its history and its mode applies after it. Its next
+   * fire time stays. Its status after: the run, or why it skipped. Fails with `invalidParams` for an unknown clock.
+   */
+  'clock.runNow': { params: { id: string }; result: ClockStatus };
   /**
    * Adds a clock (`ClockData`, filled in from `template`, by id or name, then from defaults) at `place`: beside an agent's
    * tile, on its left in its zone, or where asked. Fails with `invalidParams` for an unknown agent, zone or template, or
@@ -7001,6 +7131,17 @@ export interface ItemUpdatedEvent {
   item: BoardItem;
 }
 
+/**
+ * Sent when an agent reads a memory (`board.readMemory`, from its tool or the CLI), at most once a minute for the same
+ * agent and memory: the board draws a pulse from the memory to the agent, and reads its readers again. Heard only where
+ * the memory is.
+ */
+export interface MemoryReadByEvent {
+  type: 'memory.readBy';
+  itemId: string;
+  reader: MemoryReader;
+}
+
 /** Sent to every client when a board item is deleted. */
 export interface ItemRemovedEvent {
   type: 'item.removed';
@@ -7182,6 +7323,7 @@ export type DaemonEvent =
   | ZoneRemovedEvent
   | ItemUpdatedEvent
   | ItemRemovedEvent
+  | MemoryReadByEvent
   | ClockUpdatedEvent
   | ClockTemplateUpdatedEvent
   | ClockTemplateRemovedEvent

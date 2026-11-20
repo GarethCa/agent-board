@@ -347,6 +347,7 @@ function FlowPiece({
       style={{ ...at, width: NODE.width }}
       aria-pressed={member.id === picked}
       aria-label={`${memberLabel(member)}, ${memberModel(member)}`}
+      title={memberLabel(member)}
       onClick={() => onPick(member.id)}
     >
       <span className="prefab-node-bubble">

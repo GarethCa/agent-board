@@ -5,6 +5,8 @@
 import { needsYouKind, statusLine, type Agent, type NeedsYouShows } from '@agent-board/daemon/protocol';
 import type { HumanStatus, ImplementerFacts } from '@agent-board/daemon/human-status';
 import { calmFace, type CalmAction } from './calm-tile';
+import { ticketSaysDone, ticketStatus, type TicketTileAsk } from './ticket-tile';
+import { frozenKind } from './paused';
 
 /** The states a glance tile tells apart: finer than the six statuses, so working and thinking, done and idle differ. */
 export const GLANCE_STATES = ['working', 'thinking', 'needs', 'permission', 'failed', 'idle', 'done', 'paused', 'limit', 'review', 'scheduled'] as const;
@@ -92,11 +94,13 @@ const GLANCE_LABELS: Partial<Record<string, string>> = { 'Review & allow': 'Revi
 export function glanceFace(agent: Agent, shows: NeedsYouShows, implementer?: ImplementerFacts | null): GlanceFace {
   const calm = calmFace(agent, shows, implementer);
   const state = glanceStateOf(calm.status, agent, needsYouKind(agent, shows) === 'permission');
-  const word = GLANCE_WORDS[state];
+  // Exited on an error, it asks nothing: quiet, with no ring, its word saying how it ended.
+  const exited = frozenKind(agent, shows) === 'exited';
+  const word = exited ? 'Exited' : GLANCE_WORDS[state];
   // Its status line is its summary alone: its bar shows the progress, so a line at the cap still fits its box.
   const summary = agent.status === null || agent.status.summary.trim() === '' ? null : agent.status.summary;
   const line = calm.line === word ? summary : agent.status !== null && calm.line === statusLine(agent.status) ? summary : calm.line;
-  return { status: calm.status, state, level: GLANCE_LEVELS[state], word, line: line ?? lastLine(agent), action: actionOf(agent, state, calm.action) };
+  return { status: calm.status, state, level: exited ? 0 : GLANCE_LEVELS[state], word, line: line ?? lastLine(agent), action: actionOf(agent, state, calm.action) };
 }
 
 function actionOf(agent: Agent, state: GlanceState, calm: CalmAction | null): CalmAction | null {
@@ -106,6 +110,23 @@ function actionOf(agent: Agent, state: GlanceState, calm: CalmAction | null): Ca
   // Its changes wait on a reviewer: the PR is one click away, quietly.
   if (state === 'review' && agent.pullRequests.some((pr) => pr.state === 'open')) return { kind: 'pull-request', label: 'Open PR', prominent: false };
   return null;
+}
+
+/** A glance state for each status a ticket's own ask can take (`ticketStatus`). */
+const TICKET_GLANCE: Partial<Record<HumanStatus, GlanceState>> = { working: 'working', problem: 'failed', done: 'done' };
+
+/**
+ * A ticket's chat's glance face with its ticket's own ask on it (`ticketTileAsk` with no dot): Classic's word (Ready to
+ * merge, New review, Done), the ticket's line, and no action of its own, as the ticket's one button takes its place.
+ */
+export function ticketGlanceFace(face: GlanceFace, own: TicketTileAsk): GlanceFace {
+  const status = ticketStatus(own, face.status);
+  // Ready to merge, New review and a merged Done read as done in Classic's word, whatever the chat does; news keeps the
+  // chat's own state, word and button, save that a working or failed chat reads so.
+  if (ticketSaysDone(own)) return { status, state: 'done', level: GLANCE_LEVELS.done, word: own.word, line: own.line ?? face.line, action: null };
+  if (status === face.status) return { ...face, line: own.line ?? face.line };
+  const state = TICKET_GLANCE[status] ?? face.state;
+  return { status, state, level: GLANCE_LEVELS[state], word: own.word, line: own.line ?? face.line, action: null };
 }
 
 /** The first line of its last message with words in it, or null. */

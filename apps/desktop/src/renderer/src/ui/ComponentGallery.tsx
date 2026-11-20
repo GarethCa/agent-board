@@ -47,6 +47,7 @@ import { Segmented } from './Segmented';
 import { Tabs } from './Tabs';
 import { ToastView } from './Toast';
 import { TooltipPreview } from './Tooltip';
+import { Truncate } from './Truncate';
 
 const VARIANTS: ButtonVariant[] = ['primary', 'secondary', 'ghost', 'danger'];
 /** The states a control is drawn in: at rest, then held in each pointer and focus state, then disabled and loading. */
@@ -310,6 +311,11 @@ export function ComponentGallery() {
           <FlowPill>new</FlowPill>
           <FlowPill>sending now</FlowPill>
           <FlowPill>receiving…</FlowPill>
+        </Row>
+        <Row label="Truncated text">
+          <span className="component-gallery-truncate">
+            <Truncate text="A name too long for its box ends in an ellipsis and shows whole on hover" />
+          </span>
         </Row>
         <Row label="Shortcut hints">
           <Shortcut keys={['⌘', 'K']}>commands</Shortcut>

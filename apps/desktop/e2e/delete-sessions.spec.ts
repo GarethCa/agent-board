@@ -26,7 +26,7 @@ test('an ended agent is deleted from the right-click menu, keeping its worktree 
     const expanded = window.getByTestId('expanded-tile');
     await expanded.getByTestId('session-terminal').click();
     await window.keyboard.press('Control+D');
-    await expect(expanded.getByTestId('agent-exit-banner')).toContainText('claude exited');
+    await expect(expanded.getByTestId('agent-exit-banner')).toContainText('Done. Wake carries on this conversation.');
     await expanded.locator('.session-window-head').click();
     await window.keyboard.press('Escape');
     await expect(expanded).toHaveCount(0);
@@ -159,11 +159,12 @@ test('⌫ inside a session window never deletes its session, even with focus in 
     await expect(shellTiles(window)).toHaveCount(0);
     await expect(sessionWindow(window)).toBeHidden();
 
-    // The tile's hover row has Pop out and no Delete; Delete is in ⋯, and asks first while a pane runs.
+    // The tile's hover corner is Expand and ⋯; Pop out and Delete are in ⋯, and Delete asks first while a pane runs.
     await window.getByTestId('zone').getByRole('button', { name: 'New shell in zone' }).click();
     await sessionWindow(window).getByRole('button', { name: 'Close session window' }).click();
     await shellTiles(window).hover();
-    await expect(shellTiles(window).getByRole('button', { name: 'Pop out' })).toBeVisible();
+    await expect(shellTiles(window).getByRole('button', { name: 'Expand' })).toBeVisible();
+    await expect(shellTiles(window).getByRole('button', { name: 'Pop out' })).toHaveCount(0);
     await expect(shellTiles(window).getByRole('button', { name: /^Delete/ })).toHaveCount(0);
     await shellTiles(window).getByRole('button', { name: 'More' }).click();
     await expect(window.getByRole('menuitem', { name: 'Pop out' })).toBeVisible();
@@ -180,7 +181,7 @@ test('⌫ inside a session window never deletes its session, even with focus in 
   }
 });
 
-test('a plain click selects an agent tile and ⌫ asks to delete it; the hover row has Pop out, and Delete is in ⋯', async () => {
+test('a plain click selects an agent tile and ⌫ asks to delete it; the hover corner is Expand and ⋯, and Pop out and Delete are in ⋯', async () => {
   const { dir, repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, { ...env, ...SHELL_ENV });
@@ -192,7 +193,7 @@ test('a plain click selects an agent tile and ⌫ asks to delete it; the hover r
 
     await tile(window).hover();
     await expect(tile(window).getByRole('button', { name: 'Expand' })).toBeVisible();
-    await expect(tile(window).getByRole('button', { name: 'Pop out' })).toBeVisible();
+    await expect(tile(window).getByRole('button', { name: 'Pop out' })).toHaveCount(0);
     await expect(tile(window).getByRole('button', { name: /^Delete/ })).toHaveCount(0);
     await tile(window).getByRole('button', { name: 'More' }).click();
     await expect(window.getByRole('menuitem', { name: 'Delete agent' })).toBeVisible();

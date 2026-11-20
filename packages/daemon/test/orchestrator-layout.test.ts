@@ -970,7 +970,7 @@ describe('orchestrator.arrange', () => {
     expect(empty.emptyBands.columns).toBeGreaterThan(2);
   });
 
-  it("never moves the user's own clocks, whoever arranges: only the clocks an orchestrator or its crew made", async () => {
+  it("puts the user's own clocks on the row under the top row, whoever arranges, but never one the user dragged unless told to tidy everything", async () => {
     const setup = await layoutDaemon();
     const me = await lead(setup, setup.zone.id);
     await me.connection.call('orchestrator.spawn', { token: me.token, name: 'impl' });
@@ -982,11 +982,186 @@ describe('orchestrator.arrange', () => {
       return { x: item.x, y: item.y };
     };
     await me.connection.call('orchestrator.arrange', { token: me.token });
-    expect(await at(theirs.id)).toEqual({ x: 700, y: 400 });
-    expect(await at(mine.id)).not.toEqual({ x: 300, y: 300 });
-    // On the user's side too.
+    const head = (await setup.client.call('agent.list')).find((agent) => agent.sessionId === me.agent.sessionId)!.position!;
+    // Its crew's clock in the top row, beside the lead; the user's on the row under it.
+    expect((await at(mine.id)).y).toBe(head.y);
+    expect((await at(theirs.id)).y).toBeGreaterThan(head.y + AGENT_TILE_SIZE.height);
+    // Dragged by the user, it stays where they put it, on the user's side too.
+    await setup.client.call('item.update', { id: theirs.id, x: 700, y: 800, data: { placedByHand: true } });
+    await me.connection.call('orchestrator.arrange', { token: me.token });
     await setup.client.call('orchestrator.arrange', { zoneId: setup.zone.id });
-    expect(await at(theirs.id)).toEqual({ x: 700, y: 400 });
+    expect(await at(theirs.id)).toEqual({ x: 700, y: 800 });
+    // Told to tidy everything, it goes back on its row, and is no longer marked dragged.
+    await setup.client.call('orchestrator.arrange', { zoneId: setup.zone.id, all: true });
+    expect((await at(theirs.id)).y).toBeLessThan(800);
+    expect((await setup.client.call('item.list')).find((each) => each.id === theirs.id)!.data.placedByHand).not.toBe(true);
+  });
+
+  describe("a zone's items", () => {
+    /**
+     * A lead and its implementer, with a scatter of items about the zone: a note and a link card the implementer made,
+     * the user's clock, to-do list, queue and memory, and the user's sticky.
+     */
+    async function messyItems() {
+      const setup = await layoutDaemon();
+      const me = await lead(setup, setup.zone.id);
+      const impl = await me.connection.call('orchestrator.spawn', { token: me.token, name: 'impl' });
+      const zoneId = setup.zone.id;
+      const make = (kind: BoardItem['kind'], x: number, y: number, width: number, height: number, data: Record<string, unknown>) =>
+        setup.client.call('item.create', { kind, zoneId, x, y, width, height, data } as never) as Promise<BoardItem>;
+      const user = { kind: 'user' };
+      const note = await make('agent-note', 1000, 520, 180, 136, {
+        text: 'impl found a thing',
+        agent: { sessionId: impl.sessionId, name: 'impl', harness: 'claude', role: null },
+        writtenAt: new Date().toISOString(),
+        editedByUser: false,
+      });
+      const link = await make('link', 60, 900, 240, 96, { url: 'https://github.com/o/r/pull/9' });
+      markMadeBy(setup, link.id, impl.sessionId);
+      const clock = await setup.client.call('clock.add', { place: { zoneId, x: 820, y: 40 }, data: { prompt: 'Mine' } });
+      const todo = await make('todo', 500, 700, 300, 196, { owner: user, lines: [] });
+      const queue = await make('queue', 40, 400, 340, 244, { title: 'Backlog', madeBy: user, audience: 'user', noAgents: false, count: 0 });
+      const memory = await make('memory', 900, 300, 340, 220, { title: 'Notes', madeBy: user, noAgents: false, count: 0 });
+      const sticky = await make('sticky', 1100, 60, STICKY_SIZE.width, STICKY_SIZE.height, { text: 'user note', color: '#fff3a3' });
+      const ids = { note: note.id, link: link.id, clock: clock.id, todo: todo.id, queue: queue.id, memory: memory.id, sticky: sticky.id };
+      /** Every tile and item in the zone, by name (an item by the name `ids` gives it). */
+      const rects = async (): Promise<Record<string, Rect>> => {
+        const [agents, items] = await Promise.all([setup.client.call('agent.list'), setup.client.call('item.list')]);
+        const named = new Map(Object.entries(ids).map(([name, id]) => [id, name]));
+        return Object.fromEntries([
+          ...agents.filter((agent) => agent.zoneId === zoneId).map((agent) => [agent.name, { ...agent.position!, ...AGENT_TILE_SIZE }] as const),
+          ...items.filter((item) => item.zoneId === zoneId).map((item) => [named.get(item.id) ?? `${item.kind}:${item.id}`, { x: item.x, y: item.y, width: item.width, height: item.height }] as const),
+        ]);
+      };
+      return { setup, me, impl, ids, rects };
+    }
+
+    it('places every item in one arrange: the implementer’s in its lane, the rest on a row under the top row, the sticky left be; the same again', async () => {
+      const { me, rects } = await messyItems();
+      await me.connection.call('orchestrator.arrange', { token: me.token });
+      const once = await rects();
+      expect(once.sticky).toMatchObject({ x: 1100, y: 60 });
+      // On the row under the top row, side by side, by kind: the clock, the to-do list, the queue, the memory.
+      const top = ['clock', 'todo', 'queue', 'memory'].map((name) => once[name]!);
+      expect(new Set(top.map((rect) => rect.y)).size).toBe(1);
+      expect(top[0]!.y).toBeGreaterThan(once.lead!.y + AGENT_TILE_SIZE.height);
+      expect(top.map((rect) => rect.x)).toEqual(top.map((rect) => rect.x).toSorted((a, b) => a - b));
+      // In the implementer's lane, past its tile, below the row of the top items.
+      expect(once.impl!.y).toBeGreaterThan(top[0]!.y);
+      for (const name of ['note', 'link']) {
+        expect(once[name]!.y, name).toBe(once.impl!.y);
+        expect(once[name]!.x, name).toBeGreaterThan(once.impl!.x);
+      }
+      expectNoOverlap(new Map(Object.entries(once).map(([name, rect]) => [['lead', 'impl'].includes(name) ? name : `item:${name}`, rect])));
+      const map = await me.connection.call('orchestrator.map', { token: me.token });
+      expect(map.overlaps).toEqual([]);
+      expect(map.placed).toEqual(
+        expect.arrayContaining([
+          { kind: 'notes', placement: 'cluster', count: 1 },
+          { kind: 'files', placement: 'cluster', count: 1 },
+          { kind: 'clocks', placement: 'top', count: 1 },
+          { kind: 'todos', placement: 'top', count: 1 },
+          { kind: 'stickies', placement: 'stay', count: 1 },
+        ]),
+      );
+      await me.connection.call('orchestrator.arrange', { token: me.token });
+      expect(await rects()).toEqual(once);
+    });
+
+    it('clusters an item by the agent its own data names: a document card it showed, its plan, a queue it made, its to-do list', async () => {
+      const { setup, me, impl, rects } = await messyItems();
+      const zoneId = setup.zone.id;
+      const author = { sessionId: impl.sessionId, name: 'impl', harness: 'claude', role: null };
+      const doc = await setup.client.call('item.create', {
+        kind: 'document', zoneId, x: 40, y: 1200, width: 160, height: 120,
+        data: { documentId: 'doc-1', agent: author, title: 'Plan', format: 'markdown', collapsed: false },
+      } as never);
+      const queue = await setup.client.call('item.create', {
+        kind: 'queue', zoneId, x: 400, y: 1200, width: 160, height: 120,
+        data: { title: 'Its jobs', madeBy: { kind: 'agent', sessionId: impl.sessionId, name: 'impl' }, audience: 'agents', noAgents: false, count: 0 },
+      } as never);
+      const plan = await setup.client.call('item.create', { kind: 'plan', zoneId, x: 800, y: 1200, width: 160, height: 120, data: { agent: author, title: 'The plan' } } as never);
+      const todo = await setup.client.call('item.create', {
+        kind: 'todo', zoneId, x: 1200, y: 1200, width: 160, height: 120,
+        data: { owner: { kind: 'agent', sessionId: impl.sessionId, name: 'impl' }, lines: [] },
+      } as never);
+      await me.connection.call('orchestrator.arrange', { token: me.token, placements: { queues: 'cluster', todos: 'cluster' }, once: true });
+      const placed = await rects();
+      for (const id of [doc.id, plan.id, queue.id, todo.id]) {
+        const rect = Object.entries(placed).find(([name]) => name.endsWith(id))![1];
+        expect(rect.y, id).toBe(placed.impl!.y);
+        expect(rect.x, id).toBeGreaterThan(placed.impl!.x);
+      }
+    });
+
+    it('says in the map where an arrange would place each kind, the items of an agent the user placed by hand down the side', async () => {
+      const { setup, me, impl } = await messyItems();
+      // A zone that keeps the Lanes rule remembers the tiles the user placed by hand.
+      await me.connection.call('orchestrator.zoneLayout', { token: me.token, mode: 'lanes' });
+      await new Promise((resolve) => setTimeout(resolve, RULE_SETTLE_MS * 2));
+      await setup.client.call('agent.move', { sessionId: impl.sessionId, zoneId: setup.zone.id, x: 1400, y: 900, byHand: true });
+      const map = await me.connection.call('orchestrator.map', { token: me.token });
+      expect(map.placed).toEqual(expect.arrayContaining([{ kind: 'notes', placement: 'sidebar', count: 1 }, { kind: 'files', placement: 'sidebar', count: 1 }]));
+      expect((await me.connection.call('orchestrator.arrange', { token: me.token })).placed).toEqual(map.placed);
+    });
+
+    it('places a kind where it is told: for one arrange, or kept as the zone’s', async () => {
+      const { setup, me, ids, rects } = await messyItems();
+      await me.connection.call('orchestrator.arrange', { token: me.token });
+      const tidy = await rects();
+      // Down a sidebar right of everything, for this arrange only.
+      await expect(me.connection.call('orchestrator.arrange', { token: me.token, once: true })).rejects.toThrow(/once is for placements/);
+      await me.connection.call('orchestrator.arrange', { token: me.token, placements: { todos: 'sidebar', notes: 'top' }, once: true });
+      const sided = await rects();
+      const right = Math.max(...Object.entries(sided).filter(([name]) => name !== 'todo' && name !== 'sticky').map(([, rect]) => rect.x + rect.width));
+      expect(sided.todo!.x).toBeGreaterThan(right);
+      expect(sided.note!.y).toBe(sided.clock!.y);
+      expect((await setup.client.call('zone.list')).find((zone) => zone.id === setup.zone.id)!.placements).toEqual({});
+      await me.connection.call('orchestrator.arrange', { token: me.token });
+      expect(await rects()).toEqual(tidy);
+      // Kept, the next arrange places it so too.
+      await me.connection.call('orchestrator.arrange', { token: me.token, placements: { todos: 'stay' } });
+      expect((await setup.client.call('zone.list')).find((zone) => zone.id === setup.zone.id)!.placements).toEqual({ todos: 'stay' });
+      await setup.client.call('item.update', { id: ids.todo, x: 1300, y: 900 });
+      await me.connection.call('orchestrator.arrange', { token: me.token });
+      expect((await rects()).todo).toMatchObject({ x: 1300, y: 900 });
+      await expect(me.connection.call('orchestrator.arrange', { token: me.token, placements: { todos: 'away' } as never })).rejects.toThrow(/placements: todos must be one of/);
+    });
+
+    it.each(['rows', 'columns', 'cards', 'grid', 'wrap', 'masonry', 'treemap'] satisfies ArrangeLayout[])('places every item clear of the rest in %s, the same again', async (layout) => {
+      const { me, rects } = await messyItems();
+      await me.connection.call('orchestrator.arrange', { token: me.token, layout });
+      const once = await rects();
+      expect(once.sticky).toMatchObject({ x: 1100, y: 60 });
+      expectNoOverlap(new Map(Object.entries(once).map(([name, rect]) => [['lead', 'impl'].includes(name) ? name : `item:${name}`, rect])));
+      expect((await me.connection.call('orchestrator.map', { token: me.token })).overlaps).toEqual([]);
+      await me.connection.call('orchestrator.arrange', { token: me.token });
+      expect(await rects()).toEqual(once);
+    });
+
+    it('places every item under the lanes rule too, the same again', async () => {
+      const { setup, rects } = await messyItems();
+      await setup.client.call('zone.configure', { id: setup.zone.id, layoutRule: 'lanes' });
+      await setup.client.call('orchestrator.arrange', { zoneId: setup.zone.id });
+      const once = await rects();
+      const top = ['clock', 'todo', 'queue', 'memory'].map((name) => once[name]!);
+      expect(new Set(top.map((rect) => rect.y)).size).toBe(1);
+      expect(once.note!.y).toBe(once.impl!.y);
+      expectNoOverlap(new Map(Object.entries(once).map(([name, rect]) => [['lead', 'impl'].includes(name) ? name : `item:${name}`, rect])));
+      await setup.client.call('orchestrator.arrange', { zoneId: setup.zone.id });
+      expect(await rects()).toEqual(once);
+    });
+
+    it("puts an item whose agent has gone, or was never in the zone, down the sidebar", async () => {
+      const { me, impl, rects } = await messyItems();
+      await me.connection.call('orchestrator.close', { token: me.token, sessionId: impl.sessionId, remove: true });
+      await me.connection.call('orchestrator.arrange', { token: me.token });
+      const after = await rects();
+      const right = Math.max(...Object.entries(after).filter(([name]) => !['note', 'link', 'sticky'].includes(name)).map(([, rect]) => rect.x + rect.width));
+      expect(after.note!.x).toBeGreaterThan(right);
+      expect(after.link!.x).toBe(after.note!.x);
+      expect(after.link!.y).toBeGreaterThan(after.note!.y);
+    });
   });
 
   it('arranges another zone as its own, but never a zone that does not exist', async () => {
@@ -1807,6 +1982,10 @@ describe('the layout tools and commands', () => {
     // auto as a model may send it: "true" turns it on, an unknown word is refused, never read as off.
     expect(await mcp.callTool('arrange', { auto: 'true' })).toMatchObject({ isError: false, text: expect.stringContaining('auto-arrange on') });
     expect(await mcp.callTool('arrange', { auto: 'maybe' })).toMatchObject({ isError: true, text: expect.stringContaining('auto must be true or false') });
+    // So are once and all: a word or a number is refused, never read as no.
+    expect(await mcp.callTool('arrange', { placements: { notes: 'top' }, once: 'yes' })).toMatchObject({ isError: true, text: expect.stringContaining('once must be true or false') });
+    expect(await mcp.callTool('arrange', { all: 1 })).toMatchObject({ isError: true, text: expect.stringContaining('all must be true or false') });
+    expect(await mcp.callTool('arrange', { once: true })).toMatchObject({ isError: true, text: expect.stringContaining('--once is for --place') });
     expect(await mcp.callTool('map', {})).toMatchObject({ isError: false, text: expect.stringContaining('auto-arrange on') });
     expect(await mcp.callTool('arrange', { auto: false })).toMatchObject({ isError: false, text: expect.stringContaining('auto-arrange off') });
     expect(await mcp.callTool('move', { tile: 'worker', near: 'me', side: 'right' })).toMatchObject({

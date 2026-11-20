@@ -1,4 +1,4 @@
-import { expect, type Page } from '@playwright/test';
+import { expect, type Locator, type Page } from '@playwright/test';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { agents, clickPopOut, launch, sessionWindow, setClickOpens, SHELL_ENV, spawnAgent, tile } from './agent-helpers.ts';
@@ -34,7 +34,7 @@ const listenForTerminals = (window: Page) =>
     const seen: { name: string; detail: unknown }[] = [];
     (globalThis.window as unknown as { seen: typeof seen }).seen = seen;
     new PerformanceObserver((list) => {
-      for (const { name, detail } of list.getEntries() as PerformanceMeasure[]) if (name.startsWith('terminal.')) seen.push({ name, detail });
+      for (const { name, detail } of list.getEntries() as PerformanceMeasure[]) if (name.startsWith('terminal.') || name.startsWith('chat.')) seen.push({ name, detail });
     }).observe({ type: 'measure' });
   });
 
@@ -58,9 +58,10 @@ async function panAway(window: Page): Promise<number> {
   return steps;
 }
 
-async function panBack(window: Page, steps: number): Promise<void> {
+/** Pans the board back by `steps`, until `shows` (the terminal, unless given) is drawn again. */
+async function panBack(window: Page, steps: number, shows = pane(window).locator('.xterm')): Promise<void> {
   for (let step = 0; step < steps; step++) await pan(window, -300, 0);
-  await expect(pane(window).locator('.xterm')).toBeVisible();
+  await expect(shows).toBeVisible();
 }
 
 test('off by default: a pane panned away detaches, and comes back with a new terminal from the snapshot', async () => {
@@ -93,7 +94,7 @@ test('the setting in Settings › Advanced › Terminals keeps a pane panned awa
   const { app, window } = await launch(dataDir, SHELL_ENV);
   try {
     const settings = await openSettings(window, 'advanced.terminals');
-    const keep = settings.getByRole('switch', { name: 'Keep terminals while off screen' });
+    const keep = settings.getByRole('switch', { name: 'Keep sessions while off screen' });
     await expect(keep).not.toBeChecked();
     await keep.click();
     await expect(keep).toBeChecked();
@@ -105,7 +106,7 @@ test('the setting in Settings › Advanced › Terminals keeps a pane panned awa
 
     await panAway(window);
     // Settings again: the window from before no longer shows its switch.
-    const reopened = (await openSettings(window, 'advanced.terminals')).getByRole('switch', { name: 'Keep terminals while off screen' });
+    const reopened = (await openSettings(window, 'advanced.terminals')).getByRole('switch', { name: 'Keep sessions while off screen' });
     await expect(reopened).toBeChecked();
     await reopened.click();
     await expect(reopened).not.toBeChecked();
@@ -181,7 +182,9 @@ test('a pane keeps its place in the scrollback while it is away', async () => {
   try {
     await expandedShell(window);
     await run(window, 'clear; i=0; while [ $i -lt 200 ]; do echo line-$i; i=$((i+1)); done; echo last-line');
-    await expect(pane(window).locator('.xterm-rows')).toContainText('last-line');
+    // The row the loop's last echo prints, not the typed command, which names it too: scrolling before the output is in
+    // would leave nothing to scroll.
+    await expect(pane(window).locator('.xterm-rows > div').filter({ hasText: /^last-line\s*$/ })).toHaveCount(1);
     const box = (await pane(window).boundingBox())!;
     await window.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await window.mouse.wheel(0, -1000);
@@ -354,5 +357,69 @@ test('a session resized elsewhere while its pane is away comes back from its sna
   } finally {
     await app.close();
     await removeDataDir(dataDir);
+  }
+});
+
+/** A task long enough that the chat's log scrolls in an expanded tile. */
+const LONG_TASK = ['Pick a database', ...Array.from({ length: 60 }, (_, line) => `Constraint ${line + 1}: keep it simple.`)].join('\n');
+
+/** Where the chat's log (the chat view itself) is scrolled to, and how far it could go. */
+const logScroll = (chat: Locator) =>
+  chat.evaluate((log) => ({ top: log.scrollTop, bottom: log.scrollHeight - log.clientHeight }));
+
+test("with the setting on, an agent's chat panned out of view and back is the same chat, not drawn again, where it was scrolled to, and still follows the conversation", async () => {
+  const { dir, repo, env } = scratch('waiting');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, { ...env, ...KEPT_ENV });
+  try {
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await spawnAgent(window, 'monorepo', LONG_TASK);
+    await expect(tile(window)).toHaveCount(1);
+    await setClickOpens(window, 'Expand in place');
+    await tile(window).dblclick();
+    const expanded = window.getByTestId('expanded-tile');
+    const chat = expanded.getByTestId('chat-view');
+    await expanded.locator('.session-window-strip').getByRole('group', { name: 'View' }).getByRole('button', { name: 'Chat' }).click();
+    await expect(chat.getByTestId('chat-assistant')).toHaveText(['Which database should I use, Postgres or SQLite?']);
+    await listenForTerminals(window);
+    await chat.evaluate((element) => void ((element as HTMLElement).dataset.mark = 'kept'));
+
+    // Scrolled up part way, to read the task.
+    await chat.evaluate((log) => void (log.scrollTop = Math.round((log.scrollHeight - log.clientHeight) / 3)));
+    const before = await logScroll(chat);
+    expect(before.top).toBeGreaterThan(100);
+    expect(before.bottom - before.top).toBeGreaterThan(100);
+
+    let steps = await panAway(window);
+    await expect.poll(() => seen(window, 'chat.parked')).toEqual([{ count: 1 }]);
+    await panBack(window, steps, chat);
+
+    // The same chat, its element kept, not one built again and its transcript read and drawn again; and where it was.
+    await expect(chat).toHaveAttribute('data-mark', 'kept');
+    const { sessionId } = (await agents(window))[0]!;
+    expect(await seen(window, 'chat.mount')).toEqual([{ sessionId, kept: true }]);
+    await expect.poll(async () => Math.abs((await logScroll(chat)).top - before.top)).toBeLessThanOrEqual(2);
+
+    // Left at the end of the conversation, it follows the reply that arrives as it comes back, read only then.
+    await chat.evaluate((log) => void (log.scrollTop = log.scrollHeight));
+    steps = await panAway(window);
+    await window.evaluate((session) => globalThis.window.agentBoard.sessions.write(session, 'Postgres\r'), (await sessions(window))[0]!.id);
+    await panBack(window, steps, chat);
+    await expect(chat.getByTestId('chat-assistant').last()).toHaveText('Going with Postgres.');
+    await expect.poll(async () => {
+      const { top, bottom } = await logScroll(chat);
+      return bottom - top;
+    }).toBeLessThanOrEqual(2);
+    await expect(chat).toHaveAttribute('data-mark', 'kept');
+
+    // A click in it is still the tile's own: a tool line opens, and the tile stays expanded.
+    await chat.getByTestId('chat-tool').getByTestId('chat-tool-line').click();
+    await expect(chat.getByTestId('chat-tool').getByTestId('chat-tool-line')).toHaveAttribute('aria-expanded', 'true');
+    await expect(expanded).toHaveCount(1);
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
   }
 });

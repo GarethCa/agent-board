@@ -56,6 +56,8 @@ import { EFFORT_LABELS } from './AgentSetup';
 import { paneIds } from '@agent-board/daemon/pane-layout';
 import { repoZoneOf } from '@agent-board/daemon/repo-zone';
 import { isLead } from '@agent-board/daemon/work-units';
+import { helpersOf } from '@agent-board/daemon/ticket-tiles';
+import { closeTicketLines, closeTicketTeam, stopTeam } from './ticket-chat-menu';
 import { BoardChrome } from '../chrome/BoardChrome';
 import { useChromeFolds } from '../chrome/chrome-folds';
 import type { PointerMode } from '../chrome/CreateToolbar';
@@ -66,7 +68,8 @@ import { motionDuration, tokenNumber } from '../theme';
 import { Button, Checkbox, Dialog, useToast } from '../ui';
 import { markSeen } from '../session/mark-seen';
 import { canRestartLive } from '../session/RestartAgent';
-import { boardSettled } from '../session/terminal-sharpness';
+import { wakeAct, wakeBusyText } from './paused';
+import { boardMoving, boardSettled } from '../session/terminal-sharpness';
 import { handOffWebTabs, SessionWindowsLayer } from '../windows/SessionWindows';
 import type { NavSession } from '../windows/session-nav';
 import { requestReviewTab } from '../review/review-tab';
@@ -141,6 +144,7 @@ import { toDone, undoCleanUp, withDoneLines } from './done-lines';
 import { useSpineJoined } from './use-spine-joined';
 import { foldedSessionIds, foldedToast, roomOf, unfoldedToast, unfoldMoves, withFoldedExternals, withFoldedZones } from './fold-zone';
 import { letGoFoldedTerminals } from '../session/TerminalPane';
+import { letGoFoldedChats } from '../session/KeptChatView';
 import { foldedStack, laidOutTile, pinnedLead, withShelves, type LanesDraft } from './shelves';
 import { inFreeArea, lanesInside } from '@agent-board/daemon/shelf-layout';
 import { newStageBoardPlace, stageBoardDropPlace, stageBoardDrops, stageBoardResizes, withStageBoards } from './stage-boards';
@@ -166,6 +170,7 @@ import type { States } from './editing/history';
 import { SelectionBox, SnapGuides } from './editing/SelectionOverlays';
 import { useAskClaude } from './ask/AskClaude';
 import { SuggestionActionsContext, SuggestionGhosts, useSuggestionCommands } from './ask/SuggestionGhosts';
+import { MemoryReadPulses } from './items/MemoryReadPulses';
 import { DocumentCardsContext, type DocumentCards } from './items/DocumentNode';
 import { PlanCardsContext, type PlanCards } from './items/PlanNode';
 import { StepsLookupContext } from './items/StepsNode';
@@ -178,11 +183,14 @@ import { useEditing } from './editing/use-editing';
 import { renameDirect, renameKey, paneLabel, RenameRequestContext, type RenameTarget } from './rename';
 import { zoneDeleteText, type ZoneToDelete } from './editing/delete-zones';
 import { historyKey, itemChange, patched, useHistory, type BoardState, type Change, type DissolvedGroup } from './editing/use-history';
-import { cleanUpMessage, layoutChoiceStep, movedToDoneMessage, resizeMove, tileMoveStep, tileStepAction, zoneTidy } from './hand-moves';
+import { cleanUpMessage, layoutChoiceStep, movedToDoneMessage, placedByHandPatch, placementStep, resizeMove, tileMoveStep, tileStepAction, zoneTidy } from './hand-moves';
 import { useSnapping } from './editing/use-snapping';
 import { keptOnBoard as keptOnBoardOf, tidySize, VIEW_FOLLOW_DELAY_MS } from './expanded';
 import { expandedTrace, FIT_NOTED_MS } from './expanded-trace';
-import { tileOpenAction } from './click-opens';
+import { movingLayer } from './moving-layer';
+import { OPEN_TILE_WINDOW_PATH, tileOpenAction } from './click-opens';
+import { AgentPopup } from './AgentPopup';
+import { poppedOutOf, popUpEnded, popUpHelpers, popUpPlan, popUpShown } from './agent-popup';
 import { focusTile, pulseTile } from './tile-attention';
 import { crewFrames, crewMoves, frameableTiles, landingRects, withCrewFollowing } from './crews';
 import { restoreViewSettings, setViewSetting, useViewSettings } from './view-settings';
@@ -295,7 +303,6 @@ import { useRenameRequests } from './use-rename-requests';
 import { CONTROLS, quickInsertAt, SESSION_SURFACES } from './board-shortcuts';
 import type { SheetContext } from '../keys/cheat-sheet';
 import { useCheatSheet } from '../keys/CheatSheet';
-import { isGatheredKind } from '@agent-board/daemon/zone-clean-up';
 import { keyText, pressed } from '../keys/registry';
 import { isTyping } from '../keys/typing';
 import { useEscStep } from '../keys/esc-ladder';
@@ -544,7 +551,7 @@ function BoardView() {
   usePrefabs();
   /** Set once the expanded tiles are: a pinned expanded agent's tile is shown in place of its session window. */
   const keptOnBoard = useRef<KeptOnBoard>(() => false);
-  const { windows, windowsRestored, windowsRef, showWindow, closeWindow, popOut, popOutTabWindow, openShell, openAgent, poppedOut, onShellChange } = useBoardWindows(keptOnBoard);
+  const { windows, windowsRestored, windowsRef, showWindow, closeWindow, minimiseWindow, popOut, popOutTabWindow, openShell, openAgent, poppedOut, onShellChange } = useBoardWindows(keptOnBoard);
   // Read when ⌘K opens a reviewer beside its pull request.
   const rounds = useReviews();
   /** The view settings every window shares: what a double-click opens, how agent notes look, which connections and tethers are drawn. */
@@ -803,6 +810,12 @@ function BoardView() {
     if (levelRef.current !== null) boardLevel.leave();
   }, [boardLevel.leave]);
 
+  /**
+   * The agent popped up, one at a time, and for a ticket's, the tab it opened on: a helper Answer opened it on, else its
+   * chat. Each opening counts, so the pop-up opens afresh on that tab.
+   */
+  const [poppedUp, setPoppedUp] = useState<{ id: string; on?: string; opening: number }>();
+  const popUpId = poppedUp?.id;
   const {
     shown,
     shownRef,
@@ -823,10 +836,11 @@ function BoardView() {
     setUnfolded,
     allowOverlap,
     freeOverlaps,
-  } = useExpandedTiles({ nodes, loaded, agents, shells, externals, windows, windowsRestored, relayout, crews: crewBlocks });
+    putDown,
+  } = useExpandedTiles({ nodes, loaded, agents, shells, externals, windows, windowsRestored, relayout, crews: crewBlocks, poppedUp: popUpId });
   keptOnBoard.current = (sessionId, path) => {
     const nodeId = tileNodeId('agent', sessionId);
-    if (!keptOnBoardOf(nodeId, pinnedRef.current, expandedRef.current)) return false;
+    if (!keptOnBoardOf(nodeId, pinnedRef.current, expandedRef.current, path)) return false;
     expandedTrace.kept(path, [nodeId]);
     bringTileToFront(nodeId);
     return true;
@@ -895,14 +909,16 @@ function BoardView() {
   // The board's nodes as drawn: a shelved zone's work on its shelves, the clocks a Spine zone set aside as its "+N" chip,
   // a folded zone as a chip with nothing of its inside.
   const drawn = useMemo(() => withFoldedZones(withDoneLines(withTuckedClocks(shelved))), [shelved]);
-  // A folded zone's terminals are let go whatever the keep-terminals setting says: that is the memory it frees.
+  // A folded zone's terminals and chat views are let go whatever the keep-sessions setting says: that is the memory it frees.
   const foldedSessions = useMemo(
     () => [...foldedSessionIds(nodes.filter(isZone).map((node) => node.data.zone), agents, shells ?? [])].sort().join('\n'),
     [nodes, agents, shells],
   );
   // Every change, to none too: one opened while its zone stays folded goes as it leaves its pane, and none once unfolded.
   useEffect(() => {
-    letGoFoldedTerminals(foldedSessions === '' ? [] : foldedSessions.split('\n'));
+    const folded = foldedSessions === '' ? [] : foldedSessions.split('\n');
+    letGoFoldedTerminals(folded);
+    letGoFoldedChats(folded);
   }, [foldedSessions]);
 
   // The refs laidOut reads are this render's.
@@ -919,6 +935,9 @@ function BoardView() {
 
   // A wheel gesture stays with the surface it started on, so a pan keeps its momentum across a terminal or a note.
   useEffect(() => (container.current === null ? undefined : installWheelLatch(container.current, ZOOM_KEY)), []);
+  /** The board's layer, promoted while the camera moves (`moving-layer.ts`). */
+  const [movingBoard] = useState(() => movingLayer(() => container.current));
+  useEffect(() => () => movingBoard.dispose(), [movingBoard]);
   // A line cut short on a memory, a queue or a steps card shows whole, laid over it, while it is pointed at or focused.
   useEffect(() => (container.current === null ? undefined : installWholeLines(container.current)), []);
 
@@ -976,9 +995,9 @@ function BoardView() {
       // one whose restart the daemon refuses (a reviewer, one run in its shell), which that would only end.
       const agent = agentsRef.current.find((known) => known.sessionId === sessionId);
       const running = agent !== undefined && agent.state !== 'hibernated' && canRestartLive(agent);
-      void lifecycleOnce(sessionId, () =>
+      return lifecycleOnce(sessionId, () =>
         (running ? window.agentBoard.agents.stop(sessionId) : Promise.resolve()).then(() => window.agentBoard.agents.restart(sessionId, force)).then((result) => {
-          if (result.status === 'busy') return setPendingRestart({ sessionId, message: `${result.message}. Restarting the agent ends it.` });
+          if (result.status === 'busy') return setPendingRestart({ sessionId, message: wakeBusyText(result.message) });
           agentHeard(result.agent);
         }, report('restart the agent')),
       );
@@ -1059,8 +1078,8 @@ function BoardView() {
         }, VIEW_FOLLOW_DELAY_MS);
       },
       // Its session window, maximised: an agent's or a shell tile's (an external session has none).
-      maximise(tile) {
-        if (tile.agent !== undefined) openAgent(tile.agent);
+      maximise(tile, path) {
+        if (tile.agent !== undefined) showWindow({ kind: 'session', id: tile.agent.sessionId, title: agentTitle(tile.agent) }, path);
         else if (tile.shell !== undefined) openShell(tile.shell);
       },
       collapse,
@@ -1099,6 +1118,20 @@ function BoardView() {
         if (moved !== undefined) moveTileRef.current(nodeId, node.data, moved);
       },
       openAgent,
+      // A popped-out agent is brought forward: it is a window of its own already. Its window on the board goes to the
+      // dock, and its tile expanded in place collapses; one pinned expanded is taken off the board while the pop-up is
+      // up and comes back pinned (`useExpandedTiles`' `poppedUp`), and opening that tile (Enter, ⌘K ↵) shows it instead.
+      // A helper its ticket's tile holds pops up as its ticket, on its tab; one popped out is brought forward.
+      popUp(agent, path = 'popUp', on) {
+        const plan = popUpPlan(agent, on, agentsRef.current, windowsRef.current);
+        if (plan === undefined) return;
+        if (plan.kind === 'forward') return openAgent(plan.agent);
+        const { chat, on: tab } = plan;
+        if (keptOnBoard.current(chat.sessionId, path)) return;
+        for (const id of plan.minimise) minimiseWindow(id);
+        collapse(tileNodeId('agent', chat.sessionId), 'popUp');
+        setPoppedUp((was) => ({ id: chat.sessionId, ...(tab === undefined ? {} : { on: tab }), opening: (was?.opening ?? 0) + 1 }));
+      },
       openShell,
       popOutAgent: (agent) => popOut({ kind: 'session', id: agent.sessionId, title: agentTitle(agent) }),
       saveAsPrefab: (agent) => setSavingPrefab(agent),
@@ -1138,6 +1171,21 @@ function BoardView() {
           ],
           confirm: 'Stop agent',
           run: () => void window.agentBoard.agents.stop(sessionId).catch(report('stop the agent')),
+        });
+      },
+      // A ticket's Close ticket…: asked first, as a stop is. Who it ends is read again at the confirm (`closeTicketTeam`):
+      // helpers first, then the chat, each in turn, with one failure never leaving the rest running.
+      closeTicket(chatSessionId) {
+        const chat = agentsRef.current.find((known) => known.sessionId === chatSessionId);
+        if (chat === undefined || closeTicketTeam(agentsRef.current, chatSessionId).length === 0) return;
+        askDelete({
+          title: 'Close ticket?',
+          lines: closeTicketLines(chat, helpersOf(agentsRef.current, chatSessionId)),
+          confirm: 'Close ticket',
+          run: () =>
+            void stopTeam(closeTicketTeam(agentsRef.current, chatSessionId), (sessionId) => window.agentBoard.agents.stop(sessionId)).then((failed) => {
+              if (failed.length > 0) report(`close ${failed.map(({ agent }) => agent.name).join(', ')}`)(failed[0]!.error);
+            }),
         });
       },
       interruptAgent: (sessionId) => void window.agentBoard.agents.interrupt(sessionId).catch(report('interrupt the agent')),
@@ -1219,7 +1267,26 @@ function BoardView() {
       trustFolder: (sessionId) => window.agentBoard.agents.trustFolder(sessionId).then(agentHeard, report('trust its folder')),
       resendUndelivered: (sessionId) => window.agentBoard.agents.resendUndelivered(sessionId).then(agentHeard, report('resend what was not delivered')),
       clearUndelivered: (sessionId) => window.agentBoard.agents.clearUndelivered(sessionId).then(agentHeard, report('clear what was not delivered')),
-      restartAgent: (sessionId) => restartAgent(sessionId, false),
+      restartAgent: (sessionId) => void restartAgent(sessionId, false),
+      wakeAgent: (agent) => {
+        const act = wakeAct(agent);
+        if (act === 'resume') return lifecycleOnce(agent.sessionId, () => window.agentBoard.agents.resume(agent.sessionId).then(agentHeard, report('wake the agent')));
+        if (act === 'restart') return restartAgent(agent.sessionId, false);
+        // A run of its clock now, as its fire time would be: in its history, its mode after it, its next time as it was.
+        if (act === 'run-now' && agent.schedule !== null) {
+          const { clockId } = agent.schedule;
+          return lifecycleOnce(agent.sessionId, () =>
+            window.agentBoard.items.runClock(clockId).then((status) => {
+              const run = status.runs[0];
+              if (run?.outcome === 'skipped') report('wake it now')(new Error(`Its clock skipped: ${run.reason ?? 'no reason given'}`));
+            }, report('wake it now')),
+          );
+        }
+        return Promise.resolve();
+      },
+      turnClockOff: (agent) => {
+        if (agent.schedule !== null) void window.agentBoard.items.update({ id: agent.schedule.clockId, data: { enabled: false } }).catch(report('turn its clock off'));
+      },
       resumeShell: (shell) =>
         Promise.all(shell.stoppedPanes.map((sessionId) => window.agentBoard.shells.resumePane(shell.id, sessionId))).then(
           () => {},
@@ -1279,7 +1346,7 @@ function BoardView() {
         }
       },
     }),
-    [openAgent, openShell, showWindow, poppedOut, popOut, deleteAgent, deleteShell, dismissExternal, askDelete, restartAgent, getNodes, getInternalNode, flowStore, clearView, setViewport, report, setNotice, history, nameOf, showZoneName, expand, bringTileToFront, collapse, setTicketView, sizeTile, setUnfolded, resizeExpandedTile, agentHeard, lifecycleOnce, dropStart, boardLevel.open],
+    [openAgent, minimiseWindow, openShell, showWindow, poppedOut, popOut, deleteAgent, deleteShell, dismissExternal, askDelete, restartAgent, getNodes, getInternalNode, flowStore, clearView, setViewport, report, setNotice, history, nameOf, showZoneName, expand, bringTileToFront, collapse, setTicketView, sizeTile, setUnfolded, resizeExpandedTile, agentHeard, lifecycleOnce, dropStart, boardLevel.open],
   );
 
   const restartBanner = useRestartBanner(agents, shells, tileActions);
@@ -1379,6 +1446,8 @@ function BoardView() {
   }, []);
   // The desk's dot grid, read once: React Flow draws it as an SVG pattern from numbers. A drag snaps to it too.
   const desk = useMemo(() => ({ gap: tokenNumber('--desk-dot-gap'), size: tokenNumber('--desk-dot-size') }), []);
+  // What a ticket's pop-up draws its Board tab from.
+  const popUpBoard = useMemo(() => ({ agents, desk, onError: report }), [agents, desk, report]);
   const snapping = useSnapping({ applyNodeChanges, nodesRef, getInternalNode, getZoom, viewRect, grid, gap: desk.gap });
   const tileMoves = useTileMoves({
     loaded,
@@ -1420,19 +1489,19 @@ function BoardView() {
   );
   /** Records the move of the tile `nodeId` (standing for `tile`'s session) to `move`, from where it is now. */
   const recordTileMove = useCallback(
-    (nodeId: string, tile: TileData, move: TileMove, coalesce?: string) => {
+    (nodeId: string, tile: TileData, move: TileMove, coalesce?: string, putDownBy?: readonly string[]) => {
       const before = tilePlace(nodeId, tile);
       // A move by hand marks it placed by hand in a zone with a rule: undone, the mark goes back to what it was.
-      if (before !== undefined) history.record([tileMoveStep(nodeId, before, move, handPlacedIn(nodeId), freeNow(nodeId))], coalesce);
+      if (before !== undefined) history.record([tileMoveStep(nodeId, before, move, handPlacedIn(nodeId), freeNow(nodeId), putDownBy)], coalesce);
     },
     [history, tilePlace, handPlacedIn, freeNow],
   );
   /** Moves a tile as the user asked, which can be undone. */
   const moveTile = useCallback(
-    (nodeId: string, tile: TileData, drawn: TileMove, coalesce?: string) => {
+    (nodeId: string, tile: TileData, drawn: TileMove, coalesce?: string, putDownBy?: readonly string[]) => {
       // A folded chip is drawn below where its tile is saved: saved from where the tile would be.
       const move = savedMove(tile, drawn);
-      recordTileMove(nodeId, tile, move, coalesce);
+      recordTileMove(nodeId, tile, move, coalesce, putDownBy);
       tileMoves.moveTile(nodeId, tile, move);
     },
     [recordTileMove, tileMoves.moveTile],
@@ -1455,11 +1524,13 @@ function BoardView() {
     const drawn = shown.find((known): known is TileNodeType => known.id === node.id && isSessionTile(known)) ?? node;
     const crew = crewMoves(shown, drawn, move, landingRects(shown, move.zoneId, drawn));
     const step = coalesce ?? (crew.length === 0 ? undefined : `crew:${node.id}:${Date.now()}`);
-    moveTile(node.id, node.data, move, step);
+    // Put down beside the tiles expanded now: a redo puts it down beside them again.
+    const besides = expandedRef.current.map((entry) => entry.id);
+    moveTile(node.id, node.data, move, step, besides);
     if (crew.length > 0) {
       const following = new Set(crew.map((member) => member.node.id));
       setNodes((current) => current.map((known) => (following.has(known.id) ? { ...known, dragging: false } : known)));
-      for (const member of crew) moveTile(member.node.id, member.node.data, { ...member.move, byHand: true }, step);
+      for (const member of crew) moveTile(member.node.id, member.node.data, { ...member.move, byHand: true }, step, besides);
     }
     // The one it was dropped onto stays where it was seen, even if only drawn there, moved clear of something.
     const target = shown.find((known): known is TileNodeType => known.id === onto && isSessionTile(known));
@@ -1470,6 +1541,8 @@ function BoardView() {
       if (x !== stored.position.x || y !== stored.position.y) moveTile(target.id, target.data, { zoneId: target.parentId ?? null, x, y });
     }
     allowOverlap(node.id, onto);
+    // Saved where they were drawn, the expanded tiles' push in it: not pushed with their rows again (`PutDown`).
+    putDown([node.id, ...crew.map((member) => member.node.id)], besides);
   };
 
   /**
@@ -2150,10 +2223,9 @@ function BoardView() {
         zone === undefined
           ? placeOnBoard(absolute, size, zoneLayouts())
           : stageBoardDropPlace(absolute, size, { id: zone.id, ...layoutOf(zone) }, zoneGrid(zone.data.zone.spacing).gaps.padding);
-      // A note or doc the user drags stays where they put it: a Clean up no longer gathers it to its agent.
+      // An item the user drags stays where they put it: an arrange leaves it, and a Clean up no longer gathers it.
       const { item } = node.data;
-      const byHand = isGatheredKind(item.kind) && item.data.placedByHand !== true ? { data: { placedByHand: true } } : {};
-      itemActions.update({ id: item.id, ...place, ...byHand });
+      itemActions.update({ id: item.id, ...place, ...placedByHandPatch(item) });
     },
     [getInternalNode, getNodes, zoneLayouts, itemActions],
   );
@@ -2585,13 +2657,23 @@ function BoardView() {
         const id = key.slice(historyKey.zoneLayoutChoice('').length);
         if (!nodeIds.has(id)) continue;
         window.agentBoard.zones.configure(id, zoneLayoutChoiceFields(state.choice)).then((saved) => setNodes((current) => withZone(current, saved)), report('undo the zone’s layout'));
+      } else if (state?.type === 'zonePlacement') {
+        const id = key.slice(historyKey.zonePlacement('', state.kind).length);
+        if (!nodeIds.has(id)) continue;
+        window.agentBoard.zones.configure(id, { placements: { [state.kind]: state.placement } }).then((saved) => setNodes((current) => withZone(current, saved)), report('undo where the zone’s items go'));
       } else if (state?.type === 'tile') {
         const nodeId = key.slice(historyKey.tile('').length);
         const node = nodesRef.current.find((known): known is TileNodeType => known.id === nodeId && isSessionTile(known));
         const action = tileStepAction(state, handPlacedIn(nodeId));
         if (action.kind === 'followRule') {
+          // Its rule places it now: pushed with its row again, as any other move.
+          freeOverlaps([nodeId]);
           window.agentBoard.zones.followRule(action.zoneId, [nodeId]).then((saved) => setNodes((current) => withZone(current, saved)), report('put it back under the rule'));
-        } else if (node !== undefined) tileMoves.moveTile(nodeId, node.data, action.move);
+        } else if (node !== undefined) {
+          tileMoves.moveTile(nodeId, node.data, action.move);
+          // A drop done again: put down beside those of its tiles still open.
+          if (action.putDownBy !== undefined) putDown([nodeId], action.putDownBy);
+        }
       } else if (state?.type === 'tileSize') {
         const nodeId = key.slice(historyKey.tileSize('').length);
         if (nodeIds.has(nodeId)) sizeTile(nodeId, state.size);
@@ -3074,6 +3156,13 @@ function BoardView() {
           if (step.length > 0) history.record(step);
         }, report('change the zone’s layout'));
       },
+      setPlacement(zone, kind, placement) {
+        const step = placementStep(zone, kind, placement);
+        window.agentBoard.zones.configure(zone.id, { placements: { [kind]: placement } }).then((saved) => {
+          setNodes((current) => withZone(current, saved));
+          if (step.length > 0) history.record(step);
+        }, report('change where the zone’s items go'));
+      },
       fold(zone) {
         window.agentBoard.zones.fold(zone.id).then((result) => {
           setNodes((current) => withZone(current, result.zone));
@@ -3318,11 +3407,12 @@ function BoardView() {
         toMainBoard();
         const node = nodesRef.current.find((known) => known.id === tileNodeId(kind, id));
         if (node === undefined || !isSessionTile(node)) return false;
-        const opens = tileOpenAction(clickOpens, { hasWindow: node.data.external === undefined });
-        // Its window opens whether its tile is drawn or not; a tile in a folded zone is not there to expand.
-        if (opens !== 'window' && showFoldedHome(node.id, flyTo)) return true;
+        const opens = tileOpenAction(clickOpens, { hasWindow: node.data.external === undefined, agent: node.data.agent !== undefined });
+        // Its window or pop-up opens whether its tile is drawn or not; a tile in a folded zone is not there to expand.
+        if (opens === 'expand' && showFoldedHome(node.id, flyTo)) return true;
         selectOnly(new Set([node.id]));
-        if (opens === 'window') tileActions.maximise(node.data);
+        if (opens === 'popup' && node.data.agent !== undefined) tileActions.popUp(node.data.agent, OPEN_TILE_WINDOW_PATH);
+        else if (opens === 'window') tileActions.maximise(node.data, OPEN_TILE_WINDOW_PATH);
         else tileActions.expand(node.id);
         return true;
       },
@@ -3651,6 +3741,12 @@ function BoardView() {
   }, [loaded, agents]);
   /** Where every agent's and shell's tile sits, for the session window's steps through its zone. */
   const navSessions = useMemo(() => nodes.filter(isSessionTile).flatMap(navSessionOf), [nodes]);
+  const popUpAgent = popUpShown(popUpId, agents, windows, expandedRef.current);
+  // Gone, or given way to a session window or its tile expanded, it stays closed: the window going back to the dock brings it back no more.
+  // A tile pinned expanded is taken off the board for it instead (`popUpEnded`).
+  if (popUpId !== undefined && popUpAgent === undefined && popUpEnded(popUpId, agents, windows, expandedRef.current, pinnedRef.current)) setPoppedUp(undefined);
+  const closePopUp = useCallback(() => setPoppedUp(undefined), []);
+  const popUpHelpersHeld = popUpAgent === undefined ? undefined : popUpHelpers(popUpAgent, agents);
 
   return (
     <div
@@ -3926,9 +4022,14 @@ function BoardView() {
                               onInit={() => {
                                 if (CAPTURE_FRAME === undefined && fitOnLoad) expandedTrace.noteView('fitOnLoad', 'board', FIT_NOTED_MS);
                               }}
-                              onMoveStart={(event, viewport) => expandedTrace.moveStarted(event !== null, viewport)}
+                              onMoveStart={(event, viewport) => {
+                                boardMoving();
+                                movingBoard.started();
+                                expandedTrace.moveStarted(event !== null, viewport);
+                              }}
                               onMoveEnd={(_event, { x, y, zoom }) => {
                                 expandedTrace.moveEnded({ x, y, zoom });
+                                movingBoard.ended();
                                 boardSettled();
                                 if (CAPTURE_FRAME === undefined) saveViewport({ x, y, zoom });
                               }}
@@ -3938,6 +4039,7 @@ function BoardView() {
                               <ConnectorMarkers />
                               <SelectionBox onAsk={askClaude.open} />
                               <SuggestionGhosts />
+                              <MemoryReadPulses />
                               {askClaude.popover}
                               <SnapGuides guides={snapping.guides} />
                               {tool !== undefined && (
@@ -4354,7 +4456,7 @@ function BoardView() {
           {pendingRestart !== undefined && (
             <Dialog
               role="alertdialog"
-              title="Restart agent?"
+              title="Wake it?"
               onClose={() => setPendingRestart(undefined)}
               footer={
                 <>
@@ -4362,7 +4464,7 @@ function BoardView() {
                     Cancel
                   </Button>
                   <Button variant="danger" onClick={() => restartAgent(pendingRestart.sessionId, true)}>
-                    Restart anyway
+                    Wake anyway
                   </Button>
                 </>
               }
@@ -4380,6 +4482,18 @@ function BoardView() {
               zones={zones}
               opensMaximised={clickOpens === 'maximised'}
             />
+            {popUpAgent && (
+              <AgentPopup
+                key={`${popUpAgent.sessionId} ${poppedUp?.opening}`}
+                agent={popUpAgent}
+                helpers={popUpHelpersHeld}
+                popped={popUpHelpersHeld === undefined ? undefined : poppedOutOf(popUpHelpersHeld, windows)}
+                on={poppedUp?.on}
+                nodeId={tileNodeId('agent', popUpAgent.sessionId)}
+                onClose={closePopUp}
+                board={popUpBoard}
+              />
+            )}
           </TileActionsContext>
         </>
       )}

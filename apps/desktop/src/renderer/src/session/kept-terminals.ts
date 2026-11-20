@@ -11,7 +11,7 @@
  */
 export type LetGoReason = 'budget' | 'ended' | 'disconnected' | 'resized' | 'relaunched' | 'hidden' | 'setting' | 'folded';
 
-/** The saved keep-terminals setting, off unless it was turned on. */
+/** The saved keep-sessions setting (once named for terminals alone), off unless it was turned on. */
 export function keepTerminalsFrom(saved: unknown): boolean {
   return saved === true;
 }

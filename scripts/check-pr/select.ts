@@ -34,6 +34,7 @@ export const SCANNERS: ReadonlyArray<{ tests: readonly string[]; globs: readonly
       'apps/desktop/src/renderer/src/board/board-background.test.ts',
       'apps/desktop/src/renderer/src/board/hybrid-tile-body.test.ts',
       'apps/desktop/src/renderer/src/board/use-shrinking-line.test.ts',
+      'apps/desktop/src/renderer/src/board/items/shape-label.test.ts',
     ],
     // The `shared/` theme sources are a full gate today (`FULL_GATE_GLOBS`); the glob takes effect when that narrows.
     globs: ['apps/desktop/src/renderer/**/*.{css,ts,tsx}', 'apps/desktop/src/shared/{themes,theme-pack-tokens,design,colour}.ts'],
@@ -280,7 +281,14 @@ const matches = (file: string, globs: readonly string[]): boolean => globs.some(
 const isTest = (file: string): boolean => /\.test\.tsx?$/.test(file);
 const isSpec = (file: string): boolean => /^apps\/desktop\/e2e\/[^/]+\.spec\.ts$/.test(file);
 /** Specs that `playwright test --project app` does not run: playwright.config.ts gives them their own projects. */
-const OTHER_PROJECT_SPECS = ['board-perf.spec.ts', 'packaged.spec.ts', 'readme-screenshots.spec.ts'];
+const OTHER_PROJECT_SPECS = [
+  'board-perf.spec.ts',
+  'packaged.spec.ts',
+  'readme-screenshots.spec.ts',
+  'render-bench.spec.ts',
+  'agents-bench.spec.ts',
+  'pan-zoom-bench.spec.ts',
+];
 /** A visual spec or its shared helpers, in apps/desktop/e2e/visual/: the visual step runs them, not the app project's e2e. */
 const isVisualSpec = (file: string): boolean => /^apps\/desktop\/e2e\/visual\/[^/]+\.ts$/.test(file);
 const specName = (file: string): string => file.split('/').pop() as string;

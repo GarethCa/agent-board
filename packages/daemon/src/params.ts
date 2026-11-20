@@ -1,5 +1,5 @@
 // Checks for RPC params, which arrive untyped off the wire. Each throws an `invalidParams` error naming the bad field.
-import { MAX_EDGE_POINTS, MAX_NAME_LENGTH, RPC_ERROR, type EdgePoint, type WorkCategorySet } from './protocol.ts';
+import { ARRANGE_ITEM_KINDS, ARRANGE_PLACEMENTS, MAX_EDGE_POINTS, MAX_NAME_LENGTH, RPC_ERROR, type ArrangePlacements, type EdgePoint, type WorkCategorySet } from './protocol.ts';
 import { RpcMethodError } from './rpc.ts';
 import { parseCharacter, type CharacterSet } from './character.ts';
 import { parseWorkCategorySet } from './work-category.ts';
@@ -139,6 +139,24 @@ export function oneOf<T extends string>(fields: Record<string, unknown>, name: s
   const value = fields[name];
   if (!options.includes(value as T)) throw invalidParams(`${name} must be one of ${options.join(', ')}`);
   return value as T;
+}
+
+/**
+ * `fields`, given as `name`, checked: where to place some kinds of a zone's items, each a kind (`ARRANGE_ITEM_KINDS`) and
+ * its placement (`ARRANGE_PLACEMENTS`). `fail` makes the error, so the daemon, the CLI and the MCP tool refuse alike.
+ */
+export function checkPlacements(fields: Record<string, unknown>, name: string, fail: (message: string) => Error): Partial<ArrangePlacements> {
+  for (const [kind, placement] of Object.entries(fields)) {
+    if (!(ARRANGE_ITEM_KINDS as readonly string[]).includes(kind)) throw fail(`${name}: no kind ${kind}; give ${ARRANGE_ITEM_KINDS.join(', ')}`);
+    if (!(ARRANGE_PLACEMENTS as readonly unknown[]).includes(placement)) throw fail(`${name}: ${kind} must be one of ${ARRANGE_PLACEMENTS.join(', ')}`);
+  }
+  return fields as Partial<ArrangePlacements>;
+}
+
+/** `value`, given as `name`: where to place some kinds of a zone's items (`checkPlacements`). */
+export function placementsParam(value: unknown, name: string): Partial<ArrangePlacements> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) throw invalidParams(`${name} must be an object of kind to placement`);
+  return checkPlacements(value as Record<string, unknown>, name, invalidParams);
 }
 
 /** Field `name`: the bends of a line, each a finite board position, at most `MAX_EDGE_POINTS`. */

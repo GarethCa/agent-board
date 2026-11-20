@@ -23,7 +23,7 @@ const zone = (id: string, overrides: Partial<Zone> = {}): Zone => ({
   layoutMode: 'free',
   layoutRule: 'off',
   lanes: null,
-  handPlaced: [], free: [],
+  handPlaced: [], free: [], placements: {},
   folded: false,
   tracker: null,
   clone: null,

@@ -74,6 +74,6 @@ test('pasting a Mermaid class diagram draws its classes and relations laid out, 
     await expect(shapes).toHaveCount(0);
   } finally {
     await app.close();
-    removeDataDir(dataDir);
+    await removeDataDir(dataDir);
   }
 });

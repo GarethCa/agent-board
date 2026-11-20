@@ -3,6 +3,10 @@
 // HybridTile draws them. The Simplified tile (`calm-tile.ts`) keeps its own.
 import { needsYouKind, planPending, statusLine, type Agent, type AgentState, type NeedsYouShows, type WorkCategory } from '@agent-board/daemon/protocol';
 import { agentPill, TILE_STATE_LABELS } from '../states';
+import { sinceText } from '../../../shared/needs-you';
+import { clockWakes, endedAs, exitedLine, wakeAct } from './paused';
+import { clockTime } from './items/agent-note';
+import { whenLabel } from './schedule';
 
 /** The seven states the tile tells apart, each with its word in the tile's bottom row. */
 export type TileState = 'thinking' | 'needs-you' | 'waiting' | 'idle' | 'done' | 'paused' | 'failed';
@@ -16,6 +20,17 @@ export const TILE_STATE_WORDS: Record<TileState, string> = {
   paused: 'Paused',
   failed: 'Failed',
 };
+
+/**
+ * Its state's word: Paused reads Stopped for one a restart stopped, which sleeps as a paused one does; Failed reads
+ * Exited for one whose process ended on an error, which Wake starts again; Waiting reads Scheduled for one its clock wakes.
+ */
+export function tileWord(agent: Parameters<typeof clockWakes>[0], state: TileState): string {
+  if (state === 'waiting' && clockWakes(agent)) return 'Scheduled';
+  if (state === 'paused' && agent.state === 'stopped-by-restart') return 'Stopped';
+  if (state === 'failed' && endedAs(agent) === 'exited') return 'Exited';
+  return TILE_STATE_WORDS[state];
+}
 
 /** The states a tile lies flat in, with no shadow: its turn is over and it asks nothing. */
 export const FLAT_STATES: ReadonlySet<TileState> = new Set<TileState>(['idle', 'done', 'paused']);
@@ -57,8 +72,11 @@ export function tileAbout(agent: Pick<Agent, 'purpose' | 'issue' | 'description'
  * than the user: its usage limit, its next scheduled run, or a work category it set that waits on others.
  */
 export function tileState(agent: Agent, shows: NeedsYouShows, pill: AgentState): TileState {
-  if (agent.flag?.to === 'user' || needsYouKind(agent, shows) !== null || agent.state === 'stopped-by-restart') return 'needs-you';
-  if (pill === 'hibernated') return 'paused';
+  if (agent.flag?.to === 'user' || needsYouKind(agent, shows) !== null) return 'needs-you';
+  // Its clock wakes it by itself, paused between runs or ended: it waits on its next run.
+  if (clockWakes(agent)) return 'waiting';
+  // Stopped by a restart, it waits to be woken as a paused one does, asking nothing.
+  if (pill === 'hibernated' || agent.state === 'stopped-by-restart') return 'paused';
   if (pill === 'failed' || agent.startup?.failed === true) return 'failed';
   if (pill === 'done' || agent.endedAt !== null) return 'done';
   if (AT_WORK.has(pill)) return 'thinking';
@@ -70,17 +88,16 @@ export function tileState(agent: Agent, shows: NeedsYouShows, pill: AgentState):
 
 /**
  * What is true now, by its state: the status line it is working to; its question, or the last thing it said; what it
- * waits on; what it finished; what waking does; what failed. Undefined when there is nothing to say: the tile then shows
+ * waits on; what it finished; what waking does; what failed; when a restart stopped it, as of `now`. Undefined when there is nothing to say: the tile then shows
  * only what it is for.
  */
-export function tileNow(agent: Agent, state: TileState): string | undefined {
+export function tileNow(agent: Agent, state: TileState, now: number = Date.now()): string | undefined {
   const status = agent.status === null ? undefined : statusLine(agent.status);
   switch (state) {
     case 'thinking':
       // Its last message is its last turn's: not what it is doing now.
       return status;
     case 'needs-you':
-      if (agent.state === 'stopped-by-restart') return 'Stopped by a restart · Resume carries it on';
       if (planPending(agent)) return `Plan to review: ${agent.plan.title}`;
       return lastLine(agent.lastMessage) ?? status;
     case 'idle':
@@ -88,20 +105,24 @@ export function tileNow(agent: Agent, state: TileState): string | undefined {
       // said, which its hover card holds (the design said its last line; this keeps the status line the board has shown).
       return status ?? lastLine(agent.lastMessage);
     case 'waiting':
-      return waitsLine(agent);
+      // Exited on an error, its clock still on: how it ended stays on its face till the clock runs it again.
+      return exitedLine(agent) ?? waitsLine(agent, now);
     case 'done':
       return finishedLine(agent);
     case 'paused':
+      if (agent.state === 'stopped-by-restart') return `Stopped by a restart · ${sinceText(agent.endedAt ?? agent.stateSince, now)}`;
       return 'Wake starts it where it left off.';
     case 'failed':
-      return agent.notice ?? (agent.endedAt !== null && agent.exitCode !== null && agent.exitCode !== 0 ? `Ended · exit ${agent.exitCode}` : undefined) ?? lastLine(agent.lastMessage) ?? status ?? 'It failed';
+      return agent.notice ?? exitedLine(agent) ?? lastLine(agent.lastMessage) ?? status ?? 'It failed';
   }
 }
 
 /** What a waiting agent waits on, in words: "Waits on its review · PR #46". */
-function waitsLine(agent: Agent): string {
+function waitsLine(agent: Agent, now: number): string {
   if (agent.state === 'rate-limited') return 'Waits on its usage limit';
-  if (agent.state === 'scheduled') return 'Waits on its next run';
+  // Its clock wakes it: when, "Wakes 22:30".
+  if (clockWakes(agent) && agent.schedule?.nextRunAt != null) return `Wakes ${whenLabel(new Date(agent.schedule.nextRunAt), new Date(now))}`;
+  if (agent.state === 'scheduled' || clockWakes(agent)) return 'Waits on its next run';
   const own = agent.workCategory;
   const open = agent.pullRequests.find((pr) => pr.state === 'open');
   const pr = open === undefined ? '' : ` · PR #${open.number}`;
@@ -116,12 +137,16 @@ export function reviewablePr(agent: Pick<Agent, 'pullRequests'>): Agent['pullReq
   return agent.pullRequests.find((pr) => pr.state === 'open');
 }
 
-/** What a done agent finished: its open pull request ready to review, or the one that merged. */
+/**
+ * What a done agent finished: its open pull request ready to review, or the one that merged. Once its process has ended,
+ * when it finished: "Finished 18:02".
+ */
 function finishedLine(agent: Agent): string {
+  const finished = endedAs(agent) === 'done' && agent.endedAt !== null ? `Finished ${clockTime(agent.endedAt)}` : 'Finished';
   const open = reviewablePr(agent);
-  if (open !== undefined) return `Finished · PR #${open.number} is ready to review`;
+  if (open !== undefined) return `${finished} · PR #${open.number} is ready to review`;
   const merged = agent.pullRequests.find((pr) => pr.state === 'merged');
-  return merged === undefined ? 'Finished' : `Finished · PR #${merged.number} merged`;
+  return merged === undefined ? finished : `${finished} · PR #${merged.number} merged`;
 }
 
 /**
@@ -154,25 +179,31 @@ export interface TileButton {
   kind: 'open' | 'review' | 'wake';
   label: string;
   prominent: boolean;
+  /** Shown only while the tile is hovered or holds the focus: a scheduled agent's Wake now, as its clock wakes it anyway. */
+  onHover?: true;
 }
 
 /**
  * Its one button, only when there is something to do: none of them answers, approves or nudges the agent. Review only
- * while a pull request of its is open; a paused agent wakes, even one that flags the user.
+ * while a pull request of its is open; an asleep agent (paused, or stopped by a restart) wakes, even one that flags the
+ * user, and so does one done or exited, which Wake starts again here; one its clock wakes has Wake now, on hover only. A
+ * reviewer whose round ended has none.
  */
-export function tileButton(agent: Pick<Agent, 'state' | 'pullRequests'>, state: TileState): TileButton | undefined {
-  if (agent.state === 'hibernated') return { kind: 'wake', label: 'Wake', prominent: state === 'needs-you' };
+export function tileButton(agent: Pick<Agent, 'state' | 'pullRequests' | 'endedAt' | 'reviewOf' | 'shellHarness' | 'schedule'>, state: TileState): TileButton | undefined {
+  const wake = wakeAct(agent);
+  if (wake === 'resume') return { kind: 'wake', label: 'Wake', prominent: state === 'needs-you' };
   switch (state) {
     case 'needs-you':
       return { kind: 'open', label: 'Open', prominent: true };
     case 'failed':
-      return { kind: 'open', label: 'Open', prominent: false };
+      return wake === 'restart' ? { kind: 'wake', label: 'Wake', prominent: false } : { kind: 'open', label: 'Open', prominent: false };
     case 'done':
-      return reviewablePr(agent) === undefined ? undefined : { kind: 'review', label: 'Review', prominent: false };
+      if (reviewablePr(agent) !== undefined) return { kind: 'review', label: 'Review', prominent: false };
+      return wake === 'restart' ? { kind: 'wake', label: 'Wake', prominent: false } : undefined;
     case 'paused':
       return { kind: 'wake', label: 'Wake', prominent: false };
     default:
-      return undefined;
+      return wake === 'run-now' ? { kind: 'wake', label: 'Wake now', prominent: false, onHover: true } : undefined;
   }
 }
 

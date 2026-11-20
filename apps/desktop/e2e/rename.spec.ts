@@ -1,6 +1,6 @@
 import { expect, type Locator, type Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
-import { agents, launch, openSubmenu, tileGroup, sessionWindow, SHELL_ENV, spawnAgent, tile, zoneNamed, zones } from './agent-helpers.ts';
+import { agents, launch, openSubmenu, tileGroup, sessionWindow, SHELL_ENV, spawnAgent, tile, tileAction, zoneNamed, zones } from './agent-helpers.ts';
 import { test, addEmptyZone, browseForZone, pickFolderNext, removeDataDir, tempDataDir } from './launch.ts';
 import { scratch } from './scratch.ts';
 import { clickClosing } from './windows.ts';
@@ -54,8 +54,7 @@ test('renames an agent by a slow click on its name and the pencil, a shell with 
     expect(renamed).toMatchObject({ name: 'Fix the login', sessionId: original!.sessionId, branch: original!.branch, worktree: original!.worktree });
 
     // Escape cancels, and a blank name reverts.
-    await tile(window).hover();
-    await tile(window).getByRole('button', { name: 'Rename', exact: true }).click();
+    await tileAction(tile(window), 'Rename', 'Settings');
     await field(window).fill('Never saved');
     await field(window).press('Escape');
     await expect(tile(window).locator('.hybrid-tile-name')).toHaveText('Fix the login');

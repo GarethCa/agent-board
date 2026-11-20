@@ -47,6 +47,13 @@ describe('glanceFace', () => {
     expect(face).toEqual({ status: 'problem', state: 'failed', level: 3, word: 'Failed', line: 'Its process crashed (exit code 1).', action: { kind: 'open', label: 'Open', prominent: true } });
   });
 
+  it('reads an agent that exited on an error as Exited, quiet, with no ring, whatever its exit code, and offers Wake', () => {
+    for (const exitCode of [1, 0]) {
+      const face = glanceFace(working({ state: 'failed', endedAt: AT, exitCode, notice: null, schedule: null }), 'explicit');
+      expect(face).toMatchObject({ state: 'failed', level: 0, word: 'Exited', action: { kind: 'wake', label: 'Wake', prominent: false } });
+    }
+  });
+
   it('keeps a failed start’s Try again', () => {
     const agent = working({ state: 'failed', endedAt: AT, exitCode: 1, startup: { output: 'ANTHROPIC_API_KEY not set', failed: true } });
     expect(glanceFace(agent, 'explicit').action).toEqual({ kind: 'retry', label: 'Try again', prominent: false });

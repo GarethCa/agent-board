@@ -51,6 +51,6 @@ test("Clean up gathers a Spine zone's notes to their bands and its finished tick
     await putBack();
   } finally {
     await app.close();
-    removeDataDir(dataDir);
+    await removeDataDir(dataDir);
   }
 });

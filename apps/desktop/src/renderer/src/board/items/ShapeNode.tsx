@@ -127,7 +127,7 @@ export function ShapeBody({
       <svg className="shape-art" width={width} height={height} aria-hidden="true">
         <ShapeParts shape={style.shape} width={width} height={height} strokeWidth={style.strokeWidth} dashed={style.dashed} />
       </svg>
-      <div className="shape-label" data-tight={label.tight || undefined} data-at-top={label.atTop || undefined} style={labelStyle(label)}>
+      <div className="shape-label" data-tight={label.tight || undefined} data-outside={label.outside || undefined} data-at-top={label.atTop || undefined} style={labelStyle(label)}>
         {sections === undefined ? (
           children
         ) : (

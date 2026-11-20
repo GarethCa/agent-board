@@ -654,6 +654,21 @@ describe('resuming an agent', () => {
     addAgent('ended', { state: 'running' });
     markTurnsCutOff(db);
     expect(['working', 'asking', 'idle', 'ended'].map((id) => getRow(id)!.turn_cut_off)).toEqual([1, 1, 0, 0]);
+    // Of those, only the one on a permission prompt was asking, not working.
+    expect(['working', 'asking', 'idle', 'ended'].map((id) => getRow(id)!.turn_cut_off_asking)).toEqual([0, 1, 0, 0]);
+  });
+
+  it('records that a restart cut an agent off on a permission prompt, asking rather than working, until a turn begins', async () => {
+    const { lifecycle, addAgent, getRow, transcript } = setup();
+    addAgent('a', { state: 'failed', stoppedByRestart: true, transcriptPath: transcript() });
+    lifecycle.exited('a', true, 'needs-permission');
+    expect([getRow('a')!.turn_cut_off, getRow('a')!.turn_cut_off_asking]).toEqual([1, 1]);
+    addAgent('b', { state: 'failed', stoppedByRestart: true, transcriptPath: transcript() });
+    lifecycle.exited('b', true, 'running');
+    expect([getRow('b')!.turn_cut_off, getRow('b')!.turn_cut_off_asking]).toEqual([1, 0]);
+    // Its session ending any other way forgets both.
+    lifecycle.exited('a', false, 'idle');
+    expect([getRow('a')!.turn_cut_off, getRow('a')!.turn_cut_off_asking]).toEqual([0, 0]);
   });
 
   it('carries a Codex agent on in its own conversation when it tells it to', async () => {

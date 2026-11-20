@@ -9,7 +9,7 @@ import { SHOT, needsBaselines } from './shared.ts';
 test.use({ viewport: null });
 
 // In both designs: the tile menu's Pin expanded, in Arrange (Classic's Board), and the header of a tile pinned
-// expanded, its pin shown on as Unpin, where Collapse was, and its window buttons greyed until it is unpinned.
+// expanded, its pin shown on as Unpin, where Collapse was, beside its window buttons as on any tile.
 for (const design of ['classic', 'simplified'] as const) {
   const suffix = design === 'simplified' ? '-simplified' : '';
   test(`an agent pinned expanded: its menu row and its header, ${design}`, async () => {
@@ -51,8 +51,8 @@ for (const design of ['classic', 'simplified'] as const) {
       await expect.soft(expanded.locator('.expanded-tile-head')).toHaveScreenshot(`pinned-expanded-header${suffix}.png`, SHOT);
     } finally {
       await app.close();
-      rmSync(dir, { recursive: true, force: true });
       await removeDataDir(dataDir);
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 }

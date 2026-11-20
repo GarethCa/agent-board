@@ -5,11 +5,12 @@ import { lookShown, type CharacterLook } from '@agent-board/daemon/character';
 import { Chip, EditableName, HoverCard, Spinner, useRenaming, useSlowClickRename } from '../ui';
 import { useNeedsYouShows } from '../needs-you-setting';
 import { dropKey, dropOver as dropOverValue } from '../session/shell-moves';
-import { CalmButton } from './CalmTile';
+import { askColour, CalmButton, TicketAskButton } from './CalmTile';
 import { TileRobot } from './CommandFigure';
 import { HandoffsContext } from './flow-edges';
-import { glanceFace, type GlanceFace } from './glance-tile';
-import { ticketTileAsk } from './ticket-tile';
+import { glanceFace, ticketGlanceFace, type GlanceFace } from './glance-tile';
+import { ticketHead, ticketTileAsk } from './ticket-tile';
+import { useTicketChatMenu } from './use-ticket-chat-menu';
 import { JobTicket, useHeldJobs } from './items/taken-jobs';
 import { useJobDropOver } from './items/queue-board';
 import { useBoardCommands } from './commands';
@@ -23,13 +24,14 @@ import { poseOfStatus } from './tile-pose';
 import { PullRequestChip } from './PullRequestChip';
 import { SubagentPerch } from './SubagentPerch';
 import { ClickOpensContext, TileActionsContext, type TileData } from './tile';
+import { agentTileTip, answerTicket, openAgentTile } from './click-opens';
 import { lastMessageCard, stopPropagation, TileMenu, TrustRow, UndeliveredRow, UnsentRow, UntypedRow } from './tile-parts';
 import { useFittedLines } from './use-fitted-lines';
 import { quickAskOf, tileDialogOf } from './quick-ask';
 import { TileQuickAsk } from './TileQuickAsk';
 import { TileDialogAsk } from './DialogQuickAsk';
 import { HandPlacedMark } from './HandPlacedMark';
-import { FrostMark } from './FrostMark';
+import { FrostMark, FrostWatermark } from './FrostMark';
 import { frostedClasses } from './paused';
 
 export type GlanceTileProps = { id: string; selected: boolean; agent: Agent } & Pick<TileData, 'repo' | 'from' | 'crew' | 'crewFlags' | 'implementer' | 'helpers'>;
@@ -40,6 +42,8 @@ export interface GlanceParts {
   face: GlanceFace;
   /** Its status in the six the app names everywhere, for its glyph. */
   status: HumanStatus;
+  /** A ticket's own ask that stands up in its own colour on its word: green to merge, blue for a new review. */
+  ask: 'merge' | 'new' | undefined;
   /** Its character's look, as its status and its own pose say. */
   look: CharacterLook & { harness: Harness };
   /** Its name, which a slow click renames, with its starting spinner and its marks. */
@@ -85,14 +89,16 @@ export function GlanceTileFrame({
 }: GlanceTileProps & { design: string; children(parts: GlanceParts): ReactNode }) {
   const shows = useNeedsYouShows();
   const tileActions = useContext(TileActionsContext);
-  const { expand, openAgent, rename, sendUnsent, clearUnsent, typeFirstPrompt, trustFolder, resendUndelivered, clearUndelivered } = tileActions;
+  const { expand, rename, sendUnsent, clearUnsent, typeFirstPrompt, trustFolder, resendUndelivered, clearUndelivered } = tileActions;
   const clickOpens = useContext(ClickOpensContext);
   const dropOver = dropOverValue.use();
   const jobDrop = useJobDropOver() === agent.sessionId;
   const handoffs = useContext(HandoffsContext);
   const renaming = useRenaming(agent.name, (name) => rename({ kind: 'agent', sessionId: agent.sessionId }, name));
   const menu = useAgentTileMenu(id, agent, { from, implementer }, renaming.startSoon);
-  useMenuBarSection('agent', selected, menu.entries);
+  // A ticket's chat: the ticket's own items lead its ⋯ menu, and Close ticket… ends it, as on every tile design.
+  const ticket = useTicketChatMenu(agent, helpers, [], menu.entries, ticketHead(agent).id ?? agent.name);
+  useMenuBarSection('agent', selected, ticket.entries);
   useRenameRequest(id, renaming);
   const nameClicks = useSlowClickRename(renaming, selected);
   const fitted = useFittedLines();
@@ -103,7 +109,9 @@ export function GlanceTileFrame({
   const rolled = helpers === undefined ? undefined : ticketTileAsk(agent, helpers, shows);
   const asker = rolled?.dot === true ? rolled.asker : agent;
   const asked = glanceFace(asker, shows, asker === agent ? implementer : undefined);
-  const face = asker === agent ? asked : { ...asked, line: rolled?.line ?? asked.line };
+  // Or for the ticket itself, as Classic's tile does: Ready to merge with Merge, New review with Read, and a merged Done.
+  const own = rolled?.dot === false ? rolled : undefined;
+  const face = own !== undefined ? ticketGlanceFace(asked, own) : asker === agent ? asked : { ...asked, line: rolled?.line ?? asked.line };
   const { status } = face;
   // Its times are re-read as each would read differently: once a minute, never by the second.
   const sinceNow = useNowForSince(agent.stateSince);
@@ -114,13 +122,14 @@ export function GlanceTileFrame({
   const dialog = quick === undefined ? tileDialogOf(asker) : undefined;
   const sending = handoffs.sending.has(agent.sessionId) && status !== 'needs-you';
   const card = lastMessageCard(agent);
-  const open = () => (clickOpens !== 'expand' ? openAgent(agent) : expand(id));
+  const open = () => (openAgentTile(clickOpens, tileActions, id, agent));
   const { startup } = agent;
   const drop = dropKey({ kind: 'agent', id: agent.sessionId });
   const parts: GlanceParts = {
     agent,
     face,
     status,
+    ask: askColour(own),
     look: { harness: agent.harness, ...(sending ? { pose: 'handing-off' } : lookShown(poseOfStatus(status, agent), agent)) },
     name: (
       <>
@@ -131,7 +140,12 @@ export function GlanceTileFrame({
       </>
     ),
     reviewer: <ReviewerMark agent={agent} implementer={implementer} />,
-    menu: <TileMenu entries={menu.entries} onOpen={menu.reread} />,
+    menu: (
+      <>
+        <TileMenu entries={ticket.entries} onOpen={menu.reread} />
+        {ticket.watches}
+      </>
+    ),
     expand: () => expand(id),
     prompt:
       agent.undelivered.length > 0 ? (
@@ -148,9 +162,12 @@ export function GlanceTileFrame({
       quick !== undefined ? (
         <TileQuickAsk sessionId={asker.sessionId} name={asker.name} ask={quick} />
       ) : dialog !== undefined ? (
-        <TileDialogAsk sessionId={asker.sessionId} name={asker.name} prompt={dialog} onOpen={() => openAgent(asker)} />
+        <TileDialogAsk sessionId={asker.sessionId} name={asker.name} prompt={dialog} onOpen={() => answerTicket(clickOpens, tileActions, agent, asker)} />
       ) : face.action !== null ? (
-        <CalmButton action={face.action} agent={asker} actions={tileActions} open={asker === agent ? open : () => openAgent(asker)} className="glance-tile-action" />
+        // The chat's own ask (its Answer) comes before the ticket's button, which shows while the chat asks nothing.
+        <CalmButton action={face.action} agent={asker} actions={tileActions} open={asker === agent ? open : () => answerTicket(clickOpens, tileActions, agent, asker)} className="glance-tile-action" />
+      ) : own?.button !== undefined ? (
+        <TicketAskButton chat={agent} own={own} button={own.button} actions={tileActions} className="glance-tile-action" />
       ) : null,
     times,
     tags: <GlanceTags agent={agent} />,
@@ -186,7 +203,7 @@ export function GlanceTileFrame({
   return (
     <HoverCard label={card?.label ?? 'Last message'} content={card?.text}>
       <div
-        className={frostedClasses(`hybrid-tile hybrid-tile-agent glance-tile ${design}-tile`, agent)}
+        className={frostedClasses(`hybrid-tile hybrid-tile-agent glance-tile ${design}-tile`, agent, shows)}
         data-testid="agent-tile"
         data-representation="hybrid"
         data-tile-design={design}
@@ -210,9 +227,10 @@ export function GlanceTileFrame({
         data-reviewer={agent.reviewOf !== null || undefined}
         data-orchestrator={crew !== undefined || undefined}
         data-master={agent.master || undefined}
-        title={card !== undefined ? undefined : clickOpens !== 'expand' ? 'Double-click to open its session window' : 'Double-click to expand it here'}
+        title={card !== undefined ? undefined : agentTileTip(clickOpens)}
         onDoubleClick={open}
       >
+        <FrostWatermark agent={agent} />
         {children(parts)}
         {crew !== undefined && (
           <span className="hybrid-tile-crew-count" data-testid="crew-count" title={`It started ${crew} agent${crew === 1 ? '' : 's'} on the board`}>

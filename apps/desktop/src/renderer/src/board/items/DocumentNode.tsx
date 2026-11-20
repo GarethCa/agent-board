@@ -117,10 +117,14 @@ export const DocumentNode = memo(function DocumentNode({ data, selected: picked,
         </NodeToolbar>
         <div className="doc-card-head">
           <span className="doc-card-type">{docTypeTag(document?.format ?? card.format)}</span>
-          <span className="doc-card-file">{document?.path.split(/[\\/]/).at(-1) ?? card.title}</span>
+          <span className="doc-card-file" title={document?.path ?? card.title}>
+            {document?.path.split(/[\\/]/).at(-1) ?? card.title}
+          </span>
           {document?.writtenBy === 'user' && <span className="doc-card-edited">✎ you edited</span>}
         </div>
-        <div className="doc-card-title">{title}</div>
+        <div className="doc-card-title" title={title}>
+          {title}
+        </div>
         {!card.collapsed && (
           <div className="doc-card-body nowheel" data-testid="doc-card-preview">
             {document?.format === 'html' ? <p>{preview}</p> : renderMarkdown(preview, openLink)}

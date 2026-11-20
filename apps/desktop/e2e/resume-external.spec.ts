@@ -3,7 +3,7 @@ import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { mkdtempSync, realpathSync, rmSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { agents, claudeInTerminal, sessionWindow, tile, zones } from './agent-helpers.ts';
+import { agents, claudeInTerminal, sessionWindow, tile, tileAction, zones } from './agent-helpers.ts';
 import { browseForZone, connectedDaemonPid, launchApp, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
 import { scratch } from './scratch.ts';
 
@@ -73,7 +73,7 @@ test('an external session resumed in agent-board becomes a running agent in the 
     const loose = page.getByTestId('external-tile');
     await expect(loose).toHaveAttribute('data-state', 'done');
     const before = await loose.boundingBox();
-    await loose.getByRole('button', { name: 'Resume in agent-board' }).click();
+    await tileAction(loose, 'Resume in agent-board');
     // Outside git: no new worktree to offer.
     await expect(resumeDialog(page).getByRole('button', { name: 'Resume in a new worktree' })).toHaveCount(0);
     await resumeDialog(page).getByRole('button', { name: 'Resume here' }).click();
@@ -114,7 +114,7 @@ test('a session that may still be running elsewhere is only resumed past a warni
     session.stderr.resume();
     const external = externalTile(page);
     await expect(external).toHaveAttribute('data-state', 'waiting');
-    await external.getByRole('button', { name: 'Resume in agent-board' }).click();
+    await tileAction(external, 'Resume in agent-board');
     await expect(resumeDialog(page)).toContainText('may still be running in another terminal');
     await expect(resumeDialog(page).getByRole('button', { name: 'Cancel' })).toBeFocused();
     await page.keyboard.press('Enter');
@@ -126,7 +126,7 @@ test('a session that may still be running elsewhere is only resumed past a warni
     session.stdin.end();
     await expect(external).toHaveAttribute('data-state', 'done');
     const { sessionId } = (await page.evaluate(() => window.agentBoard.external.list()))[0]!;
-    await external.getByRole('button', { name: 'Resume in agent-board' }).click();
+    await tileAction(external, 'Resume in agent-board');
     await expect(resumeDialog(page).getByRole('button', { name: 'Resume here' })).toBeEnabled();
     await expect(resumeDialog(page)).not.toContainText('may still be running in another terminal');
     const transcript = join(home, '.claude', 'projects', repo.replace(/[^a-zA-Z0-9]/g, '-'), `${sessionId}.jsonl`);

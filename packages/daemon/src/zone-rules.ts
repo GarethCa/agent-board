@@ -59,7 +59,7 @@ const itemInputs = (item: BoardItem): Seen | null =>
   item.kind === 'clock' ? clockInputs(item) : item.kind === STAGE_BOARD_KIND ? stageInputs(item) : null;
 const zoneInputs = (zone: Zone): Seen => ({
   zoneId: zone.id,
-  shape: JSON.stringify([zone.layoutRule, zone.spacing, zone.width, zone.folded, zone.handPlaced]),
+  shape: JSON.stringify([zone.layoutRule, zone.spacing, zone.width, zone.folded, zone.handPlaced, zone.placements]),
 });
 const edgeInputs = (edge: FlowEdge): Seen => ({ zoneId: null, shape: JSON.stringify([edge.from, edge.to]) });
 

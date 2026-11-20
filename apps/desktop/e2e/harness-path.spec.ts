@@ -58,17 +58,17 @@ async function startsAndRestarts(setUp: (home: string, fake: string) => void) {
     await spawnAgent(window, 'monorepo', 'Pick a database');
     await expect(tile(window)).toHaveAttribute('data-state', 'waiting');
 
-    // Quit claude at its prompt: its pane drops into a shell, and Restart carries the agent on.
+    // Quit claude at its prompt: its pane drops into a shell, and Wake carries the agent on.
     await tile(window).dblclick();
     await expect(expandedScreen(window)).toContainText('Which database should I use');
     await expandedTile(window).getByTestId('session-terminal').click();
     await window.keyboard.press('Control+D');
-    await expect(expandedTile(window).getByTestId('agent-exit-banner')).toContainText('claude exited (code 0)');
+    await expect(expandedTile(window).getByTestId('agent-exit-banner')).toContainText('Done. Wake carries on this conversation.');
     await expandedTile(window).locator('.session-window-head').click();
     await window.keyboard.press('Escape');
     await expect(expandedTile(window)).toHaveCount(0);
-    // Restart from the tile's hover corner, pressed twice: it restarts once, and the second press is no error.
-    await tile(window).getByRole('button', { name: 'Restart', exact: true }).dblclick();
+    // Wake from the tile's footer, pressed twice: it restarts once, and the second press is no error.
+    await tile(window).getByTestId('wake').dblclick();
     await expect.poll(async () => (await agents(window))[0]!.endedAt).toBeNull();
     await expect(window.getByText(/Could not restart/)).toHaveCount(0);
     await tile(window).dblclick();

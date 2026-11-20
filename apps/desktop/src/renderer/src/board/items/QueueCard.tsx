@@ -240,7 +240,7 @@ export function QueueCardView(props: QueueCardViewProps) {
       {children}
       <div className="listcard-head">
         <ListCardFace glyph={queueGlyph(audience)} count={(count ?? open.length) + needs.length} />
-        <b className="listcard-title">{title}</b>
+        <b className="listcard-title" title={title}>{title}</b>
         <ScopeChip scope={scope} zoneColor={zoneColor} testId="queue-scope" />
       </div>
       {loaded && jobs.length > 0 && audience === 'agents' && <span className="queue-counts">{countsText(jobs, audience)}</span>}
@@ -466,7 +466,7 @@ export function QueuePeek(props: QueuePeekProps) {
   return (
     <div className="listcard-peek" data-testid="queue-peek" onKeyDown={rowKeys}>
       <div className="listcard-peek-head">
-        <b className="listcard-title">{title}</b>
+        <b className="listcard-title" title={title}>{title}</b>
         <span className="queue-counts">{countsText(jobs, audience)}</span>
         <ScopeChip scope={scope} zoneColor={zoneColor} />
       </div>

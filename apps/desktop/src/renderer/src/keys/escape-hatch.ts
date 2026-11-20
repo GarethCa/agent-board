@@ -25,7 +25,7 @@ export function nextRegion(shown: readonly Region[], current: Region | undefined
 }
 
 /** A session window, or an expanded tile on the board: what the way out leaves. */
-const SURFACE = '.session-window, .expanded-tile';
+const SURFACE = '.session-window, .expanded-tile, .agent-popup';
 const HEAD = '.session-window-head';
 /** Where each region is drawn, in a window or an expanded tile; the board is the document's. */
 const REGION_SELECTORS: Record<Exclude<Region, 'board'>, string> = {
@@ -231,13 +231,14 @@ export function leaveToTile(surface: HTMLElement | null, leave: () => void, sele
  * a field), or ⌘Esc from anywhere in it. `leave` minimises or collapses it; the focus goes to its tile first, which
  * stays on the board as the window or the expanded tile goes (a window of joined tabs: its button in the dock). Without
  * `leave` (a window of its own), neither key does; with an unsaved draft in it, both go back to the draft instead.
+ * With `select`, the tile is selected as well (the pop-up, whose other ways out select it).
  */
-export function useLeaveKeys(root: RefObject<HTMLElement | null>, leave: (() => void) | undefined): void {
+export function useLeaveKeys(root: RefObject<HTMLElement | null>, leave: (() => void) | undefined, select?: (nodeId: string) => void): void {
   const run = () => {
     const surface = root.current;
     const draft = surface && unsavedIn(surface);
     if (draft) return backToDraft(draft);
-    leaveToTile(surface, () => leave?.());
+    leaveToTile(surface, () => leave?.(), select);
   };
   const latest = useRef(run);
   latest.current = run;

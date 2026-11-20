@@ -68,6 +68,7 @@ export function checkTodoData(data: Record<string, unknown>): void {
   if (new Set(lines.map((line) => (line as TodoLine).id)).size !== lines.length) throw fail('lines must each have an id of their own');
   if (data.folded !== undefined && typeof data.folded !== 'boolean') throw fail('folded must be true or false');
   if (data.openSize !== undefined && !isCardSize(data.openSize)) throw fail('openSize must be { width, height }');
+  if (data.foldedSize !== undefined && !isCardSize(data.foldedSize)) throw fail('foldedSize must be { width, height }');
 }
 
 /** A line's text as kept: on one line, its ends trimmed; refused if empty or too long. */

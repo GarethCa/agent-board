@@ -9,6 +9,7 @@ import { stopPropagation } from './tile-parts';
 import type { HelperIcon, HelperKind, TicketButton } from './ticket-tile';
 import { ticketViewOf, type TicketView } from './ticket-view';
 import { useViewSettings } from './view-settings';
+import { FrostBadge } from './FrostMark';
 
 export const HELPER_ICONS: Record<HelperKind, ReactNode> = {
   design: <PenLine aria-hidden />,
@@ -28,7 +29,7 @@ export function useTicketView(nodeId: string): TicketView {
 /**
  * Switches the ticket tile to a view by hand, and it keeps it. The terminal shows at once; so does the board: switched
  * to it, the user is taken into the ticket's board, and comes back out to its card. The switch ignores its pressed icon,
- * so only Open as board goes in again from a tile already in the board view.
+ * so only Open the ticket's board goes in again from a tile already in the board view.
  */
 export function useSwitchTicketView(nodeId: string, chatSessionId: string): (view: TicketView) => void {
   const { setTicketView, openTicketBoard } = useContext(TileActionsContext);
@@ -90,12 +91,13 @@ export function HelperCard({ helper, column, open, onShow, onOpenWindow }: { hel
       onClick={click}
       onDoubleClick={stopPropagation}
     >
-      <span className="ticket-helper-card-icon" data-state={helper.state}>
+      <span className="ticket-helper-card-icon" data-state={helper.state} data-frozen={helper.frozen}>
         {HELPER_ICONS[helper.kind]}
+        <FrostBadge kind={helper.frozen} />
       </span>
       <b className="ticket-helper-card-name">{helper.name}</b>
       {column && (
-        <span className="ticket-helper-card-word" data-state={helper.state}>
+        <span className="ticket-helper-card-word" data-state={helper.state} data-frozen={helper.frozen}>
           {helper.word}
         </span>
       )}
@@ -105,7 +107,22 @@ export function HelperCard({ helper, column, open, onShow, onOpenWindow }: { hel
 }
 
 /** Its one button, at rest and opened. Merge opens the pull request, where the merge stays the user's click: the ticket never merges itself. */
-export function OneButton({ button, onOpen, onMerge, onWake, onRead }: { button: TicketButton; onOpen(): void; onMerge(): void; onWake(): Promise<void>; onRead(): void }) {
+export function OneButton({
+  button,
+  onOpen,
+  onMerge,
+  onWake,
+  onRead,
+  className = 'hybrid-tile-act',
+}: {
+  button: TicketButton;
+  onOpen(): void;
+  onMerge(): void;
+  onWake(): Promise<void>;
+  onRead(): void;
+  /** Its place on the tile that draws it: Classic's footer by default. */
+  className?: string;
+}) {
   const [pending, setPending] = useState(false);
   const press = () => {
     if (button.kind === 'open') return onOpen();
@@ -119,10 +136,11 @@ export function OneButton({ button, onOpen, onMerge, onWake, onRead }: { button:
       size="xs"
       variant={button.prominent ? 'primary' : 'secondary'}
       icon={button.kind === 'merge' ? <GitMerge /> : button.kind === 'wake' ? <Play /> : undefined}
-      className="hybrid-tile-act ticket-tile-act nodrag"
+      className={`${className} ticket-tile-act nodrag`}
       data-testid="tile-act"
       data-kind={button.kind}
       data-prominent={button.prominent || undefined}
+      data-on-hover={button.onHover}
       title={button.kind === 'merge' ? 'Open its pull request, to merge it there' : button.kind === 'read' ? 'Mark its watches’ news read' : undefined}
       disabled={pending}
       onClick={press}

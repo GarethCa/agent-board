@@ -21,7 +21,7 @@ export const SuggestionActionsContext = createContext<SuggestionActions>({ accep
 export const useSuggestionActions = () => useContext(SuggestionActionsContext);
 
 /** An object's box on the board, as the board has drawn it; undefined once it has gone. */
-function rectIn(state: ReactFlowState, object: { type: ConnectorEndType; id: string }): Rect | undefined {
+export function rectIn(state: ReactFlowState, object: { type: ConnectorEndType; id: string }): Rect | undefined {
   const node = state.nodeLookup.get(nodeIdOf(object));
   if (node === undefined) return undefined;
   return boundsOnBoard(node.internals.userNode, { ...node.internals.positionAbsolute, width: node.measured.width ?? 0, height: node.measured.height ?? 0 });

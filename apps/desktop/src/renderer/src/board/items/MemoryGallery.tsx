@@ -48,8 +48,14 @@ const PEEK_ENTRIES = ENTRIES.filter((each) => each.id !== 'e7');
 
 /** Who read the gallery's memory, and its guide. */
 const READERS: MemoryView['readers'] = {
-  memory: { count: 14, last: { name: 'impl-3', at: at(5, 14, 57) } },
-  entries: { e7: { count: 9, last: { name: 'impl-3', at: at(5, 14, 57) } }, e3: { count: 12, last: { name: 'lead', at: at(5, 14, 20) } } },
+  memory: { count: 4, last: { name: 'impl-3', at: at(5, 14, 57) } },
+  entries: { e7: { count: 3, last: { name: 'impl-3', at: at(5, 14, 57) } }, e3: { count: 4, last: { name: 'lead', at: at(5, 14, 20) } } },
+  list: [
+    { sessionId: 's3', name: 'impl-3', at: at(5, 14, 57) },
+    { sessionId: 's1', name: 'lead', at: at(5, 14, 20) },
+    { sessionId: 's2', name: 'impl-2', at: at(5, 11) },
+    { sessionId: 's4', name: 'review-2', at: at(4, 16) },
+  ],
 };
 
 /** The guide's versions, newest first. */
@@ -79,7 +85,7 @@ export function MemoryGallery() {
     <section className="listcard-gallery" data-testid="memory-gallery" aria-label="Memory">
       <div className="listcard-gallery-row">
         <div style={card} data-testid="memory-gallery-card">
-          <MemoryCardView title="api memory" scope="Zone · api" zoneColor={ZONE} entries={ENTRIES} readers={READERS.memory} now={NOW} onAdd={noop} onOpen={noop} />
+          <MemoryCardView title="api memory" scope="Zone · api" zoneColor={ZONE} entries={ENTRIES} readers={READERS.memory} readerList={READERS.list} now={NOW} onAdd={noop} onOpen={noop} />
         </div>
         <div style={card} data-testid="memory-gallery-empty">
           <MemoryCardView title="web memory" scope="Board" entries={[]} now={NOW} onAdd={noop} onOpen={noop} />
