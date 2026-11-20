@@ -1,7 +1,7 @@
 // Which session tiles are expanded in place, how big each one is, and which is in front. Pure, so every
 // change is unit-tested. The board holds the set in one state, saved in the daemon's view state so the tiles
 // open again after a restart.
-import { PERCH_ROOM, ZONE_PADDING } from '@agent-board/daemon/board-layout';
+import { EXPANDED_TILE_SIZE, expandedRoomFrom, PERCH_ROOM, ZONE_PADDING } from '@agent-board/daemon/board-layout';
 
 /** An expanded tile: its node id and its size on the board. */
 export interface ExpandedTile {
@@ -14,7 +14,7 @@ export interface ExpandedTile {
 export type ExpandedTiles = readonly ExpandedTile[];
 
 /** An expanded tile's size when it first opens: room for a terminal to read and its details strip. */
-export const EXPANDED_SIZE = { width: 960, height: 600 };
+export const EXPANDED_SIZE = EXPANDED_TILE_SIZE;
 
 /** The smallest an expanded tile can be resized to, with its details strip and a usable terminal. */
 export const EXPANDED_MIN_SIZE = { width: 640, height: 360 };
@@ -62,6 +62,14 @@ export function parentKindOf(parentId: string | undefined): ExpandedParent {
 export function resizeAllowed(next: { x: number; y: number }, start: { x: number; y: number }, parent: ExpandedParent): boolean {
   if (parent === 'board') return true;
   return next.x >= Math.min(start.x, ZONE_PADDING) && next.y >= Math.min(start.y, ZONE_PADDING + PERCH_ROOM);
+}
+
+/**
+ * The expanded tiles a tidy keeps room for, as the daemon's layouts do (`expandedRoomFrom`): those open now; those whose
+ * session window took them, which open again at their size; and those pinned expanded, at the size they open at.
+ */
+export function expandedRoom(expanded: ExpandedTiles, hidden: ExpandedTiles, sizes: ExpandedSizes, pinned: ReadonlySet<string>): ExpandedTiles {
+  return Object.entries(expandedRoomFrom({ expanded, hidden, sizes, pinned: [...pinned] })).map(([id, size]) => ({ id, ...size }));
 }
 
 /** What a tile takes up in a tidy: an expanded tile its expanded size, so the rest are laid out clear of it; else `compact`. */

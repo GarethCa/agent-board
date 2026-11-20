@@ -192,6 +192,7 @@ describe('the board MCP tools and the agent-board CLI', () => {
     { tool: 'read', command: 'read', positional: ['agent', 'path'] },
     { tool: 'interrupt', command: 'interrupt', positional: ['agent'] },
     { tool: 'set_effort', command: 'effort', positional: ['agent', 'effort'] },
+    { tool: 'rename', command: 'rename', positional: ['agent', 'name'] },
     // The CLI's --pin and --unpin are the tool's pinned.
     { tool: 'pin_expanded', command: 'expand', positional: ['agent'], renamed: { pinned: 'pin' }, options: ['pin'] },
     // The CLI's <kind>=<mode> words are the tool's watches object.

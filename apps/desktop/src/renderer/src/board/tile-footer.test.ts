@@ -25,6 +25,11 @@ describe('a tile’s footer', () => {
     expect(badgeLine({ kind: 'job', taken }, 0)).toBe('Its job from “api jobs”: Fix the login');
   });
 
+  it('leaves the issue out when the about line already shows its id, as a ticket’s tile does', () => {
+    expect(tileFooter(agent({ issue }), 0, [], QUIET_TILE, { issueInAbout: true }).shown).toEqual([]);
+    expect(tileFooter(agent({ issue, ticketChat: true }), 0, [], QUIET_TILE).shown).toEqual([{ kind: 'issue', issue }]);
+  });
+
   it('shows the issue, the pull requests and the schedule, in that order', () => {
     const footer = tileFooter(agent({ issue, pullRequests: [pr(214), pr(215)], schedule }));
 

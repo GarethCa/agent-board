@@ -67,14 +67,12 @@ test("a ticket's tile opens as its terminal, follows the Settings default until 
     await expect(card).toBeVisible();
     await expect(opened).toBeHidden();
 
-    // At rest, a click on its helper opens the card with the helper shown in place of the chat; the breadcrumb leads back.
-    await card.getByTestId('ticket-helper').click();
-    await expect(opened).toHaveAttribute('data-ticket-open', 'card');
-    await expect(opened.getByTestId('ticket-crumb')).toContainText('Build the watch settings');
-    await expect(opened.locator('[data-testid="ticket-helper-card"][data-open]')).toContainText('Showing on the left');
-    await opened.getByTestId('ticket-crumb-back').click();
-    await expect(opened.getByTestId('ticket-crumb')).toBeHidden();
-    await expect(opened.locator('[data-testid="ticket-helper-card"][data-open]')).toHaveCount(0);
+    // At rest it is one agent tile: its helper has no tile and no head on its face, and opens from its ⋯ menu's board.
+    await expect(card.getByTestId('ticket-helper')).toHaveCount(0);
+    await expect(window.locator(`[data-session-id="${helper.sessionId}"]`)).toHaveCount(0);
+    await card.getByRole('button', { name: 'More' }).click();
+    await window.getByRole('menuitem', { name: 'Show as a terminal' }).click();
+    await expect(opened).toHaveAttribute('data-ticket-open', 'terminal');
 
     // ⌥-click opens the helper's own session window instead.
     await opened.getByTestId('ticket-helper-card').click({ modifiers: ['Alt'] });

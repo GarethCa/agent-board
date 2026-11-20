@@ -52,7 +52,7 @@ const MAX_PULL_REQUEST_CHIPS = 2;
  * so the tile's body shows it. The quiet tile (`shows`) merges the model and effort into one tag and draws the bell
  * beside the name instead.
  */
-export function tileFooter(agent: Agent, shells = 0, jobs: readonly TakenJob[] = [], shows: Pick<TileShows, 'setupApart' | 'mutedInFooter'> = FULL_TILE): TileFooter {
+export function tileFooter(agent: Agent, shells = 0, jobs: readonly TakenJob[] = [], shows: Pick<TileShows, 'setupApart' | 'mutedInFooter'> = FULL_TILE, { issueInAbout = false }: { issueInAbout?: boolean } = {}): TileFooter {
   const shown: TileBadge[] = [];
   const hasEffort = agent.effort !== null || agent.effortPending !== null;
   if (shows.setupApart) {
@@ -65,7 +65,8 @@ export function tileFooter(agent: Agent, shells = 0, jobs: readonly TakenJob[] =
     shown.push({ kind: 'setup', model: agent.model, effort: agent.effort, pending: agent.effortPending });
   }
   if (agent.role !== null) shown.push({ kind: 'role', role: agent.role, name: agent.roleName });
-  if (agent.issue !== null) shown.push({ kind: 'issue', issue: agent.issue });
+  // A ticket's chat drawn as its ticket has its ticket's id in its about line, so not here as well.
+  if (agent.issue !== null && !issueInAbout) shown.push({ kind: 'issue', issue: agent.issue });
   // The first job it holds rides on it as a ticket; any more fold into the "+N".
   if (jobs[0] !== undefined) shown.push({ kind: 'job', taken: jobs[0] });
   // Until its session's first hook, nothing else can apply: no work to finish, branch to put up, schedule to run or shell to open.

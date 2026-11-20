@@ -1,6 +1,6 @@
 // What a ticket tile shows of its watches (`Agent.watch`): an icon for each watch that is on, grey until it matters, the
-// news its chat was not told of as the card's line, and the rows of its Watches menu. Pure, so the rules are unit-tested;
-// `TicketTile` and `TicketWatchesMenu` draw them.
+// news its chat was not told of as the ticket's line, and the rows of its Watches menu. Pure, so the rules are unit-tested;
+// the opened ticket and `TicketWatchesMenu` draw them.
 import { TICKET_WATCH_KINDS, type TicketWatch, type TicketWatchKind, type TicketWatchNews, type TicketWatchSwitch } from '@agent-board/daemon/protocol';
 
 /** How a watch's icon is drawn: grey while nothing is new, blue for news, green for good, orange for the user's to fix. */

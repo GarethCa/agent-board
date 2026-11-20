@@ -22,8 +22,10 @@ import {
   oneOf,
   optionalBooleanParam,
   optionalCountParam,
+  startNameParam,
   optionalStringParam,
   paramsObject,
+  plainLine,
   requiredNameParam,
   stringParam,
 } from './params.ts';
@@ -53,6 +55,7 @@ import {
   type Harness,
   type TicketBoardPlace,
   type TicketChatKind,
+  type TileChange,
   type AgentFlag,
   type UndeliveredMessage,
   SEND_TRAILER,
@@ -260,14 +263,14 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   };
   const updateSeen = db.prepare('UPDATE agents SET seen = ? WHERE session_id = ?');
   const updateBranch = db.prepare('UPDATE agents SET branch = ?, current_branch = ?, detached = ? WHERE session_id = ?');
-  const updateName = db.prepare('UPDATE agents SET name = ? WHERE session_id = ?');
+  const updateName = db.prepare('UPDATE agents SET name = ?, renamed = ? WHERE session_id = ?');
   const updateRole = db.prepare('UPDATE agents SET role = ?, role_name = ? WHERE session_id = ?');
   // The Captain was named "Board master" before it was called the Captain: an unchanged name follows (a name the user chose stays).
   db.prepare("UPDATE agents SET name = 'Captain' WHERE master = 1 AND name = 'Board master'").run();
   const updateStatus = db.prepare(
     'UPDATE agents SET status_summary = ?, status_progress = ?, status_updated_at = ?, status_set_by = ? WHERE session_id = ?',
   );
-  const updatePurpose = db.prepare('UPDATE agents SET purpose = ? WHERE session_id = ?');
+  const updatePurpose = db.prepare('UPDATE agents SET purpose = ?, described = ? WHERE session_id = ?');
   const updateFinished = db.prepare('UPDATE agents SET work_finished_at = ? WHERE session_id = ?');
   const updateWorkCategory = db.prepare(
     'UPDATE agents SET work_category = ?, work_category_label = ?, waiting_on_who = ?, waiting_on_ref = ?, work_category_set_at = ?, work_category_set_by = ? WHERE session_id = ?',
@@ -1181,6 +1184,8 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       character: row.ended_at === null ? characterOf(row, clock.now()) : null,
       workCategory: workCategoryOf(row),
       purpose: row.purpose,
+      renamed: tileChangeOf(row.renamed),
+      described: tileChangeOf(row.described),
       status: statusAfterTurn(
         row.status_summary === null || row.status_updated_at === null
           ? null
@@ -1314,6 +1319,14 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   };
 
   const requireAgent = (sessionId: string): Agent => toAgent(requireRow(sessionId));
+
+  /** Sets what it is for ('' clears it), keeping who did it, when and what it said before, if that changes it. */
+  const writePurpose = (sessionId: string, about: string, by: string | null): void => {
+    const before = requireRow(sessionId).purpose;
+    const after = about === '' ? null : about;
+    if (before === after) return;
+    updatePurpose.run(after, tileChange(by, before, clock.now()), sessionId);
+  };
 
   /** Sets its work category whole (a label or who left out goes), or clears it with a null category. */
   const setWorkCategory = (sessionId: string, set: WorkCategorySet, at: string, setBy: string | null): void => {
@@ -1881,9 +1894,10 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       return agent;
     },
 
-    setName(sessionId, name) {
-      requireAgent(sessionId);
-      updateName.run(name, sessionId);
+    setName(sessionId, name, by = 'you') {
+      const before = requireAgent(sessionId);
+      if (before.name === name) return get(sessionId)!;
+      updateName.run(name, tileChange(by, before.name, clock.now()), sessionId);
       const agent = get(sessionId)!;
       options.broadcast({ type: 'agent.updated', agent });
       // Its crew read "With" its name.
@@ -1907,15 +1921,12 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       return spawns.roleTemplate(requireRow(sessionId), parsed, crewReview);
     },
 
-    setStatus(sessionId, { summary = null, progress = null, done = false, character, category, purpose }, setBy = null) {
+    setStatus(sessionId, { summary = null, progress = null, done = false, character, category, purpose, purposeBy }, setBy = null) {
       requireAgent(sessionId);
       if (summary === null && character === undefined && category === undefined && purpose === undefined) {
         throw invalidParams('give a status summary, a character pose, a category, a description, or more');
       }
-      const about = purpose === undefined ? undefined : oneLine(purpose);
-      if (about !== undefined && about.length > MAX_PURPOSE_LENGTH) {
-        throw invalidParams(`the description is ${about.length} characters; at most ${MAX_PURPOSE_LENGTH}`);
-      }
+      const about = purpose === undefined ? undefined : checkedPurpose(purpose);
       const text = summary === null ? null : oneLine(summary);
       if (text === '') throw invalidParams('the status summary must not be blank');
       if (text !== null && text.length > MAX_STATUS_LENGTH) {
@@ -1935,7 +1946,15 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       if (character !== undefined) setCharacter(sessionId, character, new Date(clock.now()).toISOString(), setBy);
       if (done) finishWork(sessionId, at, setBy, category);
       else if (category !== undefined) setWorkCategory(sessionId, category, at, setBy);
-      if (about !== undefined) updatePurpose.run(about === '' ? null : about, sessionId);
+      if (about !== undefined) writePurpose(sessionId, about, purposeBy === undefined ? setBy : purposeBy);
+      const agent = get(sessionId)!;
+      options.broadcast({ type: 'agent.updated', agent });
+      return agent;
+    },
+
+    setPurpose(sessionId, purpose, by) {
+      requireAgent(sessionId);
+      writePurpose(sessionId, checkedPurpose(purpose), by);
       const agent = get(sessionId)!;
       options.broadcast({ type: 'agent.updated', agent });
       return agent;
@@ -2138,7 +2157,7 @@ function spawnParams(params: unknown): SpawnAgentParams {
     ticket: optionalStringParam(p, 'ticket'),
     allowProjectCodexConfig: optionalBooleanParam(p, 'allowProjectCodexConfig'),
     prompt: optionalStringParam(p, 'prompt'),
-    name: optionalStringParam(p, 'name'),
+    name: startNameParam(p, 'name'),
     issueId: optionalStringParam(p, 'issueId'),
     purpose: optionalStringParam(p, 'purpose'),
     position: optionalPlaceParam(p),
@@ -2341,4 +2360,29 @@ function promptAnswerParam(answer: unknown): PromptAnswer | null {
   if (Array.isArray(value.options) && value.options.every((each) => typeof each === 'number')) return { options: value.options as number[] };
   if (typeof value.text === 'string') return { text: value.text };
   throw invalidParams(shape);
+}
+
+/** A description as set: one line, at most `MAX_PURPOSE_LENGTH`; refused with `invalidParams` when longer. */
+function checkedPurpose(purpose: string): string {
+  const about = plainLine(purpose);
+  if (about.length > MAX_PURPOSE_LENGTH) throw invalidParams(`the description is ${about.length} characters; at most ${MAX_PURPOSE_LENGTH}`);
+  return about;
+}
+
+/** A change to keep (`TileChange`), as its column holds it. */
+function tileChange(by: string | null, from: string | null, now: number): string {
+  const change: TileChange = { by, at: new Date(now).toISOString(), from };
+  return JSON.stringify(change);
+}
+
+/** A kept change as its column holds it, read back; null for none, or for one that can't be read. */
+function tileChangeOf(column: string | null): TileChange | null {
+  if (column === null) return null;
+  try {
+    const parsed = JSON.parse(column) as Partial<TileChange>;
+    if (typeof parsed.at !== 'string') return null;
+    return { by: typeof parsed.by === 'string' ? parsed.by : null, at: parsed.at, from: typeof parsed.from === 'string' ? parsed.from : null };
+  } catch {
+    return null;
+  }
 }

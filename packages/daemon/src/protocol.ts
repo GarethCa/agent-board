@@ -2024,6 +2024,10 @@ export interface Agent {
    * again; null while none is set. Not its `description`, the task it was started with.
    */
   purpose: string | null;
+  /** Who last renamed its tile, when, and from what (`orchestrator.rename`, or the user's rename); null before any rename. */
+  renamed: TileChange | null;
+  /** Who last set what it is for (`purpose`), when, and from what; null before any set. */
+  described: TileChange | null;
   /**
    * When it said its work is finished: it handed off (`board.handoff`) or set its status as done
    * (`board.setStatus` with `done`). A turn ending is not finishing: an agent may end turns while its background work
@@ -3829,6 +3833,16 @@ export interface PageParams {
 /** The most a hand-off doc may hold for its tab to show it, in bytes. */
 export const MAX_DOC_BYTES = 1024 * 1024;
 
+/**
+ * A change to an agent's name or to what it is for, as its hover card's history shows it: who made it (an agent's or a
+ * shell's name, `you` for the user in the app, null for the agent itself), when, and the value before (null for none).
+ */
+export interface TileChange {
+  by: string | null;
+  at: string;
+  from: string | null;
+}
+
 /** What an agent says it is doing now: a short summary, and how far through it is (0-100) if it says. */
 export interface AgentStatus {
   summary: string;
@@ -4021,6 +4035,7 @@ export const ORCHESTRATOR_ACTIONS = [
   'crew-go-on-without',
   'crew-restore',
   'set-status',
+  'rename',
   'hold',
   'release',
   'watches',
@@ -5757,9 +5772,17 @@ export interface DaemonMethods {
   /**
    * Sets the status line of an agent in the caller's crew (the agents it started, and theirs), as the agent's own
    * `board.setStatus` does, saying who set it. The latest of the two wins. An agent outside its crew, or the caller
-   * itself, is refused with `outOfScope`.
+   * itself, is refused with `outOfScope`, unless only its `description` is given: any agent's description may be set,
+   * as `orchestrator.rename` sets it, the change kept in `Agent.described`.
    */
   'orchestrator.setStatus': { params: { token?: string; sessionId: string; summary?: string; progress?: number; character?: CharacterSet; description?: string } & WorkCategoryParams; result: Agent };
+  /**
+   * Renames any agent's tile, the caller's own too, and sets what it is for (`description`, '' clears it): either or
+   * both. The last rename wins, whoever made it. The name is trimmed, at most `MAX_NAME_LENGTH`, and refused with
+   * `invalidParams` when another agent or a shell on the board already goes by it (case aside), the clash named. Each
+   * change is kept with who made it and when (`Agent.renamed`, `Agent.described`) and logged as `rename`.
+   */
+  'orchestrator.rename': { params: { token?: string; sessionId: string; name?: string; description?: string }; result: Agent };
   /**
    * Waits until every agent (or, with `any`, one) is in one of `states` (`SETTLED_STATES` by default), or `timeoutMs`
    * passes (`DEFAULT_ORCHESTRATOR_WAIT_MS`, at most `MAX_ORCHESTRATOR_WAIT_MS`). An agent sent a message or started
@@ -6748,6 +6771,7 @@ export const ORCHESTRATOR_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMet
   'orchestrator.spawn',
   'orchestrator.send',
   'orchestrator.setStatus',
+  'orchestrator.rename',
   'orchestrator.wait',
   'orchestrator.read',
   'orchestrator.interrupt',

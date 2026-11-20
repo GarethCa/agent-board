@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import type { Agent, AgentState } from '@agent-board/daemon/protocol';
-import { Activity, ChevronLeft, ChevronRight, FileCheck, GitBranch, Maximize2, Minimize2, Minus, MoreHorizontal, Pin, SquareArrowDownLeft, SquareArrowOutUpRight, SquareTerminal, Trash2, X } from 'lucide-react';
+import { Activity, ArrowDownToLine, ChevronLeft, ChevronRight, FileCheck, GitBranch, Maximize2, Minimize2, MoreHorizontal, Pin, SquareArrowDownLeft, SquareArrowOutUpRight, SquareTerminal, Trash2, X } from 'lucide-react';
 import { HarnessMark } from '../board/HarnessMark';
+import { BackToTileButton } from '../board/BackToTile';
 import { keyText, pressed, type KeyId } from '../keys/registry';
 import { agentPill, STATE_LABELS } from '../states';
 import { useNeedsYouShows } from '../needs-you-setting';
@@ -81,9 +82,9 @@ interface SessionWindowProps {
 /**
  * The window that shows one session, or a shell tile's panes: a header with its
  * name, state and branch, and its window buttons; its details on the left; its terminal, dark, with a message
- * composer under it for an agent. On the board it has labelled Minimise, Pop out and Close buttons (V-c); popped out,
- * its header holds the OS window's traffic lights on macOS and Back to board, and its details start as an icon rail
- * (W-a). Closing or minimising it detaches; Stop ends the session. An implementer whose work is under review has a
+ * composer under it for an agent. On the board it has labelled Minimise and Pop out buttons, then – back to its tile
+ * (V-c); popped out, its header holds the OS window's traffic lights on macOS and Back to board, and its details start
+ * as an icon rail (W-a). Closing or minimising it detaches; Stop ends the session. An implementer whose work is under review has a
  * Review tab beside its terminal, with the review doc viewer; the terminal stays attached behind it. An orchestrator
  * has an Activity tab, with what it did and tried. An agent's
  * strip has a Terminal/Chat switch: the chat view reads its conversation from its transcript instead.
@@ -250,7 +251,7 @@ function SessionWindowShown({ content, title, placement, onClose, onDelete, onMi
           />
         )}
         {onMinimise && (
-          <Button variant="ghost" size="sm" icon={<Minus />} onClick={onMinimise} aria-label="Minimise session window" tooltip={minimiseTip}>
+          <Button variant="ghost" size="sm" icon={<ArrowDownToLine />} onClick={onMinimise} aria-label="Minimise session window" tooltip={minimiseTip}>
             <span className="session-window-folding-label">Minimise</span>
           </Button>
         )}
@@ -279,9 +280,13 @@ function SessionWindowShown({ content, title, placement, onClose, onDelete, onMi
           </Button>
         )}
         {placement === 'board' ? (
-          <Button size="sm" icon={<X />} onClick={onClose} aria-label="Close session window" tooltip="Back to its tile; the session keeps running">
-            Close
-          </Button>
+          <BackToTileButton
+            from={root}
+            leave={onClose}
+            label="Close session window"
+            // A window of joined tabs has no one tile to go back to: it closes, and its tabs' tiles stay where they are.
+            tooltip={content.kind === 'tabs' ? 'Close the window; its sessions keep running on their tiles' : undefined}
+          />
         ) : (
           <Menu align="end" entries={[{ label: 'Close window', icon: <X />, onSelect: onClose }]}>
             <IconButton icon={<MoreHorizontal />} size="sm" aria-label="More" />

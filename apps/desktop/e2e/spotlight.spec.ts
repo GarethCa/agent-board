@@ -219,7 +219,7 @@ test('⌘K from a session window’s terminal switches the window to the agent p
   }
 });
 
-test('⌘K from an expanded tile’s terminal expands the agent picked in its place, focus in its terminal; a zone collapses it', async () => {
+test('⌘K from an expanded tile’s terminal flies to the agent picked and selects it, as on the board; the tile stays expanded through Esc and a zone, and maximised, ↵ switches the window', async () => {
   const { dir, repo, env } = scratch('output');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env);
@@ -228,7 +228,7 @@ test('⌘K from an expanded tile’s terminal expands the agent picked in its pl
     await twoAgents(app, window, repo);
     await setClickOpens(window, 'Expand in place');
     const listed = await agents(window);
-    const [tidy, database] = ['Tidy the docs', 'Pick a database'].map((name) => listed.find((agent) => agent.name === name)!.sessionId);
+    const tidy = listed.find((agent) => agent.name === 'Tidy the docs')!.sessionId;
     await agentTile(window, 'Tidy the docs').dblclick();
     const expanded = window.getByTestId('expanded-tile');
     await expect(expanded).toHaveAttribute('data-session-id', tidy!);
@@ -236,7 +236,7 @@ test('⌘K from an expanded tile’s terminal expands the agent picked in its pl
     await expect.poll(() => terminalFocusedIn(window, '.expanded-tile')).toBe(true);
 
     await window.keyboard.press(windowKey('k'));
-    await expect(spotlight(window).getByTestId('spotlight-where')).toHaveText(SWITCHES);
+    await expect(spotlight(window).getByTestId('spotlight-where')).toHaveText(/^↵ show/);
     // Esc closes the switcher only: the tile stays expanded, its terminal focused.
     await window.keyboard.press('Escape');
     await expect(spotlight(window)).toHaveCount(0);
@@ -246,14 +246,39 @@ test('⌘K from an expanded tile’s terminal expands the agent picked in its pl
     await window.keyboard.press(windowKey('k'));
     await window.keyboard.type('databa');
     await window.keyboard.press('Enter');
+    await expect(spotlight(window)).toHaveCount(0);
+    await expect(window.locator('.react-flow__node.selected').getByTestId('agent-tile')).toContainText('Pick a database');
+    await expect(window.locator('.react-flow__node.selected')).toBeFocused();
     await expect(expanded).toHaveCount(1);
-    await expect(expanded).toHaveAttribute('data-session-id', database!);
-    await expect.poll(() => terminalFocusedIn(window, `.expanded-tile[data-session-id="${database}"]`)).toBe(true);
+    await expect(expanded).toHaveAttribute('data-session-id', tidy!);
+    // Esc after the pick leaves the tile expanded: the board has flown away from it, so it would close out of sight.
+    await window.keyboard.press('Escape');
+    await expect(expanded).toHaveCount(1);
+    await expect(expanded).toHaveAttribute('data-session-id', tidy!);
 
     await window.keyboard.press(windowKey('k'));
     await window.keyboard.type('monorepo');
     await window.keyboard.press('Enter');
-    await expect(expanded).toHaveCount(0);
+    await expect(spotlight(window)).toHaveCount(0);
+    await expect(expanded).toHaveAttribute('data-session-id', tidy!);
+
+    // Maximised into its session window, ↵ switches that window to the session picked, and the tile under it is
+    // expanded again, as it was before; the zone picked from the window closes it onto the tile.
+    await expanded.getByRole('button', { name: 'Maximise' }).click();
+    await expect(sessionWindow(window).getByRole('heading')).toHaveText('Tidy the docs');
+    await window.keyboard.press(windowKey('k'));
+    await expect(spotlight(window).getByTestId('spotlight-where')).toHaveText(SWITCHES);
+    await window.keyboard.type('databa');
+    await window.keyboard.press('Enter');
+    await expect(sessionWindow(window).getByRole('heading')).toHaveText('Pick a database');
+    await expect(sessionWindow(window)).toHaveCount(1);
+    await expect(expanded).toHaveCount(1);
+    await expect(expanded).toHaveAttribute('data-session-id', tidy!);
+    await window.keyboard.press(windowKey('k'));
+    await window.keyboard.type('monorepo');
+    await window.keyboard.press('Enter');
+    await expect(sessionWindow(window)).toHaveCount(0);
+    await expect(expanded).toHaveAttribute('data-session-id', tidy!);
   } finally {
     await app.close();
     await removeDataDir(dataDir);
@@ -433,7 +458,7 @@ test('⌘K pressed in a web tab’s page opens the switcher, which takes the key
   }
 });
 
-test('a popped-out window has the switcher too: ↵ shows the session picked in it, and a zone on the board; from an expanded tile, a popped-out session comes forward and the tile stays', async () => {
+test('a popped-out window has the switcher too: ↵ shows the session picked in it, and a zone on the board; from an expanded tile, a popped-out session comes forward and the tile stays, and popped out of it, ↵ switches that window', async () => {
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, SHELL_ENV);
   await listFinishedTurns(window);
@@ -497,6 +522,20 @@ test('a popped-out window has the switcher too: ↵ shows the session picked in 
     await window.keyboard.type('brav');
     await window.keyboard.press('Enter');
     await expect(spotlight(window)).toHaveCount(0);
+    await expect(expanded).toHaveCount(1);
+    await expect(expanded).toHaveAttribute('data-shell-id', charlie);
+
+    // Popped out of the expanded tile, ↵ shows the session picked in that OS window, and the tile on the board is
+    // expanded again, as it was before.
+    const [charlieOut] = await Promise.all([app.waitForEvent('window'), expanded.getByRole('button', { name: 'Pop out' }).click()]);
+    const charlieWindow = charlieOut.getByTestId('session-window');
+    await expect(charlieWindow.getByRole('heading')).toHaveText('charlie');
+    await expect(expanded).toHaveCount(0);
+    await charlieOut.getByTestId('shell-pane').first().click();
+    await charlieOut.keyboard.press(windowKey('k'));
+    await charlieOut.keyboard.type('alph');
+    await charlieOut.keyboard.press('Enter');
+    await expect(charlieWindow.getByRole('heading')).toHaveText('alpha');
     await expect(expanded).toHaveCount(1);
     await expect(expanded).toHaveAttribute('data-shell-id', charlie);
   } finally {

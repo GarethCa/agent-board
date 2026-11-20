@@ -1,11 +1,12 @@
 // What a ticket's tile draws the same way at rest and opened: its Card | Terminal | Board switch and the ⋯ rows that
 // do the same, the view it shows, and a helper as a card.
-import { useContext, type MouseEvent, type ReactNode } from 'react';
-import { Hammer, LayoutDashboard, PanelTop, PenLine, Search, SquareTerminal } from 'lucide-react';
+import { useContext, useState, type MouseEvent, type ReactNode } from 'react';
+import { GitMerge, Hammer, LayoutDashboard, PanelTop, PenLine, Play, Search, SquareTerminal } from 'lucide-react';
+import { Button } from '../ui';
 import type { ModelEntry } from './menu-model';
 import { TicketViewsContext, TileActionsContext } from './tile';
 import { stopPropagation } from './tile-parts';
-import type { HelperIcon, HelperKind } from './ticket-tile';
+import type { HelperIcon, HelperKind, TicketButton } from './ticket-tile';
 import { ticketViewOf, type TicketView } from './ticket-view';
 import { useViewSettings } from './view-settings';
 
@@ -100,5 +101,34 @@ export function HelperCard({ helper, column, open, onShow, onOpenWindow }: { hel
       )}
       <span className="ticket-helper-card-line">{column && open ? 'Showing on the left' : helper.line}</span>
     </button>
+  );
+}
+
+/** Its one button, at rest and opened. Merge opens the pull request, where the merge stays the user's click: the ticket never merges itself. */
+export function OneButton({ button, onOpen, onMerge, onWake, onRead }: { button: TicketButton; onOpen(): void; onMerge(): void; onWake(): Promise<void>; onRead(): void }) {
+  const [pending, setPending] = useState(false);
+  const press = () => {
+    if (button.kind === 'open') return onOpen();
+    if (button.kind === 'merge') return onMerge();
+    if (button.kind === 'read') return onRead();
+    setPending(true);
+    void onWake().finally(() => setPending(false));
+  };
+  return (
+    <Button
+      size="xs"
+      variant={button.prominent ? 'primary' : 'secondary'}
+      icon={button.kind === 'merge' ? <GitMerge /> : button.kind === 'wake' ? <Play /> : undefined}
+      className="hybrid-tile-act ticket-tile-act nodrag"
+      data-testid="tile-act"
+      data-kind={button.kind}
+      data-prominent={button.prominent || undefined}
+      title={button.kind === 'merge' ? 'Open its pull request, to merge it there' : button.kind === 'read' ? 'Mark its watches’ news read' : undefined}
+      disabled={pending}
+      onClick={press}
+      onDoubleClick={stopPropagation}
+    >
+      {button.label}
+    </Button>
   );
 }

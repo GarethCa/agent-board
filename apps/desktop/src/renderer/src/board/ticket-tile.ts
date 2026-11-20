@@ -1,10 +1,11 @@
-// What a ticket tile says at rest: one ticket chat with its helpers folded inside it (`Agent.ticketChat`, `Agent.ticket`).
-// The ticket and its title, one line of what is true now, its helpers as icons, what it watches, and a state word with
-// at most one button. Pure, so the rules are unit-tested; `TicketTile` draws them.
+// What a ticket says, from one ticket chat and the helpers it holds (`Agent.ticketChat`, `Agent.ticket`): the ticket and its
+// title, one line of what is true now, its helpers as icons, what it watches, and a state word with at most one button,
+// which its opened tile and its board draw; and a helper's ask, which its chat's agent tile shows at rest. Pure, so the
+// rules are unit-tested.
 import { chatBuilds } from '@agent-board/daemon/ticket-tiles';
-import { needsYouKind, shortIssueId, statusLine, type Agent, type NeedsYouShows, type PullRequest } from '@agent-board/daemon/protocol';
+import { needsYouKind, needsYouNow, shortIssueId, statusLine, type Agent, type NeedsYouShows, type PullRequest } from '@agent-board/daemon/protocol';
 import { agentPill, TILE_STATE_LABELS } from '../states';
-import { FLAT_STATES, TILE_STATE_WORDS, tileButton, tileNow, tileState, type TileButton, type TileState } from './tile-headline';
+import { FLAT_STATES, TILE_STATE_WORDS, tileAbout, tileButton, tileNow, tileState, type TileButton, type TileState } from './tile-headline';
 import { watchIcons, watchLine, type WatchIcon } from './ticket-watch-view';
 
 /** The one thing a ticket tile asks for, most urgent first: the first that holds is the one it shows. */
@@ -172,7 +173,7 @@ export function ticketFace(chat: Agent, helpers: readonly Agent[], shows: NeedsY
     flat,
     button: ask === 'new-review' ? { kind: 'read', label: 'Read', prominent: true } : (button ?? (news ? { kind: 'read', label: 'Read', prominent: false } : undefined)),
     asker,
-    needsYouNow: [chat, ...helpers].some((agent) => agent.flag?.to === 'user' || (needsYouKind(agent, shows) !== null && !agent.seen)),
+    needsYouNow: [chat, ...helpers].some((agent) => needsYouNow(agent, shows)),
     helpers: icons,
     watches,
     buildsWord: watches.length === 0,
@@ -208,7 +209,7 @@ function ticketLine(chat: Agent, helpers: readonly Agent[], ask: TicketAsk, chat
   if (ask === 'needs-you') {
     const words = tileNow(asker, 'needs-you');
     if (asker === chat || words === undefined) return words;
-    return asks(asker, shows) ? `${asker.name} asks: ${words}` : `${asker.name}: ${words}`;
+    return asks(asker, shows) ? `Its ${HELPER_ROLES[helperKind(asker)]} asks: ${words}` : `Its ${HELPER_ROLES[helperKind(asker)]}: ${words}`;
   }
   if (merged !== undefined) return `Merged as #${merged.number}.`;
   const own = tileNow(chat, chatState);
@@ -216,6 +217,56 @@ function ticketLine(chat: Agent, helpers: readonly Agent[], ask: TicketAsk, chat
   const index = helperStates.indexOf('thinking');
   const helper = helpers[index];
   return helper?.status == null ? undefined : `${helper.name}: ${statusLine(helper.status)}`;
+}
+
+/** A helper by its role on its ticket, in a word, as its ticket's tile names it. */
+const HELPER_ROLES: Record<HelperKind, string> = { design: 'designer', build: 'builder', review: 'reviewer' };
+
+export interface TicketTileAsk {
+  /** Who asks: a helper the chat holds, or the chat itself for its watches' news and its merge. */
+  asker: Agent;
+  /** Its state in a word: Needs you, Ready to merge, New review, or the chat's own while it only has news. */
+  word: string;
+  /** How its word is drawn: Ready to merge and New review take their own colours. */
+  wordKind: TicketWordKind;
+  /** A helper asks: the word has a dot before it. */
+  dot: boolean;
+  /** It lies flat, with no shadow: only while it asks for nothing (its news alone, once merged). */
+  flat: boolean;
+  /** Who asks, by its role, and what ("Its reviewer asks: keep the old order after a reload?"), or the news. */
+  line: string | undefined;
+  button: TicketButton | undefined;
+  /** Its pull request and the agent whose branch it is, which Merge opens. */
+  pullRequest: { owner: Agent; pr: PullRequest } | undefined;
+  /** A helper asks and has not been seen: the tile's needs-you look. */
+  needsYouNow: boolean;
+}
+
+/**
+ * What a ticket's chat's tile asks beyond the chat's own state, as its helpers have no tiles: the first helper that
+ * needs the user, else its merge, a new review, its watches' news or that it merged. Undefined while the chat itself needs the user (its
+ * tile shows its own ask then), or there is nothing more to say.
+ */
+export function ticketTileAsk(chat: Agent, helpers: readonly Agent[], shows: NeedsYouShows): TicketTileAsk | undefined {
+  if (stateOf(chat, shows) === 'needs-you') return undefined;
+  const face = ticketFace(chat, helpers, shows);
+  const owner = face.pr === undefined ? undefined : [chat, ...helpers].find((each) => each.pullRequests.includes(face.pr!));
+  const pullRequest = owner === undefined ? undefined : { owner, pr: face.pr! };
+  const said = { word: face.word, wordKind: face.wordKind, flat: face.flat, line: face.line, button: face.button, pullRequest };
+  if (face.ask === 'needs-you' && face.asker !== chat) return { ...said, asker: face.asker, dot: true, needsYouNow: needsYouNow(face.asker, shows) };
+  if (face.ask === 'working' && !face.news && !face.merged) return undefined;
+  return { ...said, asker: chat, dot: false, needsYouNow: false };
+}
+
+/**
+ * A ticket's chat's name and about line on its tile. Its ticket's id leads the about line; a chat named after its ticket
+ * alone shows the ticket's title as its name instead, so neither says the same thing twice.
+ */
+export function ticketHead(chat: Pick<Agent, 'name' | 'issue' | 'purpose' | 'description'>): { name: string; id: string | undefined; about: string | undefined } {
+  if (chat.issue === null) return { name: chat.name, id: undefined, about: tileAbout(chat) };
+  const id = shortIssueId(chat.issue);
+  const bare = chat.name === chat.issue.id || chat.name === id;
+  return { name: bare ? chat.issue.title : chat.name, id, about: tileAbout(bare ? { ...chat, issue: null } : chat) };
 }
 
 /** Whether it puts a question or a permission prompt to the user, which its one button answers. */

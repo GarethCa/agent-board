@@ -1,7 +1,7 @@
 import { expect, type Locator, type Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
 import { launch, screen, sessionItems, sessionWindow, SHELL_ENV, spawnAgent, tile, tileAction, windowKey } from './agent-helpers.ts';
-import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone, newShell } from './launch.ts';
+import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone, newShell, placeWithTool } from './launch.ts';
 import { viewSettled } from './board-helpers.ts';
 import { clickClosing } from './windows.ts';
 import { scratch } from './scratch.ts';
@@ -467,6 +467,49 @@ test('fifteen docked sessions and ten zones share the bottom bar: both scroll si
     await expect.poll(() => inTrack(current)).toBe(true);
   } finally {
     await app.close();
+    await removeDataDir(dataDir);
+  }
+});
+
+test('– is the session window header last button and takes it back to its tile, selected and focused; Minimise is not a –', async () => {
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, SHELL_ENV);
+  try {
+    await newShell(window);
+    await expect(sessionWindow(window)).toHaveAttribute('data-state', 'attached');
+    const head = sessionWindow(window).locator('.session-window-head');
+    const back = head.getByTestId('back-to-tile');
+    await expect(back).toHaveAccessibleName('Close session window');
+    await expect(back.locator('svg')).toHaveClass(/lucide-minus/);
+    // Last in the header, and the only –: Minimise has an icon of its own.
+    await expect(head.locator('button').last()).toHaveAttribute('data-testid', 'back-to-tile');
+    await expect(head.getByRole('button', { name: 'Minimise session window' }).locator('svg')).not.toHaveClass(/lucide-minus/);
+
+    // Opened from its tile, – closes it back to that tile.
+    await back.click();
+    await expect(sessionWindow(window)).toHaveCount(0);
+    const first = (await window.locator('.react-flow__node.selected').getByTestId('shell-tile').getAttribute('data-shell-id'))!;
+
+    // A window shown from the dock while another tile is selected: – leaves its own tile the one selected, focused.
+    const board = await window.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+    await placeWithTool(window, 'New shell', { x: board.width - 160, y: board.height - 200 });
+    await expect(sessionWindow(window)).toHaveAttribute('data-state', 'attached');
+    const second = (await sessionWindow(window).getAttribute('data-shell-id'))!;
+    await sessionWindow(window).getByRole('button', { name: 'Minimise session window' }).click();
+    await window.locator(`[data-testid="shell-tile"][data-shell-id="${first}"]`).click();
+    const selected = window.locator('.react-flow__node.selected');
+    await expect(selected.getByTestId('shell-tile')).toHaveAttribute('data-shell-id', first);
+    await window.getByTestId('dock-item').and(window.locator(`[data-shell-id="${second}"]`)).locator('.session-dock-open').click();
+    await expect(sessionWindow(window)).toBeVisible();
+    await sessionWindow(window).getByTestId('back-to-tile').click();
+    await expect(sessionWindow(window)).toHaveCount(0);
+    await expect(selected).toHaveCount(1);
+    await expect(selected.getByTestId('shell-tile')).toHaveAttribute('data-shell-id', second);
+    await expect(selected).toBeFocused();
+    // No tile has a –.
+    await expect(window.getByTestId('back-to-tile')).toHaveCount(0);
+  } finally {
+    await app.close().catch(() => {});
     await removeDataDir(dataDir);
   }
 });

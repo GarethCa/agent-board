@@ -11,15 +11,18 @@ export interface TileRef {
 export interface BoardCommands {
   /** Brings the tile the session belongs to into view and selects it. */
   focusSession(sessionId: string): void;
+  /** Makes the board node `nodeId` (a tile) the one selection, where it is: nothing moves. */
+  selectNode(nodeId: string): void;
   /** Brings the board item (a clock, a queue) into view and selects it. */
   showItem(itemId: string): void;
   /** Opens the window of the tile the session belongs to; false if it belongs to none the board has. */
   openSession(sessionId: string): boolean;
   /**
    * Flies the board to the tile, centred at a size to read (jumps, with reduced motion), pulses it and selects it. Each
-   * of these returns false when the board has no such tile or zone, and nothing happened.
+   * of these returns false when the board has no such tile or zone, and nothing happened. `focus`: the keyboard goes to
+   * the tile once it is there, if nothing else has it then (⌘K's pick, for Esc to be the tile's, not the board's).
    */
-  showTile(tile: TileRef): boolean;
+  showTile(tile: TileRef, options?: { focus?: boolean }): boolean;
   /** Opens the tile as Enter on it does once selected: its session window, or expanded in place, as the setting says. */
   openTile(tile: TileRef): boolean;
   /**
@@ -30,10 +33,8 @@ export interface BoardCommands {
   openSurface(surface: Surface, beside: boolean): boolean;
   /** Whether ⇧↵ on the board opens the surface beside an agent's session, in a pane of its own, rather than as ↵ does. */
   opensBeside(surface: Surface): boolean;
-  /** Shows the tile expanded in place of the expanded tile `fromNodeId`, which collapses, the focus in its terminal. */
-  switchExpanded(fromNodeId: string, tile: TileRef): boolean;
-  /** Brings the zone into view, collapsing the expanded tile `collapseNodeId` first, if given. */
-  showZone(zoneId: string, collapseNodeId?: string): boolean;
+  /** Brings the zone into view. */
+  showZone(zoneId: string): boolean;
   /** Opens the ticket's own board and shows the item on it. */
   showTicketItem(ticket: string, itemId: string): void;
   /** Whether there is a zone a new agent can start in from ⌘K. */
@@ -58,14 +59,14 @@ export function useBoardCommands(): BoardCommands {
   return useMemo(
     () => ({
       focusSession: (sessionId) => commands.current?.focusSession(sessionId),
+      selectNode: (nodeId) => commands.current?.selectNode(nodeId),
       showItem: (itemId) => commands.current?.showItem(itemId),
       openSession: (sessionId) => commands.current?.openSession(sessionId) ?? false,
-      showTile: (tile) => commands.current?.showTile(tile) ?? false,
+      showTile: (tile, options) => commands.current?.showTile(tile, options) ?? false,
       openTile: (tile) => commands.current?.openTile(tile) ?? false,
       openSurface: (surface, beside) => commands.current?.openSurface(surface, beside) ?? false,
       opensBeside: (surface) => commands.current?.opensBeside(surface) ?? false,
-      switchExpanded: (fromNodeId, tile) => commands.current?.switchExpanded(fromNodeId, tile) ?? false,
-      showZone: (zoneId, collapseNodeId) => commands.current?.showZone(zoneId, collapseNodeId) ?? false,
+      showZone: (zoneId) => commands.current?.showZone(zoneId) ?? false,
       showTicketItem: (ticket, itemId) => commands.current?.showTicketItem(ticket, itemId),
       canStartAgent: () => commands.current?.canStartAgent() ?? false,
       newAgentNamed: (name, zoneId) => commands.current?.newAgentNamed(name, zoneId),

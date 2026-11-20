@@ -34,6 +34,7 @@ import {
   identifyView,
   interruptAgent,
   setAgentEffort,
+  renameAgent,
   pinAgentExpanded,
   ticketWatches,
   giveAgentRole,
@@ -1060,6 +1061,25 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
     },
   },
   {
+    name: 'rename',
+    description:
+      "Rename any agent's tile, your own too (agent me), and set what it is for (description): either or both. Any agent " +
+      'may rename any agent, one the user named or started by hand too; the last rename wins. The tile shows the new name ' +
+      'at once, and its hover card who renamed it and when. A name another agent, a shell or a zone already has is ' +
+      'refused, naming what has it, and so are `me`, ref-shaped names (agent:…) and names holding ⟨ ⟩ or starting ' +
+      '[agent-board]. As `agent-board rename`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agent: { type: 'string', description: 'The agent, by ref (agent:9c1e), unique name, or me for your own tile.' },
+        name: { type: 'string', description: 'Its new name, at most 60 characters.' },
+        description: { type: 'string', description: 'What it is for, in up to 80 characters; "" clears it.' },
+      },
+      required: ['agent'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'pin_expanded',
     description:
       "Pin an agent's tile expanded, or unpin it with pinned false, as its tile's Pin expanded does. Pinned, it stays " +
@@ -1992,6 +2012,9 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
   read: async (session, args) => (await readAgent(session, stringArg(args, 'agent'), stringArg(args, 'path', true))).text,
   interrupt: async (session, args) => (await interruptAgent(session, stringArg(args, 'agent'))).text,
   pin_expanded: async (session, args) => (await pinAgentExpanded(session, stringArg(args, 'agent'), booleanArg(args, 'pinned') !== false)).text,
+  rename: async (session, args) => {
+    return (await renameAgent(session, stringArg(args, 'agent'), { name: stringArg(args, 'name', true), description: stringArg(args, 'description', true) })).text;
+  },
   set_effort: async (session, args) => (await setAgentEffort(session, stringArg(args, 'agent'), stringArg(args, 'effort'))).text,
   ticket_watches: async (session, args) =>
     (

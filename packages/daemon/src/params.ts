@@ -18,11 +18,54 @@ export function stringParam(params: Record<string, unknown>, name: string): stri
   return value;
 }
 
-/** A name for a tile or pane: trimmed, and no longer than `MAX_NAME_LENGTH`. Empty when blank. */
+/** `text` without its control characters (C0, DEL and C1), which a terminal acts on rather than shows. */
+const withoutControls = (text: string): string =>
+  [...text]
+    .filter((char) => {
+      const code = char.codePointAt(0)!;
+      return code > 0x1f && (code < 0x7f || code > 0x9f);
+    })
+    .join('');
+
+/** What marks a line typed at a prompt as the board's own: its `[agent-board]` lead, and the sender mark's brackets. */
+const BOARD_MARKS = /^\s*\[agent-board\]|[⟨⟩]/i;
+
+/**
+ * `text` as a tile's name may be, never refused: one line with its runs of white space as one space, no control
+ * characters, no sender-mark brackets and no `[agent-board]` lead, trimmed. Names are typed into other agents' prompts
+ * (a crew member's flag, a reply's trailer), where any of these could make one pass for the board's own words.
+ */
+function foldedName(text: string): string {
+  return withoutControls(text.replace(/\s+/g, ' '))
+    .replace(/[⟨⟩]/g, '')
+    .replace(/^\s*(\[agent-board\]\s*)+/i, '')
+    .trim();
+}
+
+/** Text as one line with no control characters in it: what an agent's description may be. */
+export function plainLine(text: string): string {
+  return withoutControls(text.replace(/\s+/g, ' ')).trim();
+}
+
+/**
+ * A name for a tile or pane: one line, its white space folded and its control characters dropped (`foldedName`), and no
+ * longer than `MAX_NAME_LENGTH`. Empty when blank. One with the board's own marks in it is refused.
+ */
 export function nameParam(params: Record<string, unknown>, name: string): string {
-  const value = stringParam(params, name).trim();
+  const value = cleanName(stringParam(params, name), name);
   if (value.length > MAX_NAME_LENGTH) throw invalidParams(`${name} must be at most ${MAX_NAME_LENGTH} characters`);
   return value;
+}
+
+/** `text` as `nameParam` cleans it, uncapped; refused when it holds the board's own marks. */
+function cleanName(text: string, name: string): string {
+  if (BOARD_MARKS.test(text)) throw invalidParams(`${name} must not hold ⟨ or ⟩ or start with [agent-board]: those mark the board's own lines`);
+  return foldedName(text);
+}
+
+/** A new agent's name as it is asked for, or undefined: cleaned as `nameParam` cleans one, and cut to fit later, not refused. */
+export function startNameParam(params: Record<string, unknown>, name: string): string | undefined {
+  return params[name] === undefined ? undefined : cleanName(stringParam(params, name), name);
 }
 
 /** A name that must not be blank. */

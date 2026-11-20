@@ -207,11 +207,14 @@ export function followEscapeHatch(): void {
  * Minimises or collapses a session window or an expanded tile (`leave`) with the focus on its tile, which stays on the
  * board as it goes (a window of joined tabs: its button in the dock), so the board's keys reach the tile after: Esc
  * unselects it. Its keys and its Collapse button both leave it this way, as a button that goes with it drops the focus.
+ * `select`, given the tile's node id, makes the tile the board's one selection as well (its – does).
  */
-export function leaveToTile(surface: HTMLElement | null, leave: () => void): void {
+export function leaveToTile(surface: HTMLElement | null, leave: () => void, select?: (nodeId: string) => void): void {
   const tile = surface && tileOf(surface);
   if (tile) focus(tile);
   leave();
+  const nodeId = tile?.dataset.id;
+  if (select && nodeId !== undefined) select(nodeId);
   // The board draws the tile again as it goes (an expanded tile's node moves in the board's order), which can drop
   // its focus: given back once it has drawn, unless it has gone somewhere else meanwhile. A tabs window's dock button
   // is only drawn once it is minimised.

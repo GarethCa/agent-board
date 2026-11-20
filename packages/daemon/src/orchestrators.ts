@@ -17,7 +17,8 @@ import { refOf } from './crew-flags.ts';
 import { markSender, sendTrailer } from './sender-marker.ts';
 import { sendTrail } from './send-log.ts';
 import { createReplyPaths } from './reply-paths.ts';
-import { invalidParams, oneOf, optionalBooleanParam, optionalCharacterParam, optionalWorkCategoryParam, optionalCountParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
+import { REF_KINDS } from './board-ops.ts';
+import { invalidParams, oneOf, optionalBooleanParam, optionalCharacterParam, optionalWorkCategoryParam, optionalCountParam, nameParam, optionalStringParam, startNameParam, paramsObject, stringParam } from './params.ts';
 import {
   BOARD_ERROR,
   CREW_EVENT_KINDS,
@@ -120,6 +121,7 @@ const LOGGED_METHODS: Partial<Record<DaemonMethod, OrchestratorAction>> = {
   'orchestrator.spawn': 'spawn',
   'orchestrator.send': 'send',
   'orchestrator.setStatus': 'set-status',
+  'orchestrator.rename': 'rename',
   'orchestrator.interrupt': 'interrupt',
   'orchestrator.setEffort': 'effort',
   'orchestrator.pinExpanded': 'pin-expanded',
@@ -208,7 +210,7 @@ export interface OrchestratorHostOptions extends BoardCallerSources {
   db: DatabaseSync;
   agents: Pick<
     AgentHost,
-    'get' | 'list' | 'announce' | 'handCrew' | 'removedOrchestrator' | 'fallbackOwner' | 'spawn' | 'answer' | 'interrupt' | 'setEffort' | 'setPinnedExpanded' | 'setRole' | 'roleTemplate' | 'continueOnCredits' | 'resume' | 'stop' | 'pause' | 'finalMessage' | 'waitsAtPrompt' | 'setStatus' | 'clearFlag' | 'sendUnsent' | 'clearUnsent' | 'queueAfterTurn' | 'dropNotices' | 'deliverAfterTurn' | 'userTyping'
+    'get' | 'list' | 'announce' | 'handCrew' | 'removedOrchestrator' | 'fallbackOwner' | 'spawn' | 'answer' | 'interrupt' | 'setEffort' | 'setPinnedExpanded' | 'setRole' | 'roleTemplate' | 'continueOnCredits' | 'resume' | 'stop' | 'pause' | 'finalMessage' | 'waitsAtPrompt' | 'setStatus' | 'setName' | 'setPurpose' | 'clearFlag' | 'sendUnsent' | 'clearUnsent' | 'queueAfterTurn' | 'dropNotices' | 'deliverAfterTurn' | 'userTyping'
   >;
   zones: () => Zone[];
   flowEdges: Pick<FlowEdgeHost, 'create' | 'get' | 'link' | 'remove'>;
@@ -497,6 +499,26 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
   /** Throws unless `me` may ask the user to remove `agent`: any tile but its own, the user's too, as the user decides. */
   const checkAskable = (me: Orchestrator, agent: Agent) => {
     if (agent.sessionId === me.agent?.sessionId) throw outOfScope('that is you: an agent asks to remove other agents, never itself');
+  };
+
+  /**
+   * Refuses `name` for `agent` when it would not address it: blank, `me` or shaped as a ref (`agent:…`), which refs read
+   * before names, or what another agent, a shell or a zone is called, case aside, which would make that name ambiguous.
+   */
+  const checkNewName = (agent: Agent, name: string) => {
+    if (name === '') throw invalidParams('the name must not be blank');
+    if (name.toLowerCase() === 'me') throw invalidParams('`me` is how an agent names its own tile: pick another name');
+    const colon = name.indexOf(':');
+    if (colon !== -1 && (REF_KINDS as readonly string[]).includes(name.slice(0, colon).toLowerCase())) {
+      throw invalidParams(`${name} reads as a ref (${name.slice(0, colon)}:…), not a name: pick a name without "${name.slice(0, colon + 1)}"`);
+    }
+    const same = (other: string) => other.toLowerCase() === name.toLowerCase();
+    const agentClash = agents.list().find((other) => other.sessionId !== agent.sessionId && same(other.name));
+    if (agentClash !== undefined) throw invalidParams(`another agent is already called ${agentClash.name} (agent:${agentClash.sessionId}): pick a name no other tile has`);
+    const shellClash = options.shells.list().find((shell) => same(shell.name));
+    if (shellClash !== undefined) throw invalidParams(`a shell is already called ${shellClash.name} (shell:${shellClash.id}): pick a name no other tile has`);
+    const zoneClash = options.zones().find((zone) => same(zone.name));
+    if (zoneClash !== undefined) throw invalidParams(`a zone is already called ${zoneClash.name} (zone:${zoneClash.id}): pick a name nothing else on the board has`);
   };
 
   /** `agent` as the orchestrator it is. */
@@ -855,7 +877,7 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
                 role: optionalStringParam(p, 'role'),
                 noTemplate: optionalBooleanParam(p, 'noTemplate'),
                 template: optionalStringParam(p, 'template'),
-                name: optionalStringParam(p, 'name'),
+                name: startNameParam(p, 'name'),
                 ...(repo === undefined ? {} : { repo: { path: repo } }),
                 branch: optionalStringParam(p, 'branch'),
                 baseBranch,
@@ -1090,10 +1112,17 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
             const agent = agentNamed(stringParam(p, 'sessionId'));
             entry.on = agentTarget(agent);
             checkSteerable(me, agent);
+            const description = optionalStringParam(p, 'description');
+            const descriptionAlone = description !== undefined && ['summary', 'progress', 'character', 'category', 'label', 'waitingOn'].every((key) => p[key] === undefined);
+            // Any agent's description, as a rename sets it, with who set it kept for its hover card.
+            if (descriptionAlone) return agents.setPurpose(agent.sessionId, description, me.name);
             // Only its own crew's line (the agents it started, and theirs): every other agent's status is its own.
             if (me.agent !== null && !inCrewOf(me.agent, agent.spawnedBy)) {
-              throw outOfScope(`${agent.name} is not in your crew, and you did not start it: only its own agent, or the orchestrator that started it, sets its status`);
+              throw outOfScope(
+                `${agent.name} is not in your crew, and you did not start it: only its own agent, or the orchestrator that started it, sets its status. Its description alone any agent may set (\`agent-board rename ${agent.name} --description …\`)`,
+              );
             }
+            // Its description with the rest, in one write once every check has passed: a refused line sets none of it.
             return agents.setStatus(
               agent.sessionId,
               {
@@ -1101,10 +1130,38 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
                 progress: p.progress === undefined ? null : (p.progress as number),
                 character: optionalCharacterParam(p),
                 category: optionalWorkCategoryParam(p),
-                purpose: optionalStringParam(p, 'description'),
+                ...(description === undefined ? {} : { purpose: description, purposeBy: me.name }),
               },
               me.agent === null ? null : me.name,
             );
+          });
+        },
+
+        // Any agent's tile, its own too: names are for the user to read, and the last rename wins.
+        'orchestrator.rename': (params, connection) => {
+          const p = paramsObject(params);
+          const me = orchestrator('orchestrator.rename', p, connection);
+          const entry: Entry = { detail: '' };
+          return logged(me, 'rename', entry, () => {
+            const agent = agentNamed(stringParam(p, 'sessionId'));
+            entry.on = agentTarget(agent);
+            const given = p.name === undefined ? undefined : nameParam(p, 'name');
+            const description = optionalStringParam(p, 'description');
+            if (given === undefined && description === undefined) throw invalidParams('give a new name, a description, or both');
+            // Its own name again changes nothing, and logs nothing as done; another case of it is a rename.
+            if (given === agent.name && description === undefined) throw invalidParams(`${agent.name} is already called that`);
+            const name = given === agent.name ? undefined : given;
+            // The agent itself: kept as by itself, so its hover card says so.
+            const by = agent.sessionId === me.agent?.sessionId ? null : me.name;
+            if (name !== undefined) {
+              checkNewName(agent, name);
+              entry.detail = `${agent.name} → ${name}`;
+            }
+            if (description !== undefined) {
+              entry.detail = [entry.detail, `description: ${description === '' ? '(cleared)' : description}`].filter((part) => part !== '').join('; ');
+              agents.setPurpose(agent.sessionId, description, by);
+            }
+            return name === undefined ? agents.get(agent.sessionId)! : agents.setName(agent.sessionId, name, by);
           });
         },
 

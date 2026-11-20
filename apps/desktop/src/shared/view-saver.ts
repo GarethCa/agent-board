@@ -1,5 +1,5 @@
 // How the app keeps where it left the board (its viewport, its windows, pop-outs' places) in the daemon's view state.
-import { EXPANDED_VIEW_KEY, TILE_SIZES_VIEW_KEY, UNFOLDED_VIEW_KEY } from '@agent-board/daemon/board-layout';
+import { EXPANDED_HIDDEN_VIEW_KEY, EXPANDED_SIZES_VIEW_KEY, EXPANDED_VIEW_KEY, TILE_SIZES_VIEW_KEY, UNFOLDED_VIEW_KEY } from '@agent-board/daemon/board-layout';
 
 /** The view state keys the app uses (`view.get`/`view.set`). */
 export const VIEW_KEYS = {
@@ -9,10 +9,10 @@ export const VIEW_KEYS = {
   restartDismissed: 'restartBanner.dismissed',
   /** The session tiles expanded in place, with their sizes. The daemon reads it too, to lay tiles out at their size. */
   expanded: EXPANDED_VIEW_KEY,
-  /** The expanded tiles whose session window is open, and their sizes: expanded again when it closes. */
-  hiddenExpanded: 'expandedTiles.hidden',
+  /** The expanded tiles whose session window is open, and their sizes: expanded again when it closes. The daemon reads it too, to keep their room. */
+  hiddenExpanded: EXPANDED_HIDDEN_VIEW_KEY,
   /** The size each tile was last let go at once resized while expanded, by node id: it opens at that size again. */
-  expandedSizes: 'expandedTiles.sizes',
+  expandedSizes: EXPANDED_SIZES_VIEW_KEY,
   /**
    * The size each compact tile was resized to, by node id; a tile not in it is the default size. The daemon
    * reads it too, to lay tiles out at their size.

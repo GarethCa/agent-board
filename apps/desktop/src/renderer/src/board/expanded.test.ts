@@ -12,6 +12,7 @@ import {
   isNarrowTile,
   expandTile,
   tidySize,
+  expandedRoom,
   expandedFrom,
   expandedRank,
   keepExpanded,
@@ -272,6 +273,24 @@ describe('windowedExpanded', () => {
     const next = windowedExpanded(expanded, hidden, sets(['a']), present);
     expect(next.expanded).toBe(expanded);
     expect(next.hidden).toBe(hidden);
+  });
+});
+
+describe('expandedRoom', () => {
+  it('keeps room for the tiles open, hidden by their session window, and pinned expanded, each at its size', () => {
+    const room = expandedRoom(
+      [{ id: 'agent:open', width: 1000, height: 640 }],
+      [{ id: 'agent:windowed', width: 1200, height: 700 }],
+      { 'agent:pinned': { width: 1100, height: 660 } },
+      new Set(['agent:pinned', 'agent:fresh']),
+    );
+    expect(Object.fromEntries(room.map(({ id, ...size }) => [id, size]))).toEqual({
+      'agent:open': { width: 1000, height: 640 },
+      'agent:windowed': { width: 1200, height: 700 },
+      'agent:pinned': { width: 1100, height: 660 },
+      'agent:fresh': EXPANDED_SIZE,
+    });
+    expect(tidySize(room, 'agent:windowed', { width: 320, height: 200 })).toEqual({ width: 1200, height: 700 });
   });
 });
 

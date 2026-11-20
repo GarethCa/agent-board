@@ -28,6 +28,9 @@ import {
   slotUnplaced,
   snapToGrid,
   TILE_GAP,
+  EXPANDED_HIDDEN_VIEW_KEY,
+  expandedRoomFrom,
+  EXPANDED_SIZES_VIEW_KEY,
   EXPANDED_VIEW_KEY,
   expandedSizesFrom,
   TILE_SIZES_VIEW_KEY,
@@ -379,8 +382,13 @@ interface Board {
   items: BoardItem[];
   /** Resized tiles' sizes, by `tileSizeKey`: an expanded tile's expanded size. */
   sizes: Record<string, Size>;
-  /** The tiles expanded in place, by `tileSizeKey`: each one's size compact, which the board pushes its neighbours aside from. */
+  /**
+   * The tiles that take an expanded tile's room (`expandedRoomFrom`), by `tileSizeKey`: each one's size compact, which
+   * the board pushes its neighbours aside from while it is open.
+   */
   compact: Record<string, Size>;
+  /** Of those, the ones open on the board now, which the app draws its neighbours pushed aside round. */
+  open: ReadonlySet<string>;
 }
 
 /**
@@ -772,7 +780,7 @@ function lineBudgetParam(fields: Record<string, unknown>, clears: boolean): numb
 
 /** Everything on the board a layout reads, through the daemon's own methods. */
 async function readLayoutBoard(call: DaemonCall): Promise<Board> {
-  const [zones, agents, shells, externals, items, sizes, unfolded, expanded] = await Promise.all([
+  const [zones, agents, shells, externals, items, sizes, unfolded, expanded, hidden, expandedSizes] = await Promise.all([
     call('zone.list', undefined),
     call('agent.list', undefined),
     call('shell.list', undefined),
@@ -781,28 +789,33 @@ async function readLayoutBoard(call: DaemonCall): Promise<Board> {
     call('view.get', { key: TILE_SIZES_VIEW_KEY }),
     call('view.get', { key: UNFOLDED_VIEW_KEY }),
     call('view.get', { key: EXPANDED_VIEW_KEY }),
+    call('view.get', { key: EXPANDED_HIDDEN_VIEW_KEY }),
+    call('view.get', { key: EXPANDED_SIZES_VIEW_KEY }),
   ]);
   const resized = typeof sizes === 'object' && sizes !== null ? (sizes as Record<string, Size>) : {};
   const open = new Set(unfoldedFrom(unfolded));
   // A closed agent the user hasn't unfolded is a chip on the board, so it takes a chip's room.
   const chips = Object.fromEntries(agents.filter((agent) => isFolded(agent, open)).map((agent) => [tileSizeKey('agent', agent.sessionId), CHIP_SIZE]));
-  const opened = expandedSizesFrom(expanded);
+  const pinned = agents.filter((agent) => agent.pinnedExpanded).map((agent) => tileSizeKey('agent', agent.sessionId));
+  const opened = expandedRoomFrom({ expanded, hidden, sizes: expandedSizes, pinned });
   return {
     zones,
     agents,
     shells: shells.filter((shell) => shell.owner === null),
     externals,
     items,
-    // A tile expanded in place takes its expanded size, so the rest are laid out clear of it.
+    // A tile expanded in place takes its expanded size, so the rest are laid out clear of it: one its session window
+    // has, or pinned expanded, too, as it opens again at that size.
     sizes: { ...resized, ...chips, ...opened },
     compact: Object.fromEntries(Object.keys(opened).map((key) => [key, chips[key] ?? resized[key] ?? AGENT_TILE_SIZE])),
+    open: new Set(Object.keys(expandedSizesFrom(expanded))),
   };
 }
 
-/** The tiles expanded in place on `board`: where each is saved, at its expanded size. */
+/** The tiles expanded in place on `board` now: where each is saved, at its expanded size. */
 function expandedOf(board: Board): ExpandedBox[] {
   return placedOf(board)
-    .filter((each) => board.compact[each.key] !== undefined)
+    .filter((each) => board.open.has(each.key))
     .map((each) => ({ key: each.key, x: each.rect.x, y: each.rect.y, width: each.rect.width, height: each.rect.height }));
 }
 
@@ -1551,7 +1564,9 @@ export function layoutHandlers<Context extends BoardConnection>({
         parts: new Map([...parts].map(([key, item]) => [key, `item:${item.id}`])),
         arrange,
         spacing: zone.spacing,
-        compact: new Map(things.flatMap((thing) => (board.compact[thing.key] === undefined ? [] : [[thing.key, { x: thing.x, y: thing.y, ...board.compact[thing.key]! }] as const]))),
+        // Only a tile open now pushes its neighbours aside on the board: one its session window has, or pinned and not yet
+        // open, covers them once it opens, so an overlap with its room is one.
+        compact: new Map(things.flatMap((thing) => (!board.open.has(thing.key) || board.compact[thing.key] === undefined ? [] : [[thing.key, { x: thing.x, y: thing.y, ...board.compact[thing.key]! }] as const]))),
         arranged,
         measured: measures.live(),
       }),

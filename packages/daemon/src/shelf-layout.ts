@@ -37,10 +37,13 @@ const prMerged = (agent: Agent): boolean => agent.pullRequests.some((pr) => pr.s
 
 /**
  * The shelf a stack of `agents` goes on, the first that holds:
- * - **Doing**: one of them works, needs the user, or failed (until its work is merged).
- * - **Done**: its pull request merged.
- * - **Waiting**: its pull request is open, so it waits on someone who is neither the user nor the agent, even with every
- *   agent of it closed.
+ * - **Doing**: one of them works, needs the user, or failed (until its work has shipped: a pull request merged, none
+ *   still open; a part merged is not the whole).
+ * - **Doing**: its work shipped, but one of them is open and waits on someone: a flag, or the question or plan it
+ *   carries, to its orchestrator as much as to the user. A merge with someone still asked is not the end of it.
+ * - **Done**: its work shipped.
+ * - **Waiting**: one of its pull requests is open, so it waits on someone who is neither the user nor the agent, even
+ *   with every agent of it closed or another of its pull requests merged.
  * - **Done**: every one is closed.
  * - **Doing**: one of them has finished a turn: its work has started, though nothing runs now. One paused after its
  *   first turn is here too, quiet on Doing, not back on To do.
@@ -48,9 +51,9 @@ const prMerged = (agent: Agent): boolean => agent.pullRequests.some((pr) => pr.s
  *   ended, just made). The daemon keeps no "has run at all" signal, so a turn ended is what counts as started.
  */
 export function stageOf(agents: readonly Agent[], shows: NeedsYouShows): ShelfStage {
-  const merged = agents.some(prMerged);
-  if (agents.some((agent) => (!isClosed(agent) && (WORKING_STATES.has(agent.state) || needsUser(agent, shows))) || (failed(agent) && !merged))) return 'doing';
-  if (merged) return 'done';
+  const shipped = agents.some(prMerged) && !agents.some(prOpen);
+  if (agents.some((agent) => (!isClosed(agent) && (WORKING_STATES.has(agent.state) || needsUser(agent, shows))) || (failed(agent) && !shipped))) return 'doing';
+  if (shipped) return agents.some((agent) => !isClosed(agent) && agent.flag !== null) ? 'doing' : 'done';
   if (agents.some(prOpen)) return 'waiting';
   if (agents.length > 0 && agents.every(isClosed)) return 'done';
   if (agents.some((agent) => agent.finishedAt !== null)) return 'doing';

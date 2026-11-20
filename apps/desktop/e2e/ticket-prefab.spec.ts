@@ -20,6 +20,9 @@ const setChat = (page: Page, sessionId: string, kind: 'implementer' | 'lead') =>
   page.evaluate(([id, picked]) => window.agentBoard.orchestrators.setTicketChat(id!, picked as 'implementer' | 'lead'), [sessionId, kind]);
 const answer = (page: Page, sessionId: string, text: string) => page.evaluate(([id, typed]) => window.agentBoard.agents.answer(id!, typed!), [sessionId, text]);
 
+/** Fits the view round the board, so every tile is drawn. */
+const fitView = (page: Page) => page.getByRole('button', { name: 'Fit View' }).click();
+
 async function newTicket(page: Page) {
   await zoneNamed(page, 'monorepo').getByRole('button', { name: 'Zone options' }).click();
   await page.getByRole('menuitem', { name: 'New crew' }).click();
@@ -64,6 +67,9 @@ test('a ticket starts from its prefab with either kind of chat, and its ⋯ swit
     // starts in its worktree. Its turn ends without `done`, so the turn's end is the signal, not finished work.
     await expect.poll(async () => (await chatNow(window, built.sessionId))?.finishedAt ?? null, { timeout: TURN_MS }).not.toBeNull();
     const footer = tileOf(window, built.sessionId);
+    // Each ticket opens as its terminal, and the second is slotted clear of the first's expanded room, so the two can be
+    // more than a window apart: the view is fitted round both, as the board draws only the tiles in view.
+    await fitView(window);
     await footer.getByRole('button', { name: 'More' }).click();
     await expect(window.getByRole('menuitemradio', { name: /The implementer/ })).toHaveAttribute('aria-checked', 'true');
     await window.getByRole('menuitemradio', { name: /Its own lead/ }).click();
@@ -80,6 +86,7 @@ test('a ticket starts from its prefab with either kind of chat, and its ⋯ swit
     // Picked at once, well inside its slow turn, so the switch waits (the ⋯ row's wiring is the lead pick's, above).
     const asked = await setChat(window, built.sessionId, 'implementer');
     expect(asked).toMatchObject({ chatKind: 'lead', chatSwitch: 'implementer' });
+    await fitView(window);
     await footer.getByRole('button', { name: 'More' }).click();
     await expect(window.getByRole('menuitemradio', { name: /The implementer/ })).toContainText('after the builder hands off');
     await window.keyboard.press('Escape');

@@ -61,6 +61,7 @@ const VERBS: Record<OrchestratorAction, { done: string; tried: string; of?: stri
   'crew-go-on-without': { done: 'let', tried: 'let', of: 'the crew ', after: ' go on without what was missing', nothing: 'a crew' },
   'crew-restore': { done: 'restored', tried: 'restore', of: 'the work of the crew ', nothing: 'the work of a crew' },
   'set-status': { done: 'set the status of', tried: 'set the status of' },
+  rename: { done: 'renamed', tried: 'rename' },
   watches: { done: 'changed the ticket watches of', tried: 'change the ticket watches of' },
 };
 

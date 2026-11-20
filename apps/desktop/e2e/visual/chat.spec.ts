@@ -257,7 +257,8 @@ test("the dark theme: a review doc in its implementer's session window, then its
     await pinChatTimes(window);
     restorePointer = await ignorePointer(window);
     await settle(window);
-    await expect.soft(win).toHaveScreenshot('dark-review-tab-row.png', SHOT);
+    // The tool row's and Done's run times are how long the fake agent took.
+    await expect.soft(win).toHaveScreenshot('dark-review-tab-row.png', { ...SHOT, mask: [win.getByTestId('chat-tool-outcome'), win.getByTestId('chat-time')] });
     // Narrow, Expand all and Collapse all fold to their icons, which keep their names; the tabs keep their words.
     // The window keeps a 24 px gutter each side: 612 px wide, under the tab row's 640 px fold.
     await window.setViewportSize({ width: 660, height: VIEWPORT.height });

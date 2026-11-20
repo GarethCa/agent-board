@@ -1271,7 +1271,7 @@ kbd {
   transition: opacity var(--motion-fast) var(--ease-out);
 }
 
-.hybrid-tile[data-corner='hover']:is(:hover, :focus-within, :where(:not(.ticket-tile)):is([data-needs-you], [data-status='needs-you'])) :is(.hybrid-tile-corner, .calm-tile-controls),
+.hybrid-tile[data-corner='hover']:is(:hover, :focus-within, [data-needs-you], [data-status='needs-you']) :is(.hybrid-tile-corner, .calm-tile-controls),
 .react-flow__node.selected .hybrid-tile[data-corner='hover'] :is(.hybrid-tile-corner, .calm-tile-controls),
 .hybrid-tile[data-corner='hover'] :is(.hybrid-tile-corner, .calm-tile-controls):has([data-state='open']) {
   opacity: 1;
@@ -1283,16 +1283,15 @@ kbd {
 
 /* While the tile needs you its buttons stay shown, so they sit beside its name, which ends in an ellipsis rather than
    under them; it is a change of state, not a hover, that moves them. The same on a screen with no hover (touch), where
-   a tap must not land on a button it can't see. A ticket's tile keeps its corner on hover: its one button answers, and
-   its title keeps the room. */
-.hybrid-tile[data-corner='hover']:not(.ticket-tile):is([data-needs-you], [data-status='needs-you']) :is(.hybrid-tile-corner, .calm-tile-controls) {
+   a tap must not land on a button it can't see. */
+.hybrid-tile[data-corner='hover']:is([data-needs-you], [data-status='needs-you']) :is(.hybrid-tile-corner, .calm-tile-controls) {
   position: static;
   padding-inline-start: 0;
   background: none;
 }
 
 /* Beside the buttons, the name gives way first, down to its ellipsis, so every button stays inside a narrow tile. */
-.hybrid-tile[data-corner='hover']:not(.ticket-tile):is([data-needs-you], [data-status='needs-you']) .hybrid-tile-name {
+.hybrid-tile[data-corner='hover']:is([data-needs-you], [data-status='needs-you']) .hybrid-tile-name {
   min-width: 0;
 }
 
@@ -1661,44 +1660,57 @@ kbd {
   box-shadow: var(--shadow-lifted);
 }
 
-/* A ticket's tile: its chat's card, holding its helpers' cards, whose two edges show under it. It asks for one thing:
-   Needs you is the usual tile's orange outline; Ready to merge is a green one; merged or at rest, it lies flat. */
-.ticket-tile {
-  box-shadow: var(--shadow-tile), var(--shadow-ticket-stack);
+/* A ticket's chat: its ticket's id leads its about line, in mono. Needs you is its word with a dot and its one button,
+   with no outline: who asks may be a helper it holds, which has no tile of its own. */
+.hybrid-tile-about-id {
+  font-family: var(--font-mono);
+  font-weight: var(--weight-semibold);
 }
 
-/* Flat, it keeps its stacked edges: as specific as the flat tile's rule above, and after it, so this one wins. */
-.hybrid-tile-agent.ticket-tile[data-flat] {
-  box-shadow: var(--shadow-ticket-stack);
+.hybrid-tile-agent[data-ticket-tile][data-needs-you] {
+  outline-color: transparent;
 }
 
-.ticket-tile[data-flat] :is(.hybrid-tile-name, .ticket-tile-now) {
-  color: var(--muted);
-}
-
-.ticket-tile[data-ask='ready-to-merge'] {
-  outline-color: var(--success);
-}
-
-/* Its Merge is green, as its ring and its word are: one colour to a tile. */
-.ticket-tile .ui-button.ticket-tile-act[data-kind='merge']:not(:disabled) {
-  border-color: var(--success-fill);
-  background: var(--success-fill);
-  color: var(--on-primary);
-}
-
-/* Merged, its pull request is good news in green, not the app's purple. */
-.ticket-tile .ticket-tile-watch[data-state='merged'] {
-  --chip: var(--success-soft);
-  --chip-ink: var(--success);
-}
-
-/* Its title on one line, after its ticket's id: the card's lines below it say the rest. */
-.ticket-tile .hybrid-tile-name {
+/* Asking, its name keeps to one line, so the line naming who asks and what keeps its room under the buttons beside it. */
+.hybrid-tile-agent[data-ticket-tile][data-tile-state='needs-you'] .hybrid-tile-name {
   -webkit-line-clamp: 1;
   line-clamp: 1;
 }
 
+/* Asking, its footer keeps to one row: its button stays beside the state, whose time gives way to an ellipsis, so a
+   second row never takes the room of the line naming who asks. */
+.hybrid-tile-agent[data-ticket-tile][data-tile-state='needs-you'] .hybrid-tile-footer {
+  flex-wrap: nowrap;
+}
+
+.hybrid-tile-agent[data-ticket-tile][data-tile-state='needs-you'] .hybrid-tile-footer > .hybrid-tile-act {
+  flex: none;
+}
+
+.hybrid-tile-agent[data-ticket-tile][data-tile-state='needs-you'] .hybrid-tile-when {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Ready to merge and New review stand up in their own colours. */
+.hybrid-tile-mark[data-ask='merge'] .hybrid-tile-word {
+  color: var(--success);
+}
+
+.hybrid-tile-mark[data-ask='new'] .hybrid-tile-word {
+  color: var(--accent-ink);
+}
+
+.hybrid-tile-dot {
+  flex: none;
+  width: var(--size-dot-md);
+  height: var(--size-dot-md);
+  border-radius: var(--radius-pill);
+  background: var(--state-waiting);
+}
+
+/* The opened ticket's id, as a chip in its head. */
 .ticket-tile-id {
   display: inline-flex;
   flex: none;
@@ -1716,10 +1728,6 @@ kbd {
 .ticket-tile-id svg {
   width: var(--icon-xs);
   height: var(--icon-xs);
-}
-
-.ticket-tile-now {
-  color: var(--text-soft);
 }
 
 /* A chat that builds its ticket itself, by its title: one session fewer, no builder among its helpers. */
@@ -1746,7 +1754,6 @@ kbd {
 }
 
 /* Its helpers as icons on the left, its pull request on the right. */
-.ticket-tile-mid,
 .ticket-tile-foot {
   display: flex;
   flex: none;
@@ -1754,98 +1761,6 @@ kbd {
   align-items: center;
   justify-content: space-between;
   min-height: var(--size-tag);
-}
-
-.ticket-tile-mid {
-  margin-top: auto;
-}
-
-.ticket-tile-helpers {
-  display: flex;
-  flex: 0 1 auto;
-  gap: var(--space-1);
-  align-items: center;
-  flex-wrap: wrap;
-  min-width: 0;
-  /* Only when nothing else gives way: a helper with no room wraps to a hidden second line, whole, never cut in half;
-     the margin keeps a working helper's ring and a done one's tick. */
-  height: var(--size-tag);
-  overflow: clip;
-  overflow-clip-margin: var(--space-0-5);
-}
-
-.ticket-tile-helper {
-  position: relative;
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-  width: var(--size-tag);
-  height: var(--size-tag);
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-pill);
-  background: var(--hover);
-  color: var(--neutral-ink);
-  cursor: pointer;
-}
-
-.ticket-tile-helper svg {
-  width: var(--icon-xs);
-  height: var(--icon-xs);
-}
-
-.ticket-tile-helper:focus-visible {
-  outline: var(--focus-ring-width) solid var(--accent);
-  outline-offset: var(--focus-ring-offset);
-}
-
-.ticket-tile-helper[data-state='working'] {
-  background: var(--success-soft);
-  color: var(--success);
-  box-shadow: 0 0 0 var(--size-helper-ring) var(--state-running);
-}
-
-.ticket-tile-helper[data-state='you'] {
-  background: var(--state-waiting-soft);
-  color: var(--state-waiting-ink);
-  box-shadow: 0 0 0 var(--size-helper-ring) var(--state-waiting);
-}
-
-.ticket-tile-helper[data-state='done'] {
-  color: var(--muted);
-}
-
-.ticket-tile-helper[data-state='failed'] {
-  background: var(--danger-soft);
-  color: var(--danger);
-}
-
-.ticket-tile-helper[data-state='sleep'] {
-  background: var(--state-idle-soft);
-  color: var(--muted);
-}
-
-/* A done helper's tick, on its icon's corner. */
-.ticket-tile-tick {
-  position: absolute;
-  right: calc(-1 * var(--space-0-5));
-  bottom: calc(-1 * var(--space-0-5));
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: var(--size-dot-lg);
-  height: var(--size-dot-lg);
-  border: var(--size-helper-ring) solid var(--raised);
-  border-radius: var(--radius-pill);
-  background: var(--state-running);
-  color: var(--on-accent);
-}
-
-.ticket-tile-tick svg {
-  width: var(--size-dot);
-  height: var(--size-dot);
-  stroke-width: 4;
 }
 
 .ticket-tile-watch {
@@ -1909,11 +1824,6 @@ kbd {
 .ticket-tile-watch-icon[data-tone='bad'] {
   background: var(--state-waiting-soft);
   color: var(--state-waiting-ink);
-}
-
-/* Its line is its watches' news, which its chat was not told: in full ink, over a flat tile's muted line. */
-.ticket-tile .ticket-tile-now[data-tone='news'] {
-  color: var(--text);
 }
 
 /* The Watches menu, from the eye in its header. */
@@ -2085,17 +1995,8 @@ kbd {
   color: var(--muted);
 }
 
-:root[data-design='simplified'] .ticket-tile .hybrid-tile-name {
-  font-weight: var(--weight-semibold);
-}
-
 :root[data-design='simplified'] .ticket-tile-state {
   font-weight: var(--weight-medium);
-}
-
-:root[data-design='simplified'] .ticket-tile-helper:not([data-state='you'], [data-state='failed']) {
-  background: transparent;
-  box-shadow: none;
 }
 
 /* Its Card | Terminal switch: two icons in one small track, the view it shows raised. */
@@ -8273,13 +8174,14 @@ button.chat-chip[aria-expanded='true'] {
   transform-origin: center bottom;
 }
 
+/* The node's own cursor: the face is most of a folded card, which a press drags. */
 .listcard-icon-face {
   padding: 0;
   border: 0;
   border-radius: var(--radius-pill);
   background: none;
   color: inherit;
-  cursor: pointer;
+  cursor: inherit;
 }
 
 .listcard-icon[data-empty] .listcard-face {

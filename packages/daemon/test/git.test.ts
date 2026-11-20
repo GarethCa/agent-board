@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { pushLfsObjects, runGit } from '../src/git.ts';
@@ -109,6 +109,104 @@ describe('pushLfsObjects', () => {
     const calls = fakeLfs();
     expect((await pushLfsObjects(tempRepo(), 'origin', 'HEAD')).ok).toBe(true);
     expect(existsSync(calls)).toBe(false);
+  });
+
+  /** Commits `.lfsconfig` with `body` at the top of `repo`. */
+  function commitLfsConfig(repo: string, body: string): void {
+    writeFileSync(join(repo, '.lfsconfig'), body);
+    git(repo, 'add', '.lfsconfig');
+    git(repo, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '--quiet', '-m', 'lfs config');
+  }
+
+  it.each([
+    ['lfs.url', '[lfs]\n\turl = https://elsewhere.example/lfs\n'],
+    ['lfs.pushurl', '[lfs]\n\tpushurl = https://elsewhere.example/lfs\n'],
+    ['remote.origin.lfsurl', '[remote "origin"]\n\tlfsurl = https://elsewhere.example/lfs\n'],
+    ['remote.origin.lfspushurl', '[remote "origin"]\n\tlfspushurl = https://elsewhere.example/lfs\n'],
+    ['url.<base>.insteadof', '[url "https://elsewhere.example/"]\n\tinsteadOf = https://github.com/\n'],
+  ])("refuses, uploading nothing, when the ref's .lfsconfig sets a key that could name where to upload (%s)", async (key, body) => {
+    const calls = fakeLfs();
+    const repo = lfsRepo();
+    commitLfsConfig(repo, body);
+    const result = await pushLfsObjects(repo, 'origin', 'HEAD');
+    expect(result.ok).toBe(false);
+    expect(result.stderr).toContain('.lfsconfig');
+    expect(result.stderr.toLowerCase()).toContain(key.replace('<base>', 'https://elsewhere.example/').toLowerCase());
+    expect(existsSync(calls) ? readFileSync(calls, 'utf8') : '').not.toContain('push');
+  });
+
+  it('refuses when only the worktree has a .lfsconfig that names where to upload, as Git LFS reads that file first', async () => {
+    const calls = fakeLfs();
+    const repo = lfsRepo();
+    writeFileSync(join(repo, '.lfsconfig'), '[lfs]\n\turl = https://elsewhere.example/lfs\n');
+    expect(await pushLfsObjects(repo, 'origin', 'HEAD')).toMatchObject({ ok: false });
+    expect(existsSync(calls) ? readFileSync(calls, 'utf8') : '').not.toContain('push');
+  });
+
+  it.each([
+    ['in-tree', 'sub/x.cfg'],
+    ['absolute', ''],
+  ])("refuses a .lfsconfig that includes another file (%s path), as Git LFS follows includes", async (_kind, inTree) => {
+    const calls = fakeLfs();
+    const repo = lfsRepo();
+    const included = inTree === '' ? join(tempDataDir(), 'x.cfg') : join(repo, inTree);
+    mkdirSync(join(included, '..'), { recursive: true });
+    writeFileSync(included, '[lfs]\n\turl = https://elsewhere.example/lfs\n');
+    commitLfsConfig(repo, `[include]\n\tpath = ${inTree === '' ? included : inTree}\n`);
+    const result = await pushLfsObjects(repo, 'origin', 'HEAD');
+    expect(result).toMatchObject({ ok: false });
+    expect(result.stderr).toContain('include.path');
+    expect(existsSync(calls) ? readFileSync(calls, 'utf8') : '').not.toContain('push');
+  });
+
+  it('refuses a conditional include in .lfsconfig', async () => {
+    const calls = fakeLfs();
+    const repo = lfsRepo();
+    commitLfsConfig(repo, '[includeIf "gitdir:/"]\n\tpath = /tmp/x.cfg\n');
+    expect((await pushLfsObjects(repo, 'origin', 'HEAD')).stderr).toContain('includeif.gitdir:/.path');
+    expect(existsSync(calls) ? readFileSync(calls, 'utf8') : '').not.toContain('push');
+  });
+
+  it('refuses when only the index has a .lfsconfig that names where to upload', async () => {
+    const calls = fakeLfs();
+    const repo = lfsRepo();
+    writeFileSync(join(repo, '.lfsconfig'), '[lfs]\n\turl = https://elsewhere.example/lfs\n');
+    git(repo, 'add', '.lfsconfig');
+    rmSync(join(repo, '.lfsconfig'));
+    expect(await pushLfsObjects(repo, 'origin', 'HEAD')).toMatchObject({ ok: false });
+    expect(existsSync(calls) ? readFileSync(calls, 'utf8') : '').not.toContain('push');
+  });
+
+  it.each([
+    ['lfs.url', '[LFS]\n\tURL = https://elsewhere.example/lfs\n'],
+    ['remote.Origin.lfsurl', '[remote "Origin"]\n\tlfsUrl = https://elsewhere.example/lfs\n'],
+  ])("refuses a .lfsconfig only on the pushed ref, not HEAD, written in mixed case (%s)", async (key, body) => {
+    const calls = fakeLfs();
+    const repo = lfsRepo();
+    git(repo, 'checkout', '--quiet', '-b', 'agent');
+    commitLfsConfig(repo, body);
+    git(repo, 'checkout', '--quiet', '-');
+    expect(existsSync(join(repo, '.lfsconfig'))).toBe(false);
+    const result = await pushLfsObjects(repo, 'origin', 'refs/heads/agent');
+    expect(result).toMatchObject({ ok: false });
+    expect(result.stderr).toContain(key);
+    expect(existsSync(calls) ? readFileSync(calls, 'utf8') : '').not.toContain('push');
+  });
+
+  it('refuses a malformed .lfsconfig whose good lines above the bad one name where to upload', async () => {
+    const calls = fakeLfs();
+    const repo = lfsRepo();
+    commitLfsConfig(repo, '[lfs]\n\turl = https://elsewhere.example/lfs\n[broken\n');
+    expect(await pushLfsObjects(repo, 'origin', 'HEAD')).toMatchObject({ ok: false });
+    expect(existsSync(calls) ? readFileSync(calls, 'utf8') : '').not.toContain('push');
+  });
+
+  it('uploads when the .lfsconfig sets only keys that do not choose a server', async () => {
+    const calls = fakeLfs();
+    const repo = lfsRepo();
+    commitLfsConfig(repo, '[lfs]\n\tfetchexclude = docs/*\n');
+    expect((await pushLfsObjects(repo, 'origin', 'HEAD')).ok).toBe(true);
+    expect(readFileSync(calls, 'utf8').split('\n')).toContain('push origin HEAD');
   });
 
   it('fails with the message of an upload that fails', async () => {

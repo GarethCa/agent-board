@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent, AgentStart, ExternalSession, Shell, TilePosition, Zone } from '@agent-board/daemon/protocol';
-import { AGENT_TILE_SIZE, CHIP_SIZE, freeTileSlot, tileSlot, ZONE_PADDING } from '@agent-board/daemon/board-layout';
+import { AGENT_TILE_SIZE, CHIP_SIZE, freeTileSlot, PERCH_ROOM, SPACING_GAPS, tileSlot, ZONE_PADDING, zoneGrid } from '@agent-board/daemon/board-layout';
 import { drawnIn, drawsAsTicket, DRAGGED_TILE_Z_INDEX, EXPANDED_DRAG_HANDLE, holdsTiles, resizesFrom, savedMove, savedPlace, shellWithPane, tileNodeId, tileSubject, withTiles, type BoardNode } from './tiles';
 import { EXPANDED_SIZE, expandTile } from './expanded';
 import type { TileNodeType } from './tile';
@@ -229,6 +229,17 @@ describe('withTiles', () => {
     expect(after!.height).toBe(grown!.data.zone.height);
   });
 
+  it('slots a tile with no place clear of the room of a tile its session window has, as the daemon slots it', () => {
+    const pad = SPACING_GAPS.normal.padding;
+    const held = { x: pad, y: pad + PERCH_ROOM, z: 1 };
+    const room = [{ id: 'agent:held', width: 1000, height: 640 }];
+    const nodes = withTiles([zone('z')], [agent('held', 'z', held), agent('fresh', 'z')], [], [], new Map(), [], {}, new Set(), [], room);
+    // The same call the daemon slots it with, round the same room (orchestrator-layout.test.ts).
+    expect(tile(nodes, 'agent:fresh').position).toEqual(freeTileSlot(800, [{ x: held.x, y: held.y, width: 1000, height: 640 }], AGENT_TILE_SIZE, zoneGrid('normal')));
+    // Still drawn compact, and its zone stretched only round that.
+    expect(tile(nodes, 'agent:held')).toMatchObject(AGENT_TILE_SIZE);
+  });
+
   it('draws a resized tile at its own size, grows its zone to hold it and slots the others clear of it', () => {
     const sizes = { 'agent:a': { width: 480, height: 320 } };
     const nodes = withTiles([zone('z')], [agent('a', 'z', { x: 700, y: 500, z: 1 }), agent('b', 'z')], [], [], new Map(), [], sizes);
@@ -436,6 +447,13 @@ describe('withTiles: ticket tiles', () => {
     expect(tiles(nodes).map((node) => node.id)).toEqual(['agent:chat', 'agent:other']);
     expect(tile(nodes, 'agent:chat').data.helpers).toEqual([builder, reviewer]);
     expect(tile(nodes, 'agent:other').data).not.toHaveProperty('helpers');
+  });
+
+  it('draws a ticket as one tile of an agent tile’s size, with no node for a helper it holds', () => {
+    const nodes = withTiles([zone('z')], [chat(), helper('builder'), helper('reviewer'), agent('other', 'z')], [], []);
+    expect(tiles(nodes).map((node) => node.id)).toEqual(['agent:chat', 'agent:other']);
+    expect(tile(nodes, 'agent:chat')).toMatchObject({ width: AGENT_TILE_SIZE.width, height: AGENT_TILE_SIZE.height });
+    expect(tile(nodes, 'agent:other')).toMatchObject({ width: AGENT_TILE_SIZE.width, height: AGENT_TILE_SIZE.height });
   });
 
   it('gives a helper laid out away from its chat a tile of its own, as any agent', () => {

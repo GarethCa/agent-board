@@ -2,8 +2,8 @@ import { useContext, useRef, useState, type KeyboardEvent, type MouseEvent, type
 import { NodeResizeControl, ResizeControlVariant, type ControlPosition } from '@xyflow/react';
 import { shortIssueId, TRACKER_PROVIDERS, type Agent, type ExternalSession, type PullRequest, type Shell } from '@agent-board/daemon/protocol';
 import { paneIds } from '@agent-board/daemon/pane-layout';
-import { Folder, GitBranch, Maximize2, Minimize2, Pin, Play, SquareArrowOutUpRight, Trash2 } from 'lucide-react';
-import { leaveToTile, useLeaveKeys } from '../keys/escape-hatch';
+import { Folder, GitBranch, Maximize2, Pin, Play, SquareArrowOutUpRight, Trash2 } from 'lucide-react';
+import { useLeaveKeys } from '../keys/escape-hatch';
 import { useExtendedShortcuts } from '../keys/extended-shortcuts';
 import { pressed } from '../keys/registry';
 import { DetailsHandle } from '../session/DetailsHandle';
@@ -24,6 +24,7 @@ import { agentPill, STATE_LABELS } from '../states';
 import { useNeedsYouShows } from '../needs-you-setting';
 import { Button, Chip, IconButton, StatusPill, Tag } from '../ui';
 import { EXPANDED_MAX_SIZE, EXPANDED_MIN_SIZE, EXPANDED_SIZE, isNarrowTile, resizeAllowed, type ExpandedParent } from './expanded';
+import { BackToTileButton } from './BackToTile';
 import { HarnessMark } from './HarnessMark';
 import { CommandFigure } from './CommandFigure';
 import { PullRequestChip } from './PullRequestChip';
@@ -167,7 +168,7 @@ function ExpandedTileShown({ id, tile, parent }: TileProps & { parent: ExpandedP
             onClick={() => setPinnedExpanded(agent!.sessionId, false)}
           />
         ) : (
-          <IconButton icon={<Minimize2 />} size="sm" variant="secondary" aria-label="Collapse" tooltip="Back to its tile; the session keeps running" onClick={() => leaveToTile(root.current, () => collapse(id, 'button'))} />
+          <BackToTileButton from={root} leave={() => collapse(id, 'button')} label="Collapse" />
         )}
       </header>
       <div className="expanded-tile-body nodrag nowheel nopan">

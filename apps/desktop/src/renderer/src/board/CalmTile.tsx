@@ -6,6 +6,7 @@ import { Button, EditableName, HoverCard, RenameButton, Spinner, useRenaming, us
 import { useNeedsYouShows } from '../needs-you-setting';
 import { dropKey, dropOver as dropOverValue } from '../session/shell-moves';
 import { calmFace, technicalLine, type CalmAction } from './calm-tile';
+import { ticketTileAsk } from './ticket-tile';
 import { TileRobot } from './CommandFigure';
 import { HandoffsContext } from './flow-edges';
 import { JobTicket, useHeldJobs } from './items/taken-jobs';
@@ -31,7 +32,7 @@ import { HandPlacedMark } from './HandPlacedMark';
 import { FrostMark } from './FrostMark';
 import { frostedClasses } from './paused';
 
-type CalmTileProps = { id: string; selected: boolean; agent: Agent } & Pick<TileData, 'repo' | 'from' | 'crew' | 'crewFlags' | 'implementer'>;
+type CalmTileProps = { id: string; selected: boolean; agent: Agent } & Pick<TileData, 'repo' | 'from' | 'crew' | 'crewFlags' | 'implementer' | 'helpers'>;
 
 /**
  * An agent's tile under the Simplified design, a calm tile (docs/adr/0022-simplified-design.md): its name and its window
@@ -40,7 +41,7 @@ type CalmTileProps = { id: string; selected: boolean; agent: Agent } & Pick<Tile
  * mono line of its AI, branch, pull requests and raw state under it. It keeps the Classic tile's root and its data, so
  * the board finds, drops onto and measures it as it does that one.
  */
-export function CalmTile({ id, selected, agent, repo, from, crew, crewFlags, implementer }: CalmTileProps) {
+export function CalmTile({ id, selected, agent, repo, from, crew, crewFlags, implementer, helpers }: CalmTileProps) {
   const shows = useNeedsYouShows();
   const tileActions = useContext(TileActionsContext);
   const { expand, openAgent, popOutAgent, setFolded, stopAgent, rename, sendUnsent, clearUnsent, typeFirstPrompt, trustFolder, resendUndelivered, clearUndelivered } = tileActions;
@@ -56,16 +57,21 @@ export function CalmTile({ id, selected, agent, repo, from, crew, crewFlags, imp
   const fitted = useFittedLines();
   const held = useHeldJobs(agent.sessionId);
   const commands = useBoardCommands();
-  const face = calmFace(agent, shows, implementer);
+  // A ticket's chat speaks for a helper it holds that needs the user, as the helper has no tile: its status, who asks and
+  // what, and its button and ask, which answer the helper.
+  const rolled = helpers === undefined ? undefined : ticketTileAsk(agent, helpers, shows);
+  const asker = rolled?.dot === true ? rolled.asker : agent;
+  const face = calmFace(asker, shows, asker === agent ? implementer : undefined);
+  const line = asker === agent ? face.line : (rolled?.line ?? face.line);
   const look: TileShows = QUIET_TILE;
   // Its times are re-read as each would read differently: once a minute, never by the second.
   const sinceNow = useNowForSince(agent.stateSince);
   const towardNow = useNowToward(look.wakeInWords && agent.schedule?.enabled === true ? agent.schedule.nextRunAt : null);
   const times = calmTimes(agent, Math.max(sinceNow, towardNow), look);
   const progress = tileProgress(agent, look);
-  const quick = quickAskOf(agent);
+  const quick = quickAskOf(asker);
   // Claude's own question dialog, answered from the same chip.
-  const dialog = quick === undefined ? tileDialogOf(agent) : undefined;
+  const dialog = quick === undefined ? tileDialogOf(asker) : undefined;
   const sending = handoffs.sending.has(agent.sessionId) && face.status !== 'needs-you';
   const card = lastMessageCard(agent);
   const open = () => (clickOpens !== 'expand' ? openAgent(agent) : expand(id));
@@ -90,7 +96,8 @@ export function CalmTile({ id, selected, agent, repo, from, crew, crewFlags, imp
         data-job-drop={jobDrop || undefined}
         data-muted={agent.muted}
         data-seen={(agent.seen && waitsForYou(agent, shows)) || undefined}
-        data-needs-you={needsYouNow(agent, shows) || undefined}
+        data-needs-you={needsYouNow(agent, shows) || rolled?.needsYouNow || undefined}
+        data-ticket-tile={helpers === undefined ? undefined : ''}
         data-handoff={sending ? 'sending' : handoffs.receiving.has(agent.sessionId) ? 'receiving' : undefined}
         data-reviewer={agent.reviewOf !== null || undefined}
         data-orchestrator={crew !== undefined || undefined}
@@ -141,16 +148,16 @@ export function CalmTile({ id, selected, agent, repo, from, crew, crewFlags, imp
         ) : agent.unsent !== null ? (
           <UnsentRow fitted={fitted} what={agent.unsent} asked={agent.ask?.question} onSend={() => sendUnsent(agent.sessionId)} onClear={() => clearUnsent(agent.sessionId)} />
         ) : (
-          (face.line !== null || times !== undefined) && (
-            <span className="calm-tile-line" data-testid="tile-line" title={face.line ?? undefined}>
+          (line !== null || times !== undefined) && (
+            <span className="calm-tile-line" data-testid="tile-line" title={line ?? undefined}>
               {/* Its times lead, so the line's two-line cut never takes them. */}
               {times !== undefined && (
                 <span className="calm-tile-times" data-testid="tile-times">
                   {times}
-                  {face.line !== null && ' · '}
+                  {line !== null && ' · '}
                 </span>
               )}
-              {face.line}
+              {line}
             </span>
           )
         )}
@@ -181,11 +188,11 @@ export function CalmTile({ id, selected, agent, repo, from, crew, crewFlags, imp
           )}
           {/* Its ask opens from its chip, beside the tile, in the button's place. */}
           {quick !== undefined ? (
-            <TileQuickAsk sessionId={agent.sessionId} name={agent.name} ask={quick} />
+            <TileQuickAsk sessionId={asker.sessionId} name={asker.name} ask={quick} />
           ) : dialog !== undefined ? (
-            <TileDialogAsk sessionId={agent.sessionId} name={agent.name} prompt={dialog} onOpen={() => openAgent(agent)} />
+            <TileDialogAsk sessionId={asker.sessionId} name={asker.name} prompt={dialog} onOpen={() => openAgent(asker)} />
           ) : (
-            face.action !== null && <CalmButton action={face.action} agent={agent} actions={tileActions} open={open} />
+            face.action !== null && <CalmButton action={face.action} agent={asker} actions={tileActions} open={asker === agent ? open : () => openAgent(asker)} />
           )}
         </span>
         <span className="calm-tile-technical" data-testid="tile-technical" data-technical-detail="">

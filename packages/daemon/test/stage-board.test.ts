@@ -172,6 +172,21 @@ describe('ticketStage', () => {
     expect(ticketStage([agent('a')], new Set(), 'explicit')).toBe('todo');
     expect(ticketStage([agent('a', { pullRequests: [pr('merged')], finishedAt: at(5) })], new Set(), 'explicit')).toBe('done');
   });
+
+  it('stays on Doing after a part merges while its builder waits on its orchestrator', () => {
+    const flag = { id: 1, reason: 'Part merged: what next?', at: at(6), to: 'orchestrator' as const, via: null };
+    const builder = agent('a', { state: 'waiting', ledBy: 'lead', flag, pullRequests: [pr('merged')], finishedAt: at(5) });
+    expect(ticketStage([builder], new Set(), 'explicit')).toBe('doing');
+    expect(ticketStage([{ ...builder, flag: null }], new Set(), 'explicit')).toBe('done');
+  });
+
+  it('waits for review with a part merged and its real pull request still open, once no flag is up', () => {
+    const builder = agent('a', { state: 'waiting', ledBy: 'lead', pullRequests: [pr('merged'), pr('open')], finishedAt: at(5) });
+    expect(ticketStage([builder], new Set(), 'explicit')).toBe('waiting');
+    expect(ticketStage([{ ...builder, pullRequests: [pr('merged')] }], new Set(), 'explicit')).toBe('done');
+    const flag = { id: 1, reason: 'Part merged: what next?', at: at(6), to: 'orchestrator' as const, via: null };
+    expect(ticketStage([{ ...builder, flag }], new Set(), 'explicit')).toBe('waiting');
+  });
 });
 
 describe('layOutStageBoard', () => {

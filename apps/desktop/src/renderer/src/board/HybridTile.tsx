@@ -67,14 +67,17 @@ import { useMenuBarSection } from '../keys/menu-bar-bridge';
 import { CalmShellTile } from './CalmShellTile';
 import { CalmTile } from './CalmTile';
 import { ShelfTile } from './ShelfTile';
-import { TicketTile } from './TicketTile';
+import { ticketHead, ticketTileAsk } from './ticket-tile';
+import { TicketWatchesMenu } from './TicketWatches';
+import { boardRow, ticketChatEntries, ticketMenuEntries } from './ticket-chat-menu';
+import { OneButton as TicketOneButton, useSwitchTicketView, useTicketView, viewRows } from './ticket-parts';
 import { ResumeButton } from './RestartBanner';
 import { ShellFolderChip } from './shell-parts';
 import { useSimplified } from '../design';
 import { quickAskOf, tileDialogOf } from './quick-ask';
 import { TileQuickAsk } from './TileQuickAsk';
 import { TileDialogAsk } from './DialogQuickAsk';
-import { pillShowsAge, sinceLabel, stateAge, tileDetails, tileProgress, timeToGo, type TileShows } from './tile-shows';
+import { pillShowsAge, sinceLabel, stateAge, tileDetails, tileHistory, tileProgress, timeToGo, type TileShows } from './tile-shows';
 import { useTileShows } from './view-settings';
 import { FLAT_STATES, reviewablePr, TILE_STATE_WORDS, tileAbout, tileMark, footerFoldKey, tileNow, tileSince, tileTime, type TileButton as OneButton } from './tile-headline';
 import { askOf, HooksSilentRow, lastMessageCard, nameClass, stopPropagation, TileButton, TileMenu, TrustRow, UndeliveredRow, UnsentRow, UntypedRow } from './tile-parts';
@@ -96,20 +99,17 @@ export const HybridTile = memo(function HybridTile({ id, tile, selected = false 
   const simplified = useSimplified();
   const design = useTileDesign();
   if (tile.start !== undefined) return <StartTile id={id} start={tile.start} />;
-  if (tile.agent !== undefined && tile.helpers !== undefined) {
-    return <TicketTile id={id} selected={selected} chat={tile.agent} helpers={tile.helpers} from={tile.from} implementer={tile.implementer} />;
-  }
   // A glance design, chosen in Settings, draws every agent's tile, under either look.
   if (tile.agent !== undefined && design === 'porthole') {
-    return <PortholeTile id={id} selected={selected} agent={tile.agent} repo={tile.repo} from={tile.from} crew={tile.crew} crewFlags={tile.crewFlags} implementer={tile.implementer} />;
+    return <PortholeTile id={id} selected={selected} agent={tile.agent} repo={tile.repo} from={tile.from} crew={tile.crew} crewFlags={tile.crewFlags} implementer={tile.implementer} helpers={tile.helpers} />;
   }
   if (tile.agent !== undefined && design === 'shelf') {
-    return <ShelfTile id={id} selected={selected} agent={tile.agent} repo={tile.repo} from={tile.from} crew={tile.crew} crewFlags={tile.crewFlags} implementer={tile.implementer} />;
+    return <ShelfTile id={id} selected={selected} agent={tile.agent} repo={tile.repo} from={tile.from} crew={tile.crew} crewFlags={tile.crewFlags} implementer={tile.implementer} helpers={tile.helpers} />;
   }
   if (tile.agent !== undefined && simplified) {
-    return <CalmTile id={id} selected={selected} agent={tile.agent} repo={tile.repo} from={tile.from} crew={tile.crew} crewFlags={tile.crewFlags} implementer={tile.implementer} />;
+    return <CalmTile id={id} selected={selected} agent={tile.agent} repo={tile.repo} from={tile.from} crew={tile.crew} crewFlags={tile.crewFlags} implementer={tile.implementer} helpers={tile.helpers} />;
   }
-  if (tile.agent !== undefined) return <AgentTile id={id} selected={selected} agent={tile.agent} repo={tile.repo} from={tile.from} crew={tile.crew} crewFlags={tile.crewFlags} tabs={tile.tabs} implementer={tile.implementer} />;
+  if (tile.agent !== undefined) return <AgentTile id={id} selected={selected} agent={tile.agent} repo={tile.repo} from={tile.from} crew={tile.crew} crewFlags={tile.crewFlags} tabs={tile.tabs} implementer={tile.implementer} helpers={tile.helpers} />;
   if (tile.shell !== undefined && simplified) return <CalmShellTile id={id} shell={tile.shell} selected={selected} />;
   if (tile.shell !== undefined) return <ShellTile id={id} shell={tile.shell} selected={selected} />;
   if (tile.external !== undefined) return <ExternalTile id={id} session={tile.external} />;
@@ -125,12 +125,12 @@ export const HybridTile = memo(function HybridTile({ id, tile, selected = false 
   );
 });
 
-function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, implementer }: { id: string; selected: boolean; agent: Agent; repo?: string } & Pick<TileData, 'from' | 'crew' | 'crewFlags' | 'tabs' | 'implementer'>) {
+function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, implementer, helpers }: { id: string; selected: boolean; agent: Agent; repo?: string } & Pick<TileData, 'from' | 'crew' | 'crewFlags' | 'tabs' | 'implementer' | 'helpers'>) {
   const shows = useNeedsYouShows();
   const crewView = useContext(CrewViewContext);
   const chip = from !== undefined && !crewView.framed.has(agent.sessionId);
   const tileActions = useContext(TileActionsContext);
-  const { expand, openAgent, popOutAgent, deleteAgent, openLink, openPullRequest, resumeAgent, sendUnsent, clearUnsent, typeFirstPrompt, trustFolder, resendUndelivered, clearUndelivered, restartAgent, rename, openReview, openGate, openPlan, openDoc, retryAgentStart, continueOnCredits } =
+  const { expand, openAgent, popOutAgent, deleteAgent, openLink, openPullRequest, resumeAgent, sendUnsent, clearUnsent, typeFirstPrompt, trustFolder, resendUndelivered, clearUndelivered, restartAgent, rename, openReview, openGate, openPlan, openDoc, retryAgentStart, continueOnCredits, readWatches } =
     tileActions;
   const commands = useBoardCommands();
   const gate = useGateRun(agent.sessionId);
@@ -142,11 +142,21 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
   const starting = isStarting(agent);
   // A starting reviewer has no room for a subtitle row, so its marker leads its name ("Review · r1 · Rework the…"), where a
   // long name's clamp can't cut it off.
-  const split = agent.reviewOf === null ? { name: agent.name } : splitReviewerName(agent.name);
+  // A ticket's chat named after its ticket alone shows the ticket's title, its id leading its about line.
+  const head = helpers === undefined ? undefined : ticketHead(agent);
+  const split = agent.reviewOf === null ? { name: head?.name ?? agent.name } : splitReviewerName(agent.name);
   const shownName = starting && split.subtitle !== undefined ? { name: `${split.subtitle} · ${split.name}` } : split;
   const renaming = useRenaming(agent.name, (name) => rename({ kind: 'agent', sessionId: agent.sessionId }, name));
   const menu = useAgentTileMenu(id, agent, { from, implementer }, renaming.startSoon);
-  useMenuBarSection('agent', selected, menuBarAgentEntries(menu.entries));
+  // A ticket's chat: its ⋯ menu switches its view, opens the ticket's board, where its helpers are, and switches what kind
+  // of chat it is.
+  const ticketView = useTicketView(id);
+  const switchView = useSwitchTicketView(id, agent.sessionId);
+  const menuEntries =
+    helpers === undefined
+      ? menu.entries
+      : ticketMenuEntries([...viewRows(ticketView, switchView), boardRow(() => tileActions.openTicketBoard(agent.sessionId))], ticketChatEntries(agent, (kind) => tileActions.setTicketChat(agent.sessionId, kind)), menu.entries);
+  useMenuBarSection('agent', selected, menuBarAgentEntries(menuEntries));
   useRenameRequest(id, renaming);
   const nameClicks = useSlowClickRename(renaming, selected);
   const handoffs = useContext(HandoffsContext);
@@ -154,7 +164,7 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
   const held = useHeldJobs(agent.sessionId);
   // What the tile shows at rest: the quiet tile unless Settings › Board › Agent tiles turns parts back on; the rest is in its hover card.
   const look: TileShows = useTileShows();
-  const { shown, overflow } = tileFooter(agent, shells.length, held, look);
+  const { shown, overflow } = tileFooter(agent, shells.length, held, look, { issueInAbout: helpers !== undefined });
   const ranking = foldRanking(shown);
   const fitted = useFittedLines();
   const ask = askOf(agent);
@@ -176,16 +186,22 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
   const seen = agent.seen && waitsForYou(agent, shows);
   const state = sending ? 'handing-off' : agent.state;
   const mark = tileMark(agent, shows, sending, receiving);
-  const pillFace = mark.pill;
+  // Tile B: what it is for, what is true now, its state in a word with a time in steps, and at most one button.
+  // A ticket's chat takes the ask of a helper it holds, which has no tile of its own (who asks and what, and Answer opens
+  // it), else its merge, a new review or its watches' news.
+  const rolled = helpers === undefined ? undefined : ticketTileAsk(agent, helpers, shows);
+  const asker = rolled?.asker ?? agent;
+  const askerNow = useNowForSince(asker.stateSince);
+  // A helper's ask takes its pill too, with how long it has asked.
+  const pillFace = rolled?.dot === true ? tileMark(asker, shows, false, false).pill : mark.pill;
   // How long it has been in its state, on its pill: re-read at each whole minute of it.
   const stateNow = useNowForSince(agent.stateSince);
-  const age = look.stateTime && !sending && pillShowsAge(pillFace.state) ? stateAge(agent.stateSince, stateNow) : undefined;
-  // Tile B: what it is for, what is true now, its state in a word with a time in steps, and at most one button.
-  const tState = mark.state;
-  const about = tileAbout(agent);
-  const nowLine = tileNow(agent, tState);
-  const stateTime = tileTime(agent, tState, stateNow);
-  const oneButton = mark.button;
+  const age = !look.stateTime || sending || !pillShowsAge(pillFace.state) ? undefined : rolled?.dot === true ? stateAge(asker.stateSince, askerNow) : stateAge(agent.stateSince, stateNow);
+  const tState = rolled?.dot === true ? 'needs-you' : mark.state;
+  const about = head === undefined ? tileAbout(agent) : head.about;
+  const ticketId = head?.id;
+  const nowLine = rolled === undefined ? tileNow(agent, tState) : rolled.line;
+  const stateTime = rolled?.dot === true ? tileTime(asker, 'needs-you', askerNow) : tileTime(agent, tState, stateNow);
   const pickedStyle = useCharacterStyle();
   // A row with a button of its own needs the tile's width more than the tile needs its character: its pill still says.
   const rowWithButton = agent.undelivered.length > 0 || agent.trustFolder !== null || agent.untypedPrompt !== null || agent.unsent !== null || agent.hooksSilent;
@@ -330,7 +346,7 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
     ...extras.map((each) => each.line),
     ...overflow.jobs,
   ];
-  const details = starting ? [] : tileDetails(agent, look, branchShown, chipLines);
+  const details = starting ? [] : [...tileDetails(agent, look, branchShown, chipLines), ...tileHistory(agent, stateNow)];
   // With details to show and no last message, the card leads with its status or task in full, which the tile's body
   // would otherwise give as a native tooltip: one tooltip at a time.
   const bodyInCard = lastMessage === undefined && details.length > 0;
@@ -351,7 +367,7 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
       data-harness={agent.harness}
       data-state={agent.state}
       data-tile-state={tState}
-      data-flat={FLAT_STATES.has(tState) || undefined}
+      data-flat={(rolled === undefined ? FLAT_STATES.has(tState) : rolled.flat) || undefined}
       data-hatch={look.pausedHatch || undefined}
       data-start={startup === null ? undefined : startup.failed ? 'failed' : 'starting'}
       data-session-id={agent.sessionId}
@@ -362,14 +378,16 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
       data-muted={agent.muted}
       data-corner={look.cornerAlways ? undefined : 'hover'}
       data-seen={seen || undefined}
-      data-needs-you={needsYouNow(agent, shows) || undefined}
+      data-needs-you={needsYouNow(agent, shows) || rolled?.needsYouNow || undefined}
+      data-ticket-tile={helpers === undefined ? undefined : ''}
       data-crowded={shown.length > 1 || undefined}
       data-handoff={sending ? 'sending' : receiving ? 'receiving' : undefined}
       data-reviewer={agent.reviewOf !== null || undefined}
       data-orchestrator={crew !== undefined || undefined}
       data-master={agent.master || undefined}
       title={hoverCard !== undefined ? undefined : clickOpens !== 'expand' ? 'Double-click to open its session window' : 'Double-click to expand it here'}
-      onDoubleClick={() => (clickOpens !== 'expand' ? openAgent(agent) : expand(id))}
+      // In the board view, a double-click on a ticket takes the user into its board.
+      onDoubleClick={() => (helpers !== undefined && ticketView === 'board' ? tileActions.openTicketBoard(agent.sessionId) : clickOpens !== 'expand' ? openAgent(agent) : expand(id))}
     >
       {agent.master && (
         <span className="hybrid-tile-master-badge" data-testid="master-badge">
@@ -394,7 +412,8 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
           {agent.state === 'stopped-by-restart' && (
             <TileButton className="hybrid-tile-minor" icon={<RotateCcw />} aria-label="Resume" data-testid="resume" title="Resume it, carrying on its conversation" onClick={() => void resumeAgent(agent.sessionId)} />
           )}
-          <TileMenu entries={menu.entries} onOpen={menu.reread} />
+          {helpers !== undefined && <TicketWatchesMenu chat={agent} name={ticketId ?? split.name} className="hybrid-tile-minor" />}
+          <TileMenu entries={menuEntries} onOpen={menu.reread} />
         </TileCorner>
       </div>
       {crew !== undefined && (
@@ -405,8 +424,17 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
       {shownName.subtitle !== undefined && <span className="hybrid-tile-subtitle">{shownName.subtitle}</span>}
       {/* What it is for, in one line, under its name; not while it starts, when its steps and their output take the room. */}
       {startup === null && (
-        <span className="hybrid-tile-about" data-testid="tile-about" data-empty={about === undefined || undefined} title={about}>
-          {about ?? 'No task yet'}
+        <span className="hybrid-tile-about" data-testid="tile-about" data-empty={about === undefined || undefined} title={ticketId === undefined ? about : [ticketId, about].filter(Boolean).join(' · ')}>
+          {/* A ticket's chat leads with its ticket's id, in mono: its pull request stays in its footer, as on any agent. */}
+          {ticketId !== undefined && (
+            <>
+              <span className="hybrid-tile-about-id" data-testid="ticket-id">
+                {ticketId}
+              </span>
+              {about !== undefined && ' · '}
+            </>
+          )}
+          {about ?? (ticketId === undefined ? 'No task yet' : undefined)}
         </span>
       )}
       {/* Not while it starts: the tile's room is its name, its step and its footer; its lead's crew count or the board's zone says whose it is. */}
@@ -660,6 +688,7 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
               className="hybrid-tile-mark"
               data-testid="tile-mark"
               data-tile-state={tState}
+              data-ask={rolled?.dot === false ? rolled.wordKind : undefined}
               data-warn={pillFace.state === 'rate-limited' || undefined}
               title={look.statePill || receiving ? undefined : stateTime === undefined ? STATE_LABELS[state] : `${STATE_LABELS[state]} ${sinceLabel(tileSince(agent, tState), stateNow)}`}
             >
@@ -668,21 +697,31 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
                 pill
               ) : (
                 <>
-                  <span className="hybrid-tile-word" data-testid="tile-state-word">{TILE_STATE_WORDS[tState]}</span>
+                  {rolled?.dot === true && <span className="hybrid-tile-dot" data-testid="tile-dot" aria-hidden />}
+                  <span className="hybrid-tile-word" data-testid="tile-state-word">{rolled?.word ?? TILE_STATE_WORDS[tState]}</span>
                   {stateTime !== undefined && <span className="hybrid-tile-when" data-testid="tile-when">· {stateTime}</span>}
                 </>
               )}
             </span>
             {!sending && !receiving && continuesOnCredits(agent) && <ContinueButton onContinue={() => continueOnCredits(agent.sessionId)} />}
-            {oneButton !== undefined && (
+            {rolled?.button !== undefined && (
+              <TicketOneButton
+                button={rolled.button}
+                onOpen={() => openAgent(asker)}
+                onMerge={() => rolled.pullRequest !== undefined && openPullRequest(rolled.pullRequest.owner, rolled.pullRequest.pr)}
+                onWake={() => resumeAgent(asker.sessionId)}
+                onRead={() => readWatches(agent.sessionId)}
+              />
+            )}
+            {rolled === undefined && mark.button !== undefined && (
               <OneTileButton
-                button={oneButton}
-                onOpen={() => openAgent(agent)}
+                button={mark.button}
+                onOpen={() => openAgent(asker)}
                 onReview={() => {
                   const pr = reviewablePr(agent);
                   if (pr !== undefined) openPullRequest(agent, pr);
                 }}
-                onWake={() => resumeAgent(agent.sessionId)}
+                onWake={() => resumeAgent(asker.sessionId)}
               />
             )}
           </span>

@@ -37,18 +37,17 @@ test("with Board picked in Settings a ticket's tile rests as its card and a doub
     const opened = window.locator(`[data-testid="expanded-tile"][data-session-id="${chat.sessionId}"]`);
     const card = window.locator(`[data-ticket-tile][data-session-id="${chat.sessionId}"]`);
     const board = window.getByTestId('ticket-board');
-    const pressed = (on: typeof card) => on.getByTestId('ticket-view-switch').locator('[aria-pressed="true"]');
     const menuRow = async (on: typeof card, name: string) => {
       await on.getByRole('button', { name: 'More' }).click();
       await window.getByRole('menuitem', { name }).click();
     };
     const views = () => window.evaluate(() => globalThis.window.agentBoard.view.get('ticketTiles.views'));
 
-    // Terminal by default; Board in Settings puts it back to its card, the board icon pressed.
+    // Terminal by default; Board in Settings puts it back to its tile at rest.
     await expect(opened).toHaveAttribute('data-ticket-open', 'terminal', { timeout: 30_000 });
     await openAs(window, 'Board');
     await expect(opened).toBeHidden();
-    await expect(pressed(card)).toHaveAttribute('data-view', 'board');
+    await expect(card).toBeVisible();
 
     // A double-click takes the user into its board; Esc comes back out to its card.
     await card.getByTestId('tile-description').dblclick();
@@ -78,12 +77,12 @@ test("with Board picked in Settings a ticket's tile rests as its card and a doub
     await expect(board).toBeHidden();
     await expect(opened).toBeHidden();
     await openAs(window, 'Card');
-    await expect(pressed(card)).toHaveAttribute('data-view', 'board');
+    await expect.poll(views).toEqual({ [nodeId]: 'board' });
 
-    // Its header switch does the same: the card icon puts it back, the board icon takes the user in again.
-    await card.getByTestId('ticket-view-switch').getByRole('button', { name: 'Show as a card' }).click();
-    await expect(pressed(card)).toHaveAttribute('data-view', 'card');
-    await card.getByTestId('ticket-view-switch').getByRole('button', { name: 'Show as a board' }).click();
+    // Its ⋯ menu at rest does the same: Show as a card puts it back, Show as a board takes the user in again.
+    await menuRow(card, 'Show as a card');
+    await expect.poll(views).toEqual({ [nodeId]: 'card' });
+    await menuRow(card, 'Show as a board');
     await expect(board).toBeVisible();
     await expect.poll(views).toEqual({ [nodeId]: 'board' });
   } finally {
@@ -92,7 +91,7 @@ test("with Board picked in Settings a ticket's tile rests as its card and a doub
   }
 });
 
-test("in the board view, the tile's Answer button opens the chat that asks, not the ticket's board", async () => {
+test("in the board view, the tile's one button opens the chat that asks, not the ticket's board", async () => {
   // A question put through the question tool needs the user whatever the needs-you setting; one in plain words at the end
   // of a turn only does when that setting counts finished turns.
   const { repo, env } = scratch('ask-questions');
@@ -108,7 +107,8 @@ test("in the board view, the tile's Answer button opens the chat that asks, not 
     const chat = await start(window, { zoneId: zone.id, prompt: 'Watch settings for a zone', ticketChat: true });
     const card = window.locator(`[data-ticket-tile][data-session-id="${chat.sessionId}"]`);
     const answer = card.getByTestId('tile-act');
-    await expect(answer).toHaveText(/Answer/, { timeout: 30_000 });
+    // Its own ask is an agent tile's: Open, as on any agent that asks. A helper's ask says Answer.
+    await expect(answer).toHaveText(/Open/, { timeout: 30_000 });
     await answer.click();
     await expect(sessionWindow(window)).toHaveAttribute('data-session-id', chat.sessionId);
     await expect(window.getByTestId('ticket-board')).toBeHidden();

@@ -684,8 +684,6 @@
    */
   --shadow-tile: 0 1px 0 rgb(40 32 16 / 12%), 0 3px 0 -1px rgb(40 32 16 / 7%), 0 6px 0 -3px rgb(40 32 16 / 4%);
   --shadow-raised: var(--shadow-tile); /* the inbox, the dock */
-  /* Under a ticket's tile, the edges of the two cards it holds: unblurred, as a tile's shadow is. */
-  --shadow-ticket-stack: 0 12px 0 -8px var(--raised), 0 12px 0 -7px var(--border), 0 24px 0 -16px var(--raised), 0 24px 0 -15px var(--border);
   --shadow-control: 0 1px 0 rgb(43 42 39 / 7%), 0 1px 2px rgb(43 42 39 / 5%); /* a button */
   --shadow-primary: 0 1px 0 rgb(30 50 140 / 25%), inset 0 1px 0 rgb(255 255 255 / 18%);
   --shadow-input: inset 0 1px 1px rgb(43 42 39 / 4%);

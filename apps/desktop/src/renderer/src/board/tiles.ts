@@ -40,14 +40,14 @@ const TILE_PREFIXES: Record<TileKind, string> = { agent: AGENT_NODE_PREFIX, shel
  */
 export const tileNodeId = (kind: TileKind, id: string): string => tileSizeKey(kind, id);
 
-/** What decides whether a ticket's chat draws as its ticket's card. */
+/** What decides whether a ticket's chat draws as its ticket's tile, holding its helpers. */
 type CardFields = Pick<Agent, 'startup' | 'undelivered' | 'trustFolder' | 'untypedPrompt' | 'unsent' | 'hooksSilent'>;
 
 /**
- * Whether a ticket's chat draws as its ticket's card: not while it starts, or while a row waits on the user's click to
- * reach it (what it was sent, its trust screen, its first prompt, what was typed and never sent, silent hooks). Its usual
- * tile has the buttons for those, and its helpers have tiles of their own meanwhile; the card has room for one ask only.
- * A chat a restart stopped keeps its card, which asks to resume it.
+ * Whether a ticket's chat draws as its ticket's tile, an agent tile that holds its helpers and takes their asks: not while
+ * it starts, or while a row waits on the user's click to reach it (what it was sent, its trust screen, its first prompt,
+ * what was typed and never sent, silent hooks). Those rows take its tile's body, so its helpers have tiles of their own
+ * meanwhile, where their asks show. A chat a restart stopped stays its ticket's tile, which asks to resume it.
  */
 export function drawsAsTicket(chat: CardFields): boolean {
   return chat.startup === null && chat.undelivered.length === 0 && chat.trustFolder === null && chat.untypedPrompt === null && chat.unsent === null && !chat.hooksSilent;
@@ -55,7 +55,7 @@ export function drawsAsTicket(chat: CardFields): boolean {
 
 type HeldFields = Pick<Agent, 'sessionId' | 'zoneId' | 'ticket' | 'ticketChat'> & CardFields;
 
-/** Whether its ticket's card holds `agent`: a helper in its chat's zone (`heldByTicket`), while that chat draws as the card. */
+/** Whether its ticket's tile holds `agent`: a helper in its chat's zone (`heldByTicket`), while that chat draws as its ticket's tile. */
 export function heldInCard(agent: HeldFields, agents: readonly HeldFields[]): boolean {
   if (agent.ticket === null || !heldByTicket(agent, agents)) return false;
   const chat = agents.find((each) => each.sessionId === agent.ticket);
@@ -63,7 +63,7 @@ export function heldInCard(agent: HeldFields, agents: readonly HeldFields[]): bo
 }
 
 /**
- * The session whose tile draws `sessionId`'s agent: its ticket's chat, for a helper its ticket's card holds, which has
+ * The session whose tile draws `sessionId`'s agent: its ticket's chat, for a helper its ticket's tile holds, which has
  * no tile of its own; else its own.
  */
 export function drawnIn(agents: readonly HeldFields[], sessionId: string): string {
@@ -201,6 +201,11 @@ export function withTiles(
   unfolded: ReadonlySet<string> = new Set(),
   /** The agents being started: each has a tile until its agent is listed. */
   starts: readonly ShownStart[] = [],
+  /**
+   * The tiles that take an expanded tile's room (`expandedRoom`): open, hidden by their session window, or pinned. A
+   * tile with no place is slotted clear of each at that size, as the daemon slots it.
+   */
+  room: ExpandedTiles = expanded,
 ): BoardNode[] {
   const isTile = (node: Node) => isSessionTile(node) || isStartTile(node);
   const known = new Map(nodes.filter(isTile).map((node) => [node.id, node]));
@@ -221,8 +226,8 @@ export function withTiles(
   // An agent's or shell tile's tabs are shells of its session window, not tiles of their own; an agent's tile shows its.
   const tabs = new Map<string, Shell[]>();
   for (const shell of shells) if (shell.owner?.kind === 'agent') tabs.set(shell.owner.id, [...(tabs.get(shell.owner.id) ?? []), shell]);
-  // A ticket's helpers in its chat's zone are drawn inside the chat's card, as icons, not as tiles of their own; while
-  // the chat draws as its usual tile instead, they keep theirs.
+  // A ticket's helpers in its chat's zone have no tiles of their own: the chat's tile holds them, and shows the ask of any
+  // that needs the user; while a row the user must click takes the chat's tile, they keep theirs.
   const helpers = new Map<string, Agent[]>();
   for (const agent of agents) if (agent.ticketChat && drawsAsTicket(agent)) helpers.set(agent.sessionId, []);
   const held = new Set(agents.filter((agent) => heldInCard(agent, agents)).map((agent) => agent.sessionId));
@@ -308,10 +313,15 @@ export function withTiles(
     return before?.resizing === true && expandedRank(expanded, id) === undefined ? { width: before.width ?? saved.width, height: before.height ?? saved.height } : saved;
   };
   const rect = (entry: Placed) => ({ ...entry.position!, ...sizeOf(entry.id) });
-  /** What a placed tile takes for a new crew member: its size as drawn (expanded or not), and the room above it. */
+  /** What a placed tile takes for a tile with no place: its expanded room if it has one (`room`), else its size as drawn. */
+  const roomOf = (id: string) => {
+    const rank = expandedRank(room, id);
+    return rank === undefined ? sizeOf(id) : room[rank]!;
+  };
+  const slotRect = (entry: Placed) => ({ ...entry.position!, ...roomOf(entry.id) });
+  /** What a placed tile takes for a new crew member: its room, and the room above it. */
   const footprintOf = (entry: Placed) => {
-    const rank = expandedRank(expanded, entry.id);
-    const size = rank === undefined ? sizeOf(entry.id) : expanded[rank]!;
+    const size = roomOf(entry.id);
     return { x: entry.position!.x, y: entry.position!.y - PERCH_ROOM, width: size.width, height: size.height + PERCH_ROOM };
   };
   // After a tile with no place is slotted: a dragged chip is already where it is drawn.
@@ -330,7 +340,7 @@ export function withTiles(
     place: (entry, spot) => (entry.position = spot),
     agentOf: (entry) => entry.data.agent?.sessionId,
     orchestratorOf: (entry) => entry.data.from?.sessionId,
-    rect,
+    rect: slotRect,
     footprint: footprintOf,
     zoneWidth: (zoneId) => layoutOf(zones.get(zoneId)!).width,
     zoneGrid: (zoneId) => zoneGrid(zones.get(zoneId)!.data.zone.spacing),

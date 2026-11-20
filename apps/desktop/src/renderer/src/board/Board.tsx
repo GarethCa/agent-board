@@ -183,7 +183,7 @@ import { useSnapping } from './editing/use-snapping';
 import { keptOnBoard as keptOnBoardOf, tidySize, VIEW_FOLLOW_DELAY_MS } from './expanded';
 import { expandedTrace, FIT_NOTED_MS } from './expanded-trace';
 import { tileOpenAction } from './click-opens';
-import { focusTerminalIn, pulseTile } from './tile-attention';
+import { focusTile, pulseTile } from './tile-attention';
 import { crewFrames, crewMoves, frameableTiles, landingRects, withCrewFollowing } from './crews';
 import { restoreViewSettings, setViewSetting, useViewSettings } from './view-settings';
 import { ConnectionCountsContext, drawnEdges, edgeCounts, nextConnectionsView, shownEdges, typingInTile } from './connections-view';
@@ -735,7 +735,7 @@ function BoardView() {
   /** `nodes` with the session tiles laid out from the agents, shells and external sessions, moves in flight applied. */
   const laidOut = useCallback(
     (nodes: BoardNode[]) =>
-      withTiles(nodes, agentsRef.current, shellsRef.current ?? [], externalsRef.current, pendingPlaces.current, expandedRef.current, tileSizesRef.current, new Set(unfoldedRef.current), startsRef.current),
+      withTiles(nodes, agentsRef.current, shellsRef.current ?? [], externalsRef.current, pendingPlaces.current, expandedRef.current, tileSizesRef.current, new Set(unfoldedRef.current), startsRef.current, roomRef.current),
     [],
   );
   const relayout = useCallback(() => setNodes(laidOut), [setNodes, laidOut]);
@@ -807,6 +807,7 @@ function BoardView() {
     shown,
     shownRef,
     expandedRef,
+    roomRef,
     tileSizesRef,
     unfoldedRef,
     pinnedRef,
@@ -2262,8 +2263,11 @@ function BoardView() {
     [moveTile],
   );
 
-  /** What a tile takes up in a tidy: an expanded tile its expanded size, so the rest are laid out clear of it. */
-  const tidySizeOf = useCallback((node: TileNodeType) => tidySize(expandedRef.current, node.id, compactSizeOf(node)), [expandedRef]);
+  /**
+   * What a tile takes up in a tidy: an expanded tile its expanded size, so the rest are laid out clear of it; one its
+   * session window has, or pinned expanded, too, as it opens at that size again.
+   */
+  const tidySizeOf = useCallback((node: TileNodeType) => tidySize(roomRef.current, node.id, compactSizeOf(node)), [roomRef]);
 
   /**
    * Tidies the zone: its tiles in rows, in reading order, round its notes and cards, and its height fitted to
@@ -3246,6 +3250,9 @@ function BoardView() {
         else if (agent !== undefined) openAgent(agent);
         return shell !== undefined || agent !== undefined;
       },
+      selectNode(nodeId) {
+        if (getInternalNode(nodeId) !== undefined) selectOnly(new Set([nodeId]));
+      },
       showItem(itemId) {
         const nodeId = `${ITEM_NODE_PREFIX}${itemId}`;
         const node = getInternalNode(nodeId);
@@ -3273,7 +3280,7 @@ function BoardView() {
         selectOnly(new Set([nodeId]));
         bringIntoView({ ...node.internals.positionAbsolute, ...sizeOfNode(node) });
       },
-      showTile({ kind, id: shown }) {
+      showTile({ kind, id: shown }, options) {
         const level = kind === 'agent' ? levelOf(shown, agentsRef.current, levelRef.current, zoomsIn) : null;
         if (level !== null) {
           showOnTicket(level, memberNodeId(shown));
@@ -3284,15 +3291,19 @@ function BoardView() {
         const nodeId = tileNodeId(kind, id);
         if (showFoldedHome(nodeId, flyTo)) return true;
         const folded = kind === 'agent' ? unfoldStack(id) : undefined;
+        const drawEye = (flightMs: number) => {
+          pulseTile(nodeId, flightMs);
+          if (options?.focus === true) focusTile(nodeId, flightMs);
+        };
         if (folded !== undefined) {
           selectOnly(new Set([nodeId]));
-          pulseTile(nodeId, flyTo(folded));
+          drawEye(flyTo(folded));
           return true;
         }
         const node = getInternalNode(nodeId);
         if (node === undefined) return false;
         selectOnly(new Set([nodeId]));
-        pulseTile(nodeId, flyTo({ ...node.internals.positionAbsolute, ...sizeOfNode(node) }));
+        drawEye(flyTo({ ...node.internals.positionAbsolute, ...sizeOfNode(node) }));
         return true;
       },
       openTile({ kind, id }) {
@@ -3330,20 +3341,11 @@ function BoardView() {
       opensBeside(surface) {
         return boardOpening(surface, switcherBoard(true), poppedOut).opens === 'window';
       },
-      switchExpanded(fromNodeId, { kind, id }) {
-        const nodeId = tileNodeId(kind, id);
-        if (nodesRef.current.every((known) => known.id !== nodeId)) return false;
-        collapse(fromNodeId, 'switchExpanded');
-        tileActions.expand(nodeId);
-        focusTerminalIn(nodeId);
-        return true;
-      },
-      showZone(zoneId, collapseNodeId) {
+      showZone(zoneId) {
         // Where it is now: its node may have been moved or resized since the daemon sent it.
         const node = getNodes().filter(isZone).find((known) => known.id === zoneId);
         if (node === undefined) return false;
         toMainBoard();
-        if (collapseNodeId !== undefined) collapse(collapseNodeId, 'showZone');
         bringIntoView(layoutOf(node));
         setCurrentZone(zoneId);
         return true;

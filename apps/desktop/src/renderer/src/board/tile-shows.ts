@@ -1,7 +1,7 @@
 // What an agent's tile shows at rest. The quiet tile says what the agent is doing and since when, and little else: the
 // rest is on hover, in its hover card, or in its menu. Warnings always stay on the tile. Pure, so the rules are
 // unit-tested; HybridTile and CalmTile draw them.
-import type { Agent, AgentState } from '@agent-board/daemon/protocol';
+import type { Agent, AgentState, TileChange } from '@agent-board/daemon/protocol';
 import { branchLine } from './AgentSetup';
 import { whenLabel } from './schedule';
 
@@ -203,5 +203,17 @@ export function tileDetails(
   if (!shows.setBy && agent.status?.setBy != null) lines.push(`Status set by ${agent.status.setBy}`);
   if (!shows.trusted && agent.trustedByZone) lines.push("Trusted by its zone's setting: Claude's trust screen was answered by that setting, not by you");
   if (!shows.chips) lines.push(...chips);
+  return lines;
+}
+
+/**
+ * Its tile's history, for its hover card: who last renamed it and when, and what it was called before; and who last set
+ * what it is for, when another did (an agent setting its own is routine). Never on the tile's face.
+ */
+export function tileHistory(agent: Pick<Agent, 'renamed' | 'described'>, now: number): string[] {
+  const by = (change: TileChange) => `by ${change.by ?? 'itself'}, ${whenLabel(new Date(change.at), new Date(now))}`;
+  const lines: string[] = [];
+  if (agent.renamed != null) lines.push(`Renamed ${by(agent.renamed)}${agent.renamed.from === null ? '' : ` (was ${agent.renamed.from})`}`);
+  if (agent.described != null && agent.described.by !== null) lines.push(`Description set ${by(agent.described)}`);
   return lines;
 }
