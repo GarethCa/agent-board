@@ -10,6 +10,7 @@ import { chordPressed, chordText, type Chord } from '../../keys/registry';
 import { isTyping } from '../../keys/typing';
 import { renderMarkdown } from './StickyNode';
 import { ScopeChip } from './ListCardParts';
+import { MemoryReaderList } from './MemoryCard';
 import { agoText, ageText, entryBytes, entryLine, entryName, isStale, lastReaderText, readersOf, readersText, sizeText, staleCount, whoText } from './memory-card';
 import {
   docBlocks,
@@ -287,6 +288,7 @@ function FullBody({ title, scope, zoneColor, entries, readers, now, onChange, hi
         </span>
       </div>
       <div className="memory-full-body">
+        <div className="memory-full-side">
         <ul ref={list} className="memory-full-list" aria-label="Entries" onKeyDown={listKeys}>
           {grouped ? (
             <>
@@ -298,6 +300,13 @@ function FullBody({ title, scope, zoneColor, entries, readers, now, onChange, hi
           )}
           {ordered.length === 0 && <li className="memory-full-none">{entries.length === 0 ? 'Nothing remembered yet' : filter.search === '' ? 'Nothing here' : `Nothing matches “${filter.search}”`}</li>}
         </ul>
+        {readers !== undefined && readers.memory.count > 0 && (
+          <section className="memory-full-who" data-testid="memory-full-readers">
+            <span className="ui-section-label">{readersText(readers.memory)}</span>
+            <MemoryReaderList readers={readers.list} count={readers.memory.count} now={now} />
+          </section>
+        )}
+        </div>
         <div className="memory-full-detail">
           {adding !== undefined ? (
             <NewEntry kind={adding} entries={entries} onChange={onChange} onAdded={added} onCancel={() => setAdding(undefined)} onUnsaved={onUnsaved} />

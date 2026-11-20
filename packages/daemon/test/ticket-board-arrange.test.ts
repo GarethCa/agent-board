@@ -144,7 +144,7 @@ describe("arranging a ticket's board", () => {
 
     const again = await cli(setup, setup.chat.token, 'arrange', `agent:${ticket}`);
     expect(again.out).toMatch(/was arranged already: nothing moved/);
-    expect((await cli(setup, setup.chat.token, 'arrange', 'ticket', '--by', 'role')).err).toMatch(/takes no --by, --layout or --auto/);
+    expect((await cli(setup, setup.chat.token, 'arrange', 'ticket', '--by', 'role')).err).toMatch(/takes no --by, --layout, --auto, --place, --once or --all/);
   });
 });
 

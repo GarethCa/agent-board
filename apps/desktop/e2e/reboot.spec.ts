@@ -80,13 +80,17 @@ test('the board looks the same after the app and daemon are killed hard, and res
     await expect(banner(again)).toHaveAttribute('data-count', '2');
     // In the shown window, not over its title bar.
     await expect(sessionWindow(again).getByTestId('restart-banner')).toBeVisible();
-    await expect(banner(again)).toContainText(/^2 sessions stopped when your (Mac|computer) restarted/);
+    await expect(banner(again)).toContainText(/^2 sessions stopped when your (Mac|computer) restarted · none was working/);
     const stopped = await again.evaluate(() => self.agentBoard.agents.list());
     expect(stopped.map((agent: Agent) => agent.endedAt)).toEqual([expect.any(String)]);
 
-    // Resume all: the agent carries on its conversation, and the shell starts again where it was.
-    await banner(again).getByRole('button', { name: 'Resume all' }).click();
+    // Wake all: the shell starts again where it was; the agent, waiting on a question, not working, stays asleep.
+    await banner(again).getByRole('button', { name: 'Wake all' }).click();
     await expect(banner(again)).toBeHidden();
+    await expect(tile(again)).toHaveAttribute('data-state', 'stopped-by-restart');
+    await expect(tile(again)).toHaveClass(/tile-frosted/);
+    // Its own Wake, in its window, carries on its conversation.
+    await sessionWindow(again).getByTestId('agent-blocked-banner').getByRole('button', { name: 'Wake' }).click();
     await expect(tile(again)).not.toHaveAttribute('data-state', 'stopped-by-restart');
     await expect(screen(again)).toContainText('Which database should I use');
     await again.getByTestId('session-terminal').click();
@@ -110,7 +114,7 @@ test('the board looks the same after the app and daemon are killed hard, and res
   }
 });
 
-test('Resume all after a daemon restart tells the agent it cut off mid-turn to carry on, and leaves an idle one idle', async () => {
+test('Wake all after a daemon restart wakes only the agent that was working, told to carry on, and leaves an idle one asleep', async () => {
   const { dir, repo, env } = scratch('output');
   const dataDir = tempDataDir();
   const apps: ElectronApplication[] = [];
@@ -141,14 +145,19 @@ test('Resume all after a daemon restart tells the agent it cut off mid-turn to c
     const again = second.window;
     await expect(busy(again)).toHaveAttribute('data-state', 'stopped-by-restart');
     await expect(quiet(again)).toHaveAttribute('data-state', 'stopped-by-restart');
-    await banner(again).getByRole('button', { name: 'Resume all' }).click();
+    await expect(banner(again)).toContainText('· 1 was working');
+    await banner(again).getByRole('button', { name: 'Wake all' }).click();
     await expect(banner(again)).toBeHidden();
 
-    // The idle one waits at its prompt, saying nothing of the restart; the cut-off one carries on, told to.
-    await expect(quiet(again)).not.toContainText('Relaunched');
+    // The cut-off one carries on; the idle one stays asleep, frosted, with its own Wake.
+    await expect(busy(again)).not.toHaveAttribute('data-state', 'stopped-by-restart');
+    await expect(quiet(again)).toHaveAttribute('data-state', 'stopped-by-restart');
+    await expect(quiet(again)).toHaveClass(/tile-frosted/);
+    await quiet(again).getByTestId('wake').click();
+    // The cut-off one was told to carry on.
     await busy(again).dblclick();
     await expect(screen(again)).toContainText('Done: The app restarted; carry on from where you were..');
-    // At its prompt (waiting once Claude's idle prompt fires), with no turn begun.
+    // At its prompt (waiting once Claude's idle prompt fires), with no turn begun and nothing said of the restart.
     await expect(quiet(again)).toHaveAttribute('data-state', /^(idle|waiting)$/);
     await expect(quiet(again)).not.toContainText('Relaunched');
     await expect(quiet(again).locator('.hybrid-tile-notice')).toHaveCount(0);
@@ -159,7 +168,7 @@ test('Resume all after a daemon restart tells the agent it cut off mid-turn to c
   }
 });
 
-test('Dismiss puts the banner away for good, and each stopped tile keeps its own Resume', async () => {
+test('Dismiss puts the banner away for good, and each stopped tile keeps its own Wake', async () => {
   const { dir, repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
   const apps: ElectronApplication[] = [];
@@ -183,7 +192,7 @@ test('Dismiss puts the banner away for good, and each stopped tile keeps its own
     apps.push(third.app);
     await expect(tile(third.window)).toHaveAttribute('data-state', 'stopped-by-restart');
     await expect(banner(third.window)).toBeHidden();
-    await tile(third.window).getByTestId('resume').click();
+    await tile(third.window).getByTestId('wake').click();
     await expect(tile(third.window)).not.toHaveAttribute('data-state', 'stopped-by-restart');
   } finally {
     for (const app of apps) await app.close().catch(() => {});
@@ -214,7 +223,7 @@ async function stoppedAgent(dir: string, repo: string, env: Record<string, strin
   return again.window;
 }
 
-test("a stopped agent's tile says a restart stopped it, and Resume agent in its ⋯ menu carries it on", async () => {
+test("a stopped agent's tile says a restart stopped it, and Wake in its ⋯ menu carries it on", async () => {
   const apps: ElectronApplication[] = [];
   const dataDir = tempDataDir();
   const { dir, repo, env } = scratch('waiting');
@@ -223,11 +232,11 @@ test("a stopped agent's tile says a restart stopped it, and Resume agent in its 
     await expect(tile(window)).toHaveAttribute('data-state', 'stopped-by-restart');
     const now = tile(window).getByTestId('tile-description');
     if (runDesign() !== 'simplified') {
-      await expect(now).toHaveText('Stopped by a restart · Resume carries it on');
-      await expect(tile(window).getByTestId('tile-state-word')).toHaveText('Needs you');
+      await expect(now).toHaveText('Stopped by a restart · just now');
+      await expect(tile(window).getByTestId('tile-state-word')).toHaveText('Stopped');
     }
-    // Under Classic, Resume leads the menu of an agent a restart stopped; under Simplified it is in Run.
-    await tileAction(tile(window), 'Resume agent', runDesign() === 'simplified' ? 'Run' : undefined);
+    // Wake leads the menu of an agent a restart stopped, as it does a paused one's.
+    await tileAction(tile(window), 'Wake');
     await expect(tile(window)).not.toHaveAttribute('data-state', 'stopped-by-restart');
     await expect(now.filter({ hasText: 'Stopped by a restart' })).toHaveCount(0);
   } finally {
@@ -237,7 +246,7 @@ test("a stopped agent's tile says a restart stopped it, and Resume agent in its 
   }
 });
 
-test("a stopped agent's banner says why and offers Resume, which carries it on", async () => {
+test("a stopped agent's banner says why and offers Wake, which carries it on", async () => {
   const apps: ElectronApplication[] = [];
   const dataDir = tempDataDir();
   const { dir, repo, env } = scratch('waiting');
@@ -250,7 +259,7 @@ test("a stopped agent's banner says why and offers Resume, which carries it on",
     await view.getByRole('button', { name: 'Chat' }).click();
     await expect(composer).toBeDisabled();
     await expect(composer).toHaveAttribute('placeholder', 'Stopped by a restart');
-    await sessionWindow(window).getByRole('button', { name: 'Resume', exact: true }).click();
+    await sessionWindow(window).getByTestId('agent-blocked-banner').getByRole('button', { name: 'Wake' }).click();
     await expect(tile(window)).not.toHaveAttribute('data-state', 'stopped-by-restart');
     await expect(composer).toBeEnabled();
   } finally {
@@ -260,7 +269,7 @@ test("a stopped agent's banner says why and offers Resume, which carries it on",
   }
 });
 
-test('a Resume the daemon refuses shows its reason in the banner', async () => {
+test('a Wake the daemon refuses shows its reason in the banner', async () => {
   const apps: ElectronApplication[] = [];
   const dataDir = tempDataDir();
   const { dir, repo, env } = scratch('waiting');
@@ -268,7 +277,7 @@ test('a Resume the daemon refuses shows its reason in the banner', async () => {
     const window = await stoppedAgentWindow(dir, repo, env, dataDir, apps);
     // Its worktree is gone, so there is nothing to resume in.
     rmSync(join(dir, 'worktrees'), { recursive: true, force: true });
-    await sessionWindow(window).getByRole('button', { name: 'Resume', exact: true }).click();
+    await sessionWindow(window).getByTestId('agent-blocked-banner').getByRole('button', { name: 'Wake' }).click();
     await expect(sessionWindow(window).getByTestId('agent-blocked-banner')).toContainText("can't be resumed");
     await expect(tile(window)).toHaveAttribute('data-state', 'stopped-by-restart');
   } finally {

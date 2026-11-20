@@ -42,7 +42,7 @@ import { AGENT_TILE_SIZE, freeSpotFor } from './board-layout.ts';
 import { spotOnTicketBoard } from './ticket-board.ts';
 import { ownTicketBoard } from './ticket-tiles.ts';
 
-type ClockMethods = Pick<DaemonMethods, 'clock.list' | 'clock.add' | 'agent.setSchedule'>;
+type ClockMethods = Pick<DaemonMethods, 'clock.list' | 'clock.runNow' | 'clock.add' | 'agent.setSchedule'>;
 type OrchestratorClockMethods = Pick<DaemonMethods, 'orchestrator.addClock' | 'orchestrator.removeClock'>;
 type AgentClockMethods = Pick<DaemonMethods, 'clock.self' | 'clock.addSelf'>;
 
@@ -592,6 +592,12 @@ export function createClockHost(options: ClockHostOptions): ClockHost {
     handlers<Context>(): RpcHandlers<ClockMethods, Context> {
       return {
         'clock.list': () => schedules.statuses(),
+        'clock.runNow': (params) => {
+          const id = stringParam(paramsObject(params), 'id');
+          const status = schedules.runNow(id);
+          if (status === undefined) throw invalidParams(`no clock ${id}`);
+          return status;
+        },
         'clock.add': (params) => {
           const p = paramsObject(params);
           const data = p.data === undefined ? {} : p.data;

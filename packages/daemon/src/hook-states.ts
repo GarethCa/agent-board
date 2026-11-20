@@ -1,7 +1,7 @@
 import { systemClock, type Clock } from './clock.ts';
 import { compactingAfterHook, isOwnDialog, lastMessageAfterHook } from './claude-state.ts';
 import { stateAfterHook } from './harness-state.ts';
-import { promptCounts, stateWithPrompts, type HookReply, type PermissionHolds } from './permissions.ts';
+import { onlyAPersonAllows, promptCounts, stateWithPrompts, type HookReply, type PermissionHolds } from './permissions.ts';
 import { STILL_WORKING, WAITING_FOR_YOU, type AgentState, type Harness, type SessionState, type Subagent } from './protocol.ts';
 import { subagentsAfterHook, type SubagentStore } from './subagents.ts';
 import type { PromptNow } from './deliveries.ts';
@@ -415,11 +415,18 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
       const settled = permissions.afterHook(sessionId, payload);
       // Claude asks in its terminal while the agent's own request is held; a subagent's dialog may wait on its hook first.
       const asksInTerminal = row.harness === 'claude' && payload.agent_id === undefined;
-      const reply = payload.hook_event_name === 'PermissionRequest' ? permissions.hold(sessionId, payload, signal, asksInTerminal) : undefined;
+      // A request only a person may allow is no prompt of the board's: holding it would keep Claude from its own dialog
+      // until its tool timeout denies the call, with the agent flagged for nothing the board can do. It goes at once, and
+      // leaves the agent as it was; a dialog Claude then draws flags it by its own notification.
+      const personOnly = asksInTerminal && onlyAPersonAllows(payload);
+      if (personOnly) options.log?.(`agent ${sessionId}: Claude asks a person, not the board, to allow ${String(payload.tool_name)} (no suggestions came with its request)`);
+      const held = payload.hook_event_name === 'PermissionRequest' && !personOnly;
+      const reply = held ? permissions.hold(sessionId, payload, signal, asksInTerminal) : undefined;
       if (payload.hook_event_name === 'PermissionRequest') {
+        // A new ask, held or not: a permission notification after it is its dialog's, no late echo of an earlier one.
         permissionSettled.delete(sessionId);
         // Another prompt is a new ask, even when the state was already needs-permission.
-        options.unsee(sessionId);
+        if (held) options.unsee(sessionId);
       } else if (settled) permissionSettled.add(sessionId);
       // A permission notification landing after its prompt was settled would put the agent back to needs-permission with
       // nothing to answer, until some later hook.
@@ -454,7 +461,7 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
         payload.hook_event_name === 'SessionStart' &&
         row.state === 'idle' &&
         (typingFirst || (!prompted && (row.description === '' || payload.source === 'resume')));
-      const hooked = stateWithPrompts(awaitingTask ? 'idle' : stateAfterHook(row.harness, row.state, payload), { ...counts, settled });
+      const hooked = stateWithPrompts(awaitingTask ? 'idle' : personOnly ? row.state : stateAfterHook(row.harness, row.state, payload), { ...counts, settled });
       // A notification at its prompt (its idle prompt, word of another session) while a command it left runs says nothing
       // of you: it stays idle, so the command's end, before the harness takes up its result, never shows it waiting.
       const state = row.state === 'idle' && hooked === 'waiting' && !ownDialog && options.onCommand?.(sessionId) === true ? 'idle' : hooked;

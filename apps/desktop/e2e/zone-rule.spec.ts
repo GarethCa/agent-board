@@ -90,7 +90,7 @@ test('a zone on Lanes by ticket lays its agents out by the rule; a tile dragged 
     expect(Object.values(back).filter((place) => JSON.stringify(place) === JSON.stringify(back['Pick a cache']))).toHaveLength(1);
   } finally {
     await app.close();
-    removeDataDir(dataDir);
+    await removeDataDir(dataDir);
   }
 });
 
@@ -167,6 +167,6 @@ test("a zone on Spine leaves the user's own agents where they are, even on a Cle
     expect(at(tidied['Resize images'])).toEqual(at(laidOut['Pick a cache']));
   } finally {
     await app.close();
-    removeDataDir(dataDir);
+    await removeDataDir(dataDir);
   }
 });

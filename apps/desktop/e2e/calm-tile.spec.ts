@@ -1,15 +1,15 @@
 import { expect, type Locator, type Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
-import { agents, launch, spawnAgent, tile, TURN_MS } from './agent-helpers.ts';
+import { agents, launch, openSubmenu, spawnAgent, tile, tileAction, TURN_MS } from './agent-helpers.ts';
 import { test, browseForZone, pickFolderNext, removeDataDir, tempDataDir } from './launch.ts';
 import { scratch } from './scratch.ts';
 import { settledBox } from './board-helpers.ts';
 
-// An agent's tile under the Simplified design is a calm tile: its window controls along its top edge, shown while it
+// An agent's tile under the Simplified design is a calm tile: the same corner as every tile, Expand and ⋯, along its top edge, shown while it
 // needs the user and otherwise on hover or focus, one grey line, its status, and a filled button only while it needs
 // the user.
 
-const CONTROLS = ['Fold to a chip', 'Expand', 'Pop out', 'More', 'Close agent'];
+const CONTROLS = ['Expand', 'More'];
 
 const chip = (page: Page) => page.locator('[data-testid="agent-tile"][data-folded]');
 const filled = (card: Locator) => card.locator('[data-testid="tile-action"][data-prominent]');
@@ -45,12 +45,10 @@ test('an agent that needs permission shows its window controls at rest, inside t
     await controlsAtRest(card);
     await expect(filled(card)).toHaveCount(1);
     await expect(filled(card)).toHaveText('Review & allow');
-    // A live agent doesn't fold: only a closed one does.
-    await expect(card.getByRole('button', { name: 'Fold to a chip' })).toBeDisabled();
     // Its technical layer stays out until Show technical details adds it.
     await expect(card.getByTestId('tile-technical')).toBeHidden();
 
-    // At the least tile width, 200px, the pencil and all five controls still sit inside the tile, over the end of its name.
+    // At the least tile width, 200px, both still sit inside the tile, over the end of its name, and no other button joins them.
     await card.evaluate((element) => ((element as HTMLElement).style.width = '200px'));
     const inside = await card.evaluate((element) => {
       const edge = element.getBoundingClientRect();
@@ -59,7 +57,7 @@ test('an agent that needs permission shows its window controls at rest, inside t
         return box.left >= edge.left && box.right <= edge.right - 1 && box.width >= 24;
       });
     });
-    expect(inside).toEqual([true, true, true, true, true, true]);
+    expect(inside).toEqual([true, true]);
     await expect(card.locator('.hybrid-tile-name')).toBeVisible();
     await card.evaluate((element) => ((element as HTMLElement).style.width = ''));
 
@@ -77,7 +75,7 @@ test('an agent that needs permission shows its window controls at rest, inside t
   }
 });
 
-test('an agent whose last message asks fills Answer; Close asks before stopping it, and its closed tile has no filled button, shows its controls only on hover or focus, and folds to a chip, by Fold or Close, never deleted', async () => {
+test('an agent whose last message asks fills Answer; Stop session in ⋯ asks first, and its closed tile has no filled button, shows its controls only on hover or focus, and folds to a chip from ⋯, never deleted', async () => {
   const { dir, repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env, [], { design: 'simplified' });
@@ -92,8 +90,8 @@ test('an agent whose last message asks fills Answer; Close asks before stopping 
     await controlsAtRest(card);
     await expect(filled(card)).toHaveText('Answer');
 
-    // Close asks first; cancelled, the agent runs on.
-    await card.getByRole('button', { name: 'Close agent' }).click();
+    // Stop session asks first; cancelled, the agent runs on.
+    await tileAction(card, 'Stop session', 'Run');
     const ask = window.getByRole('alertdialog', { name: 'Stop agent?' });
     await expect(ask).toBeVisible();
     await ask.getByRole('button', { name: 'Cancel' }).click();
@@ -102,7 +100,7 @@ test('an agent whose last message asks fills Answer; Close asks before stopping 
     expect(agent!.endedAt).toBeNull();
 
     // Confirmed, it stops; once its session is closed it folds to a chip.
-    await card.getByRole('button', { name: 'Close agent' }).click();
+    await tileAction(card, 'Stop session', 'Run');
     await ask.getByRole('button', { name: 'Stop agent' }).click();
     await expect.poll(async () => (await agents(window))[0]!.endedAt).not.toBeNull();
     await window.evaluate(async (id) => {
@@ -115,7 +113,7 @@ test('an agent whose last message asks fills Answer; Close asks before stopping 
     }, agent!.sessionId);
     await expect(chip(window)).toHaveCount(1);
 
-    // Unfolded, it asks nothing more: no filled button, and its Fold control folds it again.
+    // Unfolded, it asks nothing more: no filled button, and Fold to a chip in ⋯ folds it again.
     await chip(window).click();
     await expect(chip(window)).toHaveCount(0);
     await expect(tile(window)).not.toHaveAttribute('data-status', 'needs-you');
@@ -136,14 +134,10 @@ test('an agent whose last message asks fills Answer; Close asks before stopping 
     await tile(window).getByRole('button', { name: 'Expand', exact: true }).focus();
     await expect(controls).toHaveCSS('opacity', '1');
     await tile(window).getByRole('button', { name: 'Expand', exact: true }).blur();
-    const fold = tile(window).getByRole('button', { name: 'Fold to a chip' });
-    await expect(fold).toBeEnabled();
-    await fold.click();
-    await expect(chip(window)).toHaveCount(1);
-
-    // Close on a closed agent folds it too: it never deletes.
-    await chip(window).click();
-    await tile(window).getByRole('button', { name: 'Close agent' }).click();
+    // This spec turns Simplified on itself, so its group is Arrange whatever design the run is under.
+    await tile(window).getByRole('button', { name: 'More' }).click();
+    await openSubmenu(window, 'Arrange');
+    await window.getByRole('menuitem', { name: 'Fold to a chip' }).click();
     await expect(chip(window)).toHaveCount(1);
     expect(await agents(window)).toHaveLength(1);
   } finally {

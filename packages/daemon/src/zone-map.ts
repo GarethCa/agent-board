@@ -266,6 +266,12 @@ function freeLine(map: ZoneMap, things: ReadonlyMap<string, ZoneMapThing>): stri
   return [`free  next lane → ${place} ${map.lanes.length + 1}`, ...finished.map((lane) => `${laneName(lane)} can fold (all done)`)].join(' · ');
 }
 
+/** Where an arrange places the zone's items, kind by kind (`ZoneMap.placed`): none, no line. */
+function placedLines(map: ZoneMap): string[] {
+  if (map.placed.length === 0) return [];
+  return [`items  ${map.placed.map((each) => `${each.count} ${each.kind} ${each.placement}`).join(' · ')}`];
+}
+
 /** A lane's name in a map: its issue, else its label. */
 const laneName = (lane: ZoneMapLane) => (lane.key.startsWith('issue:') ? lane.key.slice('issue:'.length) : lane.label);
 
@@ -300,6 +306,7 @@ export function laneTable(map: ZoneMap, zoneRef: string, ref: RefOf): string {
     ...rows.map(line),
     '',
     freeLine(map, things),
+    ...placedLines(map),
     lintLine(map, ref),
   ].join('\n');
 }

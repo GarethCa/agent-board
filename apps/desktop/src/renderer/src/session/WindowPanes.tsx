@@ -140,21 +140,23 @@ export function PaneStrip({
       tabs={pane.surfaces.map(stripTab)}
       active={pane.active.key}
       focused={focused}
-      here={here}
       panelId={panelId}
       onSelect={panes.select}
       onClose={panes.close}
-      onNewShell={() => panes.newTab(pane.id)}
-      onNewShellAt={() => panes.newTabAt(pane.id)}
-      onRunScript={(script) => panes.newTab(pane.id, { script })}
-      scripts={panes.scripts}
-      sessions={panes.sessionChoices.map((choice) => ({ label: choice.label, onSelect: () => panes.showSession(pane.id, choice.surface) }))}
-      pullRequests={panes.pullRequestChoices.map((choice) => ({ label: choice.label, onSelect: () => panes.open(choice.surface, pane.id) }))}
-      onOpenTodo={panes.todoChoice && (() => panes.todoChoice && panes.open(panes.todoChoice, pane.id))}
-      onOpenWeb={(options) => panes.openBlankWeb(pane.id, options)}
-      named={panes.surfaces.length === 1}
-      shells={panes.holdsShells}
-      onSplit={() => panes.split('horizontal', pane.id)}
+      adds={{
+        here,
+        onNewShell: () => panes.newTab(pane.id),
+        onNewShellAt: () => panes.newTabAt(pane.id),
+        onRunScript: (script) => panes.newTab(pane.id, { script }),
+        scripts: panes.scripts,
+        sessions: panes.sessionChoices.map((choice) => ({ label: choice.label, onSelect: () => panes.showSession(pane.id, choice.surface) })),
+        pullRequests: panes.pullRequestChoices.map((choice) => ({ label: choice.label, onSelect: () => panes.open(choice.surface, pane.id) })),
+        onOpenTodo: panes.todoChoice && (() => panes.todoChoice && panes.open(panes.todoChoice, pane.id)),
+        onOpenWeb: (options) => panes.openBlankWeb(pane.id, options),
+        named: panes.surfaces.length === 1,
+        shells: panes.holdsShells,
+        onSplit: () => panes.split('horizontal', pane.id),
+      }}
       dragOf={(key) => {
         const surface = pane.surfaces.find((each) => each.key === key);
         return surface === undefined ? undefined : panes.dragOf(surface);

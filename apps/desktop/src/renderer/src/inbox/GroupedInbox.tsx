@@ -3,8 +3,8 @@ import { continuesOnCredits, planPending, pullRequestOfUrl, shortIssueId, waitsO
 import { InboxQuickAsk } from './InboxQuickAsk';
 import { StepsWaitBody } from './StepsWaitBody';
 import { githubBlocked, isOpenPullRequest, mergeGateBlocked } from '@agent-board/daemon/gate-rules';
-import { ArrowUp, CircleCheck, ClipboardList, Clock, Coins, Flag, FolderCheck, GitMerge, GitPullRequest, ListTodo, MessageCircleQuestion, MessageSquare, RotateCcw, SendHorizontal, ShieldQuestion, TriangleAlert, Undo2 } from 'lucide-react';
-import { Button, EmptyState, ErrorText, IconButton, Input, Kbd, useToast } from '../ui';
+import { ArrowUp, CircleCheck, ClipboardList, Clock, Coins, Flag, FolderCheck, GitMerge, GitPullRequest, ListTodo, MessageCircleQuestion, MessageSquare, Play, SendHorizontal, ShieldQuestion, TriangleAlert, Undo2 } from 'lucide-react';
+import { Button, EmptyState, ErrorText, IconButton, Input, Kbd, Truncate, useToast } from '../ui';
 import { useAction } from '../use-action';
 import { PermissionRow } from './PermissionRow';
 import { RemoveAskRow } from './RemoveAskRow';
@@ -260,7 +260,7 @@ function AskBody({ agent, ask, now, rowKeys }: { agent: Agent; ask: AgentAsk; no
         <div className="inbox-item-actions" role="group" aria-label={`Answers for ${agent.name}`}>
           {ask.options.map((option, index) => (
             <Button key={index} size="sm" className="inbox-ask-option" disabled={busy} aria-keyshortcuts={index < 9 ? String(index + 1) : undefined} onClick={() => answer({ option: index })}>
-              {option}
+              <Truncate text={option} />
               {index < 9 && <Kbd aria-hidden>{index + 1}</Kbd>}
             </Button>
           ))}
@@ -499,8 +499,8 @@ function ProblemBody({ agent, onOpen, onDismiss }: { agent: Agent; onOpen(): voi
       </p>
       <div className="inbox-item-actions">
         {agent.state === 'stopped-by-restart' ? (
-          <Button size="sm" variant="primary" icon={<RotateCcw />} loading={busy} aria-label={`Resume ${agent.name}`} onClick={() => run(() => window.agentBoard.agents.resume(agent.sessionId))}>
-            Resume
+          <Button size="sm" variant="primary" icon={<Play />} loading={busy} aria-label={`Wake ${agent.name}`} onClick={() => run(() => window.agentBoard.agents.resume(agent.sessionId))}>
+            Wake
           </Button>
         ) : (
           continuesOnCredits(agent) && (

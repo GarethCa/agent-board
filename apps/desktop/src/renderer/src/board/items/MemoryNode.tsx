@@ -6,9 +6,9 @@ import { pressed } from '../../keys/registry';
 import { isTyping } from '../../keys/typing';
 import { useNow } from '../../inbox/use-now';
 import { ItemActionsContext, useOnlySelected, type ItemNodeType } from './items';
-import { CardResizer } from './CardSizing';
+import { CardResizer, FoldedPicture } from './CardSizing';
 import { foldTo } from './card-size';
-import { ListCardPeekPopover, ListCardToolbar, useFocusOnce, useFresh, useLift, useRows, useZone, why } from './ListCardNodeParts';
+import { ListCardPeekPopover, ListCardToolbar, useFocusOnce, useFresh, useRows, useZone, why } from './ListCardNodeParts';
 import { MemoryCardView, MemoryIconView, MemoryPeek, type AddEntry } from './MemoryCard';
 import { MemoryFull, type Unsaved } from './MemoryFull';
 import { entryName, freshEntry, inListOrder, memoryData, newestWrite, scopeText, whoText } from './memory-card';
@@ -21,7 +21,7 @@ const readView = (id: string) => window.agentBoard.items.readMemory(id).then((vi
  * brain icon alone (D). The icon opens the peek beside it, with every entry to search, edit, pin or remove; the card's
  * Open (a double-click, or ⌘↵ while it is selected) opens it full screen, where documents are read and written.
  */
-export const MemoryNode = memo(function MemoryNode({ id: nodeId, data, selected: picked, dragging }: NodeProps<ItemNodeType>) {
+export const MemoryNode = memo(function MemoryNode({ id: nodeId, data, selected: picked, dragging, width, height }: NodeProps<ItemNodeType>) {
   const selected = useOnlySelected(picked);
   const { update, remove, openLink } = useContext(ItemActionsContext);
   const toast = useToast();
@@ -29,10 +29,10 @@ export const MemoryNode = memo(function MemoryNode({ id: nodeId, data, selected:
   const memory = memoryData(item.data);
   const zone = useZone(item.zoneId);
   const zoneName = zone.name;
-  const lift = useLift(memory.folded === true);
   const scope = scopeText(memory.noAgents, zoneName);
-  // Opening it full screen reads it again: who read it moves without a write.
+  // Opening it full screen reads it again, and so does an agent's read: who read it moves without a write.
   const [opens, setOpens] = useState(0);
+  useEffect(() => window.agentBoard.items.onMemoryReadBy((event) => event.itemId === item.id && setOpens((count) => count + 1)), [item.id]);
   const view = useRows(item.id, `${item.updatedAt}#${opens}`, readView, (error) =>
     toast.show({ tone: 'error', id: `memory-read-${item.id}`, message: `Could not read “${memory.title}”: ${why(error)}` }),
   );
@@ -131,7 +131,6 @@ export const MemoryNode = memo(function MemoryNode({ id: nodeId, data, selected:
       title={memory.title}
       scope={scope}
       zoneColor={zone.color}
-      lift={lift}
       count={count}
       pulse={fresh !== undefined}
       sub={fresh === undefined ? undefined : `${whoText(fresh.changedBy)} wrote ${entryName(fresh)}`}
@@ -147,6 +146,7 @@ export const MemoryNode = memo(function MemoryNode({ id: nodeId, data, selected:
       count={count}
       entries={shown}
       readers={view?.readers.memory}
+      readerList={view?.readers.list}
       loaded={entries !== undefined}
       now={now}
       onAdd={add}
@@ -160,9 +160,20 @@ export const MemoryNode = memo(function MemoryNode({ id: nodeId, data, selected:
 
   return (
     <>
-      <CardResizer visible={selected && memory.folded !== true} least={LIST_CARD_MIN_SIZE} onResized={(frame) => update({ id: item.id, ...frame })} />
+      <CardResizer
+        visible={selected}
+        least={LIST_CARD_MIN_SIZE}
+        picture={memory.folded === true ? LIST_CARD_FOLDED_SIZE : undefined}
+        onResized={(frame) => update({ id: item.id, ...frame })}
+      />
       <ListCardPeekPopover
-        anchor={<div className="listcard-anchor">{body}</div>}
+        anchor={
+          <div className="listcard-anchor">
+            <FoldedPicture picture={memory.folded === true ? LIST_CARD_FOLDED_SIZE : undefined} width={width} height={height} item={item}>
+              {body}
+            </FoldedPicture>
+          </div>
+        }
         open={peek}
         onOpenChange={setPeek}
         aria-label={`${memory.title}: every entry`}

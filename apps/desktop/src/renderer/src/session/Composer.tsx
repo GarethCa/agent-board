@@ -5,7 +5,8 @@ import { Button, ErrorText, IconButton, Kbd, Menu, Textarea } from '../ui';
 import { useSimplified } from '../design';
 import { ipcErrorMessage } from '../../../shared/errors';
 import { agentAtWork } from './chat';
-import { composerBlock, composerPlaceholder } from './composer-block';
+import { composerBlock, composerPlaceholder, wakesAtText } from './composer-block';
+import { WAKE_ANYWAY_WHERE, wakeBusyText } from '../board/paused';
 import { composerExtras } from './composer-extras';
 import { composerKey, insertAt, keepPastedImages, pastedImages } from './composer-input';
 import { keyText } from '../keys/registry';
@@ -41,15 +42,36 @@ export function Composer({ agent, placeholder, focusRequest, chatTheme }: Compos
   const simplified = useSimplified();
   const Field = simplified ? 'div' : 'label';
   const blocked = composerBlock(agent);
+  // A done or exited agent takes a message too: sending wakes it (as Wake does), and the message waits until it is up.
+  const wakes = blocked?.action === 'restart';
+  const closed = blocked !== undefined && !wakes;
+  const [waking, setWaking] = useState(false);
   // Each new request (⌘⇧M in the master's panel) puts the caret in the field.
   useEffect(() => {
     if (focusRequest !== undefined && focusRequest > 0) field.current?.focus();
   }, [focusRequest]);
   const send = () => {
-    if (text.trim() === '' || blocked !== undefined || pasting) return;
+    if (text.trim() === '' || closed || pasting || waking) return;
+    if (wakes) return void wakeAndSend();
     void sentMessages.send(agent.sessionId, text, images, agentAtWork(agent));
     setText('');
     setImages([]);
+  };
+  /** Starts an ended agent again in its conversation, then sends it the message; a shell running something keeps both. */
+  const wakeAndSend = async () => {
+    setWaking(true);
+    setPasteError(undefined);
+    try {
+      const woke = await window.agentBoard.agents.restart(agent.sessionId, false);
+      if (woke.status === 'busy') return setPasteError(`${wakeBusyText(woke.message)} ${WAKE_ANYWAY_WHERE}`);
+      void sentMessages.send(agent.sessionId, text, images, false);
+      setText('');
+      setImages([]);
+    } catch (error) {
+      setPasteError(`Could not wake it: ${ipcErrorMessage(error)}`);
+    } finally {
+      setWaking(false);
+    }
   };
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     const action = composerKey(event.nativeEvent);
@@ -130,7 +152,7 @@ export function Composer({ agent, placeholder, focusRequest, chatTheme }: Compos
               }}
               entries={composerExtras({ onAttach: () => picker.current?.click(), onCommand: typeCommand, draft: text })}
             >
-              <IconButton className="composer-plus" icon={<Plus />} aria-label="Add to the message" data-testid="composer-plus" disabled={blocked !== undefined} />
+              <IconButton className="composer-plus" icon={<Plus />} aria-label="Add to the message" data-testid="composer-plus" disabled={closed} />
             </Menu>
             <input ref={picker} type="file" accept="image/*" multiple hidden data-testid="composer-attach" onChange={onPicked} />
           </>
@@ -143,25 +165,25 @@ export function Composer({ agent, placeholder, focusRequest, chatTheme }: Compos
           ref={field}
           className="composer-input"
           aria-label="Message to the agent"
-          placeholder={simplified ? composerPlaceholder(agent, placeholder) : (blocked?.reason ?? placeholder ?? `Message ${agent.name}…`)}
+          placeholder={simplified ? composerPlaceholder(agent, placeholder) : (blocked?.reason ?? wakesAtText(agent) ?? placeholder ?? `Message ${agent.name}…`)}
           rows={1}
           value={text}
-          disabled={blocked !== undefined}
+          disabled={closed}
           onChange={(event) => setText(event.target.value)}
           onKeyDown={onKeyDown}
           onPaste={onPaste}
         />
-        {blocked === undefined &&
+        {!closed &&
           (simplified ? (
-            <IconButton type="submit" className="composer-send" variant="primary" icon={<ArrowUp />} aria-label="Send" tooltip={keyText('window.send')} loading={pasting} disabled={text.trim() === ''} />
+            <IconButton type="submit" className="composer-send" variant="primary" icon={<ArrowUp />} aria-label="Send" tooltip={keyText('window.send')} loading={pasting || waking} disabled={text.trim() === ''} />
           ) : (
-            <Button type="submit" size="sm" variant="primary" loading={pasting} disabled={text.trim() === ''}>
+            <Button type="submit" size="sm" variant="primary" loading={pasting || waking} disabled={text.trim() === ''}>
               Send
               <Kbd className="composer-key">{keyText('window.send')}</Kbd>
             </Button>
           ))}
       </Field>
-      {blocked === undefined && !simplified && (
+      {!closed && !simplified && (
         <p className="composer-hint">
           <Kbd>{keyText('window.newLine')}</Kbd> new line · paste an image to attach it
         </p>

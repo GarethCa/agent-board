@@ -27,7 +27,7 @@ const zone = (id: string, folded: boolean): Zone => ({
   layoutMode: 'free',
   layoutRule: 'off',
   lanes: null,
-  handPlaced: [], free: [],
+  handPlaced: [], free: [], placements: {},
   folded,
   tracker: null,
   clone: null,

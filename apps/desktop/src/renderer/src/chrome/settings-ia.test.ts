@@ -30,6 +30,7 @@ describe('the Settings window’s groups', () => {
       'mode',
       'theme',
       'boardBackground',
+      'popupFrost',
       'keepWebLogins',
       'clearBrowsingData',
       'clickOpens',

@@ -22,6 +22,8 @@ export const VIEW_KEYS = {
   unfolded: UNFOLDED_VIEW_KEY,
   /** The tiles dragged onto another, one of them expanded, by node id: left there, over it, not moved clear. */
   expandedOverlaps: 'expandedTiles.overlaps',
+  /** The tiles put down while tiles were expanded, by node id, with those tiles: not pushed with their rows again. */
+  putDown: 'expandedTiles.putDown',
   /** Whether onboarding was finished or skipped, and whether the board menu offers it again. */
   onboarding: 'onboarding',
   /** Whether onboarding sent its test notification, the one that makes the OS ask; not whether the OS allowed it. */
@@ -52,6 +54,8 @@ export const VIEW_KEYS = {
   ticketViews: 'ticketTiles.views',
   /** Which board the window shows: a ticket's own board, zoomed into from its tile (`{ ticket }`, its chat's session id), else the main board. */
   boardLevel: 'board.level',
+  /** The order a pop-up's row of tabs was dragged into, by owner (`ticket:<chat's session id>`): each its tabs' keys, left to right. */
+  popUpTabOrder: 'popUp.tabOrder',
   /** Whether the plan usage pill shows on the board, beside the zoom controls: off unless turned on. */
   usageOnBoard: 'usageOnBoard',
   /** Whether the keys added since the key registry work, the "Extended keyboard shortcuts" setting: on unless turned off. */

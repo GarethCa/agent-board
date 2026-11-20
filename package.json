@@ -35,6 +35,7 @@
     "update:app": "sh scripts/update-app.sh",
     "visual:check": "sh scripts/visual.sh check",
     "visual:update": "sh scripts/visual.sh update",
+    "signing:setup": "node scripts/app-install/setup-signing.ts",
     "readme:screenshots": "sh scripts/readme-screenshots.sh"
   },
   "devDependencies": {

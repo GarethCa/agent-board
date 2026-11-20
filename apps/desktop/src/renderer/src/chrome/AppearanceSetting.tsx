@@ -3,7 +3,7 @@ import { ChevronDown, Search } from 'lucide-react';
 import { choiceFor, missingMode, themeFor, type Mode } from '../../../shared/appearance';
 import { THEME_CHOICES, THEMES, type ThemeChoice, type ThemePreview } from '../../../shared/themes';
 import { darkQuery } from '../themes';
-import { EmptyState, Fieldset, Hint, Input, Popover, Segmented } from '../ui';
+import { EmptyState, Fieldset, Hint, Input, Popover, Segmented, Truncate } from '../ui';
 import { MODE_OPTIONS, useAppearance } from './appearance-mode';
 
 /** Whether the window is in dark mode now: the OS's own while the setting is System. */
@@ -139,8 +139,8 @@ function ThemeList({ picked, onPick }: { picked: string; onPick(theme: string): 
           {families.map(({ family, credit, choices }) => (
             <div key={family} className="theme-family" role="group" aria-label={family}>
               <p className="theme-family-name">
-                {family}
-                {credit !== undefined && <small>{credit}</small>}
+                <Truncate text={family} />
+                {credit !== undefined && <small title={credit}>{credit}</small>}
               </p>
               <div className="theme-cards">
                 {choices.map((choice) => (
@@ -159,8 +159,12 @@ function ThemeList({ picked, onPick }: { picked: string; onPick(theme: string): 
                     <span className="theme-card-previews">
                       {[choice.light, choice.dark].map((id) => id !== undefined && <ThemeSwatch key={id} preview={themeNamed(id).preview} />)}
                     </span>
-                    <span className="theme-card-name">{choice.name}</span>
-                    <span className="theme-card-variants">{variants(choice)}</span>
+                    <span className="theme-card-name" title={choice.name}>
+                      {choice.name}
+                    </span>
+                    <span className="theme-card-variants" title={variants(choice)}>
+                      {variants(choice)}
+                    </span>
                   </div>
                 ))}
               </div>
@@ -206,7 +210,9 @@ export function AppearanceSetting({ onError }: { onError(action: string): (error
           >
             <button type="button" className="theme-control" aria-label={`Theme: ${choice?.name ?? ''}`} disabled={appearance === undefined}>
               {appearance && <ThemeSwatch preview={themeFor(appearance, dark).preview} />}
-              <span className="theme-control-name">{choice?.name}</span>
+              <span className="theme-control-name" title={choice?.name}>
+                {choice?.name}
+              </span>
               <ChevronDown className="theme-control-chevron" aria-hidden />
             </button>
           </Popover>

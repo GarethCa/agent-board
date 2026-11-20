@@ -108,6 +108,14 @@ describe('selectChecks', () => {
     expect(plan.full).toBe(false);
   });
 
+  it('does not run a benchmark spec in the app project, which ignores it and would find no tests', () => {
+    for (const name of ['render-bench.spec.ts', 'agents-bench.spec.ts', 'pan-zoom-bench.spec.ts']) {
+      const plan = selectChecks([`apps/desktop/e2e/${name}`], () => true);
+      expect(plan.e2e).toEqual([]);
+      expect(plan.reasons.join('\n')).toContain('runs in its own project');
+    }
+  });
+
   it('widens to the whole unit project and all e2e when the key registry changes, which every surface matches its keys through', () => {
     for (const file of ['apps/desktop/src/renderer/src/keys/registry.ts', 'apps/desktop/src/renderer/src/keys/index.ts']) {
       expect(selectChecks([file])).toMatchObject({ full: false, unitAll: true, e2eAll: true });

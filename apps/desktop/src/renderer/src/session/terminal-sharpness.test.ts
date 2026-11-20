@@ -1,8 +1,8 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import type { Terminal } from '@xterm/xterm';
-import { boardSettled, onBoardSettled, raster, screenZoom, sharpen, snapOffset, type RasterInput } from './terminal-sharpness';
+import { boardMoving, boardSettled, onBoardSettled, raster, screenZoom, sharpen, snapOffset, type RasterInput } from './terminal-sharpness';
 
 // The mono's measure at 13 px, as Chromium gives it.
 const INPUT: RasterInput = { charWidth: 7.8, charHeight: 15, lineHeight: 1, letterSpacing: 0, dpr: 2, zoom: 1, cols: 115, rows: 32 };
@@ -256,12 +256,12 @@ describe('sharpen', () => {
     // Panned, a new position at the same zoom: the same pixels, moved.
     box.left = 120.3;
     const placed = style.transform;
-    sharp.settle();
+    expect(sharp.settle(), 'a pan draws nothing again').toBe(false);
     expect(render.handleResize).toHaveBeenCalledTimes(1);
     expect(style.transform).not.toBe(placed);
 
     size.width = 863;
-    sharp.settle();
+    expect(sharp.settle(), 'a zoom draws again').toBe(true);
     expect(render.handleResize).toHaveBeenCalledTimes(2);
     expect(webgl.dimensions.device.cell).toEqual({ width: 15, height: 30 });
   });
@@ -353,12 +353,81 @@ describe('sharpen', () => {
 });
 
 describe('board settling', () => {
+  beforeEach(() => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'requestAnimationFrame', 'cancelAnimationFrame'] }));
+  afterEach(() => {
+    boardMoving();
+    vi.useRealTimers();
+  });
+  /** Runs the next frame. */
+  const frame = () => vi.advanceTimersToNextFrame();
+
   it('reaches each listener until it stops listening', () => {
-    const heard = vi.fn();
+    const heard = vi.fn(() => true);
     const stop = onBoardSettled(heard);
     boardSettled();
+    frame();
     stop();
     boardSettled();
+    frame();
     expect(heard).toHaveBeenCalledTimes(1);
+  });
+
+  it('draws one terminal a frame, from the next frame on, and the ones that draw nothing take no frame', () => {
+    const order: string[] = [];
+    const listener = (name: string, draws: boolean) => () => {
+      order.push(name);
+      return draws;
+    };
+    const stops = [
+      onBoardSettled(listener('a', true)),
+      onBoardSettled(listener('hidden', false)),
+      onBoardSettled(listener('b', true)),
+      onBoardSettled(listener('c', true)),
+    ];
+    boardSettled();
+    expect(order).toEqual([]);
+    frame();
+    expect(order).toEqual(['a']);
+    frame();
+    expect(order).toEqual(['a', 'hidden', 'b']);
+    frame();
+    expect(order).toEqual(['a', 'hidden', 'b', 'c']);
+    frame();
+    expect(order).toHaveLength(4);
+    for (const stop of stops) stop();
+  });
+
+  it('starts again from the first on a new rest, and a move stops what is left', () => {
+    const heard: string[] = [];
+    const stops = ['a', 'b', 'c'].map((name) =>
+      onBoardSettled(() => {
+        heard.push(name);
+        return true;
+      }),
+    );
+    boardSettled();
+    frame();
+    boardSettled();
+    frame();
+    expect(heard).toEqual(['a', 'a']);
+    boardMoving();
+    frame();
+    frame();
+    expect(heard).toEqual(['a', 'a']);
+    for (const stop of stops) stop();
+  });
+
+  it('skips a listener that stopped while it waited', () => {
+    const a = vi.fn(() => true);
+    const b = vi.fn(() => true);
+    const stopA = onBoardSettled(a);
+    const stopB = onBoardSettled(b);
+    boardSettled();
+    frame();
+    stopB();
+    frame();
+    expect(a).toHaveBeenCalledTimes(1);
+    expect(b).not.toHaveBeenCalled();
+    stopA();
   });
 });

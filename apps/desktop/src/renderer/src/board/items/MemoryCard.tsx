@@ -3,16 +3,36 @@
 import { useEffect, useRef, useState, type ComponentProps, type KeyboardEvent, type ReactNode } from 'react';
 import { Brain, ChevronRight, Eye, FileText, Maximize2, Pin, PinOff, Search, Trash2 } from 'lucide-react';
 import { entryFrom } from '@agent-board/daemon/memory-lines';
-import { MAX_MEMORY_VALUE, type MemoryEntry, type MemoryReaders } from '@agent-board/daemon/protocol';
-import { IconButton } from '../../ui';
+import { MAX_MEMORY_VALUE, type MemoryEntry, type MemoryReader, type MemoryReaders } from '@agent-board/daemon/protocol';
+import { HoverCard, IconButton } from '../../ui';
 import { peekKeys, ScopeChip, ListCardAddBox, ListCardFace, ListCardIconView } from './ListCardParts';
 import { useScrollFade } from './CardSizing';
-import { ADDED_SECTION, ageText, cardSections, openSections, turnedOpen, type MemorySectionKey, countText, entryLine, entryName, filePreview, isStale, matching, staleCount, whenText, whoText } from './memory-card';
+import { ADDED_SECTION, ageText, cardSections, openSections, turnedOpen, type MemorySectionKey, agoText, countText, entryLine, entryName, filePreview, isStale, matching, moreReadersText, readByText, staleCount, whenText, whoText } from './memory-card';
 
 /** What the add box makes of what was typed: `key: value` (the key one word) is a keyed entry, anything else a note. */
 export type AddEntry = (entry: { key: string | null; text: string }) => void;
 
 const BRAIN = <Brain className="listcard-glyph" />;
+
+/** The most readers the foot's hover card lists: it is cut at a few lines. */
+const HOVER_READERS = 6;
+
+/** Who read a memory and when, the latest first: at most `most` of them, then how many more did. */
+export function MemoryReaderList({ readers, count, now, most = readers.length }: { readers: readonly MemoryReader[]; count: number; now: Date; most?: number }) {
+  const shown = readers.slice(0, most);
+  const more = moreReadersText(count, shown.length);
+  return (
+    <ol className="memory-readers" aria-label="Read by">
+      {shown.map((reader) => (
+        <li key={reader.sessionId}>
+          <b>{reader.name}</b>
+          <time dateTime={reader.at}>{agoText(reader.at, now)}</time>
+        </li>
+      ))}
+      {more !== undefined && <li className="memory-readers-more">{more}</li>}
+    </ol>
+  );
+}
 
 /** The box at a card's foot, and the peek's: ↵ remembers what is typed, by the CLI's rule. */
 function MemoryAddBox({ onAdd, autoFocus }: { onAdd: AddEntry; autoFocus?: boolean }) {
@@ -67,6 +87,8 @@ interface MemoryCardViewProps {
   entries: readonly MemoryEntry[];
   /** How many agents read it, and who last did: none until its entries are read. */
   readers?: MemoryReaders;
+  /** Who read it and when, the latest first, for the foot's hover card. */
+  readerList?: readonly MemoryReader[];
   /** How many it holds: its saved count until its entries are read. */
   count?: number;
   /** Whether its entries are read yet: until then it says nothing of being empty. */
@@ -114,7 +136,7 @@ function FactRow({ fact, fresh, now }: { fact: MemoryEntry; fresh: boolean; now:
  * it; then its documents by title and its facts (pinned first), each with who wrote it and when; a box to remember a
  * fact; and at its foot how many agents read it, how many entries are stale, and Open, full screen.
  */
-export function MemoryCardView({ title, scope, zoneColor, entries, readers, count = entries.length, loaded = true, now, onAdd, onOpen, fresh, focusAdd, children }: MemoryCardViewProps) {
+export function MemoryCardView({ title, scope, zoneColor, entries, readers, readerList = [], count = entries.length, loaded = true, now, onAdd, onOpen, fresh, focusAdd, children }: MemoryCardViewProps) {
   const { pinned, docs, facts } = cardSections(entries);
   const factRow = (fact: MemoryEntry) => <FactRow key={fact.id} fact={fact} fresh={fact.id === fresh} now={now} />;
   const docRow = (doc: MemoryEntry) => (
@@ -154,7 +176,7 @@ export function MemoryCardView({ title, scope, zoneColor, entries, readers, coun
       {children}
       <div className="listcard-head">
         <ListCardFace glyph={BRAIN} count={count} />
-        <b className="listcard-title">{title}</b>
+        <b className="listcard-title" title={title}>{title}</b>
         <ScopeChip scope={scope} zoneColor={zoneColor} testId="memory-scope" />
       </div>
       {!loaded ? (
@@ -188,9 +210,11 @@ export function MemoryCardView({ title, scope, zoneColor, entries, readers, coun
         />
         <span className="listcard-foot-line">
           {readers !== undefined && readers.count > 0 ? (
-            <span className="memory-read" title={readers.last === null ? undefined : `Last read by ${readers.last.name}`}>
-              <Eye aria-hidden="true" /> read by {readers.count}
-            </span>
+            <HoverCard label="Read by" content={readerList.length === 0 ? undefined : <MemoryReaderList readers={readerList} count={readers.count} now={now} most={HOVER_READERS} />}>
+              <span className="memory-read" data-testid="memory-read">
+                <Eye aria-hidden="true" /> {readByText(readers, now)}
+              </span>
+            </HoverCard>
           ) : (
             <span>{countText(entries)}</span>
           )}
@@ -273,7 +297,7 @@ export function MemoryPeek({ title, scope, zoneColor, entries, now, onAdd, onEdi
   return (
     <div className="listcard-peek" data-testid="memory-peek" onKeyDown={rowKeys}>
       <div className="listcard-peek-head">
-        <b className="listcard-title">{title}</b>
+        <b className="listcard-title" title={title}>{title}</b>
         <ScopeChip scope={scope} zoneColor={zoneColor} />
         {onFull !== undefined && <IconButton icon={<Maximize2 />} size="xs" aria-label="Open full screen" tooltip="Full screen: documents, history, who read it" onClick={onFull} />}
       </div>

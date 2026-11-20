@@ -3,6 +3,7 @@ import { paneIds } from '@agent-board/daemon/pane-layout';
 import { INTERRUPT_KEY, type Agent, type ExternalSession, type Shell, type SplitDirection } from '@agent-board/daemon/protocol';
 import { Copy, FolderOpen, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { errorMessage } from '../../../shared/errors';
+import { WAKE_ANYWAY_WHERE, wakeAct, wakeBusyText } from '../board/paused';
 import { keyText } from '../keys/registry';
 import { STATE_LABELS } from '../states';
 import { Button, Hint, IconButton, Kbd, PanelRow, Section, StatusPill } from '../ui';
@@ -292,6 +293,21 @@ export function controlAction(id: ControlId, sessionId: string, agent: Agent | u
     case 'pause':
       return failing('pause', () => agents.pause(sessionId));
     case 'wake':
+      // Done or exited, Wake starts it again in its worktree; a shell running something there keeps it, and says so.
+      // Its clock wakes it by itself: Wake now runs its clock, which keeps its next time.
+      if (agent?.schedule != null && wakeAct(agent) === 'run-now') {
+        const { clockId } = agent.schedule;
+        return failing('wake', async () => {
+          const run = (await window.agentBoard.items.runClock(clockId)).runs[0];
+          if (run?.outcome === 'skipped') throw new Error(`Its clock skipped: ${run.reason ?? 'no reason given'}`);
+        });
+      }
+      if (agent !== undefined && wakeAct(agent) === 'restart') {
+        return failing('wake', async () => {
+          const woke = await agents.restart(sessionId, false);
+          if (woke.status === 'busy') throw new Error(`${wakeBusyText(woke.message)} ${WAKE_ANYWAY_WHERE}`);
+        });
+      }
       return failing('wake', () => agents.resume(sessionId));
     case 'stop':
       return failing('stop', agent ? () => agents.stop(sessionId) : () => sessions.kill(sessionId));

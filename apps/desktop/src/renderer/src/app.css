@@ -299,9 +299,15 @@ kbd {
 
 /* Hybrid tiles */
 
+/* No text on a tile is under 11px: its smallest step is the count badge's size. The glance designs keep their own
+   steps, which fit the longest line to its box (use-shrinking-line.ts). */
+.hybrid-tile:not(.glance-tile) {
+  --font-size-2xs: var(--font-size-badge);
+}
+
 .hybrid-tile {
-  /* A container for the head's corner to fold by (see .hybrid-tile-minor). It also contains layout and style, which
-     makes the tile a stacking context and the containing block of fixed-position descendants. */
+  /* A size container, for the rules that fit its parts to its width. It is not a stacking context by that: see
+     .tile-frosted for the tile that needs one. */
   container-type: inline-size;
   display: flex;
   flex-direction: column;
@@ -1021,19 +1027,13 @@ kbd {
   vertical-align: -2px;
 }
 
-/* Stopped by a restart, waiting to be resumed: a quiet dashed outline (Resume is in its hover corner and ⋯ menu). A
-   shell tile's stopped panes keep a Resume row. */
-.hybrid-tile-agent[data-state='stopped-by-restart'] {
-  outline: 1.5px dashed var(--state-stopped-by-restart);
-  outline-offset: -1px;
-}
-
-/* Paused (hibernated) by the user or an orchestrator: frosted, so a frozen agent reads across the board in every design
-   and pack. A solid cool border, never dashed (that is stopped, and starting), on a cool fill with frost gathered in two
-   corners, drawn under its name, its line and its buttons; a slate snowflake by its name. No motion: the
-   frost is there or not, and waking it clears it at once. Who paused it sits under its line, and Wake in its footer. */
-.hybrid-tile-agent[data-state='hibernated'] {
-  outline: 1.5px solid color-mix(in srgb, var(--state-hibernated) 70%, var(--border));
+/* Paused by the user or an orchestrator, or stopped by a restart: frosted, so an agent asleep reads across the board in
+   every design and pack. A solid cool border, never dashed (that is starting), on a cool fill with frost gathered in two
+   corners, drawn under its name, its line and its buttons; a slate snowflake by its name. No motion: the frost is there
+   or not, and waking it clears it at once. Why it sleeps sits in its line, and Wake in its footer. A shell tile's
+   stopped panes keep a Resume row. */
+.hybrid-tile-agent.tile-frosted {
+  outline: 1.5px solid var(--frost-edge);
   background: var(--frost-fill);
   /* What its head's hover buttons sit on: its frosted fill. */
   --tile-fill: var(--frost-fill);
@@ -1062,7 +1062,7 @@ kbd {
 }
 
 /* Classic's hatching, switched back on, lies over the frost. */
-.hybrid-tile-agent[data-state='hibernated'][data-hatch] {
+.hybrid-tile-agent.tile-frosted[data-hatch] {
   background:
     repeating-linear-gradient(
       135deg,
@@ -1075,7 +1075,361 @@ kbd {
 /* Expanded, the frost lies in the corners of its terminal and chat as well, faint enough to read through; they stay
    usable. */
 .expanded-tile.tile-frosted {
-  border-color: color-mix(in srgb, var(--state-hibernated) 70%, var(--border));
+  border-color: var(--frost-edge);
+}
+
+/* Each kind of frozen agent tints the same frost its own way (tokens.css): scheduled slate-blue, done grey, exited grey
+   warmed with clay. Paused keeps the slate. Its edge, its corners' frost, its mark and its watermark follow. */
+.tile-frost-scheduled {
+  --frost-fill: var(--frost-scheduled-fill);
+  --frost: var(--frost-scheduled);
+  --frost-edge: var(--frost-scheduled-edge);
+  --frost-mark: var(--frost-scheduled-mark);
+  --frost-watermark: var(--state-scheduled);
+}
+
+.tile-frost-done {
+  --frost-fill: var(--frost-done-fill);
+  --frost: var(--frost-done);
+  --frost-edge: var(--frost-done-edge);
+  --frost-mark: var(--frost-done-mark);
+  --frost-watermark: var(--frost-done-mark);
+}
+
+.tile-frost-exited {
+  --frost-fill: var(--frost-exited-fill);
+  --frost: var(--frost-exited);
+  --frost-edge: var(--frost-exited-edge);
+  --frost-mark: var(--frost-exited-mark);
+  --frost-watermark: var(--frost-exited-watermark);
+}
+
+/* A frozen tile is its own stacking context, so its watermark and corner frost, below everything else in it, still
+   paint over its background rather than under it. */
+.tile-frosted {
+  isolation: isolate;
+}
+
+/* Its kind's glyph, large and faint in the bottom-right corner, overhanging and clipped by the tile, under its text.
+   No motion, no outline. */
+.tile-frost-watermark {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  color: var(--frost-watermark);
+  opacity: var(--frost-watermark-opacity);
+  pointer-events: none;
+}
+
+.tile-frost-watermark svg {
+  position: absolute;
+  right: calc(-1 * var(--space-3-5));
+  bottom: calc(-1 * var(--space-3-5));
+  width: var(--frost-watermark-size);
+  height: var(--frost-watermark-size);
+}
+
+/* An agent's pop-up: its session over the board, dimmed but still there under it. A click on the dimmed board closes it. */
+.agent-popup-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: var(--layer-popup);
+  display: grid;
+  place-items: center;
+  /* A small margin: on a laptop the pop-up fills the board less this, and only a big screen leaves more round it. */
+  padding: var(--space-4);
+  background: var(--scrim-popup);
+  animation: ui-fade var(--motion-fast) var(--ease-out);
+}
+
+/* Frosted (Settings › Appearance, on by default): the board blurred as well as dimmed. One layer the size of the board,
+   up only while a pop-up is; nothing on the board takes a filter of its own. */
+.agent-popup-scrim[data-frost] {
+  backdrop-filter: blur(var(--blur-popup));
+  background: var(--scrim-popup-frost);
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .agent-popup-scrim[data-frost] {
+    backdrop-filter: none;
+    background: var(--scrim-popup-solid);
+  }
+}
+
+/* What holds its size (usePopupSize): the 16:10 fit, or the size dragged to, with its edges' handles round it. Until the
+   board is measured, the board less its margin. */
+.agent-popup-frame {
+  position: relative;
+  width: 100%;
+  max-width: 100%;
+  height: 100%;
+  max-height: 100%;
+}
+
+.agent-popup {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-window);
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: var(--shadow-window);
+  animation: session-window-in var(--motion-base) var(--ease-out);
+}
+
+/* Its edges and corners, which resize it: a strip along each edge and a square off each corner, all in the margin round
+   it, so none of them covers its scrollbars or its header's buttons. */
+.agent-popup-edge {
+  position: absolute;
+  z-index: 1;
+  touch-action: none;
+}
+
+.agent-popup-edge:is([data-edge='n'], [data-edge='s']) {
+  inset-inline: 0;
+  height: var(--popup-edge);
+  cursor: ns-resize;
+}
+
+.agent-popup-edge:is([data-edge='e'], [data-edge='w']) {
+  inset-block: 0;
+  width: var(--popup-edge);
+  cursor: ew-resize;
+}
+
+.agent-popup-edge:is([data-edge='ne'], [data-edge='nw'], [data-edge='se'], [data-edge='sw']) {
+  width: var(--popup-corner);
+  height: var(--popup-corner);
+}
+
+.agent-popup-edge[data-edge='n'] {
+  top: calc(-1 * var(--popup-edge));
+}
+
+.agent-popup-edge[data-edge='s'] {
+  bottom: calc(-1 * var(--popup-edge));
+}
+
+.agent-popup-edge[data-edge='e'] {
+  right: calc(-1 * var(--popup-edge));
+}
+
+.agent-popup-edge[data-edge='w'] {
+  left: calc(-1 * var(--popup-edge));
+}
+
+.agent-popup-edge:is([data-edge='ne'], [data-edge='nw']) {
+  top: calc(-1 * var(--popup-corner));
+}
+
+.agent-popup-edge:is([data-edge='se'], [data-edge='sw']) {
+  bottom: calc(-1 * var(--popup-corner));
+}
+
+.agent-popup-edge:is([data-edge='ne'], [data-edge='se']) {
+  right: calc(-1 * var(--popup-corner));
+}
+
+.agent-popup-edge:is([data-edge='nw'], [data-edge='sw']) {
+  left: calc(-1 * var(--popup-corner));
+}
+
+.agent-popup-edge:is([data-edge='nw'], [data-edge='se']) {
+  cursor: nwse-resize;
+}
+
+.agent-popup-edge:is([data-edge='ne'], [data-edge='sw']) {
+  cursor: nesw-resize;
+}
+
+/* Focused as it opens, to take the keys from the board: its session shows where they go, not a ring round it all. */
+.agent-popup:focus {
+  outline: none;
+}
+
+.session-window-head.agent-popup-head {
+  gap: var(--space-2);
+  height: var(--popup-header-height);
+  padding: 0 var(--space-2-25) 0 var(--space-3);
+  background: var(--raised);
+}
+
+.agent-popup-body {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* A ticket's pop-up: its title in the header, and under it one row of tabs, its Board's, its chat's and its helpers'.
+   The tab that is on is raised, what it shows straight under it; a tab whose agent asks is in the ask's colours, and the
+   tab the user came from is underlined in the accent. What doesn't fit folds into "+n", and + ends the row. */
+.agent-popup-title {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--font-size-md);
+  font-weight: var(--weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The shown session's Terminal | Chat switch, in the header as it has no strip of its own. */
+.agent-popup-switch {
+  display: flex;
+  align-items: center;
+}
+
+.agent-popup-tabs {
+  display: flex;
+  flex: none;
+  align-items: flex-end;
+  padding: var(--space-1) var(--space-2) 0;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.agent-popup-tabs .session-tabs-list {
+  align-items: flex-end;
+}
+
+.agent-popup-tabs .session-tab {
+  gap: var(--space-1-5);
+  height: auto;
+  padding-right: var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  color: var(--muted);
+}
+
+.agent-popup-tabs .session-tab:hover {
+  background: var(--hover);
+}
+
+.agent-popup-tabs .session-tab[data-active] {
+  border-color: var(--border);
+  border-bottom-color: transparent;
+  background: var(--raised);
+  color: var(--text);
+}
+
+.agent-popup-tabs .session-tab[data-ask] {
+  background: var(--ask);
+  color: var(--ask-ink);
+}
+
+.agent-popup-tabs .session-tab[data-ask][data-active] {
+  border-color: var(--ask-edge);
+  border-bottom-color: transparent;
+  background: var(--ask-edge);
+}
+
+.agent-popup-tab-end-slot {
+  flex: none;
+  width: var(--control-xs);
+}
+
+/* The Board's × takes the same room as the slot kept for it, not the tighter fit a shell tab's × has. */
+.agent-popup-tabs .session-tab .session-tab-close {
+  margin-inline: 0;
+}
+
+.agent-popup-tabs .session-tab[data-from] {
+  box-shadow: var(--shadow-tab-from);
+}
+
+.agent-popup-tabs .session-tab-icon {
+  display: inline-flex;
+  color: var(--muted);
+}
+
+.agent-popup-tabs .session-tab-icon svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+}
+
+.agent-popup-row-end {
+  display: inline-flex;
+  flex: none;
+  gap: var(--space-1);
+  align-items: center;
+  padding-bottom: var(--space-1);
+}
+
+.agent-popup-more {
+  display: inline-flex;
+  gap: var(--space-0-5);
+  align-items: center;
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  cursor: pointer;
+}
+
+.agent-popup-more:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.agent-popup-more svg {
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+}
+
+.agent-popup-tabs .session-tab-button {
+  padding: var(--space-1) 0 var(--space-1) var(--space-2);
+  font-family: inherit;
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.agent-popup-tabs .session-tab-lead {
+  display: inline-flex;
+  align-items: center;
+}
+
+.session-tab-pill {
+  padding: 0 var(--space-1-5);
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-heavy);
+}
+
+.agent-popup-tab-dot {
+  flex: none;
+  width: var(--size-dot);
+  height: var(--size-dot);
+  border-radius: var(--radius-pill);
+  background: var(--muted);
+}
+
+.agent-popup-tab-dot[data-status='working'] {
+  background: var(--state-running);
+}
+
+.agent-popup-tab-dot[data-status='needs-you'] {
+  background: var(--state-waiting);
+}
+
+.agent-popup-tab-dot[data-status='problem'] {
+  background: var(--state-failed);
+}
+
+.agent-popup-tab-dot[data-status='done'] {
+  background: var(--state-done-ink);
 }
 
 .expanded-tile.tile-frosted .expanded-tile-body {
@@ -1092,6 +1446,50 @@ kbd {
     radial-gradient(ellipse at 100% 100%, var(--frost), transparent 40%);
   pointer-events: none;
   content: '';
+}
+
+/* A session window frosts as its expanded tile does: its edge, and the corners of its terminal and chat. */
+.session-window.tile-frosted {
+  border-color: var(--frost-edge);
+}
+
+.session-window.tile-frosted .session-window-body {
+  position: relative;
+}
+
+.session-window.tile-frosted .session-window-body::after {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  border-radius: inherit;
+  background:
+    radial-gradient(ellipse at 0 0, var(--frost), transparent 45%),
+    radial-gradient(ellipse at 100% 100%, var(--frost), transparent 40%);
+  pointer-events: none;
+  content: '';
+}
+
+/* A frozen agent's chip in its head, in place of its state pill: its kind in a word, then the time that matters. Red
+   only in an exited one's word. */
+.tile-frost-chip {
+  display: inline-flex;
+  flex: none;
+  align-items: baseline;
+  padding: var(--space-0-5) var(--space-2);
+  border: 1px solid var(--frost-edge);
+  border-radius: var(--radius-pill);
+  background: var(--frost-fill);
+  color: var(--text);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+}
+
+.tile-frost-chip-word {
+  font-weight: var(--weight-semibold);
+}
+
+.tile-frost-chip[data-kind='exited'] .tile-frost-chip-word {
+  color: var(--frost-exited-ink);
 }
 
 /* The snowflake, by its name: in its state's ink, at the size of the head's other marks. */
@@ -1115,7 +1513,7 @@ kbd {
   color: var(--review-mark);
 }
 
-.hybrid-tile-agent[data-state='hibernated'] .hybrid-tile-icon {
+.hybrid-tile-agent.tile-frosted .hybrid-tile-icon {
   opacity: 0.6;
   filter: grayscale(1);
 }
@@ -1146,6 +1544,19 @@ kbd {
 
 .hybrid-tile-wake {
   margin-left: auto;
+}
+
+/* A button its tile shows only on hover or focus (a scheduled agent's Wake now, as its clock wakes it anyway): it keeps
+   its spot, so showing it moves nothing, and stays in the tab order (opacity only), so Tab onto it shows it. */
+[data-on-hover] {
+  opacity: 0;
+  transition: opacity var(--motion-fast) var(--ease-out);
+}
+
+.hybrid-tile:is(:hover, :focus-within) [data-on-hover],
+.react-flow__node.selected [data-on-hover],
+[data-on-hover]:focus-visible {
+  opacity: 1;
 }
 
 .hybrid-tile-resume {
@@ -1237,14 +1648,16 @@ kbd {
   opacity: 0.7;
 }
 
-/* A narrow tile folds its lesser actions into the ⋯ menu, which has them all, before Expand and ⋯ would go. A size
-   container is measured on its content box, so 200px here is a tile of about 224 (border 2, padding 12 + 10). The head
-   needs its icon (~16) + 7 + the name's --size-tile-name (96) + 7 + four buttons (4 x 18 + 3 + 2 = 77) = about 203, so
-   the default 256px tile (content 232) keeps all four and the 200px least size (content 176) folds. */
-@container (max-width: 200px) {
-  .hybrid-tile-minor {
-    display: none;
-  }
+/* Every tile's corner is the same two buttons, Expand and ⋯, each a 24px target like the porthole tile's. The rest of a
+   tile's actions are in ⋯, so a narrow tile has nothing to fold. */
+.hybrid-tile-actions .ui-icon-button[data-size='xs'] {
+  width: var(--space-6);
+  height: var(--space-6);
+}
+
+.hybrid-tile-actions .ui-icon-button svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
 }
 
 .hybrid-tile:is(:hover, :focus-within) .hybrid-tile-actions {
@@ -1313,21 +1726,9 @@ kbd {
   visibility: hidden;
 }
 
-/* The pencil sits with the other buttons, so a long name needs no room kept for it; in the calm tile's controls it is a
-   24px target like theirs. */
+/* On hover, Rename is in ⋯, so a long name needs no room kept for a pencil. */
 .hybrid-tile[data-corner='hover'] .hybrid-tile-name-long {
   padding-inline-end: 0;
-}
-
-.hybrid-tile[data-corner='hover'] :is(.hybrid-tile-corner, .calm-tile-controls) .ui-icon-button.rename-button {
-  border-width: 1px;
-  margin-inline-start: 0;
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.calm-tile[data-corner='hover'] .calm-tile-controls .ui-icon-button.rename-button {
-  width: var(--space-6);
 }
 
 /* How far through it says it is: a hairline on the tile's bottom edge, which takes no room. */
@@ -1649,6 +2050,14 @@ kbd {
   color: var(--state-failed-ink);
 }
 
+/* Exited on an error, frozen: red only in its word and its line, deepened to read on its clay frost. */
+.tile-frost-exited .hybrid-tile-mark .hybrid-tile-word,
+.tile-frost-exited .hybrid-tile-now[data-tone='fail'],
+.tile-frost-exited .calm-tile-line,
+.tile-frost-exited .calm-tile-foot .status-mark-word {
+  color: var(--frost-exited-ink);
+}
+
 /* Finished tiers: a tile whose turn is over and asks nothing lies flat; a done one also steps back. Only its own shadow
    goes: the Captain's and an orchestrator's halos are drawn in box-shadow too, and stay. */
 .hybrid-tile-agent[data-flat]:not([data-orchestrator], [data-master]) {
@@ -1699,6 +2108,19 @@ kbd {
 }
 
 .hybrid-tile-mark[data-ask='new'] .hybrid-tile-word {
+  color: var(--accent-ink);
+}
+
+/* The same on a Simplified, Porthole or Shelf ticket tile: its word in green to merge, in blue for a new review. */
+.status-mark[data-ask='merge'] .status-mark-word,
+.porthole-word[data-ask='merge'],
+.shelf-tile-word[data-ask='merge'] {
+  color: var(--success);
+}
+
+.status-mark[data-ask='new'] .status-mark-word,
+.porthole-word[data-ask='new'],
+.shelf-tile-word[data-ask='new'] {
   color: var(--accent-ink);
 }
 
@@ -2224,6 +2646,58 @@ kbd {
 .ticket-helper-card-icon[data-state='failed'] {
   background: var(--danger-soft);
   color: var(--danger);
+}
+
+/* A frozen helper: its icon greys, and a badge on its corner says how (a snowflake, a clock, a tick or a warning). One
+   that exited on an error gets no red disc: red stays in its word. */
+.ticket-helper-card-icon[data-frozen] {
+  position: relative;
+  background: var(--frost-fill);
+  color: var(--muted);
+}
+
+.ticket-helper-card-icon[data-frozen='scheduled'] {
+  background: var(--frost-scheduled-fill);
+}
+
+.ticket-helper-card-icon[data-frozen='done'] {
+  background: var(--frost-done-fill);
+}
+
+.ticket-helper-card-icon[data-frozen='exited'] {
+  background: var(--frost-exited-fill);
+}
+
+.ticket-helper-frost {
+  display: inline-flex;
+  position: absolute;
+  right: calc(-1 * var(--space-1));
+  bottom: calc(-1 * var(--space-1));
+  padding: var(--space-0-5);
+  border-radius: var(--radius-pill);
+  background: var(--raised);
+  color: var(--frost-mark);
+}
+
+.ticket-helper-card-icon .ticket-helper-frost svg {
+  width: var(--icon-2xs);
+  height: var(--icon-2xs);
+}
+
+.ticket-helper-frost[data-kind='scheduled'] {
+  color: var(--frost-scheduled-mark);
+}
+
+.ticket-helper-frost[data-kind='done'] {
+  color: var(--frost-done-mark);
+}
+
+.ticket-helper-frost[data-kind='exited'] {
+  color: var(--frost-exited-mark);
+}
+
+.ticket-helper-card-word[data-state='failed'][data-frozen='exited'] {
+  color: var(--frost-exited-ink);
 }
 
 .ticket-helper-card-name {
@@ -3148,6 +3622,14 @@ kbd {
   gap: var(--space-2) var(--space-4);
 }
 
+/* A box narrower than its text, so the line ends in its ellipsis. */
+.component-gallery-truncate {
+  display: flex;
+  width: 220px;
+  color: var(--text);
+  font-size: var(--font-size-sm);
+}
+
 .component-gallery-columns {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -3416,22 +3898,12 @@ kbd {
   padding: var(--space-2) var(--space-2) var(--space-2-5) var(--space-3);
 }
 
-/* Needs you rings it in orange, a problem in red; the rest sit plain. A paused agent or one a restart stopped takes no
-   ring and none of Classic's dashes or stripes: its status says it, and a paused one keeps the frost. The ring follows
-   its status, so an agent that asks in its last words or has changes to review is ringed too, seen or not. */
-.calm-tile.hybrid-tile-agent:is([data-state='stopped-by-restart'], [data-state='hibernated']) {
+/* Needs you rings it in orange, a problem in red; the rest sit plain. The ring follows its status, so an agent that asks
+   in its last words or has changes to review is ringed too, seen or not. An agent asleep (paused, or stopped by a
+   restart) keeps the frost every design shares, with no ring and none of Classic's stripes: below. */
+.calm-tile.hybrid-tile-agent.tile-frosted {
   outline-style: solid;
   outline-width: 2.5px;
-}
-
-/* Stopped, it sits plain; paused, it keeps the frost every design shares. */
-.calm-tile.hybrid-tile-agent[data-state='stopped-by-restart'] {
-  background: var(--raised);
-  --tile-fill: var(--raised);
-}
-
-.calm-tile:is([data-state='stopped-by-restart'], [data-state='hibernated']) {
-  outline-color: transparent;
 }
 
 /* As plain as Classic's own rules weigh, so a hand-off's ring and a tab drop's halo, later in this file, still show. */
@@ -3441,6 +3913,17 @@ kbd {
 
 .calm-tile[data-status='problem'] {
   outline-color: var(--state-failed);
+}
+
+/* Asleep, it takes no ring, even waiting on you: the frost says it. A hand-off's ring and a drop's halo, later, still show. */
+.calm-tile.tile-frosted {
+  outline-color: transparent;
+}
+
+/* A ticket's tile asks with its word and its button alone, as Classic's does: a helper's ask draws no outline. As light as
+   the needs-you rule, so a hand-off's ring and a drop's halo still show. */
+.calm-tile[data-ticket-tile]:where([data-status='needs-you']) {
+  outline-color: transparent;
 }
 
 .calm-tile .hybrid-tile-name {
@@ -4025,7 +4508,11 @@ kbd {
 /* Dialogs over the board */
 
 .new-agent-zone {
+  /* A zone's name in a dialog's title (`ZoneName`): one line, cut with an ellipsis when long, whole on hover. */
+  display: inline-block;
+  max-width: 100%;
   color: var(--accent-ink);
+  vertical-align: bottom;
 }
 
 /* The Repo field of New agent in a group: the repo, with its base and new branch folded in one quiet line under it. */
@@ -4265,7 +4752,10 @@ kbd {
 
 /* An orchestrator, or the crew member a flag came through: the crew's violet chip. */
 .inbox-crew {
+  display: inline-block;
+  max-width: 100%;
   padding: 0 var(--space-1-5);
+  vertical-align: bottom;
   border-radius: var(--radius-pill);
   background: var(--crew-flag-soft);
   color: var(--crew-flag);
@@ -4330,6 +4820,11 @@ kbd {
 .inbox-item-tool,
 .inbox-item-note {
   margin: 0;
+}
+
+/* The subagent's type can be one long word: it breaks rather than widen the inbox. */
+.inbox-item-tool {
+  overflow-wrap: anywhere;
 }
 
 .inbox-item-note {
@@ -4444,6 +4939,11 @@ kbd {
 .inbox-question-options .inbox-question-other {
   border-style: dashed;
   color: var(--muted);
+}
+
+.inbox-ask-option {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .inbox-ask-option .ui-kbd {
@@ -4635,8 +5135,10 @@ kbd {
 }
 
 .session-window-name {
-  /* The title keeps its room: the chips beside it shrink first, and it stops at a share of the header. */
-  flex: 0 0 auto;
+  /* The title keeps its room: the chips beside it shrink a hundred times quicker, and it stops at a share of
+     the header. Still short of room, it ellipsises rather than push the header's buttons, which never shrink, out of
+     the window, the expanded tile or the pop-up. */
+  flex: 0 1 auto;
   min-width: 0;
   /* Its limit, far wider than the chips'; past it, it ellipsises. */
   max-width: 60%;
@@ -4647,12 +5149,6 @@ kbd {
   letter-spacing: var(--tracking-snug);
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-/* A header holding the chat's controls too, still short of room once the chips have shrunk, ellipsises the
-   name rather than push Close out of the window. */
-.session-window-head:has(.chat-controls) .session-window-name {
-  flex-shrink: 1;
 }
 
 .session-window-where {
@@ -5499,6 +5995,12 @@ kbd {
 /* A kept terminal's own element, which moves from pane to pane (kept-terminals.ts). */
 .terminal-host {
   height: 100%;
+}
+
+/* A kept chat view's pane and its own element, which moves from pane to pane (kept-chats.ts): the chat lays out as if
+   it were the pane's own. */
+.kept-chat {
+  display: contents;
 }
 
 /* The composer, at the terminal's foot. */
@@ -7254,6 +7756,8 @@ button.chat-chip[aria-expanded='true'] {
   box-sizing: border-box;
   margin: 0;
   padding: var(--sticky-padding);
+  /* Inside a word too long for a line, as the font size that fits it (sticky-text.ts) reckons. */
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 
@@ -7883,8 +8387,10 @@ button.chat-chip[aria-expanded='true'] {
 
 .listcard-scope {
   display: inline-flex;
-  flex: none;
+  /* A long scope shrinks to an ellipsis rather than running out of the card's head. */
+  flex: 0 1 auto;
   align-items: center;
+  min-width: 0;
   gap: var(--space-1);
   padding: var(--space-px) var(--space-1-5);
   border: 1px solid var(--control-edge);
@@ -8057,6 +8563,13 @@ button.chat-chip[aria-expanded='true'] {
   white-space: nowrap;
 }
 
+/* On the card a row's corner (who wrote it, and when) ends in an ellipsis, its title saying it whole, so a long name can't squeeze out the key and the value. */
+.listcard-rows .listcard-who {
+  overflow: hidden;
+  max-width: var(--listcard-who-width);
+  text-overflow: ellipsis;
+}
+
 .listcard-changed {
   color: var(--text);
   font-weight: var(--weight-semibold);
@@ -8167,11 +8680,10 @@ button.chat-chip[aria-expanded='true'] {
   text-align: center;
 }
 
-.listcard-icon[data-lifted] .listcard-icon-face {
-  position: relative;
-  z-index: 1;
-  scale: var(--listcard-lift);
-  transform-origin: center bottom;
+/* A folded memory, queue, to-do list or steps card: its icon at its own size, scaled as a picture to its frame. */
+.folded-picture {
+  transform: scale(var(--picture-scale, 1));
+  transform-origin: 0 0;
 }
 
 /* The node's own cursor: the face is most of a folded card, which a press drags. */
@@ -8578,13 +9090,62 @@ button.chat-chip[aria-expanded='true'] {
 
 .memory-full-list {
   display: flex;
+  flex: 1;
   flex-direction: column;
   gap: var(--space-0-5);
+  min-height: 0;
   margin: 0;
   padding: var(--space-2);
   overflow: auto;
-  border-right: 1px solid var(--separator);
   list-style: none;
+}
+
+/* The list's column: the entries, then who read the memory, under them. */
+.memory-full-side {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--separator);
+}
+
+.memory-full-who {
+  display: grid;
+  flex: none;
+  gap: var(--space-1-5);
+  max-height: 40%;
+  padding: var(--space-2-5) var(--space-3);
+  overflow: auto;
+  border-top: 1px solid var(--separator);
+}
+
+/* Who read a memory and when, the latest first: in the foot's hover card and the full screen's column. */
+.memory-readers {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  font-size: var(--font-size-xs);
+  list-style: none;
+}
+
+.memory-readers li {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.memory-readers b {
+  overflow: hidden;
+  color: var(--text-soft);
+  font-weight: var(--weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-readers time,
+.memory-readers-more {
+  flex: none;
+  color: var(--muted);
 }
 
 .memory-full-group {
@@ -9192,6 +9753,7 @@ button.chat-chip[aria-expanded='true'] {
 
 /* Start agents to take jobs: a queue's drain. */
 .drain-sheet {
+  grid-template-columns: minmax(0, 1fr);
   display: grid;
   gap: var(--space-3);
   width: var(--hand-on-width);
@@ -9200,6 +9762,7 @@ button.chat-chip[aria-expanded='true'] {
 
 /* Hand on: who to hand the job to, and the message as it will be typed. */
 .hand-on {
+  grid-template-columns: minmax(0, 1fr);
   display: grid;
   gap: var(--space-3);
   width: var(--hand-on-width);
@@ -9207,6 +9770,7 @@ button.chat-chip[aria-expanded='true'] {
 }
 
 .hand-on-agents {
+  grid-template-columns: minmax(0, 1fr);
   display: grid;
   gap: var(--space-0-5);
   max-height: var(--hand-on-agents-height);
@@ -9224,6 +9788,12 @@ button.chat-chip[aria-expanded='true'] {
   border-radius: var(--radius-sm);
   font-size: var(--font-size-sm);
   cursor: pointer;
+}
+
+/* An agent's name wraps, however long, rather than pushing its state out of the list. */
+.hand-on-agent b {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .hand-on-agent:hover {
@@ -9479,6 +10049,7 @@ button.chat-chip[aria-expanded='true'] {
 }
 
 .clock-history {
+  grid-template-columns: minmax(0, 1fr);
   display: grid;
   max-height: var(--space-30);
   overflow-y: auto;
@@ -9487,6 +10058,7 @@ button.chat-chip[aria-expanded='true'] {
 }
 
 .clock-history-row {
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -9500,10 +10072,9 @@ button.chat-chip[aria-expanded='true'] {
   font-size: var(--font-size-2xs);
 }
 
+/* A run's agent and what came of it: one line, whole on hover (\`Truncate\`). */
 .clock-history-what {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  flex: 1;
 }
 
 .react-flow__edge-path.agent-note-tether {
@@ -9597,6 +10168,7 @@ button.chat-chip[aria-expanded='true'] {
 }
 
 .link-card {
+  container: link-card / size; /* its title shows as many lines as its height has room for */
   display: flex;
   flex-direction: column;
   gap: var(--space-1-5);
@@ -9646,16 +10218,50 @@ button.chat-chip[aria-expanded='true'] {
   margin-left: auto;
 }
 
+/* Two lines at the board's size, under its site (and a status tag); more as the card is made taller. The title says the
+   rest on hover. */
 .link-card-title {
   display: -webkit-box;
   overflow: hidden;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: 2;
   font-family: var(--font-display);
   font-size: var(--font-size-xl);
   font-weight: var(--weight-semibold);
   line-height: var(--leading-snug);
   overflow-wrap: anywhere;
+}
+
+/* A line of title is 20.25px; the site row and its gap take 28px. */
+@container link-card (min-height: 89px) {
+  .link-card-title {
+    -webkit-line-clamp: 3;
+  }
+}
+@container link-card (min-height: 109px) {
+  .link-card-title {
+    -webkit-line-clamp: 4;
+  }
+}
+@container link-card (min-height: 130px) {
+  .link-card-title {
+    -webkit-line-clamp: 5;
+  }
+}
+@container link-card (min-height: 150px) {
+  .link-card-title {
+    -webkit-line-clamp: 6;
+  }
+}
+@container link-card (min-height: 170px) {
+  .link-card-title {
+    -webkit-line-clamp: 7;
+  }
+}
+@container link-card (min-height: 190px) {
+  .link-card-title {
+    -webkit-line-clamp: 8;
+  }
 }
 
 /* An item of a kind this version doesn't know: the link card's plain look, but not a link. */
@@ -9798,7 +10404,8 @@ button.chat-chip[aria-expanded='true'] {
   position: absolute;
   inset: 0;
   display: grid;
-  place-items: center;
+  overflow: hidden; /* more text than fits stays inside the shape's outline, from its start */
+  place-items: safe center;
   box-sizing: border-box;
   padding: var(--shape-padding);
   text-align: center;
@@ -9811,6 +10418,14 @@ button.chat-chip[aria-expanded='true'] {
 
 .shape-label[data-at-top] {
   place-items: start center;
+}
+
+/* Text under a figure has only a short strip: centred on it, its lines spill evenly instead of losing the last one, and
+   its descenders paint a little past the strip's edge rather than being cut off. */
+.shape-label[data-outside] {
+  overflow: clip;
+  overflow-clip-margin: var(--space-1);
+  place-items: center;
 }
 
 .shape-text {
@@ -10243,7 +10858,7 @@ button.chat-chip[aria-expanded='true'] {
   align-items: center;
 }
 
-/* The thin banner over an ended agent's pane, which has dropped into a shell: how it exited, and Restart agent. */
+/* The thin banner over an ended agent's pane, which has dropped into a shell: how it ended, and Wake. */
 .agent-exit-banner {
   display: flex;
   flex: none;
@@ -11074,6 +11689,7 @@ button.chat-chip[aria-expanded='true'] {
 /* Issue cards and the "issue brief" flow edge that feeds an agent from one (R1) */
 
 .issue-card {
+  container: issue-card / size; /* its title shows as many lines as its height has room for */
   display: flex;
   flex-direction: column;
   gap: var(--space-1-5);
@@ -11102,7 +11718,14 @@ button.chat-chip[aria-expanded='true'] {
 }
 
 .issue-card-state {
+  /* A long state shrinks to an ellipsis rather than pushing the id out: a block, as a flex box shows no ellipsis. */
+  display: block;
+  flex: 0 1 auto;
+  min-width: 0;
   margin-left: auto;
+  overflow: hidden;
+  line-height: var(--size-tag);
+  text-overflow: ellipsis;
 }
 
 .issue-card-title {
@@ -11113,6 +11736,78 @@ button.chat-chip[aria-expanded='true'] {
   font-weight: var(--weight-bold);
   line-height: var(--leading-snug);
   overflow-wrap: anywhere;
+}
+
+/* At the board's size a card shows two lines of title, or one with its Start button under it; more as the card is made
+   taller. The title says the rest on hover. A line is 17.55px; the head and its gap take 28px, the Start button and its
+   gap 32px more. */
+.issue-card:has(.issue-card-start) .issue-card-title {
+  -webkit-line-clamp: 1;
+}
+@container issue-card (min-height: 87px) {
+  .issue-card-title {
+    -webkit-line-clamp: 3;
+  }
+}
+@container issue-card (min-height: 99px) {
+  .issue-card-title {
+    -webkit-line-clamp: 4;
+  }
+}
+@container issue-card (min-height: 116px) {
+  .issue-card-title {
+    -webkit-line-clamp: 5;
+  }
+}
+@container issue-card (min-height: 134px) {
+  .issue-card-title {
+    -webkit-line-clamp: 6;
+  }
+}
+@container issue-card (min-height: 151px) {
+  .issue-card-title {
+    -webkit-line-clamp: 7;
+  }
+}
+@container issue-card (min-height: 169px) {
+  .issue-card-title {
+    -webkit-line-clamp: 8;
+  }
+}
+@container issue-card (min-height: 96px) {
+  .issue-card:has(.issue-card-start) .issue-card-title {
+    -webkit-line-clamp: 2;
+  }
+}
+@container issue-card (min-height: 113px) {
+  .issue-card:has(.issue-card-start) .issue-card-title {
+    -webkit-line-clamp: 3;
+  }
+}
+@container issue-card (min-height: 131px) {
+  .issue-card:has(.issue-card-start) .issue-card-title {
+    -webkit-line-clamp: 4;
+  }
+}
+@container issue-card (min-height: 148px) {
+  .issue-card:has(.issue-card-start) .issue-card-title {
+    -webkit-line-clamp: 5;
+  }
+}
+@container issue-card (min-height: 166px) {
+  .issue-card:has(.issue-card-start) .issue-card-title {
+    -webkit-line-clamp: 6;
+  }
+}
+@container issue-card (min-height: 183px) {
+  .issue-card:has(.issue-card-start) .issue-card-title {
+    -webkit-line-clamp: 7;
+  }
+}
+@container issue-card (min-height: 201px) {
+  .issue-card:has(.issue-card-start) .issue-card-title {
+    -webkit-line-clamp: 8;
+  }
 }
 
 .issue-card-start {
@@ -11268,6 +11963,42 @@ button.chat-chip[aria-expanded='true'] {
   stroke-width: 1.6px;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+/* A memory read: one soft dot from the memory's middle to its reader's, fading in and out on the way, once. */
+.memory-read-pulse {
+  position: absolute;
+  top: var(--pulse-y);
+  left: var(--pulse-x);
+  z-index: var(--layer-tool);
+  width: var(--space-3);
+  height: var(--space-3);
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  box-shadow: var(--shadow-pulse);
+  opacity: 0;
+  pointer-events: none;
+  animation: memory-read-pulse var(--motion-handoff) var(--ease-in-out) forwards;
+}
+
+@keyframes memory-read-pulse {
+  0% {
+    opacity: 0;
+    translate: -50% -50%;
+  }
+
+  20% {
+    opacity: 0.8;
+  }
+
+  80% {
+    opacity: 0.8;
+  }
+
+  100% {
+    opacity: 0;
+    translate: calc(var(--pulse-dx) - 50%) calc(var(--pulse-dy) - 50%);
+  }
 }
 
 /* Placed at its end of the rail; the body sits off that side of the tile, away from it. */
@@ -12237,8 +12968,8 @@ button.chat-chip[aria-expanded='true'] {
   outline-color: var(--flow-target-edge);
 }
 
-/* Needing you outranks a hand-off: the orange outline stays. */
-.hybrid-tile-agent[data-handoff][data-needs-you] {
+/* Needing you outranks a hand-off: the orange outline stays, save on a ticket's tile, which asks without one. */
+.hybrid-tile-agent[data-handoff][data-needs-you]:not([data-ticket-tile]) {
   outline-color: var(--state-waiting);
 }
 
@@ -14010,6 +14741,7 @@ tr[data-status='running'] .gate-step-icon {
   padding: 0 var(--space-2-5);
   overflow: hidden;
   color: var(--text-soft);
+  overflow-wrap: anywhere;
   mask-image: linear-gradient(to bottom, var(--text) 55%, transparent);
 }
 
@@ -14724,6 +15456,7 @@ tr[data-status='running'] .gate-step-icon {
 .agent-shelves-body {
   display: grid;
   flex: 1;
+  grid-template-columns: minmax(0, 1fr); /* one column no wider than the sidebar, however long a word in it */
   align-content: start;
   gap: var(--space-3);
   min-height: 0;
@@ -14858,6 +15591,7 @@ tr[data-status='running'] .gate-step-icon {
 }
 .agent-shelves-rows {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-px);
   margin: 0;
   padding: 0;
@@ -14938,6 +15672,7 @@ button.agent-shelves-row:hover {
 /* The page: the agent's blocks, each in the board's own design with its tone, then its pins and From the board. */
 .page-shelf {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-3-5);
 }
 .page-status-line {
@@ -14954,6 +15689,7 @@ button.agent-shelves-row:hover {
 .page-block {
   position: relative;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-1-5);
   min-width: 0;
 }
@@ -15061,7 +15797,7 @@ button.agent-shelves-row:hover {
   text-decoration: underline;
 }
 .page-issue-id {
-  flex: none;
+  flex: 0 1 auto;
   padding: 0 var(--space-1-5);
   border-radius: var(--radius-sm);
   background: var(--accent-soft);
@@ -15088,6 +15824,7 @@ button.agent-shelves-row:hover {
 }
 .page-figure {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-px);
   padding: var(--space-2-25) var(--space-2-5);
   border-radius: var(--radius-xl);
@@ -15096,7 +15833,9 @@ button.agent-shelves-row:hover {
 }
 .page-figure-value {
   display: flex;
+  min-width: 0;
   align-items: center;
+  overflow-wrap: anywhere;
   gap: var(--space-1-5);
   font-size: var(--font-size-3xl);
   font-weight: var(--weight-heavy);
@@ -15112,6 +15851,7 @@ button.agent-shelves-row:hover {
 }
 .page-checks {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-1-25);
   margin: 0;
   padding: 0;
@@ -15172,6 +15912,7 @@ button.agent-shelves-row:hover {
 }
 .page-note {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-0-5);
   margin-right: var(--space-5);
   padding: var(--space-1-75) var(--space-2-25);
@@ -15259,6 +16000,7 @@ button.agent-shelves-row:hover {
 }
 .page-from-board {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-1);
   padding-top: var(--space-2-5);
   border-top: 1px solid var(--separator);
@@ -15270,6 +16012,7 @@ button.agent-shelves-row:hover {
 }
 .agent-shelves-group {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-0-5);
 }
 .agent-shelves-group > * {
@@ -15326,6 +16069,7 @@ button.agent-shelves-row:hover {
 }
 .agent-shelves-group-body {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-0-5);
 }
 .agent-shelves-group-body > * {
@@ -15369,6 +16113,7 @@ button.agent-shelves-row:hover {
 .made-pr {
   position: relative;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-2);
   padding: var(--space-2-5);
   border: 1px solid var(--border);
@@ -15377,6 +16122,7 @@ button.agent-shelves-row:hover {
 }
 .made-pr-top {
   display: flex;
+  min-width: 0;
   align-items: flex-start;
   gap: var(--space-2-25);
   padding: 0;
@@ -15401,6 +16147,7 @@ button.agent-shelves-row:hover {
 }
 .made-fact {
   display: inline-flex;
+  max-width: 100%;
   align-items: center;
   gap: var(--space-1);
   height: 20px;
@@ -15412,6 +16159,7 @@ button.agent-shelves-row:hover {
   font-weight: var(--weight-semibold);
 }
 .made-fact svg {
+  flex: none;
   width: var(--icon-xs);
   height: var(--icon-xs);
 }
@@ -16173,6 +16921,8 @@ button.agent-shelves-row:hover {
 
 .steps-rows {
   display: grid;
+  /* One column no wider than the card: a long line wraps or ends in an ellipsis rather than scrolling sideways. */
+  grid-template-columns: minmax(0, 1fr);
   max-height: 330px;
   overflow: auto;
   border-top: 1px solid var(--separator);
@@ -16479,6 +17229,7 @@ button.agent-shelves-row:hover {
 
 .steps-open {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-1-5);
   padding: var(--space-2) var(--space-2-5) var(--space-2-25);
   border-bottom: 1px solid var(--separator);
@@ -16568,16 +17319,18 @@ button.agent-shelves-row:hover {
 
 .steps-controls {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-1-5);
 }
 
 .steps-options {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-1);
 }
 
 .steps-yes-no {
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 }
 
 .steps-option {
@@ -16592,6 +17345,7 @@ button.agent-shelves-row:hover {
   color: var(--text);
   font: inherit;
   text-align: left;
+  overflow-wrap: anywhere;
   cursor: pointer;
 }
 
@@ -17475,6 +18229,7 @@ button.steps-link-open:focus-visible {
 }
 
 .prefab-node {
+  grid-template-columns: minmax(0, 1fr);
   position: absolute;
   display: grid;
   justify-items: center;
@@ -17490,8 +18245,13 @@ button.steps-link-open:focus-visible {
   cursor: pointer;
 }
 
+/* A member's label stays on its node: one line, cut with an ellipsis, whole on the node's hover. */
 .prefab-node b {
+  max-width: 100%;
+  overflow: hidden;
   font-size: var(--font-size-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .prefab-node-model {
@@ -17652,7 +18412,9 @@ button.steps-link-open:focus-visible {
 }
 
 .prefab-inspector-head b {
+  min-width: 0;
   font-size: var(--font-size-md);
+  overflow-wrap: anywhere;
 }
 
 .prefab-inspector-remove {
@@ -17706,6 +18468,12 @@ button.steps-link-open:focus-visible {
   line-height: var(--leading-roomy);
 }
 
+/* The crew in words: long member names wrap rather than run past the editor. */
+.prefab-sentence > span:last-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .prefab-sentence b {
   color: var(--text);
 }
@@ -17743,6 +18511,9 @@ button.steps-link-open:focus-visible {
 }
 
 .prefab-card {
+  min-width: 0;
+  /* A prefab's name, purpose or file name with no spaces wraps inside its card. */
+  overflow-wrap: anywhere;
   display: flex;
   flex-direction: column;
   gap: var(--space-1-5);
@@ -17768,6 +18539,10 @@ button.steps-link-open:focus-visible {
   gap: var(--space-1-5);
   align-items: center;
   font-size: var(--font-size-md);
+}
+
+.prefab-card-name b {
+  min-width: 0;
 }
 
 .prefab-card-purpose {
@@ -17862,9 +18637,16 @@ button.steps-link-open:focus-visible {
 }
 
 .crew-prompt-title {
-  display: inline-flex;
+  display: flex;
   gap: var(--space-2);
   align-items: center;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* The words beside the mark shrink, so a long zone name ends in its ellipsis inside the dialog. */
+.crew-prompt-title > span:last-child {
+  min-width: 0;
 }
 
 .crew-prompt-rounds {
@@ -17910,6 +18692,14 @@ button.steps-link-open:focus-visible {
   flex: 1;
   flex-direction: column;
   min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* When a member starts: it shrinks to an ellipsis (whole on hover) so the member's words keep their room. */
+.crew-prompt-member > .ui-tag {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 50%;
 }
 
 .crew-prompt-member-detail {
@@ -17964,7 +18754,11 @@ button.steps-link-open:focus-visible {
   min-width: 0;
 }
 
-.new-crew-row-text span {
+.new-crew-row-name {
+  font-weight: var(--weight-bold);
+}
+
+.new-crew-row-text > span:not(.new-crew-row-name) {
   color: var(--muted);
   font-size: var(--font-size-xs);
 }
@@ -19511,4 +20305,100 @@ button.tile-folded-row:is(:hover, :focus-visible) {
 /* A finished agent in a ticket still going: dimmed in its band until the whole ticket is done. */
 .react-flow__node.finished-in-band {
   opacity: 0.55;
+}
+
+/* Text an agent or the user wrote, in the session sidebar and the inbox: a word, path or link longer than the line breaks
+   inside it rather than running past the panel. */
+.details-message,
+.details-pin-note,
+.page-status-line,
+.page-now-summary,
+.page-quote,
+.page-text,
+.page-check-text,
+.page-callout,
+.page-figure-label,
+.page-block-head,
+.made-pr-title,
+.inbox-item-message,
+.inbox-question-header,
+.inbox-question-options li,
+.inbox-remove-tiles li,
+.inbox-row-meta,
+.inbox-row-warning,
+.inbox-plan-title,
+.steps-wait-text,
+.steps-wait-on {
+  overflow-wrap: anywhere;
+}
+
+/* Beside an icon, the text takes what is left and no more. */
+.page-now-summary,
+.made-pr-title,
+.page-callout > * {
+  min-width: 0;
+}
+
+.inbox-question-options li,
+.inbox-remove-tiles li {
+  max-width: 100%;
+}
+
+/* The long-text gallery: every board item with long strings, each in a box of the size the board gives it. */
+.long-text-gallery {
+  display: grid;
+  gap: var(--space-6);
+  padding: var(--space-6);
+  background: var(--surface);
+}
+
+.long-text-gallery-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-6);
+}
+
+/* Each item's box drawn faintly, so a spill shows against the edge it ran past. */
+.long-text-box {
+  outline: 1px dashed var(--separator);
+}
+
+/* A panel in the gallery is as tall as all it shows, so nothing in it is out of sight below, and is drawn on the panel's
+   own surface. */
+.long-text-panel {
+  background: var(--panel);
+}
+
+/* The sidebar is as wide as its box: in its window it may take up to half of it. */
+.long-text-panel .agent-shelves {
+  max-width: none;
+}
+
+/* The Captain's panel in its box, not docked to the window's side. */
+.long-text-panel .long-text-master {
+  position: static;
+  width: auto;
+}
+
+.long-text-zones > .ui-island {
+  position: static; /* in its box, not at the window's corner */
+}
+
+.long-text-steps {
+  width: 280px;
+}
+
+/* A dialog in the gallery is as wide as a dialog over the board; a crew's prompt and a new ticket are wider there. */
+.long-text-dialog {
+  width: var(--size-dialog);
+}
+
+.long-text-dialog:has(.crew-prompt) {
+  width: var(--size-crew-prompt);
+}
+
+/* ⌘K's list drawn whole, its compact columns too, rather than scrolled to its first rows. */
+.long-text-spotlight .spotlight-list {
+  max-height: none;
 }

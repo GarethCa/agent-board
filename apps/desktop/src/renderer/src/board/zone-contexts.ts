@@ -71,6 +71,7 @@ export const ZoneBindingContext = createContext<ZoneBindingActions>({
   setSpacing: () => {},
   openSettings: () => {},
   setLayoutMode: () => {},
+  setPlacement: () => {},
   fold: () => {},
   unfold: () => {},
   rename: () => Promise.resolve(),

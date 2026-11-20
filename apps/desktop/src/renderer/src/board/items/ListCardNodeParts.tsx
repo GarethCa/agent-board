@@ -1,4 +1,4 @@
-// What a memory's node and a queue's share on the board: their zone, the lift zoomed out, rows read again on each
+// What a memory's node and a queue's share on the board: their zone, rows read again on each
 // write, the add box focused once, the toolbar, and the peek's popover rules.
 import { useEffect, useRef, useState, type ComponentProps, type ReactNode } from 'react';
 import { NodeToolbar, Position, useReactFlow, useStore } from '@xyflow/react';
@@ -19,17 +19,6 @@ export function useZone(zoneId: string | null): { name?: string; color?: string 
     return node !== undefined && isZone(node) ? node.data.zone.color : undefined;
   });
   return { name, color };
-}
-
-/** The board zoom below which a folded one's face stops shrinking with it, so it still reads as what it is. */
-const ICON_MIN_ZOOM = 0.6;
-
-/**
- * How much a folded one's face is scaled up against the board's zoom: 1 down to `ICON_MIN_ZOOM`, then enough to keep it
- * at that size. Only a folded one listens, and only below it does the value change.
- */
-export function useLift(folded: boolean): number {
-  return useStore((state) => (folded ? Math.max(1, Math.round((ICON_MIN_ZOOM / state.transform[2]) * 20) / 20) : 1));
 }
 
 /**

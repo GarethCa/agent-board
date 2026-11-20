@@ -13,7 +13,7 @@ export const DONE_LINE_KIND = 'done-line';
  */
 const GATHERED: readonly BoardItemKind[] = ['agent-note', 'document', 'plan', 'steps', 'todo'];
 
-/** Whether a Clean up may gather an item of `kind` to its agent: once the user drags one, it is placed by hand. */
+/** Whether a Clean up gathers an item of `kind` to its agent: the board keeps such an item with its tile until it is dragged. */
 export const isGatheredKind = (kind: BoardItemKind): boolean => GATHERED.includes(kind);
 
 /**

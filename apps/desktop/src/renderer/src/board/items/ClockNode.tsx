@@ -101,14 +101,18 @@ export const ClockNode = memo(function ClockNode({ data, selected: picked, dragg
       <Face at={next} small={clock.folded} />
       {clock.folded ? (
         <span className="clock-pill-text">
-          <b className="clock-words">{card.words}</b>
+          <b className="clock-words" title={card.words}>
+            {card.words}
+          </b>
           <small className="clock-soon" data-testid="clock-soon">
             {card.running ? '✦ running' : card.soon}
           </small>
         </span>
       ) : (
         <span className="clock-text">
-          <b className="clock-words">{card.words}</b>
+          <b className="clock-words" title={card.words}>
+            {card.words}
+          </b>
           <small className="clock-detail" data-testid="clock-detail">
             {card.detail}
           </small>

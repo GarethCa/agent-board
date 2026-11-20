@@ -72,7 +72,7 @@ export function GoThroughView(props: GoThroughViewProps) {
         <button type="button" className="queue-going-back nodrag" data-testid="queue-going-back" title="Back to the list" onClick={onBack}>
           ← Back
         </button>
-        <b className="listcard-title">{title}</b>
+        <b className="listcard-title" title={title}>{title}</b>
         <span className="queue-going-place" data-testid="queue-going-place" aria-live="polite">
           {at} of {total}
         </span>

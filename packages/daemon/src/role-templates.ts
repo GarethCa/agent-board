@@ -94,7 +94,7 @@ const BUILT_IN: Partial<Record<AgentRole, string>> = {
 
 Read the issue, the repo's own instructions and what other agents left (\`agent-board memory ls\`, then \`memory read <memory>\`) first. Work test-first, commit in small steps on \`{{branch}}\`, and
 write what you did, how to verify it and anything left over in \`.agent-board/handover.md\` before you finish. Before you finish, also add what the
-next agent should know with \`agent-board memory add <memory> "key: value"\` (\`memory new\` first if there is none).
+next agent should know to your zone's memory with \`agent-board memory add <memory> "key: value"\` (\`memory new\` only if your zone has none).
 Record each pull request you open with \`agent-board record pr <url>\`, and the handover with \`agent-board record doc
 .agent-board/handover.md\` (add \`--for orchestrator\` when an orchestrator started you).`,
   reviewer: `You are an adversarial reviewer for {{issue}}, review round {{round}}.

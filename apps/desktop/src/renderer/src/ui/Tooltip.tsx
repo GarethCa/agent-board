@@ -29,6 +29,14 @@ const opensPopup = (control: HTMLElement | null) => control?.hasAttribute('aria-
 type Wake = { node: HTMLElement; by: 'hover' | 'focus' };
 
 /**
+ * Controls pressed since the pointer came over them. A click wakes its control and presses it in one go, before the
+ * tooltip has mounted to hear the press, so the tooltip mustn't then open as if only hovered: Radix keeps it shut
+ * after a press until the pointer leaves, and so does this. A press anywhere inside counts, as presses bubble: a click
+ * on a tile, or on a chip on it, keeps the tile's hover card shut until the pointer leaves the tile.
+ */
+const pressed = new WeakSet<HTMLElement>();
+
+/**
  * Wakes a hint on first use. A board holds hundreds of controls and a Radix tooltip is a dozen components each, so a
  * control mounts none until the pointer first rests on it or the focus first comes to it; `live` then mounts the
  * tooltip beside the control, which is never remounted (it keeps its focus, its state, and for a `HoverCard` the
@@ -49,6 +57,8 @@ function useWake(child: ReactElement, hover: boolean) {
     onPointerEnter: chain('onPointerEnter', (event) => {
       if ((event as PointerEvent<HTMLElement>).pointerType !== 'touch') wakeBy('hover')(event);
     }),
+    onPointerDown: chain('onPointerDown', (event) => pressed.add(event.currentTarget)),
+    onPointerLeave: chain('onPointerLeave', (event) => pressed.delete(event.currentTarget)),
     ...(hover ? {} : { onFocus: chain('onFocus', wakeBy('focus')) }),
   });
   return { wake, control };
@@ -75,8 +85,9 @@ function OnControl({ node, first, hoverOnly = false, ref, ...props }: { node: HT
         return () => node.removeEventListener(type, listener);
       });
     // The pointer is over the control, or the focus is on it, now: tell the trigger, as it would have heard. Only if it
-    // still is: a hover card with no text yet mounts when its text arrives, long after the pointer has gone.
-    if (first === 'hover' && node.matches(':hover')) (props.onPointerMove as (event: Event) => void)(new PointerEvent('pointermove', { pointerType: 'mouse' }));
+    // still is: a hover card with no text yet mounts when its text arrives, long after the pointer has gone. Not if it
+    // was pressed meanwhile, which closes a tooltip until the pointer leaves.
+    if (first === 'hover' && node.matches(':hover') && !pressed.has(node)) (props.onPointerMove as (event: Event) => void)(new PointerEvent('pointermove', { pointerType: 'mouse' }));
     else if (first === 'focus' && !hoverOnly && node.matches(':focus-within')) (props.onFocus as (event: Event) => void)(new FocusEvent('focus'));
     return () => {
       for (const off of events) off();

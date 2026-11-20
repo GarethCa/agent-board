@@ -24,6 +24,14 @@ export interface StripTab {
   closable: boolean;
   /** What its × says it does. */
   closeHint: string;
+  /** What leads it, before its label, in place of its dot: an agent's character. */
+  lead?: ReactNode;
+  /** A word in a pill after its label: a ticket's chat's "chat". */
+  pill?: string;
+  /** What ends it, after its label: an agent's status dot, with a tooltip of its own. */
+  mark?: ReactNode;
+  /** Whether its agent asks for the user, which colours it as an ask. */
+  ask?: boolean;
 }
 
 interface TabStripProps {
@@ -33,6 +41,37 @@ interface TabStripProps {
   focused?: boolean;
   onSelect(id: string): void;
   onClose(id: string): void;
+  /** The id of the panel that shows a tab, for its `aria-controls`. */
+  panelId(tabId: string): string;
+  /** What the tab drags as; undefined for one that stays put, and for every tab where nothing drags. */
+  dragOf?(tabId: string): TabDrag | undefined;
+  /** What the strip does with a tab or pane dropped on it at `index` among its tabs, if it would take it. */
+  drop?: { accepts(drag: TabDrag): boolean; onDrop(drag: TabDrag, index: number): void };
+  /** What ⌥-click on a tab does in place of picking it: opens its agent in a window of its own. */
+  onAltSelect?(id: string): void;
+  /** What the tab list is named, for a screen reader. */
+  label?: string;
+  /**
+   * What + (⌘T) offers, and Split (⌘D): new shells, scripts, other sessions. Undefined for a strip of a fixed set of
+   * tabs, a ticket's pop-up's, which has neither, and whose tabs name no ⌘1–9.
+   */
+  adds?: TabAdds;
+  /** Whatever sits at the strip's right end, after Split: the agent's Terminal / Chat switch. */
+  trailing?: ReactNode;
+  /**
+   * Given, every tab drags along the strip, and only along it: dropped at `index` (as `drop` counts it, the tab still in
+   * place), it moves there. Dropped anywhere else it stays put. A pop-up's row has it in place of `dragOf`.
+   */
+  reorder?(id: string, index: number): void;
+  /** The tab the user came from, underlined so one click (or ⌘[) goes back to it. */
+  from?: string | undefined;
+}
+
+/** What a tab dragged along a strip that reorders carries: its own type, so nothing else (the board, a window) takes it. */
+const ROW_TAB_TYPE = 'application/x-agent-board-row-tab';
+
+/** What a session window's strip adds: its + menu, and Split. */
+export interface TabAdds {
   /** A new shell where the agent started, or in the shell tile's folder (⌘T). */
   onNewShell(): void;
   /** Where that is, as its menu entry says: "in this worktree", "in this folder". */
@@ -56,14 +95,6 @@ interface TabStripProps {
   shells?: boolean;
   /** Splits the pane, a new shell tab beside it (⌘D). */
   onSplit(): void;
-  /** The id of the panel that shows a tab, for its `aria-controls`. */
-  panelId(tabId: string): string;
-  /** What the tab drags as; undefined for one that stays put, and for every tab where nothing drags. */
-  dragOf?(tabId: string): TabDrag | undefined;
-  /** What the strip does with a tab or pane dropped on it at `index` among its tabs, if it would take it. */
-  drop?: { accepts(drag: TabDrag): boolean; onDrop(drag: TabDrag, index: number): void };
-  /** Whatever sits at the strip's right end, after Split: the agent's Terminal / Chat switch. */
-  trailing?: ReactNode;
 }
 
 /**
@@ -72,39 +103,18 @@ interface TabStripProps {
  * switch. A tab closes by its ×, shown on hover and on the tab showing, or a middle-click. A tab dragged along the
  * strip, from another, or from another window lands where a slot shows.
  */
-export function TabStrip({
-  tabs,
-  active,
-  focused = false,
-  onSelect,
-  onClose,
-  onNewShell,
-  here,
-  onNewShellAt,
-  onRunScript,
-  scripts,
-  sessions,
-  pullRequests = [],
-  onOpenTodo,
-  onOpenWeb,
-  named,
-  shells = true,
-  onSplit,
-  panelId,
-  dragOf,
-  drop,
-  trailing,
-}: TabStripProps) {
-  const simplified = useSimplified();
+export function TabStrip({ tabs, active, focused = false, onSelect, onAltSelect, onClose, label = 'Terminal tabs', adds, panelId, dragOf, drop, trailing, reorder, from }: TabStripProps) {
   const list = useRef<HTMLDivElement>(null);
   // A tab or pane held over the strip that would land here shows a slot where it would go.
   const dragging = useTabDrag();
-  const accepting = dragging !== undefined && drop?.accepts(dragging) === true;
+  /** The tab dragged along the strip to move it, where its tabs reorder (`reorder`). */
+  const [moving, setMoving] = useState<string>();
+  const accepting = moving !== undefined || (dragging !== undefined && drop?.accepts(dragging) === true);
   /** Where among the tabs a drag held over the strip would land, if one is. */
   const [over, setOver] = useState<number>();
   useEffect(() => {
-    if (dragging === undefined) setOver(undefined);
-  }, [dragging]);
+    if (dragging === undefined && moving === undefined) setOver(undefined);
+  }, [dragging, moving]);
   /** The index the pointer is at among the tabs: before the first whose middle is right of it. */
   const indexAt = (clientX: number) => {
     const placed = [...(list.current?.querySelectorAll<HTMLElement>('[data-testid="session-tab"]') ?? [])];
@@ -129,6 +139,132 @@ export function TabStrip({
     onSelect(tabs[to]!.id);
     list.current?.querySelectorAll<HTMLElement>('[role="tab"]')[to]?.focus();
   };
+  const slot = over !== undefined && accepting ? <span className="session-tab-slot" data-testid="session-tab-slot" aria-hidden /> : null;
+  return (
+    <div
+      className="session-tabs"
+      data-testid="session-tabs"
+      data-focused={focused || undefined}
+      data-drop-over={(over !== undefined && accepting) || undefined}
+      onDragOver={(event) => {
+        if (!accepting) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+        setOver(indexAt(event.clientX));
+      }}
+      onDragLeave={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOver(undefined);
+      }}
+      onDrop={(event) => {
+        if (moving !== undefined && reorder !== undefined) {
+          event.preventDefault();
+          event.stopPropagation();
+          setOver(undefined);
+          setMoving(undefined);
+          reorder(moving, indexAt(event.clientX));
+          return;
+        }
+        const drag = tabDrag();
+        if (drag === undefined || drop === undefined || !drop.accepts(drag)) return;
+        // The strip's, not the board's under it.
+        event.preventDefault();
+        event.stopPropagation();
+        setOver(undefined);
+        dropTaken();
+        drop.onDrop(drag, indexAt(event.clientX));
+      }}
+    >
+      <div ref={list} className="session-tabs-list" role="tablist" aria-label={label} onKeyDown={move}>
+        {tabs.map((tab, index) => {
+          const drag = dragOf?.(tab.id);
+          const moves = reorder !== undefined;
+          return (
+            <Fragment key={tab.id}>
+              {over === index && slot}
+              <span
+                className={drag === undefined && !moves ? 'session-tab' : 'session-tab nodrag'}
+                data-active={tab.id === active || undefined}
+                data-from={(tab.id === from && tab.id !== active) || undefined}
+                data-ask={tab.ask || undefined}
+                data-testid="session-tab"
+                data-tab={tab.id}
+                data-dragging={(drag !== undefined && dragging !== undefined && dragKey(dragging) === dragKey(drag)) || moving === tab.id || undefined}
+                draggable={drag !== undefined || moves}
+                onDragStart={
+                  moves
+                    ? (event) => {
+                        event.dataTransfer.effectAllowed = 'move';
+                        event.dataTransfer.setData(ROW_TAB_TYPE, tab.id);
+                        setMoving(tab.id);
+                      }
+                    : drag === undefined
+                      ? undefined
+                      : (event) => startDrag(event, drag, tab.label)
+                }
+                onDragEnd={moves ? () => setMoving(undefined) : drag === undefined ? undefined : (event) => endDrag(event, drag)}
+                // A middle-click closes a shell tab, as in a browser; held down, it neither scrolls nor pastes.
+                onMouseDown={tab.closable ? (event) => event.button === 1 && event.preventDefault() : undefined}
+                onAuxClick={
+                  tab.closable
+                    ? (event) => {
+                        if (event.button !== 1) return;
+                        event.preventDefault();
+                        onClose(tab.id);
+                      }
+                    : undefined
+                }
+              >
+                <button
+                  type="button"
+                  role="tab"
+                  className="session-tab-button"
+                  aria-selected={tab.id === active}
+                  aria-controls={panelId(tab.id)}
+                  tabIndex={tab.id === active ? 0 : -1}
+                  title={adds !== undefined && index < 9 ? `${tab.title ?? tab.label} (${chordText({ ...binding('window.tab').keys[0]!, text: String(index + 1) })})` : (tab.title ?? tab.label)}
+                  onClick={(event) => (event.altKey && onAltSelect !== undefined ? onAltSelect(tab.id) : onSelect(tab.id))}
+                >
+                  {tab.lead !== undefined ? (
+                    <span className="session-tab-lead" aria-hidden>
+                      {tab.lead}
+                    </span>
+                  ) : tab.icon === undefined ? (
+                    <span className="session-window-pane-dot" data-state={tab.dot} aria-hidden />
+                  ) : (
+                    <span className="session-tab-icon" aria-hidden>
+                      {tab.icon}
+                    </span>
+                  )}
+                  <span className="session-tab-label">{tab.label}</span>
+                  {tab.pill !== undefined && <span className="session-tab-pill">{tab.pill}</span>}
+                </button>
+                {tab.mark}
+                {tab.closable && (
+                  <IconButton
+                    className="session-tab-close"
+                    icon={<X />}
+                    size="xs"
+                    variant="ghost"
+                    aria-label={`Close ${tab.label}`}
+                    tooltip={tab.closeHint}
+                    onClick={() => onClose(tab.id)}
+                  />
+                )}
+              </span>
+            </Fragment>
+          );
+        })}
+        {over !== undefined && over >= tabs.length && slot}
+      </div>
+      {adds !== undefined && <AddTabs {...adds} />}
+      {trailing}
+    </div>
+  );
+}
+
+/** A session window's + (⌘T), named Shell while it has no tab but its own, and Split (⌘D). */
+function AddTabs({ onNewShell, here, onNewShellAt, onRunScript, scripts, sessions, pullRequests = [], onOpenTodo, onOpenWeb, named, shells = true, onSplit }: TabAdds) {
+  const simplified = useSimplified();
   const [menuOpen, setMenuOpen] = useState(false);
   const [found, setFound] = useState<PackageScripts | 'looking' | 'failed'>('looking');
   const openMenu = (open: boolean) => {
@@ -166,90 +302,8 @@ export function TabStrip({
     ...(onOpenTodo === undefined ? [] : (['separator', { label: 'To-do list', icon: <SquareCheckBig />, hint: 'Its reminders for you', onSelect: onOpenTodo }] as MenuEntry[])),
     ...(simplified && shells ? (['separator', { heading: 'Split' }, { label: 'Split right', icon: <Columns2 />, shortcut: keyText('window.splitBeside'), onSelect: onSplit }] as MenuEntry[]) : []),
   ];
-  const slot = over !== undefined && accepting ? <span className="session-tab-slot" data-testid="session-tab-slot" aria-hidden /> : null;
   return (
-    <div
-      className="session-tabs"
-      data-testid="session-tabs"
-      data-focused={focused || undefined}
-      data-drop-over={(over !== undefined && accepting) || undefined}
-      onDragOver={(event) => {
-        if (!accepting) return;
-        event.preventDefault();
-        event.dataTransfer.dropEffect = 'move';
-        setOver(indexAt(event.clientX));
-      }}
-      onDragLeave={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOver(undefined);
-      }}
-      onDrop={(event) => {
-        const drag = tabDrag();
-        if (drag === undefined || drop === undefined || !drop.accepts(drag)) return;
-        // The strip's, not the board's under it.
-        event.preventDefault();
-        event.stopPropagation();
-        setOver(undefined);
-        dropTaken();
-        drop.onDrop(drag, indexAt(event.clientX));
-      }}
-    >
-      <div ref={list} className="session-tabs-list" role="tablist" aria-label="Terminal tabs" onKeyDown={move}>
-        {tabs.map((tab, index) => {
-          const drag = dragOf?.(tab.id);
-          return (
-            <Fragment key={tab.id}>
-              {over === index && slot}
-              <span
-                className={drag === undefined ? 'session-tab' : 'session-tab nodrag'}
-                data-active={tab.id === active || undefined}
-                data-testid="session-tab"
-                data-tab={tab.id}
-                data-dragging={(drag !== undefined && dragging !== undefined && dragKey(dragging) === dragKey(drag)) || undefined}
-                draggable={drag !== undefined}
-                onDragStart={drag === undefined ? undefined : (event) => startDrag(event, drag, tab.label)}
-                onDragEnd={drag === undefined ? undefined : (event) => endDrag(event, drag)}
-                // A middle-click closes a shell tab, as in a browser; held down, it neither scrolls nor pastes.
-                onMouseDown={tab.closable ? (event) => event.button === 1 && event.preventDefault() : undefined}
-                onAuxClick={
-                  tab.closable
-                    ? (event) => {
-                        if (event.button !== 1) return;
-                        event.preventDefault();
-                        onClose(tab.id);
-                      }
-                    : undefined
-                }
-              >
-                <button
-                  type="button"
-                  role="tab"
-                  className="session-tab-button"
-                  aria-selected={tab.id === active}
-                  aria-controls={panelId(tab.id)}
-                  tabIndex={tab.id === active ? 0 : -1}
-                  title={index < 9 ? `${tab.title ?? tab.label} (${chordText({ ...binding('window.tab').keys[0]!, text: String(index + 1) })})` : (tab.title ?? tab.label)}
-                  onClick={() => onSelect(tab.id)}
-                >
-                  {tab.icon === undefined ? <span className="session-window-pane-dot" data-state={tab.dot} aria-hidden /> : <span className="session-tab-icon" aria-hidden>{tab.icon}</span>}
-                  <span className="session-tab-label">{tab.label}</span>
-                </button>
-                {tab.closable && (
-                  <IconButton
-                    className="session-tab-close"
-                    icon={<X />}
-                    size="xs"
-                    variant="ghost"
-                    aria-label={`Close ${tab.label}`}
-                    tooltip={tab.closeHint}
-                    onClick={() => onClose(tab.id)}
-                  />
-                )}
-              </span>
-            </Fragment>
-          );
-        })}
-        {over !== undefined && over >= tabs.length && slot}
-      </div>
+    <>
       <Menu entries={entries} open={menuOpen} onOpenChange={openMenu}>
         {/* Named while the window has no shell tabs yet, so the way to one is plain to see. */}
         <Button
@@ -268,22 +322,21 @@ export function TabStrip({
         </Button>
       </Menu>
       {shells && !simplified && (
-      <IconButton
-        className="session-tab-split"
-        icon={<Columns2 />}
-        size="xs"
-        variant="ghost"
-        aria-label="Split pane"
-        tooltip={
-          <>
-            Split: a new shell beside this pane
-            <Kbd>{keyText('window.splitBeside')}</Kbd>
-          </>
-        }
-        onClick={onSplit}
-      />
+        <IconButton
+          className="session-tab-split"
+          icon={<Columns2 />}
+          size="xs"
+          variant="ghost"
+          aria-label="Split pane"
+          tooltip={
+            <>
+              Split: a new shell beside this pane
+              <Kbd>{keyText('window.splitBeside')}</Kbd>
+            </>
+          }
+          onClick={onSplit}
+        />
       )}
-      {trailing}
-    </div>
+    </>
   );
 }

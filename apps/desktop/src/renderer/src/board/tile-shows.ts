@@ -15,7 +15,7 @@ export interface TileShows {
   wakeInWords: boolean;
   /** Its model and reasoning effort as two tags, not one. */
   setupApart: boolean;
-  /** Its corner actions (Expand, Pop out, ⋯) always, not only on hover. */
+  /** Its corner actions (Expand and ⋯) always, not only on hover. */
   cornerAlways: boolean;
   /** Its branch row always, not only when it says more than its issue does. */
   branchAlways: boolean;
@@ -74,7 +74,7 @@ export const FULL_TILE: TileShows = {
  * that puts it back: in the order the tile draws them, top to bottom, so the list reads down the tile.
  */
 export const PARTS_TO_TURN_ON: readonly { part: keyof TileShows; label: string }[] = [
-  { part: 'cornerAlways', label: 'Expand, Pop out and ⋯, without hovering' },
+  { part: 'cornerAlways', label: 'Expand and ⋯, without hovering' },
   { part: 'branchAlways', label: 'Branch row, even when it repeats the issue' },
   { part: 'trusted', label: 'The “trusted by this zone’s setting” line' },
   { part: 'setBy', label: 'Who set its status line' },

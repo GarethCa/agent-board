@@ -6,7 +6,8 @@ import { CrewFaces } from '../crews/icons';
 import { prefabWeight } from '../crews/prefab-flow';
 import { usePrefabs, usePrefabsFailed } from '../crews/prefab-store';
 import { HARNESSES } from '../harness';
-import { Button, Checkbox, Dialog, ErrorText, Field, Fieldset, Hint, Input, Kbd, Segmented, Select, Textarea } from '../ui';
+import { Button, Checkbox, Dialog, ErrorText, Field, Fieldset, Hint, Input, Kbd, Segmented, Select, Textarea, Truncate } from '../ui';
+import { ZoneName } from './ZoneName';
 import type { SegmentedOption } from '../ui';
 import { AgentSetupChips, DEFAULT_SETUP, reviews, roleNote, type AgentSetup } from './AgentSetup';
 import { bypassNoticeSeen, CodexBypassExplanation, markBypassNoticeSeen } from './codex-notice';
@@ -258,12 +259,7 @@ export function NewAgentDialog({ zone, agents, issue: initialIssue, issueZoneId,
   }
 
   // Fixed while the switch is shown, so the switch stays where it is as the harness or the kind changes.
-  const sheetTitle = (
-    <>
-      New{zone !== undefined && ' in '}
-      {zone !== undefined && <span className="new-agent-zone">{zone.name}</span>}
-    </>
-  );
+  const sheetTitle = <NewSheetTitle zone={zone} />;
 
   if (kind === 'crew') {
     return (
@@ -292,18 +288,14 @@ export function NewAgentDialog({ zone, agents, issue: initialIssue, issueZoneId,
         <ul className="new-crew-list" aria-label="Crew prefabs">
           {prefabs.slice(0, SHEET_PREFABS).map((prefab, index) => (
             <li key={prefab.name}>
-              <button type="button" className="ui-row new-crew-row" title={prefab.purpose} autoFocus={index === 0} onClick={() => {
+              <CrewSheetRow
+                prefab={prefab}
+                autoFocus={index === 0}
+                onPick={() => {
                   rememberKind('crew');
                   onCrew(prefab);
-                }}>
-                <CrewFaces members={prefab.members} />
-                <span className="new-crew-row-text">
-                  <b>{prefab.name}</b>
-                  <span>
-                    {prefab.builtIn ? 'built in' : 'yours'} · {prefabWeight(prefab)}
-                  </span>
-                </span>
-              </button>
+                }}
+              />
             </li>
           ))}
         </ul>
@@ -319,10 +311,7 @@ export function NewAgentDialog({ zone, agents, issue: initialIssue, issueZoneId,
         crewable ? (
           sheetTitle
         ) : (
-          <>
-            New {HARNESSES[harness].label} agent{zone !== undefined && ' in '}
-            {zone !== undefined && <span className="new-agent-zone">{zone.name}</span>}
-          </>
+          <NewSheetTitle what={`${HARNESSES[harness].label} agent`} zone={zone} />
         )
       }
       headEnd={kindSwitch}
@@ -452,5 +441,31 @@ export function NewAgentDialog({ zone, agents, issue: initialIssue, issueZoneId,
       )}
       {error && <ErrorText>{error}</ErrorText>}
     </Dialog>
+  );
+}
+
+/** A crew prefab on the New sheet: its faces, its name and how heavy it is; its purpose on hover. */
+export function CrewSheetRow({ prefab, autoFocus = false, onPick }: { prefab: LibraryPrefab; autoFocus?: boolean; onPick(): void }) {
+  return (
+    <button type="button" className="ui-row new-crew-row" title={prefab.purpose} autoFocus={autoFocus} onClick={onPick}>
+      <CrewFaces members={prefab.members} />
+      <span className="new-crew-row-text">
+        <Truncate text={prefab.name} className="new-crew-row-name" />
+        <span>
+          {prefab.builtIn ? 'built in' : 'yours'} · {prefabWeight(prefab)}
+        </span>
+      </span>
+    </button>
+  );
+}
+
+/** The New sheet's title: what it starts, and the zone it starts it in, cut short when long. */
+export function NewSheetTitle({ what, zone }: { what?: string; zone: { name: string } | undefined }) {
+  return (
+    <>
+      New{what !== undefined && ` ${what}`}
+      {zone !== undefined && ' in '}
+      {zone !== undefined && <ZoneName name={zone.name} />}
+    </>
   );
 }

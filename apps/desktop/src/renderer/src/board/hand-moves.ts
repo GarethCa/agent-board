@@ -1,7 +1,7 @@
 // The user's own moves of a tile, which take it out of its zone's layout rule (placed by hand), and how a rule is undone
 // and redone: picking or leaving one, and a tile the user moved out of one.
 
-import { isLayoutRule, type TileMove, type Zone, type ZoneLayoutChoice } from '@agent-board/daemon/protocol';
+import { arrangeItemKind, isLayoutRule, placementsOf, type ArrangeItemKind, type ArrangePlacement, type BoardItem, type TileMove, type Zone, type ZoneLayoutChoice } from '@agent-board/daemon/protocol';
 import { historyKey, type BoardState, type Change } from './editing/use-history';
 
 /** A nudge of a tile with the arrow keys, to `at` in `zoneId`: the user's own move, as a drag is. */
@@ -42,17 +42,29 @@ export function layoutChoiceStep(zoneId: string, was: ZoneLayoutChoice, choice: 
 }
 
 /**
+ * The step of the user picking where `zone` puts its items of `kind`: undone, the zone's own choice (or the default)
+ * comes back, and a zone with a rule lays them out by it again. Nothing for the choice it has already.
+ */
+export function placementStep(zone: Zone, kind: ArrangeItemKind, placement: ArrangePlacement): Change[] {
+  const was = placementsOf(zone.placements)[kind];
+  if (was === placement) return [];
+  return [[historyKey.zonePlacement(zone.id, kind), { type: 'zonePlacement', kind, placement: was }, { type: 'zonePlacement', kind, placement }]];
+}
+
+/**
  * The step of the user moving the tile `nodeId` from `before` to `move`. A move by hand records whether the tile was
  * placed by hand before it (`markedIn`, the zone it is marked in, if any), and whether it was free in its zone's free
- * area (`wasFree`), so that an undo puts both marks back as they were.
+ * area (`wasFree`), so that an undo puts both marks back as they were. A drop beside expanded tiles records them
+ * (`putDownBy`) with the place it left, so a redo puts it down beside them again; an undo leaves it pushed as before.
  */
-export function tileMoveStep(nodeId: string, before: TileMove, move: TileMove, markedIn: string | undefined, wasFree = false): Change {
+export function tileMoveStep(nodeId: string, before: TileMove, move: TileMove, markedIn: string | undefined, wasFree = false, putDownBy: readonly string[] = []): Change {
   const marked = move.byHand === true ? { handPlaced: markedIn !== undefined, free: wasFree } : {};
-  return [historyKey.tile(nodeId), { type: 'tile', move: historyPlace(before), ...marked }, { type: 'tile', move }];
+  const put = putDownBy.length === 0 ? {} : { putDown: putDownBy };
+  return [historyKey.tile(nodeId), { type: 'tile', move: historyPlace(before), ...marked }, { type: 'tile', move, ...put }];
 }
 
 /** What putting back a tile's step does: move it there, or have its zone's rule take it back (to where its lane is now). */
-export type TileStepAction = { kind: 'move'; move: TileMove } | { kind: 'followRule'; zoneId: string };
+export type TileStepAction = { kind: 'move'; move: TileMove; putDownBy?: readonly string[] } | { kind: 'followRule'; zoneId: string };
 
 /**
  * What putting the tile back to `state` does, the tile now marked placed by hand in `markedIn` (if any). A tile that
@@ -63,7 +75,8 @@ export type TileStepAction = { kind: 'move'; move: TileMove } | { kind: 'followR
 export function tileStepAction(state: Extract<BoardState, { type: 'tile' }>, markedIn: string | undefined): TileStepAction {
   if (state.handPlaced === false && markedIn !== undefined && markedIn === state.move.zoneId) return { kind: 'followRule', zoneId: markedIn };
   const move = state.handPlaced === true ? { ...state.move, byHand: true } : state.move;
-  return { kind: 'move', move: state.free === undefined ? move : { ...move, free: state.free } };
+  const put = state.putDown === undefined ? {} : { putDownBy: state.putDown };
+  return { kind: 'move', move: state.free === undefined ? move : { ...move, free: state.free }, ...put };
 }
 
 /**
@@ -82,3 +95,10 @@ export const cleanUpMessage = (zoneName: string, moved: number, done: number): s
 
 /** What the toast says after a ticket is moved to a zone's Done line by hand. */
 export const movedToDoneMessage = (zoneName: string): string => `Moved to ${zoneName}'s Done line`;
+
+/**
+ * The patch that marks an item the user dragged as placed by hand, which an arrange (and a Spine zone's Clean up) then
+ * leaves where it is; nothing for one marked already, or of a kind an arrange never places.
+ */
+export const placedByHandPatch = (item: BoardItem): { data: { placedByHand: true } } | Record<string, never> =>
+  arrangeItemKind(item.kind) !== null && item.data.placedByHand !== true ? { data: { placedByHand: true } } : {};

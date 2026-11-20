@@ -29,7 +29,7 @@ describe('the key registry', () => {
     }
   });
 
-  it('marks only the cheat sheet, master, memory full screen, document editing, find, reading rail, arrow-swapping, zone clean-up, board-arranging and way-out keys new so far: the rest were in the app before it', () => {
+  it('marks only the cheat sheet, master, memory full screen, document editing, find, reading rail, arrow-swapping, zone clean-up, board-arranging, pop-up tab row and way-out keys new so far: the rest were in the app before it', () => {
     expect(KEYS.filter((entry) => entry.status === 'new').map((entry) => entry.id)).toEqual([
       'tile.full',
       'move.cheatSheet',
@@ -39,6 +39,9 @@ describe('the key registry', () => {
       'edit.swapDirection',
       'edit.cleanUpZone',
       'edit.arrangeBoard',
+      'window.nextTab',
+      'window.previousTab',
+      'window.backTab',
       'window.saveDoc',
       'window.find',
       'window.readingRail',
@@ -115,6 +118,17 @@ describe('pressing a key', () => {
     expect(pressed('make.askClaude', press('A', 'KeyA', { metaKey: true, shiftKey: true }), MAC)).toBe(true);
     expect(pressed('make.askClaude', press('a', 'KeyA', { metaKey: true }), MAC)).toBe(false);
     expect(pressed('edit.selectAll', press('a', 'KeyA', { metaKey: true }), MAC)).toBe(true);
+  });
+
+  it('takes a control chord as ⌃ on macOS and Ctrl elsewhere, never with ⌘ or plain', () => {
+    expect(pressed('window.nextTab', press('Tab', 'Tab', { ctrlKey: true }), MAC)).toBe(true);
+    expect(pressed('window.nextTab', press('Tab', 'Tab'), MAC)).toBe(false);
+    expect(pressed('window.nextTab', press('Tab', 'Tab', { metaKey: true }), MAC)).toBe(false);
+    expect(pressed('window.nextTab', press('Tab', 'Tab', { ctrlKey: true, shiftKey: true }), MAC)).toBe(false);
+    expect(pressed('window.previousTab', press('Tab', 'Tab', { ctrlKey: true, shiftKey: true }), MAC)).toBe(true);
+    expect(pressed('window.nextTab', press('Tab', 'Tab', { ctrlKey: true }), OTHER)).toBe(true);
+    expect(keysText('window.nextTab', true)).toEqual(['⌃Tab']);
+    expect(keysText('window.previousTab', false)).toEqual(['Ctrl+Shift+Tab']);
   });
 
   it('takes a window chord as ⌘ on macOS and Ctrl+Shift elsewhere, by where the key is', () => {
@@ -229,7 +243,7 @@ describe('the cheat sheet', () => {
     expect(off).not.toContain('edit.arrangeBoard');
     expect(off).not.toContain('edit.cleanUpZone');
     expect(off).not.toContain('tile.full');
-    expect(off).toHaveLength(on.length - 17);
+    expect(off).toHaveLength(on.length - 20);
   });
 
   it('puts the sections for where it opened first, marked here', () => {

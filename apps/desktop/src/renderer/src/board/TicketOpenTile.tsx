@@ -20,7 +20,7 @@ import { stopPropagation, TileMenu } from './tile-parts';
 import { ticketFace } from './ticket-tile';
 import { HELPER_ICONS, HelperCard, OneButton, TicketViewSwitch, useSwitchTicketView, useTicketView, viewRows } from './ticket-parts';
 import { useTicketShown } from './ticket-shown';
-import { boardRow, ticketChatEntries, ticketMenuEntries } from './ticket-chat-menu';
+import { useTicketChatMenu } from './use-ticket-chat-menu';
 import { shownHelper, type TicketView } from './ticket-view';
 import { useViewSettingsLoaded } from './view-settings';
 import { TicketWatchesMenu, WatchIcons } from './TicketWatches';
@@ -51,7 +51,7 @@ export function TicketOpenTile(props: TicketOpenTileProps) {
 function TicketOpenTileShown({ id, tile, parent, standIn }: TicketOpenTileProps) {
   const chat = tile.agent!;
   const helpers = tile.helpers ?? [];
-  const { collapse, expand, resizeExpanded, openAgent, openPullRequest, resumeAgent, setTicketView, setTicketChat, readWatches, openTicketBoard } = useContext(TileActionsContext);
+  const { collapse, expand, resizeExpanded, openAgent, openPullRequest, wakeAgent, setTicketView, readWatches } = useContext(TileActionsContext);
   const shows = useNeedsYouShows();
   const face = ticketFace(chat, helpers, shows, { simplified: useSimplified() });
   const view = useTicketView(id);
@@ -61,8 +61,7 @@ function TicketOpenTileShown({ id, tile, parent, standIn }: TicketOpenTileProps)
   const helper = shownHelper(picked, helpers);
   const subject = helper ?? chat;
   const menu = useAgentTileMenu(id, chat, { from: tile.from, implementer: tile.implementer }, noop);
-  const kinds = ticketChatEntries(chat, (kind) => setTicketChat(chat.sessionId, kind));
-  const entries = ticketMenuEntries([...viewRows(view, switchView), boardRow(() => openTicketBoard(chat.sessionId))], kinds, withoutRename(menu.entries));
+  const { entries } = useTicketChatMenu(chat, helpers, viewRows(view, switchView), withoutRename(menu.entries), face.ticketId ?? face.title, { withWatches: false });
   const root = useRef<HTMLElement>(null);
   const resizeStart = useRef({ x: 0, y: 0 });
   // Esc from its header, or ⌘Esc from anywhere in it: back to its card; from the terminal view, a switch by hand.
@@ -92,7 +91,7 @@ function TicketOpenTileShown({ id, tile, parent, standIn }: TicketOpenTileProps)
   return (
     <section
       ref={root}
-      className={frostedClasses('expanded-tile ticket-open', chat)}
+      className={frostedClasses('expanded-tile ticket-open', chat, shows)}
       data-testid="expanded-tile"
       data-ticket-open={view}
       data-harness={chat.harness}
@@ -174,7 +173,7 @@ function TicketOpenTileShown({ id, tile, parent, standIn }: TicketOpenTileProps)
             button={face.button}
             onOpen={() => (face.asker === chat ? show(undefined) : showOrOpen(face.asker, helpers, show, openAgent))}
             onMerge={() => face.pr !== undefined && openPr(face.pr)}
-            onWake={() => resumeAgent(face.asker.sessionId)}
+            onWake={() => wakeAgent(face.asker)}
             onRead={() => readWatches(chat.sessionId)}
           />
         )}

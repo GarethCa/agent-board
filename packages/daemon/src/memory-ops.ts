@@ -156,9 +156,9 @@ async function cardFor(session: BoardSession, kind: 'memory' | 'queue', ref: str
 
 // ---- memory ----
 
-/** `memory new`: a memory beside the caller's tile. */
-export async function newMemory(session: BoardSession, title: string): Promise<BoardView> {
-  const item = await session.client.call('board.newMemory', { token: agentToken(session, 'make a memory'), title });
+/** `memory new`: a memory beside the caller's tile; refused while its zone has one, unless `second`. */
+export async function newMemory(session: BoardSession, title: string, second = false): Promise<BoardView> {
+  const item = await session.client.call('board.newMemory', { token: agentToken(session, 'make a memory'), title, ...(second ? { second } : {}) });
   const refs = new BoardRefs(await readCards(session));
   return { text: `Put ${cardLine(refs, item)} beside your tile. \`agent-board memory add ${refs.of('item', item.id)} key: value\` remembers something.`, json: item };
 }

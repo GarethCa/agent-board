@@ -466,7 +466,7 @@ describe('hook states', () => {
 
   it('holds a permission request as a new ask, and drops its late echo once it is settled', () => {
     const { hook, unseen, saved, row: now } = setup(row('a', { state: 'running' }));
-    const tool = { tool_name: 'Bash', tool_input: { command: 'ls' } };
+    const tool = { tool_name: 'Bash', tool_input: { command: 'ls' }, permission_suggestions: [] };
     expect(hook({ hook_event_name: 'PermissionRequest', ...tool })).toBeInstanceOf(Promise);
     expect(unseen).toEqual(['a']);
     expect(now().state).toBe('needs-permission');
@@ -480,7 +480,7 @@ describe('hook states', () => {
   });
 
   it("holds Claude's own request for the long hold, as its terminal asks too, and a subagent's or Codex's for the short one", () => {
-    const tool = { tool_name: 'Bash', tool_input: { command: 'ls' } };
+    const tool = { tool_name: 'Bash', tool_input: { command: 'ls' }, permission_suggestions: [] };
     const asks = (start: HookStateRow, fields: Record<string, unknown> = {}) => {
       const { hook } = setup(start);
       void hook({ hook_event_name: 'PermissionRequest', ...tool, ...fields });
@@ -491,6 +491,49 @@ describe('hook states', () => {
     expect(asks(row('a', { state: 'running' }))).toBe(true);
     expect(asks(row('b', { state: 'running' }), { agent_id: 'sub', agent_type: 'Explore' })).toBe(false);
     expect(asks(row('c', { state: 'running', harness: 'codex' }))).toBe(false);
+  });
+
+  it("lets Claude's own request go at once, unflagged, when only a person may allow it: no suggestions came with it", () => {
+    // Claude's own check (a removal it can't rule out) wants a person: it sends no suggestions and ignores a hook's allow.
+    const { hook, unseen, saved, logged, row: now } = setup(row('a', { state: 'running' }));
+    const tool = { tool_name: 'Bash', tool_input: { command: 'rm -f "$S"/*' } };
+    expect(hook({ hook_event_name: 'PermissionRequest', ...tool })).toBeUndefined();
+    expect(holds!.prompts('a')).toEqual([]);
+    expect(now().state).toBe('running');
+    expect(unseen).toEqual([]);
+    expect(saved).toEqual([{ state: 'running', always: false }]);
+    expect(logged).toEqual([`agent a: Claude asks a person, not the board, to allow Bash (no suggestions came with its request)`]);
+    // If Claude then draws its own dialog, it is a real ask, answered in the terminal: it flags the agent as ever.
+    hook({ hook_event_name: 'Notification', notification_type: 'permission_prompt', message: 'Claude needs your permission to use Bash' });
+    expect(now().state).toBe('needs-permission');
+    // Its denial lands as the agent carries on.
+    hook({ hook_event_name: 'PreToolUse', tool_name: 'Read' });
+    expect(now().state).toBe('running');
+  });
+
+  it("flags the dialog of a request only a person may allow after an earlier prompt was settled: it is no late echo", () => {
+    const { hook, row: now } = setup(row('a', { state: 'running' }));
+    const tool = { tool_name: 'Bash', tool_input: { command: 'ls' }, permission_suggestions: [] };
+    void hook({ hook_event_name: 'PermissionRequest', ...tool });
+    hook({ hook_event_name: 'PostToolUse', ...tool });
+    expect(hook({ hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'rm -f "$S"/*' } })).toBeUndefined();
+    hook({ hook_event_name: 'Notification', notification_type: 'permission_prompt', message: 'Claude needs your permission to use Bash' });
+    expect(now().state).toBe('needs-permission');
+  });
+
+  it("still holds a request with suggestions, even none, and a subagent's, Codex's, a question's or a plan's without", () => {
+    const held = (start: HookStateRow, fields: Record<string, unknown>) => {
+      const { hook } = setup(start);
+      const reply = hook({ hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'ls' }, ...fields });
+      const prompts = holds!.prompts(start.session_id).length;
+      holds!.close();
+      return reply instanceof Promise && prompts === 1;
+    };
+    expect(held(row('a', { state: 'running' }), { permission_suggestions: [] })).toBe(true);
+    expect(held(row('b', { state: 'running' }), { agent_id: 'sub', agent_type: 'Explore' })).toBe(true);
+    expect(held(row('c', { state: 'running', harness: 'codex' }), {})).toBe(true);
+    expect(held(row('d', { state: 'running' }), { tool_name: 'AskUserQuestion', tool_input: { questions: [] } })).toBe(true);
+    expect(held(row('e', { state: 'running' }), { tool_name: 'ExitPlanMode', tool_input: { plan: '# Plan' } })).toBe(true);
   });
 
   it("ignores an interrupted turn's work still landing, until the next prompt", () => {
@@ -629,7 +672,7 @@ describe('where a prompt stands, for pressing Enter on what was typed there', ()
     expect(states.promptNow(now())).toBe('working');
     hook({ hook_event_name: 'PreToolUse', tool_name: 'Bash' });
     expect(states.promptNow(now())).toBe('working');
-    void hook({ hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'rm -rf dist' } });
+    void hook({ hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'rm -rf dist' }, permission_suggestions: [] });
     expect(now().state).toBe('needs-permission');
     expect(states.promptNow(now())).toBe('moved-on');
     // A subagent's prompt pending holds it too, whatever its own state says.
@@ -700,7 +743,7 @@ describe('where a prompt stands, for pressing Enter on what was typed there', ()
   it('takes keys answering a permission prompt, a question or a rate limit for no draft at its prompt', () => {
     const { states, hook, row: now } = setup(row('a'));
     hook({ hook_event_name: 'UserPromptSubmit', prompt: 'go' });
-    void hook({ hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'rm -rf dist' } });
+    void hook({ hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'rm -rf dist' }, permission_suggestions: [] });
     expect(now().state).toBe('needs-permission');
     states.typed('a', '2', now());
     hook({ hook_event_name: 'Stop', last_assistant_message: 'Ok.' });

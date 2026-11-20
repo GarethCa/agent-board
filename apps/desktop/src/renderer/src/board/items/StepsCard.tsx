@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { ArrowDown, ArrowUp, Check, ChevronLeft, ChevronRight, Circle, Link, ListCheck, ListChecks, ListTodo, MessageSquareText, Send, ToggleRight, ArrowUpDown } from 'lucide-react';
 import type { Step, StepAnswer, StepsData } from '@agent-board/daemon/protocol';
-import { Button, ErrorText, Kbd } from '../../ui';
+import { Button, ErrorText, Kbd, Truncate } from '../../ui';
 import { useScrollFade } from './CardSizing';
 import { scrollToShow } from './card-size';
 import { fromStepLink, stepLinkUrl } from './step-link';
@@ -99,7 +99,7 @@ function Head({ data, view }: { data: StepsData; view: StepsView }) {
       <span className="steps-glyph" data-finished={view.finished || undefined}>
         <ListTodo />
       </span>
-      <b className="steps-title">{data.title}</b>
+      <b className="steps-title" title={data.title}>{data.title}</b>
       <span className="steps-count" data-testid="steps-count">
         {view.closed ? 'Closed' : view.finished ? 'Done' : <>{view.done}<span>/{view.total}</span></>}
       </span>
@@ -337,7 +337,7 @@ function Row({ row, onCursor, onToggle, actions, onNext, keys, sends }: { row: S
     return (
       <button type="button" className="steps-section nodrag" aria-expanded={row.open} data-finished={row.finished || undefined} onClick={() => onToggle(row)}>
         <ChevronRight className="steps-chevron" />
-        <span>{row.label}</span>
+        <Truncate className="steps-section-label" text={row.label} />
         <span className="steps-section-count">
           {row.finished && <Check />}
           {row.count}

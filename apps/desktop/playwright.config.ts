@@ -3,8 +3,11 @@ import { cpus, loadavg } from 'node:os';
 import { defaultWorkers } from '../../scripts/e2e-lock/workers.ts';
 
 const PERF = /board-perf\.spec\.ts/;
-/** The benchmarks, run only by hand: `pnpm bench:render` and `pnpm bench:agents`. */
-const BENCH = /(render|agents)-bench\.spec\.ts/;
+/**
+ * The benchmarks, run only by hand: `pnpm bench:render`, `pnpm bench:agents`, the pan and zoom profile
+ * (docs/research/pan-zoom.md) and the frost behind a pop-up (`popup-frost-bench.spec.ts`).
+ */
+const BENCH = /(render|agents|pan-zoom|popup-frost)-bench\.spec\.ts/;
 const PACKAGED = /packaged\.spec\.ts/;
 const VISUAL = /(^|\/)e2e\/visual\/[^/]+\.spec\.ts$/;
 const README = /readme-screenshots\.spec\.ts/;

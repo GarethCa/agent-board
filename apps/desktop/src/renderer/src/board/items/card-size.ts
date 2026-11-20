@@ -9,13 +9,39 @@ interface Sized {
 }
 
 /**
- * The size a card folds or unfolds to, and the data that keeps its open size. Folding keeps the size it had open, which
- * the user may have given it; unfolding gives that back, or `sizes.open` for one that kept none.
+ * The size a card folds or unfolds to, and the data that keeps the size it leaves. Each way keeps its own size, which
+ * the user may have given it: folding keeps the open size and gives back the icon's (`sizes.folded` for one that kept
+ * none); unfolding keeps the icon's and gives back the open size (`sizes.open` for one that kept none).
  */
-export function foldTo(card: Sized, folded: boolean, sizes: { folded: CardSize; open: CardSize }): { size: CardSize; kept: { openSize?: CardSize } } {
-  if (folded) return { size: sizes.folded, kept: { openSize: { width: card.width, height: card.height } } };
-  const open = card.data.openSize;
-  return { size: isCardSize(open) ? { width: open.width, height: open.height } : sizes.open, kept: {} };
+export function foldTo(
+  card: Sized,
+  folded: boolean,
+  sizes: { folded: CardSize; open: CardSize },
+): { size: CardSize; kept: { openSize?: CardSize; foldedSize?: CardSize } } {
+  const now = { width: card.width, height: card.height };
+  if (folded) return { size: keptSize(card.data.foldedSize) ?? sizes.folded, kept: { openSize: now } };
+  return { size: keptSize(card.data.openSize) ?? sizes.open, kept: { foldedSize: now } };
+}
+
+const keptSize = (size: unknown): CardSize | undefined => (isCardSize(size) ? { width: size.width, height: size.height } : undefined);
+
+/**
+ * How much bigger than its icon (`base`) a folded card is drawn: its frame's width over the icon's. A folded card is a
+ * picture, sized with its shape kept, so the width says it all.
+ */
+export function pictureScale(frame: CardSize, base: CardSize): number {
+  const scale = frame.width / base.width;
+  return Number.isFinite(scale) && scale > 0 ? scale : 1;
+}
+
+/** The least and most a folded icon is drawn, against its own size. */
+const LEAST_PICTURE = 0.5;
+const MOST_PICTURE = 4;
+
+/** The frames a folded icon `base` big can be resized between, its shape kept. */
+export function foldedBounds(base: CardSize): { least: CardSize; most: CardSize } {
+  const times = (by: number) => ({ width: Math.round(base.width * by), height: Math.round(base.height * by) });
+  return { least: times(LEAST_PICTURE), most: times(MOST_PICTURE) };
 }
 
 /** Which edges of a list have rows past them, for its fade: none when it all fits. */

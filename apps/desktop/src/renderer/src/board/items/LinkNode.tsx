@@ -83,7 +83,7 @@ export const LinkNode = memo(function LinkNode({ data, selected: picked, draggin
           </Tag>
         )}
       </div>
-      <div className="link-card-title" data-testid="link-card-title">
+      <div className="link-card-title" data-testid="link-card-title" title={title ?? url}>
         {title ?? url}
       </div>
     </div>

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent, AgentState, NeedsYouShows, PullRequest } from '@agent-board/daemon/protocol';
 import { galleryAgent } from './TileGallery';
-import { footerFoldKey, TILE_STATE_WORDS, tileAbout, tileButton, tileMark, tileMarkKey, tileNow, tileSince, tileState, tileTime, type TileState } from './tile-headline';
+import { whenLabel } from './schedule';
+import { footerFoldKey, TILE_STATE_WORDS, tileAbout, tileButton, tileMark, tileMarkKey, tileNow, tileSince, tileState, tileTime, tileWord, type TileState } from './tile-headline';
+import { clockTime } from './items/agent-note';
 
 const NOW = Date.parse('2026-11-13T09:00:00.000Z');
 const MIN = 60_000;
@@ -51,9 +53,14 @@ describe('its state on the tile', () => {
     expect(stateOf(base('needs-permission', { seen: true, permissions: [{ id: 'p', toolName: 'Bash', toolInput: {}, subagent: null, requestedAt: AT, heldUntil: null, asksInTerminal: false, sessionGrant: null, dialog: null, plan: null, questions: null }] as Agent['permissions'] }))).toBe('needs-you');
   });
 
-  it('is Needs you for a flag to the user and a restart that stopped it', () => {
+  it('is Needs you for a flag to the user', () => {
     expect(stateOf(base('idle', { flag: { id: 1, reason: 'Pick a cache', at: AT, to: 'user', via: null } }))).toBe('needs-you');
-    expect(stateOf(base('stopped-by-restart'))).toBe('needs-you');
+  });
+
+  it('is Paused for a restart that stopped it, by the word Stopped: it waits to be woken, asking nothing', () => {
+    expect(stateOf(base('stopped-by-restart'))).toBe('paused');
+    expect(tileWord(base('stopped-by-restart'), 'paused')).toBe('Stopped');
+    expect(tileWord(base('hibernated'), 'paused')).toBe('Paused');
   });
 
   it('has a word for each', () => {
@@ -86,7 +93,8 @@ describe('what is true now', () => {
     expect(now('waiting', { workCategory: { ...inReview, category: 'waiting-on-others', label: 'Legal' }, pullRequests: [] })).toBe('Waits on Legal');
     expect(now('waiting', { workCategory: { ...inReview, category: 'blocked', label: 'No API key' } })).toBe('Blocked · No API key');
     expect(tileNow(base('rate-limited'), 'waiting')).toBe('Waits on its usage limit');
-    expect(tileNow(base('scheduled'), 'waiting')).toBe('Waits on its next run');
+    expect(tileNow(base('scheduled'), 'waiting')).toBe(`Wakes ${whenLabel(new Date(base('scheduled').schedule!.nextRunAt!), new Date())}`);
+    expect(tileNow(base('scheduled', { schedule: null }), 'waiting')).toBe('Waits on its next run');
   });
 
   it('says it finished, and which pull request is ready', () => {
@@ -95,13 +103,31 @@ describe('what is true now', () => {
     expect(now('done', { pullRequests: [] })).toBe('Finished');
   });
 
-  it('says a restart stopped it, and that Resume carries it on', () => {
-    expect(tileNow(base('stopped-by-restart', { lastMessage: 'Half way' }), 'needs-you')).toBe('Stopped by a restart · Resume carries it on');
+  it('says when a done agent whose process ended finished', () => {
+    const done = (fields: Partial<Agent>) => tileNow(base('done', { endedAt: AT, ...fields }), 'done');
+    expect(done({ pullRequests: [] })).toBe(`Finished ${clockTime(AT)}`);
+    expect(done({ pullRequests: [pr(44)] })).toBe(`Finished ${clockTime(AT)} · PR #44 is ready to review`);
+  });
+
+  it('calls an agent that exited on an error Exited, and one that failed live Failed', () => {
+    expect(tileWord(base('failed', { endedAt: AT }), 'failed')).toBe('Exited');
+    expect(tileWord(base('failed', { endedAt: null }), 'failed')).toBe('Failed');
+    expect(tileWord(base('scheduled'), 'waiting')).toBe('Scheduled');
+    expect(tileWord(base('rate-limited'), 'waiting')).toBe('Waiting');
+  });
+
+  it('says a restart stopped it, and how long ago', () => {
+    const stopped = base('stopped-by-restart', { lastMessage: 'Half way', endedAt: '2026-01-01T10:00:00.000Z' });
+    expect(tileNow(stopped, 'paused', Date.parse('2026-01-01T12:10:00.000Z'))).toBe('Stopped by a restart · 2 h ago');
+    expect(tileNow(stopped, 'paused', Date.parse('2026-01-01T10:00:20.000Z'))).toBe('Stopped by a restart · just now');
   });
 
   it('says what waking does, and what failed', () => {
     expect(now('paused')).toBe('Wake starts it where it left off.');
-    expect(now('failed', { endedAt: AT, exitCode: 2, notice: null, lastMessage: null })).toBe('Ended · exit 2');
+    const ended = (exitCode: number | null) => tileNow(base('failed', { endedAt: AT, exitCode, notice: null, lastMessage: null }), 'failed');
+    expect(ended(2)).toBe(`Error (code 2) · ${clockTime(AT)}`);
+    expect(ended(0)).toBe(`Error · ${clockTime(AT)}`);
+    expect(ended(null)).toBe(`Error · ${clockTime(AT)}`);
     expect(now('failed', { notice: '3 tests failed in checkout.spec.ts' })).toBe('3 tests failed in checkout.spec.ts');
     expect(now('failed', { notice: null, endedAt: null, lastMessage: null, status: null })).toBe('It failed');
   });
@@ -166,8 +192,53 @@ describe('its one button', () => {
     expect(tileButton(flagged, stateOf(flagged))).toEqual({ kind: 'wake', label: 'Wake', prominent: true });
   });
 
+  it("is Wake, plain as a paused one's, for an agent a restart stopped: never Resume", () => {
+    const stopped = base('stopped-by-restart', { endedAt: AT });
+    expect(tileButton(stopped, stateOf(stopped))).toEqual({ kind: 'wake', label: 'Wake', prominent: false });
+  });
+
   it('is none while it thinks, waits on others or is idle', () => {
     for (const state of ['thinking', 'waiting', 'idle'] as const) expect(button(state)).toBeUndefined();
+  });
+
+  it('is Wake for a done agent with nothing to review, which starts it again here', () => {
+    const done = base('done', { endedAt: AT, pullRequests: [] });
+    expect(tileButton(done, stateOf(done))).toEqual({ kind: 'wake', label: 'Wake', prominent: false });
+    // Its open pull request comes first: Wake is in its menu.
+    expect(tileButton({ ...done, pullRequests: [pr(44)] }, 'done')).toEqual({ kind: 'review', label: 'Review', prominent: false });
+  });
+
+  it('is Wake for an agent that exited on an error, and Open for one whose start failed', () => {
+    const exited = base('failed', { endedAt: AT, exitCode: 1 });
+    expect(tileButton(exited, stateOf(exited))).toEqual({ kind: 'wake', label: 'Wake', prominent: false });
+    expect(tileButton(base('failed', { endedAt: null }), 'failed')).toEqual({ kind: 'open', label: 'Open', prominent: false });
+  });
+
+  it('is none for a reviewer whose round ended, nor one whose harness runs in its shell', () => {
+    expect(tileButton(base('done', { endedAt: AT, pullRequests: [], reviewOf: 'impl' }), 'done')).toBeUndefined();
+    expect(tileButton(base('failed', { endedAt: AT, reviewOf: 'impl' }), 'failed')).toEqual({ kind: 'open', label: 'Open', prominent: false });
+    expect(tileButton(base('done', { endedAt: AT, pullRequests: [], shellHarness: 'claude' }), 'done')).toBeUndefined();
+  });
+
+  it('is Wake now, on hover only, for an agent its clock wakes, and none once its clock is off', () => {
+    const scheduled = base('scheduled');
+    expect(tileButton(scheduled, stateOf(scheduled))).toEqual({ kind: 'wake', label: 'Wake now', prominent: false, onHover: true });
+    const off = { ...scheduled, schedule: { ...scheduled.schedule!, enabled: false } };
+    expect(tileButton(off, stateOf(off))).toBeUndefined();
+  });
+
+  it('draws one its clock pauses between runs, or one ended with its clock on, as waiting on its next run, with Wake now on hover', () => {
+    const { schedule } = base('scheduled');
+    for (const sleeping of [base('hibernated', { endedAt: AT, schedule: { ...schedule!, hibernates: true } }), base('done', { endedAt: AT, schedule })]) {
+      const state = stateOf(sleeping);
+      expect(state).toBe('waiting');
+      expect(tileNow(sleeping, state)).toMatch(/^Wakes /);
+      expect(tileWord(sleeping, state)).toBe('Scheduled');
+      expect(tileButton(sleeping, state)).toEqual({ kind: 'wake', label: 'Wake now', prominent: false, onHover: true });
+    }
+    // Exited on an error, its clock on: how it ended stays on its face.
+    const exited = base('failed', { endedAt: AT, exitCode: 1, schedule });
+    expect(tileNow(exited, stateOf(exited))).toBe(`Error (code 1) · ${clockTime(AT)}`);
   });
 });
 

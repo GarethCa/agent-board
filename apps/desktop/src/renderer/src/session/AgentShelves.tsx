@@ -46,7 +46,7 @@ import { branchLine, plainWhereLine, shelvesSetupLine } from '../board/AgentSetu
 import { clockBadge } from '../board/schedule';
 import { checksLabel } from '../board/tile-footer';
 import { keyText } from '../keys/registry';
-import { IconButton, Kbd, Tooltip } from '../ui';
+import { IconButton, Kbd, Tooltip, Truncate } from '../ui';
 import { shortWhen } from '../when';
 import { PAGE_ICON_COMPONENTS } from './page-icons';
 import { useShelfFold, type ShelfGroupId } from './shelf-folds';
@@ -306,8 +306,8 @@ function NowBlock({ agent, actions }: { agent: Agent; actions: ShelfActions }) {
         </p>
       )}
       {agent.issue !== null && (
-        <button type="button" className="page-issue" title={`${agent.issue.title}: opens in your browser`} onClick={() => actions.openLink(agent.issue!.url)}>
-          <span className="page-issue-id">{shortIssueId(agent.issue)}</span>
+        <button type="button" className="page-issue" title={`${shortIssueId(agent.issue)} ${agent.issue.title}: opens in your browser`} onClick={() => actions.openLink(agent.issue!.url)}>
+          <Truncate text={shortIssueId(agent.issue)} className="page-issue-id" />
           <span className="page-issue-title">{agent.issue.title}</span>
           <ArrowUpRight aria-hidden />
         </button>
@@ -734,7 +734,7 @@ function PullRequestCard({ row, agent, gate, records, actions }: { row: SidebarR
         {agent.issue !== null && (
           <span className="made-fact">
             <CircleDot aria-hidden />
-            {shortIssueId(agent.issue)}
+            <Truncate text={shortIssueId(agent.issue)} />
           </span>
         )}
         {row.source === 'guessed' && (

@@ -19,15 +19,28 @@ import {
   type Size,
   type ZoneGrid,
 } from './board-layout.ts';
-import { MIN_ZONE_SIZE, type AgentRole, type AgentState, type ArrangeBy, type ArrangeLayout, type ArrangeSpacing } from './protocol.ts';
+import {
+  ARRANGE_ITEM_KINDS,
+  MIN_ZONE_SIZE,
+  type AgentRole,
+  type AgentState,
+  type ArrangeBy,
+  type ArrangeItemKind,
+  type ArrangeLayout,
+  type ArrangePlacement,
+  type ArrangeSpacing,
+} from './protocol.ts';
 import { cutText } from './text-cut.ts';
 
-/** A tile to arrange (or a clock its crew made, which goes on the top row as a shell does): what it is grouped and ordered by. */
+/**
+ * A tile to arrange (or a clock its crew made, which goes on the top row as a shell does, or an item of the zone's, which
+ * goes where its `place` says): what it is grouped and ordered by.
+ */
 export interface ArrangeTile {
   /** Unique among the tiles. */
   id: string;
   name: string;
-  kind: 'agent' | 'shell' | 'clock';
+  kind: 'agent' | 'shell' | 'clock' | 'item';
   role: AgentRole | null;
   /** Its linked issue's ID, or null. */
   issue: string | null;
@@ -47,6 +60,15 @@ export interface ArrangeTile {
   branch?: string | null;
   /** When it was started (ISO time): between tiles of one role, the one started first goes first. */
   createdAt?: string;
+  /** An item's kind, which orders the items placed together: as `ARRANGE_ITEM_KINDS` lists them. */
+  itemKind?: ArrangeItemKind;
+  /** Where an item goes (`ArrangePlacement`): one placed `stay` is no tile to arrange, but in the way. */
+  place?: Exclude<ArrangePlacement, 'stay'>;
+  /**
+   * The tile an item belongs with, which it is placed `cluster` beside: in its lane after its tiles, or the lead's in
+   * the block beside the crew. Null, or a tile not among them, puts it in the sidebar.
+   */
+  owner?: string | null;
 }
 
 /** An edge between two of the tiles, from the one that hands off to the one it hands to. */
@@ -248,7 +270,22 @@ interface Row {
   columns: number[];
   /** Whether it is a unit of work (an issue's, or a chain's), which can be laid out as a cluster. */
   unit: boolean;
+  /** Whether it is the row of items placed `top`, under the top row: lined up with no other. */
+  segment?: boolean;
 }
+
+const isItem = (tile: ArrangeTile) => tile.kind === 'item';
+/**
+ * Where `item` is placed among `tiles`: as it is set, but beside an agent that is not among them (gone, never in the
+ * zone) or beside no agent (one of no one's, a shell's), down the sidebar.
+ */
+export const placedAs = (item: ArrangeTile, tiles: readonly ArrangeTile[]): Exclude<ArrangePlacement, 'stay'> =>
+  item.place === undefined || (item.place === 'cluster' && tiles.find((tile) => tile.id === item.owner)?.kind !== 'agent') ? 'sidebar' : item.place;
+/** `tiles` but the items among them. */
+const crewIn = (tiles: readonly ArrangeTile[]) => tiles.filter((tile) => !isItem(tile));
+/** Items in the order they are placed together: by kind (`ARRANGE_ITEM_KINDS`), then in the order they were made. */
+const byItem = (a: ArrangeTile, b: ArrangeTile) =>
+  ARRANGE_ITEM_KINDS.indexOf(a.itemKind ?? 'notes') - ARRANGE_ITEM_KINDS.indexOf(b.itemKind ?? 'notes') || byMade(a, b) || byText(a.id, b.id);
 
 /** A lane's slots, left to right: what does its work, what reviews it, what reviews it again. */
 export const LANE_SLOTS = ['implementer', 'reviewer', 'follow-up'] as const;
@@ -260,18 +297,23 @@ const slotOf = (tile: Pick<ArrangeTile, 'role' | 'reviewOf'>): LaneSlot =>
 
 /**
  * Lanes as rows: each unit's tiles in its slots' columns, every slot as many columns wide as its fullest lane needs and
- * none for a slot no lane uses, so every lane's tiles line up. Its note goes right after its own last tile, so a short
- * lane leaves no run of free slots before it.
+ * none for a slot no lane uses, so every lane's tiles line up; then the items of its agents (`itemsOf`), past every
+ * slot, so lanes' items line up too. Its note goes right after its own last tile, so a short lane leaves no run of free
+ * slots before it.
  */
-function laneRows(units: readonly ArrangeTile[][]): Row[] {
+function laneRows(units: readonly ArrangeTile[][], itemsOf: (unit: readonly ArrangeTile[]) => ArrangeTile[]): Row[] {
   const slotted = units.map((unit) => LANE_SLOTS.map((slot) => unit.filter((tile) => slotOf(tile) === slot)));
   const widths = LANE_SLOTS.map((_, index) => Math.max(0, ...slotted.map((slots) => slots[index]!.length)));
   const starts = widths.map((_, index) => widths.slice(0, index).reduce((sum, width) => sum + width, 0));
-  return slotted.map((slots) => ({
-    tiles: slots.flat(),
-    columns: slots.flatMap((tiles, index) => tiles.map((_, at) => starts[index]! + at)),
-    unit: true,
-  }));
+  const after = widths.reduce((sum, width) => sum + width, 0);
+  return slotted.map((slots, lane) => {
+    const items = itemsOf(units[lane]!);
+    return {
+      tiles: [...slots.flat(), ...items],
+      columns: [...slots.flatMap((tiles, index) => tiles.map((_, at) => starts[index]! + at)), ...items.map((_, at) => after + at)],
+      unit: true,
+    };
+  });
 }
 
 /** Columns for the tiles of each role in `chain`, from 0: a reviewer in the column of what it reviews where it can. */
@@ -297,7 +339,15 @@ function roleColumns(chain: readonly ArrangeTile[]): Map<string, number> {
   return at;
 }
 
+/**
+ * The rows `tiles` are laid out in. By issue: the top row (the lead, the shells, the clocks), the items placed `top`,
+ * then a lane per unit of work. By role or state: the lead's row, the items placed `top`, a row per role or state, then
+ * the shells. Items placed `cluster` go after their agent's row's tiles; every other item is placed by `arrangeTiles`.
+ */
 function rowsOf(tiles: readonly ArrangeTile[], links: readonly ArrangeLink[], by: ArrangeBy): Row[] {
+  const topItems = tiles.filter((tile) => isItem(tile) && tile.place === 'top').toSorted(byItem);
+  const clustered = tiles.filter((tile) => isItem(tile) && tile.place === 'cluster').toSorted(byItem);
+  const itemsOf = (row: readonly ArrangeTile[]) => clustered.filter((item) => row.some((tile) => tile.id === item.owner));
   const lead = tiles.filter((tile) => tile.lead).toSorted(byTile);
   // The shells, then the clocks, in the order they were made: never where they are, so the same crew arranges the same way.
   const shells = [...tiles.filter((tile) => !tile.lead && tile.kind === 'shell').toSorted(byTile), ...tiles.filter((tile) => tile.kind === 'clock').toSorted(byMade)];
@@ -309,9 +359,19 @@ function rowsOf(tiles: readonly ArrangeTile[], links: readonly ArrangeLink[], by
   const add = (row: ArrangeTile[], columns: number[] = row.map((_, index) => index), unit = false) => {
     if (row.length > 0) rows.push({ tiles: row, columns, unit });
   };
+  /** A row and its agents' items after its tiles. */
+  const addWithItems = (row: ArrangeTile[], columns: number[] = row.map((_, index) => index)) => {
+    const items = itemsOf(row);
+    const after = Math.max(-1, ...columns) + 1;
+    add([...row, ...items], [...columns, ...items.map((_, index) => after + index)]);
+  };
+  const segment = () => {
+    if (topItems.length > 0) rows.push({ tiles: topItems, columns: topItems.map((_, index) => index), unit: false, segment: true });
+  };
   if (by === 'issue') {
-    // The lead, the shells and the clocks share the top row, above the lanes.
+    // The lead, the shells and the clocks share the top row, above the lanes; the items placed on top go under it.
     add([...lead, ...shells]);
+    segment();
     const units = new Map<string, ArrangeTile[]>();
     for (const chain of chains) {
       const unit = unitOf(chain);
@@ -328,10 +388,11 @@ function rowsOf(tiles: readonly ArrangeTile[], links: readonly ArrangeLink[], by
     }
     // In the order their work started, so a new lane goes last and the others stay put.
     const started = (lane: readonly ArrangeTile[]) => lane.map((tile) => tile.createdAt ?? '').reduce((first, at) => (at !== '' && (first === '' || at < first) ? at : first), '');
-    rows.push(...laneRows(lanes.toSorted((a, b) => byText(started(a), started(b)))));
+    rows.push(...laneRows(lanes.toSorted((a, b) => byText(started(a), started(b))), itemsOf));
     return rows;
   }
   add(lead);
+  segment();
   if (by === 'role') {
     // Each chain takes as many columns as its roles need, side by side.
     const columns = new Map<string, number>();
@@ -343,14 +404,14 @@ function rowsOf(tiles: readonly ArrangeTile[], links: readonly ArrangeLink[], by
     }
     for (const role of ROLE_ORDER) {
       const row = chains.flat().filter((tile) => tile.role === role);
-      add(
+      addWithItems(
         row.toSorted((a, b) => columns.get(a.id)! - columns.get(b.id)!),
         row.map((tile) => columns.get(tile.id)!).sort((a, b) => a - b),
       );
     }
   } else {
     const ordered = chains.flat();
-    for (const state of STATE_ORDER) add(ordered.filter((tile) => tile.state === state));
+    for (const state of STATE_ORDER) addWithItems(ordered.filter((tile) => tile.state === state));
   }
   add(shells);
   return rows;
@@ -370,7 +431,8 @@ function commonStart(names: readonly string[]): string {
 }
 
 /** A cluster's label: its issue, else its branch's ticket, else what its agents' names start with, else its first's name. */
-function labelOf(row: readonly ArrangeTile[]): string {
+function labelOf(tiles: readonly ArrangeTile[]): string {
+  const row = crewIn(tiles);
   const linked = row.find((tile) => tile.issue !== null);
   if (linked !== undefined) return cutText(`${linked.issue}${linked.issueTitle ? ` ${linked.issueTitle}` : ''}`, MAX_LABEL);
   const ticket = unitOf(row);
@@ -379,9 +441,10 @@ function labelOf(row: readonly ArrangeTile[]): string {
 }
 
 /** A lane's key, stable across arranges: `issue:<id>` for its issue or the ticket in its branch, else its first tile's id. */
-function laneKey(tiles: readonly ArrangeTile[]): string {
+function laneKey(all: readonly ArrangeTile[]): string {
+  const tiles = crewIn(all);
   const unit = tiles.find((tile) => tile.issue !== null)?.issue ?? unitOf(tiles);
-  return unit === null ? tiles[0]!.id : `issue:${unit}`;
+  return unit === null ? (tiles[0] ?? all[0]!).id : `issue:${unit}`;
 }
 
 /** A zone's crew as lanes, by issue: what the top row holds (the lead, then the shells), and each lane's tiles by slot. */
@@ -392,7 +455,7 @@ export interface Lanes {
 
 /** `tiles` as an arrange by issue puts them in lanes, whatever their places. */
 export function lanesOf(tiles: readonly ArrangeTile[], links: readonly ArrangeLink[]): Lanes {
-  const rows = rowsOf(tiles, links, 'issue');
+  const rows = rowsOf(crewIn(tiles), links, 'issue');
   return {
     top: rows.filter((row) => !row.unit).flatMap((row) => row.tiles),
     lanes: rows
@@ -417,12 +480,15 @@ const hull = (a: Rect, b: Rect): Rect => {
   return { x, y, width: Math.max(a.x + a.width, b.x + b.width) - x, height: Math.max(a.y + a.height, b.y + b.height) - y };
 };
 
-/** Where `tiles` go as a grid filling a zone `width` wide in their order, each on `grid` and clear of `obstacles`. */
-function gridFill(tiles: readonly ArrangeTile[], obstacles: readonly Rect[], width: number, grid: ZoneGrid): Map<string, Point> {
+/**
+ * Where `tiles` go as a grid filling a zone `width` wide in their order, from grid row `fromRow` down, each on `grid`
+ * and clear of `obstacles`.
+ */
+function gridFill(tiles: readonly ArrangeTile[], obstacles: readonly Rect[], width: number, grid: ZoneGrid, fromRow = 0): Map<string, Point> {
   const perRow = Math.max(1, Math.floor((width - 2 * grid.origin.x + grid.column - AGENT_TILE_SIZE.width) / grid.column));
   const positions = new Map<string, Point>();
   const taken = [...obstacles];
-  let index = 0;
+  let index = fromRow * perRow;
   for (const tile of tiles) {
     const size = sizeOf(tile);
     const { columns } = gridSpan(size, grid);
@@ -472,13 +538,20 @@ export function arrangeTiles(
   links: readonly ArrangeLink[],
   options: ArrangeOptions,
 ): { positions: Map<string, Point>; clusters: ArrangedCluster[]; size: Size; notes: Map<string, Point> } {
-  const lead = tiles.find((tile) => tile.lead);
-  const wanted = options.leadNotes ?? [];
-  if (lead === undefined || wanted.length === 0) return { ...layoutTiles(tiles, links, options), notes: new Map() };
+  const crew = tiles.filter((tile) => !isItem(tile));
+  const lead = crew.find((tile) => tile.lead);
+  // An item placed beside its agent goes in that one's lane; beside the lead, in the lead's block; beside no agent in the
+  // zone (none, one gone, a shell), in the sidebar, as do the items placed there.
+  const besideLead = tiles.filter((tile) => isItem(tile) && placedAs(tile, crew) === 'cluster' && tile.owner === lead?.id).toSorted(byItem);
+  const side = tiles.filter((tile) => isItem(tile) && placedAs(tile, crew) === 'sidebar').toSorted(byItem);
+  const laid = tiles.filter((tile) => !besideLead.includes(tile) && !side.includes(tile));
+  const wanted = [...(lead === undefined ? [] : (options.leadNotes ?? [])), ...besideLead.map((item) => ({ id: item.id, size: sizeOf(item) }))];
+  if (wanted.length === 0 && side.length === 0) return { ...layoutTiles(laid, links, options), notes: new Map() };
   const grid = zoneGrid(options.spacing ?? 'normal');
   const { gaps } = grid;
-  // The notes are a block of at most `LEAD_NOTES_ACROSS` to a row, whatever the zone's width: a wrap that followed the
-  // zone's width would change as the zone grew to fit, and move the crew at every arrange.
+  // The lead's notes are a block of at most `LEAD_NOTES_ACROSS` to a row, whatever the zone's width: a wrap that followed
+  // the zone's width would change as the zone grew to fit, and move the crew at every arrange. The sidebar is one column
+  // past it, its items one under another.
   const across = Math.min(wanted.length, LEAD_NOTES_ACROSS);
   const offsets = new Map<string, Point>();
   let [y, blockWidth] = [0, 0];
@@ -492,41 +565,55 @@ export function arrangeTiles(
     blockWidth = Math.max(blockWidth, x - gaps.tile);
     y += Math.max(...line.map(({ size }) => size.height)) + gaps.tile;
   }
-  // A grid or masonry fills the zone's width, which the block's strip is part of: lay them out in what is left of it, so
-  // the zone fitted to crew and block is the width it had and arranging again lays out the same.
+  const sideX = wanted.length === 0 ? 0 : blockWidth + gaps.tile;
+  // A lane's gap apart, as rows are: room for what perches on the next.
+  let sideY = 0;
+  for (const item of side) {
+    offsets.set(item.id, { x: sideX, y: sideY });
+    sideY += sizeOf(item).height + gaps.lane;
+  }
+  const sideWidth = side.length === 0 ? blockWidth : sideX + Math.max(...side.map((item) => sizeOf(item).width));
+  // A grid or masonry fills the zone's width, which the strip of the block and the sidebar is part of: lay them out in
+  // what is left of it, so the zone fitted to crew, block and sidebar is the width it had and arranging again lays out
+  // the same.
   const widthDriven = options.layout === 'grid' || options.layout === 'masonry';
   // Never narrower than a roughly square grid of the crew needs, whatever the zone's width: a floor that came from the
   // zone's would collapse the grid to one column in a zone narrower than the block, and it would stay so.
-  const columns = Math.ceil(Math.sqrt(tiles.length));
-  const floor = columns * (Math.max(...tiles.map((tile) => sizeOf(tile).width)) + gaps.tile) - gaps.tile + 2 * gaps.padding;
-  const reserved = { ...options, width: Math.max(floor, options.width - blockWidth - gaps.tile) };
-  let first = layoutTiles(tiles, links, widthDriven ? reserved : options);
+  const columns = Math.ceil(Math.sqrt(laid.length));
+  const floor = columns * (Math.max(0, ...laid.map((tile) => sizeOf(tile).width)) + gaps.tile) - gaps.tile + 2 * gaps.padding;
+  const reserved = { ...options, width: Math.max(floor, options.width - sideWidth - gaps.tile) };
+  let first = layoutTiles(laid, links, widthDriven ? reserved : options);
   // What it laid out wider than that (lanes joined by edges, which no width narrows) is the width the next arrange would
   // lay it out in, so it is laid out in that now: arranging again moves nothing.
-  if (widthDriven) {
-    const reach = Math.max(...tiles.map((tile) => first.positions.get(tile.id)!.x + sizeOf(tile).width)) + gaps.padding;
-    if (reach > reserved.width) first = layoutTiles(tiles, links, { ...reserved, width: reach });
+  if (widthDriven && laid.length > 0) {
+    const reach = Math.max(...laid.map((tile) => first.positions.get(tile.id)!.x + sizeOf(tile).width)) + gaps.padding;
+    if (reach > reserved.width) first = layoutTiles(laid, links, { ...reserved, width: reach });
   }
   const placed = [
-    ...tiles.map((tile) => sizedFootprint(first.positions.get(tile.id)!, sizeOf(tile))),
+    ...laid.map((tile) => sizedFootprint(first.positions.get(tile.id)!, sizeOf(tile))),
     ...first.clusters.flatMap((cluster) => [
       { ...cluster.labelAt, ...CLUSTER_LABEL_SIZE },
       { ...cluster.noteAt, ...cluster.noteSize },
     ]),
   ];
-  // Right of everything the crew is laid out in, from the top of the crew (the lead's, but for a grid, which fills round lanes), so no lane is ever pushed below the block; right of
-  // what stays put in the way too. The zone grows wider for it, not taller.
-  const top = Math.min(...tiles.map((tile) => first.positions.get(tile.id)!.y));
+  // Right of everything the crew is laid out in, from the top of the crew (the lead's, but for a grid, which fills round
+  // lanes), so no lane is ever pushed below the block; right of what stays put in the way too. The zone grows wider for
+  // it, not taller.
+  const top = laid.length === 0 ? grid.origin.y : Math.min(...laid.map((tile) => first.positions.get(tile.id)!.y));
+  const blocks = [...wanted, ...side.map((item) => ({ id: item.id, size: sizeOf(item) }))];
   const boxAt = (x: number, { id, size }: { id: string; size: Size }): Rect => ({ x: x + offsets.get(id)!.x, y: top + offsets.get(id)!.y, ...size });
-  let left = Math.max(...placed.map((rect) => rect.x + rect.width)) + gaps.tile;
+  let left = placed.length === 0 ? grid.origin.x : Math.max(...placed.map((rect) => rect.x + rect.width)) + gaps.tile;
   for (let step = 0; step <= (options.obstacles ?? []).length; step++) {
-    const blocking = (options.obstacles ?? []).filter((obstacle) => wanted.some((note) => !clearOf(boxAt(left, note), [obstacle])));
+    const blocking = (options.obstacles ?? []).filter((obstacle) => blocks.some((block) => !clearOf(boxAt(left, block), [obstacle])));
     if (blocking.length === 0) break;
     left = Math.max(left + 1, ...blocking.map((obstacle) => obstacle.x + obstacle.width + gaps.tile));
   }
-  const boxes = wanted.map((note) => boxAt(left, note));
-  const notes = new Map(wanted.map((note, index) => [note.id, { x: boxes[index]!.x, y: boxes[index]!.y }] as const));
-  return { ...first, notes, size: fittedSize([...placed, ...boxes], options.obstacles ?? [], grid) };
+  const boxes = blocks.map((block) => boxAt(left, block));
+  const positions = new Map(first.positions);
+  const notes = new Map<string, Point>();
+  const items = new Set([...besideLead, ...side].map((item) => item.id));
+  blocks.forEach(({ id }, index) => (items.has(id) ? positions : notes).set(id, { x: boxes[index]!.x, y: boxes[index]!.y }));
+  return { ...first, positions, notes, size: fittedSize([...placed, ...boxes], options.obstacles ?? [], grid) };
 }
 
 /** The most of the lead's own notes in a row of the block they are laid out as. */
@@ -552,7 +639,7 @@ function layoutTiles(
     const isCluster = (row: Row) => options.clusters === true && options.by === 'issue' && row.unit;
     const headOf = (row: Row) => headSize(noteSizeOf(laneKey(row.tiles), HEAD_NOTE_SIZE));
     const cells = packs
-      ? packedCells(rows, isCluster, headOf, (row) => (options.by === 'issue' ? !row.unit : row.tiles.some((tile) => tile.lead)), (blocks, above) =>
+      ? packedCells(rows, isCluster, headOf, (row) => (options.by === 'issue' ? !row.unit : row.segment === true || row.tiles.some((tile) => tile.lead)), (blocks, above) =>
           options.layout === 'masonry' ? masonry(blocks, grid, above, options.window, options.width) : treemap(blocks, grid, above, options.window),
         )
       : (options.layout === 'columns' ? columnCells : options.layout === 'cards' ? cardCells : wrapCells)(rows, isCluster, headOf);
@@ -561,12 +648,18 @@ function layoutTiles(
       const key = laneKey(row.tiles);
       const labelAt = positions.get(headId(key))!;
       positions.delete(headId(key));
-      clusters.push({ key, label: labelOf(row.tiles), members: row.tiles.map((tile) => tile.id), labelAt, noteAt: noteBelow(labelAt), noteSize: noteSizeOf(key, HEAD_NOTE_SIZE) });
+      clusters.push({ key, label: labelOf(row.tiles), members: crewIn(row.tiles).map((tile) => tile.id), labelAt, noteAt: noteBelow(labelAt), noteSize: noteSizeOf(key, HEAD_NOTE_SIZE) });
     }
   } else if (options.layout === 'grid') {
     // A unit joined by edges goes as rows lay it out, from the top, and only the tiles no edge joins fill the grid, round
-    // it: clear of its tiles and of the box round each two its rails join, where its rails and their tokens are.
-    const inRows = joinedUnits(tiles, links, rows, options.by);
+    // it: clear of its tiles and of the box round each two its rails join, where its rails and their tokens are. With
+    // items placed on top, the top row and those items go as rows lay them out too, and the grid fills below them.
+    const segmentAt = rows.findIndex((row) => row.segment === true);
+    const head = segmentAt < 0 ? [] : rows.slice(0, segmentAt + 1).flatMap((row) => row.tiles);
+    const inRows = new Set([...joinedUnits(tiles, links, rows, options.by), ...head.map((tile) => tile.id)]);
+    // An item placed beside its agent goes where its agent goes: in the rows with it, or straight after it in the grid.
+    const isClustered = (tile: ArrangeTile) => isItem(tile) && tile.place === 'cluster' && tiles.some((other) => other.id === tile.owner);
+    for (const tile of tiles) if (isClustered(tile) && inRows.has(tile.owner!)) inRows.add(tile.id);
     const block = tiles.filter((tile) => inRows.has(tile.id));
     positions = block.length === 0 ? new Map() : layoutTiles(block, links, { ...options, layout: 'rows', clusters: false }).positions;
     const footprint = (tile: ArrangeTile) => sizedFootprint(positions.get(tile.id)!, sizeOf(tile));
@@ -574,8 +667,12 @@ function layoutTiles(
       const [from, to] = [block.find((tile) => tile.id === link.from), block.find((tile) => tile.id === link.to)];
       return from === undefined || to === undefined || from === to ? [] : [hull(footprint(from), footprint(to))];
     });
-    const rest = rows.flatMap((row) => row.tiles).filter((tile) => !inRows.has(tile.id));
-    for (const [id, spot] of gridFill(rest, [...obstacles, ...block.map(footprint), ...railed], options.width, grid)) positions.set(id, spot);
+    const rest = rows
+      .flatMap((row) => row.tiles)
+      .filter((tile) => !inRows.has(tile.id) && !isClustered(tile))
+      .flatMap((tile) => [tile, ...tiles.filter((item) => isClustered(item) && item.owner === tile.id && !inRows.has(item.id)).toSorted(byItem)]);
+    const below = head.length === 0 ? 0 : gridRowAtOrBelow(Math.max(...head.map(footprint).map((rect) => rect.y + rect.height)) + gaps.lane, grid);
+    for (const [id, spot] of gridFill(rest, [...obstacles, ...block.map(footprint), ...railed], options.width, grid, below)) positions.set(id, spot);
   } else {
     positions = new Map();
     // A cluster's label takes the column before its tiles.
@@ -605,8 +702,9 @@ function layoutTiles(
       return advance;
     };
     const leads = (row: Row) => row.tiles.some((tile) => tile.lead);
-    const shared = advanceOf(rows.filter((row) => !leads(row)));
-    const startsIn = (row: Row): number[] => columnStarts(leads(row) || options.by === 'issue' ? advanceOf([row]) : shared, noteColumn(row) + 1, 0, grid);
+    const shared = advanceOf(rows.filter((row) => !leads(row) && row.segment !== true));
+    const startsIn = (row: Row): number[] =>
+      columnStarts(leads(row) || row.segment === true || options.by === 'issue' ? advanceOf([row]) : shared, noteColumn(row) + 1, 0, grid);
     // A rail's room above each row a rail crosses the top of: one from a row above it to it, or to a row below it.
     const rowOf = new Map(rows.flatMap((row, index) => row.tiles.map((tile) => [tile.id, index] as const)));
     const crossings = links.flatMap((link) => {
@@ -638,7 +736,7 @@ function layoutTiles(
         clusters.push({
           key: laneKey(row.tiles),
           label: labelOf(row.tiles),
-          members: row.tiles.map((tile) => tile.id),
+          members: crewIn(row.tiles).map((tile) => tile.id),
           labelAt: labelAt(at),
           noteAt: noteAt(at),
           noteSize,
@@ -681,7 +779,8 @@ const headId = (key: string) => `#head:${key}`;
 const noteBelow = (labelAt: Point): Point => ({ x: labelAt.x, y: labelAt.y + CLUSTER_LABEL_SIZE.height + TILE_GAP });
 
 /** A row's tiles in the order a lane takes them: by slot (implementer, reviewer, follow-up), or as they are for a row by role or state. */
-const inSlotOrder = (row: Row): ArrangeTile[] => (row.unit ? LANE_SLOTS.flatMap((slot) => row.tiles.filter((tile) => slotOf(tile) === slot)) : row.tiles);
+const inSlotOrder = (row: Row): ArrangeTile[] =>
+  row.unit ? [...LANE_SLOTS.flatMap((slot) => row.tiles.filter((tile) => !isItem(tile) && slotOf(tile) === slot)), ...row.tiles.filter(isItem)] : row.tiles;
 
 /** Lanes as columns: the lead, the shells and the clocks stacked in the first, then a column per lane, its head cell first, its tiles under it. */
 function columnCells(rows: readonly Row[], isCluster: (row: Row) => boolean, headOf: (row: Row) => Size): Cell[] {
@@ -701,7 +800,7 @@ function cardCells(rows: readonly Row[], isCluster: (row: Row) => boolean, headO
   const lanes = rows.filter((row) => row.unit);
   const cards = lanes.map((row) => {
     const head = isCluster(row) ? [{ id: headId(laneKey(row.tiles)), size: headOf(row) }] : [];
-    const tiles = inSlotOrder(row).map((tile) => ({ id: tile.id, size: sizeOf(tile), slot: row.unit ? slotOf(tile) : 'implementer' }));
+    const tiles = inSlotOrder(row).map((tile) => ({ id: tile.id, size: sizeOf(tile), slot: row.unit && !isItem(tile) ? slotOf(tile) : 'implementer' }));
     const first = [...head, ...tiles.filter((tile) => tile.slot !== 'follow-up')];
     const second = tiles.filter((tile) => tile.slot === 'follow-up');
     return [first.map((cell, column) => ({ ...cell, column, row: 0 })), second.map((cell, column) => ({ ...cell, column: head.length + column, row: 1 }))].flat();
@@ -710,7 +809,7 @@ function cardCells(rows: readonly Row[], isCluster: (row: Row) => boolean, headO
   const width = Math.max(1, ...cards.flat().map((cell) => cell.column + 1));
   // Above lanes (by issue), the top row of the lead, the shells and the clocks lines up with no card; by role or state, the rows
   // are all top rows, lined up with each other but the lead's.
-  const alone = (row: Row) => lanes.length > 0 || row.tiles.some((tile) => tile.lead);
+  const alone = (row: Row) => lanes.length > 0 || row.segment === true || row.tiles.some((tile) => tile.lead);
   const cells: Cell[] = top.flatMap((row, index) =>
     row.tiles.map((tile, column) => ({ id: tile.id, size: sizeOf(tile), column, row: index, ...(alone(row) ? { alone: true } : {}) })),
   );
@@ -796,12 +895,10 @@ function packedCells(
   isTop: (row: Row) => boolean,
   pack: (groups: readonly Group[], above: number) => Cell[],
 ): Cell[] {
-  const top = rows
-    .filter(isTop)
-    .flatMap((row) => row.tiles)
-    .map((tile, column) => ({ id: tile.id, size: sizeOf(tile), column, row: 0, alone: true }));
+  const tops = rows.filter(isTop);
+  const top = tops.flatMap((row, index) => row.tiles.map((tile, column) => ({ id: tile.id, size: sizeOf(tile), column, row: index, alone: true })));
   const groups = rows.filter((row) => !isTop(row)).map((row) => (isCluster(row) ? { row, head: headOf(row) } : { row }));
-  const above = top.length > 0 ? 1 : 0;
+  const above = tops.length;
   return [...top, ...pack(groups, above).map((cell) => ({ ...cell, row: cell.row + above }))];
 }
 

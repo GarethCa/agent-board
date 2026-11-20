@@ -13,9 +13,9 @@ import { lookCount, lookItems, needsInScope } from './to-look-at';
 import { QueueGoThrough } from './QueueGoThrough';
 import { QueueCardView, QueueIconView, QueuePeek, type AddJob } from './QueueCard';
 import { agentLine, freshJob, jobLine, newestChange, nextJob, queueData, queueTitle } from './queue-card';
-import { CardResizer } from './CardSizing';
+import { CardResizer, FoldedPicture } from './CardSizing';
 import { foldTo } from './card-size';
-import { ListCardPeekPopover, ListCardToolbar, useFocusOnce, useFresh, useLift, useRows, useZone, why } from './ListCardNodeParts';
+import { ListCardPeekPopover, ListCardToolbar, useFocusOnce, useFresh, useRows, useZone, why } from './ListCardNodeParts';
 
 /** A queue's jobs and notes as the daemon lists them, for the user. */
 const readJobs = (id: string) => window.agentBoard.items.readQueue(id).then((view) => view.jobs);
@@ -25,14 +25,13 @@ const readJobs = (id: string) => window.agentBoard.items.readQueue(id).then((vie
  * (E), or the inbox for a queue that is the user's. Either opens the peek beside it, with every job to search, edit,
  * reorder, finish, put back or remove.
  */
-export const QueueNode = memo(function QueueNode({ id: nodeId, data, selected: picked, dragging }: NodeProps<ItemNodeType>) {
+export const QueueNode = memo(function QueueNode({ id: nodeId, data, selected: picked, dragging, width, height }: NodeProps<ItemNodeType>) {
   const selected = useOnlySelected(picked);
   const { update, remove } = useContext(ItemActionsContext);
   const toast = useToast();
   const { item } = data;
   const queue = queueData(item.data);
   const zone = useZone(item.zoneId);
-  const lift = useLift(queue.folded === true);
   const scope = scopeText(queue.noAgents, zone.name);
   const jobs = useRows(item.id, item.updatedAt, readJobs, (error) =>
     toast.show({ tone: 'error', id: `queue-read-${item.id}`, message: `Could not read “${queue.title}”: ${why(error)}` }),
@@ -168,7 +167,6 @@ export const QueueNode = memo(function QueueNode({ id: nodeId, data, selected: p
       title={queue.title}
       scope={scope}
       zoneColor={zone.color}
-      lift={lift}
       count={lookCount(jobs === undefined ? queue.count : shown.filter((job) => job.state !== 'done').length, needs)}
       next={nextJob(shown)}
       pulse={fresh !== undefined}
@@ -206,9 +204,20 @@ export const QueueNode = memo(function QueueNode({ id: nodeId, data, selected: p
 
   return (
     <>
-      <CardResizer visible={selected && queue.folded !== true} least={LIST_CARD_MIN_SIZE} onResized={(frame) => update({ id: item.id, ...frame })} />
+      <CardResizer
+        visible={selected}
+        least={LIST_CARD_MIN_SIZE}
+        picture={queue.folded === true ? LIST_CARD_FOLDED_SIZE : undefined}
+        onResized={(frame) => update({ id: item.id, ...frame })}
+      />
       <ListCardPeekPopover
-        anchor={<div className="listcard-anchor">{body}</div>}
+        anchor={
+          <div className="listcard-anchor">
+            <FoldedPicture picture={queue.folded === true ? LIST_CARD_FOLDED_SIZE : undefined} width={width} height={height} item={item}>
+              {body}
+            </FoldedPicture>
+          </div>
+        }
         open={peek}
         onOpenChange={setPeek}
         aria-label={`${queue.title}: every job`}

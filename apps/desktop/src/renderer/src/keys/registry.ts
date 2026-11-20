@@ -24,9 +24,9 @@ export type KeyStatus = 'today' | 'new' | 'fix';
 /**
  * How a chord's modifiers are pressed. `command`: ⌘ on macOS, Ctrl elsewhere (the board's). `window`: ⌘ on macOS,
  * Ctrl+Shift elsewhere, where Ctrl and its keys are a terminal's (a session window's). `pane`: ⌘⌥, or Ctrl+Shift+Alt.
- * Without one, no modifier but Shift.
+ * `control`: Ctrl on every platform, ⌃ on macOS, as a browser's ⌃Tab. Without one, no modifier but Shift.
  */
-export type Modifier = 'command' | 'window' | 'pane';
+export type Modifier = 'command' | 'window' | 'pane' | 'control';
 
 export interface Chord {
   mod?: Modifier;
@@ -119,7 +119,10 @@ export const KEYS = [
   // A session window or an expanded tile: chords, so typing never fires one.
   { id: 'window.previous', label: 'Previous session in the group', section: 'window', scope: 'terminal-safe', status: 'today', keys: [{ mod: 'window', code: 'BracketLeft', text: '[' }] },
   { id: 'window.next', label: 'Next session in the group', section: 'window', scope: 'terminal-safe', status: 'today', keys: [{ mod: 'window', code: 'BracketRight', text: ']' }] },
-  { id: 'window.tab', label: 'Tab 1–9 of the focused pane', section: 'window', scope: 'terminal-safe', status: 'today', keys: [{ mod: 'window', text: '1–9' }] },
+  { id: 'window.tab', label: "Tab 1–9 of the focused pane, or of a pop-up's row", section: 'window', scope: 'terminal-safe', status: 'today', keys: [{ mod: 'window', text: '1–9' }] },
+  { id: 'window.nextTab', label: "Next tab of a pop-up's row", section: 'window', scope: 'terminal-safe', status: 'new', keys: [{ mod: 'control', key: 'Tab' }] },
+  { id: 'window.previousTab', label: "Previous tab of a pop-up's row", section: 'window', scope: 'terminal-safe', status: 'new', keys: [{ mod: 'control', shift: true, key: 'Tab' }] },
+  { id: 'window.backTab', label: 'Back to the tab you came from, in a pop-up', section: 'window', scope: 'terminal-safe', status: 'new', keys: [{ mod: 'window', code: 'BracketLeft', text: '[' }] },
   { id: 'window.newTab', label: 'New shell tab', section: 'window', scope: 'terminal-safe', status: 'today', keys: [{ mod: 'window', code: 'KeyT', text: 'T' }] },
   { id: 'window.closeTab', label: 'Close the tab', section: 'window', scope: 'terminal-safe', status: 'today', keys: [{ mod: 'window', code: 'KeyW', text: 'W' }] },
   { id: 'window.splitBeside', label: 'Split beside', section: 'window', scope: 'terminal-safe', status: 'today', keys: [{ mod: 'window', code: 'KeyD', text: 'D' }] },
@@ -257,6 +260,8 @@ export function chordText(chord: Chord, isMac = mac): string {
       return isMac ? `⌘${shifted ? '⇧' : ''}${key}` : `Ctrl+Shift+${key}`;
     case 'pane':
       return isMac ? `⌘⌥${key}` : `Ctrl+Shift+Alt+${key}`;
+    case 'control':
+      return isMac ? `⌃${shifted ? '⇧' : ''}${key}` : `Ctrl+${shifted ? 'Shift+' : ''}${key}`;
     case undefined:
       return `${shifted ? '⇧' : ''}${key}`;
   }
@@ -292,6 +297,8 @@ export function chordPressed(chord: Chord, event: KeyPress, isMac = mac): boolea
       return event.ctrlKey && event.shiftKey && !event.metaKey;
     case 'pane':
       return event.altKey && (isMac ? event.metaKey && !event.ctrlKey && !event.shiftKey : event.ctrlKey && event.shiftKey && !event.metaKey);
+    case 'control':
+      return event.ctrlKey && !event.metaKey && !event.altKey && (shift === 'any' || event.shiftKey === shift);
   }
 }
 

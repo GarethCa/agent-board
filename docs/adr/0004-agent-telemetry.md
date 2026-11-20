@@ -591,6 +591,18 @@ PTY.
 - Not settled: after an answer in the terminal, the inbox keeps the prompt's buttons until the call's `PostToolUse`
   (a `PreToolUse` settles nothing); a click then is dropped by Claude, and the daemon releases the hook at that
   `PostToolUse`.
+- **Requests only a person may allow are not held** (`onlyAPersonAllows`). Read from Claude Code 2.1.329's bundle, no
+  tokens spent: when a check of Claude's own wants a person's approval (a removal it can't rule out, an auto-mode
+  block), it sends the PermissionRequest with no `permission_suggestions`, ignores a hook's allow (only a deny counts),
+  and waits on its hooks *before* it draws a dialog, for at most its tool timeout of 120 s. Held, such a request kept the
+  agent flagged as needing permission for those 120 s, with no dialog in its terminal, and then Claude denied the call
+  ("denied by a built-in Claude Code safety check… the permission prompt timed out, or none was shown"). So a request
+  of the agent's own with no `permission_suggestions` key at all (an empty list is still held), other than a question
+  or plan call, is answered at once with no decision, lists no prompt and leaves the agent's state as it was. Claude
+  then does what it does with no board: denies the call, or draws its own dialog, whose `permission_prompt`
+  notification flags the agent as ever, to be answered in its terminal. The daemon log says each time. The cost: a
+  request Claude sends with no suggestions for another reason (a call a mod judged, say) is no longer answerable from
+  the inbox, only in the terminal.
 
 **Reasoning effort**, as built (`packages/daemon/src/agent-spawns.ts` `launch` and `codexLaunch`, `agents.ts`
 `setEffort`, `deliveries.ts` `typeCommand`):

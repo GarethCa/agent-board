@@ -1,7 +1,7 @@
 import { existsSync, writeFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { join } from 'node:path';
-import { describe, expect, it, onTestFinished } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { fakeHarnessEnv } from '@agent-board/fake-harness';
 import { runBoardCommand } from '../src/board-cli.ts';
 import { daemonPaths } from '../src/paths.ts';
@@ -156,6 +156,82 @@ describe('memories', () => {
     expect(view.readers.memory).toMatchObject({ count: 1, last: { name: 'Impl' } });
     await cli(lead.env, 'memory', 'rm', 'Handbook', 'Release checklist');
     expect((await client.call('memory.read', { id: card.id })).readers.memory).toEqual({ count: 0, last: null });
+  });
+
+  it("refuses a second memory in a zone that has one, naming it to add to, and makes it when asked for a second", async () => {
+    const { client, start, cardOf } = await boardDaemon();
+    const lead = await start('Memory: Storefront facts', undefined, 'Lead');
+    const shared = await cardOf('memory', lead.agent);
+    const refused = await cli(lead.env, 'memory', 'new', 'Ticket 12 notes');
+    expect(refused.code).not.toBe(0);
+    expect(refused.err).toContain(`this zone already shares the memory “Storefront facts” (item:${shared.id}): add to it with memory_update`);
+    expect(refused.err).toContain('--second');
+    expect((await client.call('item.list')).filter((item) => item.kind === 'memory')).toHaveLength(1);
+    await expect(lead.connection.call('board.newMemory', { token: lead.token, title: 'Ticket 12 notes' })).rejects.toThrow(/already shares the memory/);
+
+    // A different subject the whole zone needs: asked for, it is made.
+    const second = await cli(lead.env, 'memory', 'new', '--second', 'Release runbook');
+    expect(second.code).toBe(0);
+    expect(second.out).toContain('“Release runbook”');
+    expect((await client.call('item.list')).filter((item) => item.kind === 'memory')).toHaveLength(2);
+    expect((await cli(lead.env, 'memory', 'read', '--second', 'Release runbook')).err).toContain('--second is not for `memory read`');
+
+    // The user's own memories (No agents) are not the zone's shared one: they neither block a new one nor are named.
+    for (const memory of (await client.call('item.list')).filter((item) => item.kind === 'memory')) await client.call('item.update', { id: memory.id, data: { noAgents: true } });
+    const mine = await lead.connection.call('board.newMemory', { token: lead.token, title: 'Storefront notes' });
+    expect(mine.zoneId).toBe(shared.zoneId);
+
+    // Another zone has none of its own yet: its first is made without asking.
+    const billing = await client.call('zone.add', { path: tempRepo('billing'), x: 4000, y: 0, name: 'billing' });
+    const other = await start('Memory: Billing facts', billing.id, 'Billing');
+    expect((await cardOf('memory', other.agent)).zoneId).toBe(billing.id);
+
+  });
+
+  it('lists who read a memory, latest first; tells the board of a read once a minute per agent; and keeps them across a restart', async () => {
+    const { daemon, dataDir, client, recorder, start, cardOf } = await boardDaemon();
+    const lead = await start('Memory: Handbook', undefined, 'Lead');
+    const card = await cardOf('memory', lead.agent);
+    await cli(lead.env, 'memory', 'add', 'Handbook', 'db-host: pg.internal');
+    const reads = () => recorder.events.filter((event) => event.type === 'memory.readBy');
+
+    // Read through the CLI, then the tool: one read counted, one event, until a minute has gone.
+    await cli(lead.env, 'memory', 'read', 'Handbook');
+    await lead.connection.call('board.readMemory', { token: lead.token, id: card.id });
+    await expect.poll(() => reads().length).toBe(1);
+    expect(reads()[0]).toMatchObject({ itemId: card.id, reader: { sessionId: lead.agent.sessionId, name: 'Lead' } });
+
+    const impl = await start('Queue: Scratch', undefined, 'Impl');
+    await cli(impl.env, 'memory', 'read', 'Handbook');
+    await expect.poll(() => reads().length).toBe(2);
+    let view = await client.call('memory.read', { id: card.id });
+    expect(view.readers.list.map((reader) => reader.name)).toEqual(['Impl', 'Lead']);
+    expect(view.readers.memory.count).toBe(2);
+
+    // The minute runs from when the board was last told, not from the last read: reading every 50 s, Lead is told
+    // again at 100 s, and moves to the top.
+    const first = Date.now();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      for (const [seconds, told] of [[50, 2], [100, 3], [150, 3]] as const) {
+        vi.setSystemTime(first + seconds * 1000);
+        await lead.connection.call('board.readMemory', { token: lead.token, id: card.id });
+        expect(reads()).toHaveLength(told);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+    view = await client.call('memory.read', { id: card.id });
+    expect(view.readers.list.map((reader) => reader.name)).toEqual(['Lead', 'Impl']);
+    // The user's reads tell no one.
+    await client.call('memory.read', { id: card.id });
+    expect(reads()).toHaveLength(3);
+
+    await daemon.stop();
+    const again = await startTestDaemon({ dataDir });
+    const after = await (await connectTestClient(again)).call('memory.read', { id: card.id });
+    expect(after.readers.list.map((reader) => reader.name)).toEqual(['Lead', 'Impl']);
+    expect(after.readers.memory.count).toBe(2);
   });
 
   it('marks an entry untouched for a month stale, and confirm says it is still true without changing it', async () => {
@@ -685,6 +761,8 @@ describe('a memory made on the board', () => {
     // Folded, it keeps the size the user gave it open, so unfolding gives it back.
     expect((await client.call('item.update', { id: card.id, data: { openSize: { width: 420, height: 360 } } })).data).toMatchObject({ openSize: { width: 420, height: 360 } });
     await expect(client.call('item.update', { id: card.id, data: { openSize: { width: 420 } } })).rejects.toThrow(/openSize must be \{ width, height \}/);
+    expect((await client.call('item.update', { id: card.id, data: { foldedSize: { width: 256, height: 264 } } })).data).toMatchObject({ foldedSize: { width: 256, height: 264 } });
+    await expect(client.call('item.update', { id: card.id, data: { foldedSize: { height: 264 } } })).rejects.toThrow(/foldedSize must be \{ width, height \}/);
 
     // An undo sends the card's whole data back, its count as it was then: the count stays its entries'.
     expect((await client.call('item.update', { id: card.id, data: { ...folded.data, count: 7 } })).data).toMatchObject({ count: 1 });

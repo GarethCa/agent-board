@@ -1,9 +1,9 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import type { Agent, Shell } from '@agent-board/daemon/protocol';
-import { RotateCcw } from 'lucide-react';
+import { Play, RotateCcw } from 'lucide-react';
 import { VIEW_KEYS } from '../../../shared/view-saver';
 import { Button, ToastView } from '../ui';
-import { dismissedStill, restartBannerShown, restartMessage, stoppedByRestart } from './restart';
+import { dismissedStill, restartBannerShown, restartMessage, stoppedByRestart, wakeAll } from './restart';
 import type { TileActions } from './tile';
 
 /** Whether the app runs on a Mac, for the banner's words. */
@@ -11,9 +11,10 @@ const MAC = navigator.userAgent.includes('Macintosh');
 
 /**
  * The restart banner (a toast, chrome C), while a restart has stopped sessions the user hasn't dismissed it for, or
- * null: how many it stopped, with Resume all and Dismiss. Nothing starts again, and no tokens are spent, until the user
- * picks; each stopped tile has its own Resume. Either button puts it away, so Resume all is pressed once. The board
- * places it: on the board, or in the session window shown over it.
+ * null: how many it stopped and how many of those were working, with Wake all and Dismiss. Nothing starts again, and no
+ * tokens are spent, until the user picks. Wake all wakes only the agents that were mid-turn (and reopens the shells'
+ * panes); the rest stay asleep, each with its own Wake. Either button puts it away, so Wake all is pressed once. The
+ * board places it: on the board, or in the session window shown over it.
  */
 export function useRestartBanner(
   agents: readonly Agent[],
@@ -39,17 +40,23 @@ export function useRestartBanner(
     if (stale) save(dismissedStill(dismissed!, stopped.ids));
   });
   if (dismissed === undefined || !restartBannerShown(stopped.ids, dismissed)) return null;
+  const wakes = wakeAll(stopped);
   return (
-    <div className="restart-banner" data-testid="restart-banner" data-count={stopped.ids.length}>
+    <div className="restart-banner" data-testid="restart-banner" data-count={stopped.ids.length} data-working={wakes?.agents.length ?? 0}>
       <ToastView
-        message={restartMessage(stopped.ids.length, MAC)}
-        action={{
-          label: 'Resume all',
-          onClick() {
-            for (const agent of stopped.agents) void actions.resumeAgent(agent.sessionId);
-            for (const shell of stopped.shells) void actions.resumeShell(shell);
-          },
-        }}
+        message={restartMessage(stopped, MAC)}
+        action={
+          wakes === null
+            ? undefined
+            : {
+                label: 'Wake all',
+                icon: <Play />,
+                onClick() {
+                  for (const agent of wakes.agents) void actions.resumeAgent(agent.sessionId);
+                  for (const shell of wakes.shells) void actions.resumeShell(shell);
+                },
+              }
+        }
         onDismiss={() => save(stopped.ids)}
       />
     </div>

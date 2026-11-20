@@ -4,7 +4,7 @@ import { daemonPaths } from '@agent-board/daemon/paths';
 import { isProcessAlive } from '@agent-board/daemon/pid';
 import { scrubBoardSessionEnv } from '@agent-board/fake-harness';
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, mkdtempSync, openSync, readFileSync, readSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -27,6 +27,8 @@ export const BACKGROUND_ENV = { AGENT_BOARD_E2E_BACKGROUND: '1', AGENT_BOARD_HEA
 /** Data dirs and apps the current test made, which the `test` fixture below reaps when it ends. */
 const dataDirs = new Set<string>();
 const apps = new Set<ElectronApplication>();
+/** The daemon logs of the current test's data dirs, read as each dir is removed, for a failing test to attach. */
+const daemonLogs = new Map<string, string>();
 /** Data dirs of earlier tests in this worker that were reaped, for the spec that checks nothing was left behind. */
 export const reapedDataDirs: string[] = [];
 
@@ -42,6 +44,12 @@ function track(dir: string): void {
   dataDirs.add(dir);
   const registry = dataDirRegistry();
   if (registry !== undefined) appendFileSync(registry, `${dir}\n`);
+}
+
+/** Has the end of the test close `app`, for a spec that launches an app itself rather than through `launchApp`. */
+export function trackApp(launched: Promise<ElectronApplication>): Promise<ElectronApplication> {
+  void launched.then((app) => apps.add(app), () => {});
+  return launched;
 }
 
 export function tempDataDir(): string {
@@ -100,9 +108,22 @@ async function reapTest(): Promise<void> {
 export const test = base.extend<{ reap: void }>({
   reap: [
     // eslint-disable-next-line no-empty-pattern -- Playwright reads a fixture's dependencies from this pattern.
-    async ({}, use) => {
+    async ({}, use, testInfo) => {
       await use();
-      await reapTest();
+      // A reap that throws (a daemon left running) fails the test only after this fixture ends, so it counts here too.
+      let failed = testInfo.status !== testInfo.expectedStatus;
+      try {
+        await reapTest();
+      } catch (error) {
+        failed = true;
+        throw error;
+      } finally {
+        // Why a session ended, or what the daemon was doing, is in its log, which goes with its data dir.
+        if (failed) {
+          for (const [dir, log] of daemonLogs) await testInfo.attach(`daemon.log ${dir}`, { body: log, contentType: 'text/plain' });
+        }
+        daemonLogs.clear();
+      }
     },
     { auto: true },
   ],
@@ -165,12 +186,14 @@ export function launchApp(dataDir: string, env: Record<string, string> = {}, arg
       // Specs read a terminal's text from the DOM renderer's rows, which the WebGL renderer doesn't draw: the GPU
       // terminals spec and the benchmarks ask for it with `AGENT_BOARD_TERMINAL_RENDERER: 'auto'`.
       AGENT_BOARD_TERMINAL_RENDERER: 'dom',
+      // A double-click opens the session window, as the specs written before the pop-up expect, until one is picked.
+      // A spec about the pop-up passes `AGENT_BOARD_CLICK_OPENS: ''` for the app's own default.
+      AGENT_BOARD_CLICK_OPENS: 'window',
       ...BACKGROUND_ENV,
       ...env,
     },
   });
-  void launched.then((app) => apps.add(app), () => {});
-  return launched;
+  return trackApp(launched);
 }
 
 /** Waits until the window shows a connected daemon, and returns that daemon's pid. */
@@ -214,6 +237,8 @@ export async function stopDaemon(dataDir: string): Promise<number | undefined> {
 /** Stops any daemon left in `dataDir`, then deletes the dir. */
 export async function removeDataDir(dataDir: string): Promise<void> {
   await stopDaemon(dataDir).catch(() => {});
+  const { log } = daemonPaths(dataDir);
+  if (existsSync(log)) daemonLogs.set(dataDir, logTail(log));
   rmSync(dataDir, { recursive: true, force: true });
 }
 
@@ -287,3 +312,19 @@ export async function pickFolderNext(app: ElectronApplication, path: string): Pr
     dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [picked] })) as typeof dialog.showOpenDialog;
   }, path);
 }
+
+/** The last `LOG_TAIL_BYTES` of a daemon's log: the end is what explains a failure, and a chatty daemon's whole log would sit in the worker. */
+function logTail(path: string): string {
+  const size = statSync(path).size;
+  const fd = openSync(path, 'r');
+  try {
+    const length = Math.min(size, LOG_TAIL_BYTES);
+    const buffer = Buffer.alloc(length);
+    readSync(fd, buffer, 0, length, size - length);
+    return buffer.toString('utf8');
+  } finally {
+    closeSync(fd);
+  }
+}
+
+const LOG_TAIL_BYTES = 256 * 1024;

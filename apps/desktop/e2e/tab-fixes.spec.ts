@@ -56,7 +56,7 @@ test("Chat picked while a shell tab shows brings the agent's own tab forward in 
     await expect(composer).toBeVisible();
   } finally {
     await app.close();
-    removeDataDir(dataDir);
+    await removeDataDir(dataDir);
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -116,7 +116,7 @@ test('a shell tab closes by ⌘W, a middle-click or its ×, asking first while i
     await expect(tabs(window)).toHaveCount(1);
   } finally {
     await app.close();
-    removeDataDir(dataDir);
+    await removeDataDir(dataDir);
     rmSync(dir, { recursive: true, force: true });
   }
 });

@@ -10,6 +10,8 @@
 
 **Linear rejects my key.** Make a new personal API key, with access to the teams you want, and paste it again. To remove a stored key: `security delete-generic-password -s agent-board -a linear`.
 
+**macOS keeps asking to access Downloads, Desktop, Photos or other apps' data.** Agents run as part of agent-board, so macOS asks on its behalf. Run `pnpm signing:setup` once, and macOS keeps your answers across updates; Don't Allow is a fine answer. [Why macOS asks for folders](macos-folder-prompts.md) explains it, and Full Disk Access as your own choice.
+
 **A banner says the daemon is from an older build.** The daemon outlives the app by design, so after an upgrade it can be the old one. Click **Restart daemon**; it warns first if sessions are running, because restarting ends them.
 
 **"Delete agent" stops short.** The agent's worktree has uncommitted changes, or its branch has commits no other branch has. Push or merge them, or confirm that you want them gone.

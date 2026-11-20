@@ -3,7 +3,7 @@ import type { Zone } from '@agent-board/daemon/protocol';
 import { CircleHelp } from 'lucide-react';
 import { useExtendedShortcuts } from '../keys/extended-shortcuts';
 import { keyText } from '../keys/registry';
-import { Button, Island, IslandSeparator, ToolButton, useSidewaysScroll } from '../ui';
+import { Button, Island, IslandSeparator, ToolButton, Truncate, useSidewaysScroll } from '../ui';
 
 /**
  * The bottom-left island (chrome C): a button per zone that brings it into view, and the keyboard cheat sheet's button.
@@ -40,10 +40,11 @@ export function ZoneJump({ zones, current, onJump, onKeyboardHelp }: { zones: re
               data-zone-id={zone.id}
               aria-current={zone.id === currentId || undefined}
               icon={<span className="board-menu-swatch" style={{ '--zone-color': zone.color } as CSSProperties} aria-hidden />}
-              tooltip="Show it on the board"
+              aria-label={zone.name}
+              tooltip={`Show ${zone.name} on the board`}
               onClick={() => onJump(zone)}
             >
-              {zone.name}
+              <Truncate text={zone.name} title={null} className="zone-jump-name" />
             </Button>
           ))}
         </div>

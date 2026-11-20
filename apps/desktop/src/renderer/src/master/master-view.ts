@@ -15,16 +15,16 @@ const RAIL_Z_INDEX = 0;
 /** The board's master, live or ended; undefined until the user starts one. */
 export const boardMaster = (agents: readonly Agent[]): Agent | undefined => agents.find((agent) => agent.master);
 
-/** How an ended Captain comes back: `resume` after a restart stopped it, `wake` when it was paused, `restart` when it exited. */
-export type CaptainRevival = 'resume' | 'wake' | 'restart';
+/** How an ended Captain comes back: `wake` after a restart stopped it or when it was paused, `restart` when it exited. */
+export type CaptainRevival = 'wake' | 'restart';
 
 /** What the Captain's panel offers a Captain that is not running, or undefined while it runs or cannot be started in place. */
 export function captainRevival(master: Agent): CaptainRevival | undefined {
   if (master.endedAt === null) return undefined;
   if (master.state === 'hibernated') return 'wake';
-  // The same rules as the composer's block, so Resume and Restart read alike wherever they are offered.
+  // The same rules as the composer's block, so Wake and Restart read alike wherever they are offered.
   const action = composerBlock(master)?.action;
-  if (action === 'resume') return 'resume';
+  if (action === 'wake') return 'wake';
   return action === 'restart' && canRestart(master) ? 'restart' : undefined;
 }
 

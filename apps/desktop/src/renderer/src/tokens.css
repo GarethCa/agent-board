@@ -32,6 +32,9 @@
   --shadow-usage-hot: 0 0 0 1.5px var(--warning-edge), var(--shadow-island); /* the usage pill past 80% of a window */
   --shadow-attention-ring: color-mix(in srgb, var(--state-waiting) 14%, transparent); /* round the Needs-you pill while something waits */
   --scrim-window: color-mix(in srgb, var(--text) 42%, transparent); /* behind a session window shown on the board */
+  --scrim-popup: color-mix(in srgb, var(--surface) 62%, transparent); /* behind an agent's pop-up: the board dimmed, still there */
+  --scrim-popup-frost: color-mix(in srgb, var(--surface) 48%, transparent); /* the same, frosted: the blur does part of the dimming */
+  --scrim-popup-solid: color-mix(in srgb, var(--surface) 82%, transparent); /* the frost with reduced transparency: no blur, a deeper dim */
 
   /* Text */
   --text: #2b2a27;
@@ -173,6 +176,33 @@
   --frost-fill: color-mix(in srgb, var(--state-hibernated-soft) 45%, var(--raised));
   --frost: color-mix(in srgb, var(--state-hibernated) 8%, transparent);
   --frost-mark: var(--state-hibernated-ink);
+  --frost-edge: color-mix(in srgb, var(--state-hibernated) 70%, var(--border));
+  --frost-watermark: var(--state-hibernated);
+  --frost-watermark-opacity: 0.05; /* the big glyph in a frozen tile's corner: faint, under its text */
+  /* The other frozen kinds, each its own soft tint of the same frost, its edge kept near grey, its mark in its own
+     ink (held to 3:1, its text to AA, as above). Scheduled comes back by itself: the slate with a little blue, a clock.
+     Done is over: a plain grey from the muted text, a tick (not the restart-stopped slate, which is Paused, nor the
+     done green, which is a success). Exited stopped on an error: the same grey warmed with clay, a warning; it stays
+     flat and dim, apart from needs-you. Each is mixed only from colours every theme pack sets. */
+  --frost-scheduled-fill: color-mix(in srgb, var(--state-scheduled) 4%, var(--frost-fill));
+  --frost-scheduled: color-mix(in srgb, var(--state-scheduled) 4%, transparent);
+  --frost-scheduled-edge-base: color-mix(in srgb, var(--state-hibernated) 55%, var(--border));
+  --frost-scheduled-edge: color-mix(in srgb, var(--state-scheduled) 30%, var(--frost-scheduled-edge-base));
+  --frost-scheduled-mark: var(--state-scheduled-ink);
+  --frost-done-fill: color-mix(in srgb, var(--muted) 2%, var(--raised));
+  --frost-done: color-mix(in srgb, var(--muted) 6%, transparent);
+  --frost-done-edge: color-mix(in srgb, var(--muted) 35%, var(--border));
+  --frost-done-mark: var(--muted);
+  --frost-exited-base: color-mix(in srgb, var(--muted) 2%, var(--raised));
+  --frost-exited-fill: color-mix(in srgb, var(--warning-soft) 45%, var(--frost-exited-base));
+  --frost-exited: color-mix(in srgb, var(--warning) 6%, transparent);
+  --frost-exited-edge: color-mix(in srgb, var(--warning) 14%, var(--frost-done-edge));
+  --frost-exited-watermark: var(--warning);
+  /* Its warning glyph in the failed red, not its ink: a glyph needs 3:1, and the ink, kept for its words, is darker. */
+  --frost-exited-mark: var(--state-failed);
+  /* An exited tile's red word and error line: the failed ink taken towards the text, so it reads at AA on the clay in
+     every look. */
+  --frost-exited-ink: color-mix(in srgb, var(--state-failed-ink) 70%, var(--text));
   --state-on-command: #0b7285; /* a command left running: its row on the tile, the running count and the stopwatch */
   --state-on-command-ink: var(--state-on-command);
   --state-on-command-soft: #e3f6f8;
@@ -386,7 +416,7 @@
   --listcard-key-width: 30%; /* the most a row's first column takes (a key, a job's state): the value is what the card is for */
   --listcard-zone-dot: 7px; /* the zone's colour in the scope chip */
   --listcard-zone: var(--muted); /* the dot's colour: its zone's, set on the chip */
-  --listcard-lift: 1; /* a folded one's face scaled against the zoom, set on it when zoomed far out */
+  --listcard-who-width: 88px; /* the most a card row's corner (who wrote it, and when) takes: the fact is what the card is for */
   --listcard-who-mark: 7px; /* the mark before who wrote a row, in a memory's peek: a dot for an agent, a ring for you */
   --listcard-who-ring: 1.5px;
   --listcard-fresh: var(--hover); /* a row an agent just changed, as it flashes */
@@ -697,6 +727,7 @@
   --shadow-rail-token-selected: 0 0 0 3px var(--connector-halo); /* round a selected rail's token */
   --shadow-loose-dot: inset 0 0 0 1.5px var(--muted); /* the hollow dot for the board's loose sessions */
   --shadow-pane-focused: inset 0 -2px 0 var(--window-focus); /* under the strip of a session window's focused pane, of several */
+  --shadow-tab-from: inset 0 -2px 0 var(--accent); /* under the tab of a pop-up's row the user came from */
   --shadow-window-tab-picked: 0 0 0 1px var(--window-line); /* the picked tab in a session window's strip, under the Simplified design */
   --shadow-island: 0 1px 0 rgb(43 42 39 / 5%), 0 12px 32px -8px rgb(43 42 39 / 28%), 0 2px 6px rgb(43 42 39 / 8%);
   --shadow-tooltip: 0 6px 16px -6px rgb(0 0 0 / 40%);
@@ -726,6 +757,7 @@
   --layer-dock: 21; /* the dock, over a shown session window */
   --layer-panel: 22; /* the Captain's docked panel: over the dock, which ends under it */
   --layer-notice: 23; /* a notice over the board's chrome, the docked panel included */
+  --layer-popup: 24; /* an agent's pop-up and its scrim: over the board, its chrome and the dock, under a dialog */
   --layer-dialog: 30; /* a modal dialog and its scrim */
   --layer-popover: 40; /* menus and popovers, which a dialog may open */
   --layer-toast: 50;
@@ -863,6 +895,7 @@
   --size-empty-board: 420px; /* the empty board's welcome */
   --size-empty-board-mark: 72px; /* the app's mark over it */
   --size-zone-tab: 28px; /* a zone's tab */
+  --size-zone-jump-name: 160px; /* the widest a zone's name grows in the zone bar before it ends in an ellipsis */
   --size-clone-bar: 72px; /* a cloning zone's progress bar, on its tab */
   --size-clone-bar-height: 5px;
   --size-shape-picker: 290px; /* the shape picker under the Shape tool: six shapes a row */
@@ -941,6 +974,9 @@
   --size-composer: 42px; /* the composer's field, one line high */
   --size-composer-max: 200px; /* the most the composer's field grows to with the lines typed, before it scrolls */
   --window-header-height: 50px; /* a session window's header: the traffic lights' midline when popped out (main/chrome.ts) */
+  --popup-edge: 8px; /* the strip along an agent's pop-up's edge that resizes it, in the margin round it */
+  --popup-corner: 14px; /* the square off each of its corners that resizes it both ways, in the margin too */
+  --popup-header-height: 44px;
   --settings-bar-height: 38px; /* the Settings and Overview windows' title bar: the traffic lights' midline there (main/chrome.ts) */
   --settings-sidebar-width: 224px; /* the Settings window's sidebar of groups */
   --size-settings-control: 264px; /* the width of a Settings control that fills its column: a segmented control, the Theme pop-up */
@@ -964,10 +1000,12 @@
   --island-inset: 14px; /* how far the islands float from the window's edges (ChromeC) */
   --island-height: 46px; /* the top islands', so they share a midline with the traffic lights (main/chrome.ts) */
   --size-traffic-lights: 72px; /* the room macOS's traffic lights take, from the window's left edge */
+  --icon-2xs: 8px; /* a badge on an icon's corner */
   --icon-xs: 12px; /* in a pill or an extra-small control */
   --icon-sm: 14px; /* in a button or menu row */
   --icon-md: 16px; /* in a medium icon button, or on its own */
   --icon-lg: 18px; /* on a toolbar tool */
+  --frost-watermark-size: 94px; /* a frozen tile's faint glyph in its corner */
   --size-check: 16px; /* a checkbox or radio */
   --size-switch: 30px; /* a switch's track width */
   --size-switch-height: 18px;
@@ -982,6 +1020,7 @@
   --size-hover-card: 270px; /* a hover card's widest */
   --size-toast: 380px; /* a toast's widest */
   --size-menu: 214px; /* a menu's narrowest */
+  --size-menu-max: 400px; /* a menu's widest: a longer row's label ends in an ellipsis */
   --size-menu-detail: 180px; /* the widest a menu row's muted words grow, such as a path to copy, before they are cut */
   --size-popover-wide: 420px; /* the widest a list popover grows, long lines cut with an ellipsis */
   --size-empty-body: 200px; /* an empty state's text, widest */
@@ -1003,6 +1042,7 @@
   --shadow-tour-ring: 0 0 0 5px color-mix(in srgb, var(--accent) 45%, transparent), 0 0 24px 4px color-mix(in srgb, var(--step-done) 45%, transparent), 0 0 0 100vmax var(--tour-scrim);
   --onboarding-veil: color-mix(in srgb, var(--surface) 50%, transparent); /* over the board, under a step's card */
   --blur-veil: 6px;
+  --blur-popup: 10px; /* the frost on the board behind an agent's pop-up: enough to quiet it, small enough to stay cheap */
   --tour-scrim: rgb(36 35 32 / 56%); /* the tour's dimming, round its spotlight */
   --step-done: #91a7ff; /* a step's bar once done */
   --step-todo: var(--border);
@@ -1360,6 +1400,12 @@
   --state-hibernated: #9fb0e6;
   --state-hibernated-ink: #9fb0e6;
   --state-hibernated-soft: #262b3d;
+  --frost-watermark-opacity: 0.07;
+  /* On the dark, the blue lightens what it tints: a lighter share, so its text keeps AA in the dimmest packs. */
+  --frost-scheduled-fill: color-mix(in srgb, var(--state-scheduled) 3%, var(--frost-fill));
+  --frost-scheduled: color-mix(in srgb, var(--state-scheduled) 2%, transparent);
+  /* Its fill can take little blue on the dark, so its edge carries it: clearly bluer than the paused slate. */
+  --frost-scheduled-edge: color-mix(in srgb, var(--state-scheduled) 60%, var(--frost-scheduled-edge-base));
   --state-on-command: #5cc4d4;
   --state-on-command-soft: #16313a;
   --shelf-wants: #e8a640;

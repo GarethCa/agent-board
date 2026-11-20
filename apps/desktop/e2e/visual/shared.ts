@@ -1,4 +1,4 @@
-import { expect, type Page } from '@playwright/test';
+import { expect, type Locator, type Page } from '@playwright/test';
 import { agentNoteSize } from '@agent-board/daemon/agent-notes';
 import { MIN_AGENT_NOTE_SIZE } from '@agent-board/daemon/protocol';
 import { existsSync, rmSync } from 'node:fs';
@@ -235,4 +235,21 @@ export async function shootSimplifiedNotes(appearanceTheme: string, scheme: 'lig
     await removeDataDir(dataDir);
     rmSync(dir, { recursive: true, force: true });
   }
+}
+
+/**
+ * A frozen tile's watermark paints over its frost, not under the tile's background: the tile's bottom-right corner
+ * changes with it hidden. A faint glyph passes a screenshot's per-pixel threshold, so a shot alone would not see it go.
+ */
+export async function expectWatermarkShows(window: Page, frosted: Locator): Promise<void> {
+  const watermark = frosted.locator('.tile-frost-watermark').first();
+  const corner = async () => {
+    const box = (await frosted.boundingBox())!;
+    return window.screenshot({ clip: { x: box.x + box.width - 64, y: box.y + box.height - 64, width: 56, height: 56 } });
+  };
+  const shown = await corner();
+  await watermark.evaluate((element: HTMLElement) => (element.style.visibility = 'hidden'));
+  const hidden = await corner();
+  await watermark.evaluate((element: HTMLElement) => (element.style.visibility = ''));
+  expect(shown.equals(hidden), 'the watermark shows in a frozen tile').toBe(false);
 }

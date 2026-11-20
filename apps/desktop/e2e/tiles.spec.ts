@@ -7,7 +7,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { rmSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { centreOf, drag, settledBox, withDaemon } from './board-helpers.ts';
-import { launch, normalNewZones, setClickOpens, SHELL_ENV, showDetails, spawnAgent, tile, groupName, windowKey } from './agent-helpers.ts';
+import { launch, normalNewZones, setClickOpens, SHELL_ENV, showDetails, spawnAgent, tile, tileAction, groupName, windowKey } from './agent-helpers.ts';
 import { test, addEmptyZone, classicOnly, browseForZone, connectedDaemonPid, pickFolderNext, removeDataDir, stopDaemon, tempDataDir, placeWithTool } from './launch.ts';
 import { scratch } from './scratch.ts';
 import { openSettings, settingsSection } from './settings-helpers.ts';
@@ -486,7 +486,7 @@ test('hovering a tile moves nothing on it: its state stays at the bottom and its
     await card.getByRole('button', { name: 'Expand' }).focus();
     await expect(corner).toHaveCSS('opacity', '1');
     // While its name is typed, the buttons give the field the whole head.
-    await card.getByRole('button', { name: 'Rename' }).click();
+    await tileAction(card, 'Rename', 'Settings');
     await expect(card.locator('.editable-name-field')).toBeVisible();
     await expect(corner).toHaveCSS('visibility', 'hidden');
     await window.keyboard.press('Escape');
@@ -498,7 +498,7 @@ test('hovering a tile moves nothing on it: its state stays at the bottom and its
   }
 });
 
-test('a tile at its least width folds Pop out into ⋯ and keeps Expand and ⋯ inside it', async () => {
+test('a tile at its least width keeps its corner, Expand and ⋯, inside it', async () => {
   classicOnly();
   const { dir, repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
@@ -509,11 +509,10 @@ test('a tile at its least width folds Pop out into ⋯ and keeps Expand and ⋯ 
     const card = tile(window);
     await window.mouse.move(0, 0);
     await expect(card).toHaveAttribute('data-state', 'waiting');
-    await expect(card.getByRole('button', { name: 'Pop out' })).toBeVisible();
+    await expect(card.getByRole('button', { name: 'Pop out' })).toHaveCount(0);
 
     // The least tile width, 200px (a tile's size is the board's to set, so the width is set on the tile itself).
     await card.evaluate((element) => ((element as HTMLElement).style.width = '200px'));
-    await expect(card.getByRole('button', { name: 'Pop out' })).toBeHidden();
     await expect(card.getByRole('button', { name: 'Expand' })).toBeVisible();
     await expect(card.getByRole('button', { name: 'More' })).toBeVisible();
     const tileBox = await settledBox(card);

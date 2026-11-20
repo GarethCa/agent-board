@@ -111,7 +111,7 @@ for (const { theme, suffix } of THEMES) {
       await window.getByRole('menuitem', { name: /^End agent…/ }).click();
       await window.getByRole('alertdialog', { name: /^End / }).getByRole('button', { name: 'End agent' }).click();
       await expect(tile(window)).toHaveAttribute('data-state', 'done');
-      await expect(composer.getByLabel('Message to the agent')).toBeDisabled();
+      await expect(composer.getByLabel('Message to the agent')).toHaveAttribute('placeholder', 'Done. Wake carries on this conversation.');
       await shoot('simplified-composer-ended');
     } finally {
       await app.close();
@@ -370,6 +370,10 @@ for (const { theme, suffix } of THEMES) {
       await panel.getByTestId('master-start').click();
       await expect(panel.getByTestId('chat-assistant')).toHaveText(['Which database should I use, Postgres or SQLite?'], { timeout: TURN_MS });
       await expect(panel.getByTestId('chat-live')).toHaveAttribute('data-live', 'done', { timeout: TURN_MS });
+      // The chat's turn ends before the Captain's tile and the pill hear it waits on the user, its question asked: both
+      // are in the shot, the tile's button as Open rather than the Answer of a question still being put.
+      await expect(window.getByTestId('inbox-count')).toHaveAttribute('data-count', '2', { timeout: TURN_MS });
+      await expect(window.locator('.board').getByRole('button', { name: 'Open', exact: true })).toHaveCount(2);
       await pinChatTimes(window);
       await pinRandomText(window);
       restorePointer = await ignorePointer(window);

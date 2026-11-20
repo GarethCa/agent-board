@@ -1,5 +1,36 @@
 # Changelog
 
+## v0.6.33 (2026-11-20)
+
+- Main's full check passes: settings search, hinted menu rows and theme names whole again, baselines
+- A long name keeps the header's buttons inside the expanded tile and pop-up; the pop-up fills a laptop board
+- Long text keeps to menus, ⌘K, dialogs and Settings (part 3 of 3)
+- Main's full check passes: shape-label test in the scanner list, the schedule badge clickable, the zoomed DOM terminal shot
+- The pop-up has one row of tabs: its Board, its agents, in any order you drag
+- Don't hold or flag a Claude permission request only a person may allow
+- Main's unit tests pass again: the two new IPC channels in the allowlist tests
+- Smoother pan and zoom: the four quick wins from the pan-zoom profile
+- Keep sessions while off screen keeps chat views too
+- One memory per zone, and the memory tile shows who read it and when
+- Scheduled, done and exited agents each get a frost of their own
+- Smooth pan and zoom research: profile the board, rank the fixes
+- A tile you move in a zone with an expanded tile stays where you put it
+- Long text keeps to the session sidebar, inbox, master panel and zone bar (part 2 of 3)
+- The zone menu's Arrange items picks where an arrange puts each kind
+- Wake replaces Restart for a done or exited agent; a scheduled one shows Wake now on hover and in ⋯
+- Memory, queue, to-do and steps icons zoom with the board and resize as pictures
+- A queue, to-do list or memory you move stays where you put it
+- A ticket's pop-up shows its chat and helpers as tabs; Answer opens it on the helper that asks
+- A pinned expanded tile opens its window and pops out; the pin stays
+- Arrange places every zone item by kind (cluster, sidebar, top, stay), from the CLI and MCP
+- Every tile has the same hover corner: ⤢ and ⋯
+- Long text keeps to its card on every board item (part 1 of 3)
+- Double-click an agent to open its pop-up over the dimmed board
+- Porthole, Shelf and Simplified ticket tiles roll up the ticket's own Merge, New review and Done
+- Sign local macOS builds with a stable certificate, so macOS keeps folder answers across updates
+- A ticket's board, watches, PR and Close ticket… are in its chat's ⋯
+- A restart-stopped agent is frosted and wakes with Wake; Wake all wakes only what was working
+
 ## v0.6.32 (2026-11-20)
 
 - A folded memory or queue drags by its face

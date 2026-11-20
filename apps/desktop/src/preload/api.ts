@@ -35,6 +35,7 @@ import type {
   QueueView,
   TakenJob,
   ClockUpdatedEvent,
+  MemoryReadByEvent,
   Connector,
   ConnectorRemovedEvent,
   ConnectorUpdatedEvent,
@@ -859,6 +860,7 @@ export const ITEM_IPC = {
   delete: 'item:delete',
   importImage: 'item:import-image',
   clocks: 'item:clocks',
+  runClock: 'item:run-clock',
   addClock: 'item:add-clock',
   readMemory: 'item:read-memory',
   changeMemory: 'item:change-memory',
@@ -873,6 +875,8 @@ export const ITEM_IPC = {
   changed: 'item:changed',
   /** main → renderer: `(ClockUpdatedEvent)` whenever a clock is planned again, fires or a run of it ends. */
   clockChanged: 'item:clock-changed',
+  /** main → renderer: `(MemoryReadByEvent)` as an agent reads a memory, at most once a minute for each. */
+  memoryReadBy: 'item:memory-read-by',
 } as const;
 
 export interface ItemsApi {
@@ -892,10 +896,14 @@ export interface ItemsApi {
   onChanged(listener: (change: ItemChange) => void): () => void;
   /** Every clock's next run and latest runs. */
   clocks(): Promise<ClockStatus[]>;
+  /** Runs the clock now, as its fire time would, keeping its next one: its status after. */
+  runClock(id: string): Promise<ClockStatus>;
   /** Adds a clock beside an agent's tile (joined to it) or at a place, with `data` over a new clock's. */
   addClock(data: Partial<ClockData>, place: ClockPlace): Promise<BoardItem>;
   /** Calls `listener` with a clock's status whenever it changes. Returns the unsubscribe function. */
   onClockChanged(listener: (event: ClockUpdatedEvent) => void): () => void;
+  /** Calls `listener` as an agent reads a memory (at most once a minute for each agent). Returns the unsubscribe function. */
+  onMemoryReadBy(listener: (event: MemoryReadByEvent) => void): () => void;
   /** A memory with its entries, those matching `search` if given. */
   readMemory(id: string, search?: string): Promise<MemoryView>;
   /** Adds, edits, removes or restores one of a memory's entries, as the user. */

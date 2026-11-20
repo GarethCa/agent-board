@@ -25,7 +25,7 @@ export function ShelfTile(props: GlanceTileProps) {
   );
 }
 
-function ShelfFace({ face, look, name, reviewer, menu, expand, prompt, action, times, tags, repo, extras }: GlanceParts) {
+function ShelfFace({ face, ask, look, name, reviewer, menu, expand, prompt, action, times, tags, repo, extras }: GlanceParts) {
   const style = useCharacterStyle();
   // A command it asks to run is shown as the command, the same way under either glance design.
   const line = glanceLine(face.line, face.state);
@@ -47,7 +47,7 @@ function ShelfFace({ face, look, name, reviewer, menu, expand, prompt, action, t
       </span>
       <div className="shelf-tile-band" data-testid="tile-band" data-level={face.level} data-glance={face.state}>
         <GlanceGlyph state={face.state} className="shelf-tile-glyph" />
-        <span className="shelf-tile-word" data-testid="tile-state">
+        <span className="shelf-tile-word" data-testid="tile-state" data-ask={ask}>
           {face.word}
         </span>
         {reviewer}

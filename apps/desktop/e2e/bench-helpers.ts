@@ -30,11 +30,12 @@ export async function installRecorders(window: Page): Promise<void> {
     new PerformanceObserver((list) => {
       if (bench.recording) for (const entry of list.getEntries()) bench.longTasks.push(entry.duration);
     }).observe({ type: 'longtask' });
-    // TerminalPane's User Timing measures (`terminal.*`): it clears each as it writes it, so only an observer hears them.
+    // TerminalPane's and KeptChatView's User Timing measures (`terminal.*`, `chat.*`): each is cleared as it is
+    // written, so only an observer hears them.
     new PerformanceObserver((list) => {
       for (const { name, startTime, duration, detail } of list.getEntries() as PerformanceMeasure[]) {
         if (name === 'terminal.parked') bench.parked = detail as typeof bench.parked;
-        if (name.startsWith('terminal.')) bench.timings.push({ name, startTime, duration, detail });
+        if (name.startsWith('terminal.') || name.startsWith('chat.')) bench.timings.push({ name, startTime, duration, detail });
       }
     }).observe({ type: 'measure' });
   });
@@ -94,6 +95,14 @@ export interface Phase {
   longTaskMs: number;
   /** Terminals mounted during the phase (TerminalPane's User Timing marks), and what their snapshots took. */
   mounts: number;
+  /**
+   * Chat views shown during the phase with the keep-sessions setting on (KeptChatView's marks): all of them, and those
+   * taken back parked, not built and drawn again. Both stay 0 with the setting off, where chat views are not counted.
+   */
+  chatMounts: number;
+  chatKept: number;
+  /** Chat views let go during the phase. */
+  chatLetGo: number;
   /** From the mount to the terminal opened and fitted, summed, ms. */
   openMs: number;
   /** The slowest snapshot, from attaching to parsed, ms; and the bytes of all of them. */
@@ -258,6 +267,9 @@ export async function phase(app: ElectronApplication, window: Page, cdp: CDPSess
       gaps: bench.gaps.splice(0),
       longTasks: bench.longTasks.splice(0),
       mounts: named('terminal.mount').length,
+      chatMounts: named('chat.mount').length,
+      chatKept: named('chat.mount').filter((each) => (each.detail as { kept: boolean }).kept).length,
+      chatLetGo: named('chat.letGo').length,
       openMs: named('terminal.open').reduce((sum, each) => sum + each.duration, 0),
       snapshotMs: snapshots.map((each) => each.duration),
       snapshotBytes: snapshots.reduce((sum, each) => sum + (each.detail as { bytes: number }).bytes, 0),
@@ -277,6 +289,9 @@ export async function phase(app: ElectronApplication, window: Page, cdp: CDPSess
     longTasks: seen.longTasks.length,
     longTaskMs: Math.round(seen.longTasks.reduce((sum, each) => sum + each, 0)),
     mounts: seen.mounts,
+    chatMounts: seen.chatMounts,
+    chatKept: seen.chatKept,
+    chatLetGo: seen.chatLetGo,
     openMs: Math.round(seen.openMs),
     slowestSnapshotMs: Math.round(Math.max(0, ...seen.snapshotMs)),
     slowestFillMs: Math.round(Math.max(0, ...seen.fillMs)),

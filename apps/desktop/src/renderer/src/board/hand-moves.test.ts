@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { historyPlace, layoutChoiceStep, nudgeMove, resizeMove, tileMoveStep, tileStepAction, zoneTidy, cleanUpMessage, movedToDoneMessage } from './hand-moves';
+import { historyPlace, layoutChoiceStep, nudgeMove, placementStep, placedByHandPatch, resizeMove, tileMoveStep, tileStepAction, zoneTidy, cleanUpMessage, movedToDoneMessage } from './hand-moves';
+import type { BoardItem, BoardItemKind, Zone } from '@agent-board/daemon/protocol';
 import type { BoardState } from './editing/use-history';
 
 describe('the user moving a tile by hand', () => {
@@ -33,6 +34,18 @@ describe('the history of a layout rule', () => {
       ['tile:agent:a', { type: 'tile', move: { zoneId: 'z1', x: 1, y: 2 } }, null],
       ['tile:shell:b', { type: 'tile', move: { zoneId: 'z1', x: 3, y: 4 } }, null],
     ]);
+  });
+
+  it("records picking where a zone puts a kind of item as a step that puts the zone's own choice back", () => {
+    const zone = { id: 'z1', placements: { notes: 'sidebar' } } as unknown as Zone;
+    expect(placementStep(zone, 'notes', 'top')).toEqual([
+      ['zone-placement:notes:z1', { type: 'zonePlacement', kind: 'notes', placement: 'sidebar' }, { type: 'zonePlacement', kind: 'notes', placement: 'top' }],
+    ]);
+    // A kind the zone never chose was where the default put it.
+    expect(placementStep(zone, 'todos', 'sidebar')[0]?.[1]).toEqual({ type: 'zonePlacement', kind: 'todos', placement: 'top' });
+    // The choice it has already, or the default again: nothing to undo.
+    expect(placementStep(zone, 'notes', 'sidebar')).toEqual([]);
+    expect(placementStep(zone, 'todos', 'top')).toEqual([]);
   });
 
   it('records picking Spine the same way: it is a rule too', () => {
@@ -72,6 +85,17 @@ describe('the history of a tile moved by hand', () => {
     expect(tileStepAction(outOf as Extract<BoardState, { type: 'tile' }>, undefined)).toEqual({ kind: 'move', move: { zoneId: 'z1', x: 0, y: 0, free: true } });
   });
 
+  it('records the expanded tiles a drop was put down beside with the place it left: a redo puts it down beside them again, an undo does not', () => {
+    const move = { zoneId: 'z1', x: 9, y: 700, byHand: true };
+    const [, undone, redone] = tileMoveStep('agent:a', before, move, undefined, false, ['agent:open']);
+
+    expect(redone).toEqual({ type: 'tile', move, putDown: ['agent:open'] });
+    expect(tileStepAction(redone as Extract<BoardState, { type: 'tile' }>, undefined)).toEqual({ kind: 'move', move, putDownBy: ['agent:open'] });
+    expect(tileStepAction(undone as Extract<BoardState, { type: 'tile' }>, undefined)).not.toHaveProperty('putDownBy');
+    // Nothing expanded: no mark.
+    expect(tileMoveStep('agent:a', before, move, undefined, false, [])[2]).toEqual({ type: 'tile', move });
+  });
+
   it('records no mark for a move not by hand', () => {
     expect(tileMoveStep('agent:a', before, { zoneId: 'z1', x: 9, y: 9 }, 'z1')[1]).toEqual({ type: 'tile', move: { zoneId: 'z1', x: 0, y: 0 } });
   });
@@ -107,4 +131,19 @@ describe('a Clean up of a zone', () => {
 
   it('says what it did', () => expect(cleanUpMessage('Crew', 3, 1)).toBe('Cleaned up Crew · 3 moved · 1 to Done'));
   it('says where a ticket moved to Done by hand went', () => expect(movedToDoneMessage('Crew')).toBe("Moved to Crew's Done line"));
+});
+
+const itemOf = (kind: BoardItemKind, data: Record<string, unknown> = {}) => ({ id: 'i1', kind, data }) as unknown as BoardItem;
+
+describe('an item the user drags', () => {
+  it('is marked placed by hand, of every kind an arrange places, so the next arrange leaves it', () => {
+    for (const kind of ['agent-note', 'document', 'plan', 'image', 'link', 'issue', 'clock', 'todo', 'queue', 'memory', 'steps', 'sticky', 'shape', 'text'] satisfies BoardItemKind[]) {
+      expect(placedByHandPatch(itemOf(kind))).toEqual({ data: { placedByHand: true } });
+    }
+  });
+
+  it('is marked once, and never of a kind an arrange leaves alone', () => {
+    expect(placedByHandPatch(itemOf('todo', { placedByHand: true }))).toEqual({});
+    expect(placedByHandPatch(itemOf('stages' as BoardItemKind))).toEqual({});
+  });
 });

@@ -4,7 +4,7 @@ import { TODO_CARD_MIN_SIZE, TODO_CARD_SIZE, TODO_PILL_SIZE } from '@agent-board
 import { requestTab } from '../../session/tab-request';
 import { todoSurfaceOf } from '../../session/tabs';
 import { useBoardCommands } from '../commands';
-import { CardResizer } from './CardSizing';
+import { CardResizer, FoldedPicture } from './CardSizing';
 import { foldTo } from './card-size';
 import { ItemActionsContext, useOnlySelected, type ItemNodeType } from './items';
 import { ListCardToolbar, useZone } from './ListCardNodeParts';
@@ -22,7 +22,7 @@ export const TodoLookupContext = createContext<TodoLookup>(NO_LOOKUP);
  * back. It folds to a pill from its toolbar or its head's menu. An agent's list opens from that menu as the To do tab of
  * the agent's window too.
  */
-export const TodoNode = memo(function TodoNode({ id: nodeId, data, selected: picked, dragging }: NodeProps<ItemNodeType>) {
+export const TodoNode = memo(function TodoNode({ id: nodeId, data, selected: picked, dragging, width, height }: NodeProps<ItemNodeType>) {
   const selected = useOnlySelected(picked);
   const { update, remove } = useContext(ItemActionsContext);
   const lookup = useContext(TodoLookupContext);
@@ -85,11 +85,18 @@ export const TodoNode = memo(function TodoNode({ id: nodeId, data, selected: pic
 
   return (
     <div className="todo-node" data-folded={folded || undefined}>
-      <CardResizer visible={selected && !folded} least={TODO_CARD_MIN_SIZE} onResized={(frame) => update({ id: item.id, ...frame })} />
+      <CardResizer
+        visible={selected}
+        least={TODO_CARD_MIN_SIZE}
+        picture={folded ? TODO_PILL_SIZE : undefined}
+        onResized={(frame) => update({ id: item.id, ...frame })}
+      />
       {folded ? (
-        <TodoPillView data={list} lookup={lookup} onOpen={() => fold(false)} onClear={changes.clear}>
-          {toolbar}
-        </TodoPillView>
+        <FoldedPicture picture={TODO_PILL_SIZE} width={width} height={height} item={item}>
+          <TodoPillView data={list} lookup={lookup} onOpen={() => fold(false)} onClear={changes.clear}>
+            {toolbar}
+          </TodoPillView>
+        </FoldedPicture>
       ) : (
         <TodoCardView data={list} lookup={lookup} zoneName={zone.name} look={look} steppedIn={steppedIn} addFirst={addFirst} actions={actions}>
           {toolbar}

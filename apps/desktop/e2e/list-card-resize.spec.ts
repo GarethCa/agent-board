@@ -1,6 +1,6 @@
 import { expect, type Page } from '@playwright/test';
-import { LIST_CARD_MIN_SIZE, STEPS_CARD_SIZE, type BoardItem, type MemoryData, type QueueData, type Step, type StepsData, type TodoData } from '@agent-board/daemon/protocol';
-import { boardZoom, centreOf, drag, settledBox, viewTransform } from './board-helpers.ts';
+import { LIST_CARD_FOLDED_SIZE, LIST_CARD_MIN_SIZE, STEPS_CARD_SIZE, STEPS_ICON_SIZE, type BoardItem, type MemoryData, type QueueData, type Step, type StepsData, type TodoData } from '@agent-board/daemon/protocol';
+import { boardZoom, centreOf, drag, settledBox, viewTransform, zoomUntil } from './board-helpers.ts';
 import { test, connectedDaemonPid, launchApp, removeDataDir, tempDataDir } from './launch.ts';
 
 // A memory, a queue, a steps card and a to-do list are resized from their handles, keep that size folded and after a restart, and
@@ -191,6 +191,105 @@ test('a memory, a queue, a steps card and a to-do list resize from a corner, kee
       await resizeBy(window, memory, { x: -(box.width - 8), y: -(box.height - 8) });
       await expect.poll(() => savedSize(window, memory.id)).toEqual(LIST_CARD_MIN_SIZE);
     });
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+  }
+});
+
+/** The folded memory's face, its width on screen over the board's zoom: its size on the board, whatever the zoom. */
+async function faceOnBoard(page: Page, item: BoardItem): Promise<number> {
+  const face = node(page, item).getByRole('button', { name: /open its peek/ });
+  return (await settledBox(face)).width / (await boardZoom(page));
+}
+
+test('a folded memory is a picture on the board: it zooms with the board, resizes as a picture, and keeps its folded and open sizes after a restart; so does a folded steps card', async () => {
+  const dataDir = tempDataDir();
+  let app = await launchApp(dataDir);
+  try {
+    let window = await app.firstWindow();
+    await connectedDaemonPid(window);
+    const { memory, steps } = await window.evaluate(
+      async ({ folded, icon }) => {
+        const { items } = globalThis.window.agentBoard;
+        const data: MemoryData = { title: 'Facts', madeBy: { kind: 'user' }, noAgents: false, count: 0, folded: true };
+        const made = await items.create({ kind: 'memory', zoneId: null, x: 0, y: 0, ...folded, data: { ...data } });
+        for (let n = 1; n <= 12; n += 1) await items.changeMemory(made.id, { action: 'add', text: `Fact ${n}` });
+        const stepsData: StepsData = { title: 'Release', madeBy: { kind: 'user' }, answeredBy: { kind: 'user' }, steps: [], sent: null, waits: [], closedAt: null, collapsed: true };
+        const card = await items.create({ kind: 'steps', zoneId: null, x: 400, y: 0, ...icon, data: { ...stepsData } });
+        return { memory: made, steps: card };
+      },
+      { folded: LIST_CARD_FOLDED_SIZE, icon: STEPS_ICON_SIZE },
+    );
+    await window.getByRole('button', { name: /^Fit view/ }).click();
+    const icon = node(window, memory).getByTestId('memory-icon');
+    await expect(icon).toBeVisible();
+
+    // Zoomed far out and back in, its face is the same size on the board: on screen it follows the zoom.
+    await test.step('zoom out and in', async () => {
+      const size = await faceOnBoard(window, memory);
+      const zoomed = await boardZoom(window);
+      await zoomUntil(window, node(window, memory), 'Zoom Out', (zoom) => zoom < 0.3);
+      expect(Math.abs((await faceOnBoard(window, memory)) - size)).toBeLessThan(1.5);
+      await zoomUntil(window, node(window, memory), 'Zoom In', (zoom) => zoom >= zoomed);
+      expect(Math.abs((await faceOnBoard(window, memory)) - size)).toBeLessThan(1.5);
+    });
+
+    // Selected, it has the handles a note has; its corner scales it as a picture, its shape kept, its face with it.
+    const face = await faceOnBoard(window, memory);
+    await icon.locator('.listcard-icon-name').click();
+    const handle = node(window, memory).locator('.react-flow__resize-control.handle.bottom.right');
+    await expect(handle).toBeVisible();
+    const corner = centreOf(await settledBox(handle));
+    const by = LIST_CARD_FOLDED_SIZE.width * (await boardZoom(window));
+    await drag(window, corner, { x: corner.x + by, y: corner.y + by });
+    await expect.poll(async () => (await savedSize(window, memory.id))!.width).toBeGreaterThan(LIST_CARD_FOLDED_SIZE.width * 1.5);
+    const folded = (await savedSize(window, memory.id))!;
+    expect(Math.abs(folded.height / folded.width - LIST_CARD_FOLDED_SIZE.height / LIST_CARD_FOLDED_SIZE.width)).toBeLessThan(0.02);
+    const scale = folded.width / LIST_CARD_FOLDED_SIZE.width;
+    await expect.poll(async () => Math.abs((await faceOnBoard(window, memory)) - face * scale)).toBeLessThan(2);
+
+    // A folded steps card, whose open card grows round its rows, is resized as a picture too: square, and kept.
+    await node(window, steps).getByTestId('steps-card').click();
+    const stepsCorner = centreOf(await settledBox(node(window, steps).locator('.react-flow__resize-control.handle.bottom.right')));
+    await drag(window, stepsCorner, { x: stepsCorner.x + by / 2, y: stepsCorner.y + by / 4 });
+    await expect.poll(async () => (await savedSize(window, steps.id))!.width).toBeGreaterThan(STEPS_ICON_SIZE.width * 1.2);
+    const stepsFolded = (await savedSize(window, steps.id))!;
+    expect(Math.abs(stepsFolded.height - stepsFolded.width)).toBeLessThan(2);
+    await icon.locator('.listcard-icon-name').click();
+
+    // Opened, it is its card, resized from its corner: bigger, its text the same size, with more of what it holds.
+    await window.getByRole('button', { name: 'Open the card' }).click();
+    const card = node(window, memory).getByTestId('memory-card');
+    await expect(card).toBeVisible();
+    const textSize = () => card.locator('.listcard-row').first().evaluate((row) => getComputedStyle(row).fontSize);
+    const room = () => card.locator('.listcard-rows').evaluate((list: HTMLElement) => list.clientHeight);
+    const before = { text: await textSize(), room: await room() };
+    const grow = { x: 80, y: 120 };
+    await expectGrown(window, memory, await resizeBy(window, memory, grow), grow);
+    const open = (await savedSize(window, memory.id))!;
+    expect(await textSize()).toBe(before.text);
+    await expect.poll(room).toBeGreaterThan(before.room + 60);
+
+    // Folded, it is the picture it was made; opened, the card it was made.
+    await window.getByRole('button', { name: 'Fold to its icon' }).click();
+    await expect.poll(() => savedSize(window, memory.id)).toEqual(folded);
+    await window.getByRole('button', { name: 'Open the card' }).click();
+    await expect.poll(() => savedSize(window, memory.id)).toEqual(open);
+    await window.getByRole('button', { name: 'Fold to its icon' }).click();
+    await expect.poll(() => savedSize(window, memory.id)).toEqual(folded);
+
+    // After a restart it is still that picture, and opens to that card.
+    await app.close();
+    app = await launchApp(dataDir);
+    window = await app.firstWindow();
+    await connectedDaemonPid(window);
+    await expect.poll(() => savedSize(window, memory.id)).toEqual(folded);
+    await expect.poll(() => savedSize(window, steps.id)).toEqual(stepsFolded);
+    await expect.poll(() => node(window, memory).evaluate((element: HTMLElement) => [element.offsetWidth, element.offsetHeight])).toEqual([Math.round(folded.width), Math.round(folded.height)]);
+    await node(window, memory).getByTestId('memory-icon').locator('.listcard-icon-name').click();
+    await window.getByRole('button', { name: 'Open the card' }).click();
+    await expect.poll(() => savedSize(window, memory.id)).toEqual(open);
   } finally {
     await app.close();
     await removeDataDir(dataDir);

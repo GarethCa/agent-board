@@ -239,6 +239,6 @@ test('a zone of about 30 agents on status shelves (at a glance, a stack fanned o
     }
   } finally {
     await app.close();
-    removeDataDir(dataDir);
+    await removeDataDir(dataDir);
   }
 });

@@ -5,25 +5,43 @@ import { SHOT, needsBaselines, THEMES, launchGallery } from './shared.ts';
 
 test.use({ viewport: null });
 
-// A ticket's tile at rest, needing the user, ready to merge and merged, in each design and theme: one shot of the four.
+// A ticket's tile opened, its own board and a new review read in place, in each design and theme.
 const DESIGNS = [
-  { design: 'classic', prefix: 'ticket-tiles', opened: 'ticket-open', zoomed: 'ticket-board', read: 'ticket-open-read' },
-  { design: 'simplified', prefix: 'simplified-ticket-tiles', opened: 'simplified-ticket-open', zoomed: 'simplified-ticket-board', read: 'simplified-ticket-open-read' },
+  { design: 'classic', opened: 'ticket-open', zoomed: 'ticket-board', read: 'ticket-open-read' },
+  { design: 'simplified', opened: 'simplified-ticket-open', zoomed: 'simplified-ticket-board', read: 'simplified-ticket-open-read' },
 ] as const;
 
-for (const { design, prefix, opened, zoomed, read } of DESIGNS) {
+// A ticket's tile at rest, needing the user, ready to merge and merged, in each design and theme, the glance designs
+// (which Settings picks over either look) too: one shot of the four.
+const TILE_SHOTS = [
+  { design: 'classic', prefix: 'ticket-tiles', tileDesign: undefined },
+  { design: 'simplified', prefix: 'simplified-ticket-tiles', tileDesign: undefined },
+  { design: 'classic', prefix: 'porthole-ticket-tiles', tileDesign: 'porthole' },
+  { design: 'classic', prefix: 'shelf-ticket-tiles', tileDesign: 'shelf' },
+] as const;
+
+for (const { design, prefix, tileDesign } of TILE_SHOTS) {
   for (const { theme, suffix } of THEMES) {
-    test(`a ticket's tile: its chat's agent tile with its ticket in its about line and one ask, at rest, needing you, ready to merge and merged, ${design}, ${theme}`, async () => {
+    test(`a ticket's tile: its chat's agent tile with its ticket in its about line and one ask, at rest, needing you, ready to merge and merged, ${tileDesign ?? design}, ${theme}`, async () => {
       needsBaselines(`${prefix}${suffix}`);
       const dataDir = tempDataDir();
       const { app, window } = await launchGallery(dataDir, theme, undefined, design === 'simplified' ? { design } : {});
       try {
+        if (tileDesign !== undefined) {
+          await window.evaluate((picked) => {
+            localStorage.setItem('agent-board.tile-design', picked);
+            location.reload();
+          }, tileDesign);
+          await expect(window.getByTestId('ticket-tile-merged').locator(`[data-tile-design="${tileDesign}"]`).first()).toBeVisible();
+        }
         const gallery = window.getByTestId('ticket-tile-gallery');
         // Each design draws a ticket as its chat's agent tile, a helper's ask rolled up on it: who asks and what, in a line
         // that keeps its room, and a button that answers that helper.
         await expect(gallery.locator('[data-ticket-tile]')).toHaveCount(4);
         const needsYou = window.getByTestId('ticket-tile-needs-you');
-        if (design === 'classic') {
+        // Classic's own tile, not a glance design drawn over it.
+        const classic = design === 'classic' && tileDesign === undefined;
+        if (classic) {
           await expect(needsYou.getByTestId('tile-act')).toHaveText('Answer');
           // Needing you, its title keeps at least half its head beside the buttons, on one line.
           const head = await needsYou.locator('.hybrid-tile-head').boundingBox();
@@ -34,13 +52,23 @@ for (const { design, prefix, opened, zoomed, read } of DESIGNS) {
           await expect(window.getByTestId('ticket-tile-ready-to-merge').getByTestId('agent-tile')).not.toHaveAttribute('data-flat');
           await expect(window.getByTestId('ticket-tile-merged').getByTestId('agent-tile')).toHaveAttribute('data-flat', 'true');
         }
+        // Every design rolls up the ticket's own ask in Classic's words and button: Ready to merge with Merge, and a
+        // merged Done; neither reads as needing the user.
+        const merge = window.getByTestId('ticket-tile-ready-to-merge');
+        await expect(merge).toContainText('Ready to merge');
+        await expect(merge.getByTestId('tile-act')).toHaveText('Merge');
+        await expect(merge).not.toContainText('Needs you');
+        const merged = window.getByTestId('ticket-tile-merged');
+        await expect(merged).toContainText('Done');
+        await expect(merged).toContainText('Merged as #645.');
+        await expect(merged).not.toContainText('Needs you');
         await pinFonts(window);
         await ignorePointer(window);
         await settle(window);
         // As shot: the line naming who asks shows whole above its footer, which keeps its button on the state's row.
         const asks = needsYou.getByText(/Its builder asks: /);
         await expect(asks).toBeVisible();
-        if (design === 'classic') {
+        if (classic) {
           const line = (await asks.boundingBox())!;
           const mark = (await needsYou.getByTestId('tile-mark').boundingBox())!;
           const act = (await needsYou.getByTestId('tile-act').boundingBox())!;
@@ -53,6 +81,11 @@ for (const { design, prefix, opened, zoomed, read } of DESIGNS) {
         await removeDataDir(dataDir);
       }
     });
+  }
+}
+
+for (const { design, opened, zoomed, read } of DESIGNS) {
+  for (const { theme, suffix } of THEMES) {
     test(`a ticket's tile opened: its terminal over a strip of helpers, and its card opened with a column of them, each showing a helper, ${design}, ${theme}`, async () => {
       needsBaselines(`${opened}${suffix}`);
       const dataDir = tempDataDir();
@@ -123,4 +156,38 @@ for (const { design, prefix, opened, zoomed, read } of DESIGNS) {
       }
     });
   }
+}
+
+for (const { theme, suffix } of THEMES) {
+  test(`a ticket pop-up's one row of tabs: its Board, its chat underlined as the tab it came from, its helpers, the one that asks amber, the reviewer on with its ⋯; and the row folded into "+n", ${theme}`, async () => {
+    needsBaselines(`ticket-popup-row${suffix}`);
+    const dataDir = tempDataDir();
+    const { app, window } = await launchGallery(dataDir, theme);
+    try {
+      const gallery = window.getByTestId('ticket-popup-row-gallery');
+      await gallery.scrollIntoViewIfNeeded();
+      const wide = gallery.getByTestId('ticket-popup-row-wide');
+      const narrow = gallery.getByTestId('ticket-popup-row-narrow');
+      const tab = (row: typeof wide, key: string) => row.locator(`[data-testid="session-tab"][data-tab="${key}"]`);
+      await expect(wide.getByTestId('session-tab')).toHaveCount(5);
+      await expect(tab(wide, 'ticket-you-review')).toHaveAttribute('data-active', 'true');
+      await expect(tab(wide, 'ticket-you-review').getByTestId('agent-popup-tab-more')).toBeVisible();
+      await expect(tab(wide, 'ticket-you')).toHaveAttribute('data-from', 'true');
+      await expect(tab(wide, 'ticket-you-build')).toHaveAttribute('data-ask', 'true');
+      await expect(wide.getByTestId('agent-popup-more')).toHaveCount(0);
+      // Folded from the right: the Board, the tab that's on and the amber one stay, and none is clipped.
+      await expect(narrow.getByTestId('agent-popup-more')).toHaveText(/^\+\d/);
+      await expect(tab(narrow, 'board')).toBeVisible();
+      await expect(tab(narrow, 'ticket-you-review')).toBeVisible();
+      await expect(tab(narrow, 'ticket-you-build')).toBeVisible();
+      expect(await narrow.locator('.session-tabs-list').evaluate((list) => list.scrollWidth <= list.clientWidth)).toBe(true);
+      await pinFonts(window);
+      await ignorePointer(window);
+      await settle(window);
+      await expect.soft(gallery).toHaveScreenshot(`ticket-popup-row${suffix}.png`, SHOT);
+    } finally {
+      await app.close();
+      await removeDataDir(dataDir);
+    }
+  });
 }

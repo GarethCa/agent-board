@@ -208,6 +208,7 @@ export function checkStepsData(data: Record<string, unknown>): void {
   if (!(data.closedAt === null || typeof data.closedAt === 'string')) throw fail('closedAt must be null or a time');
   if (data.collapsed !== undefined && typeof data.collapsed !== 'boolean') throw fail('collapsed must be true or false');
   if (data.openSize !== undefined && !isCardSize(data.openSize)) throw fail('openSize must be { width, height }');
+  if (data.foldedSize !== undefined && !isCardSize(data.foldedSize)) throw fail('foldedSize must be { width, height }');
   const fromAsk = data.fromAsk;
   const endedOk = (ended: unknown) => ended === null || (isObject(ended) && typeof ended.at === 'string' && (STEPS_ASK_ENDS as readonly unknown[]).includes(ended.how));
   if (fromAsk !== undefined && !(isObject(fromAsk) && typeof fromAsk.askId === 'string' && endedOk(fromAsk.ended))) {

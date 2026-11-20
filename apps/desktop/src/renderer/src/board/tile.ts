@@ -2,6 +2,7 @@ import { createContext } from 'react';
 import type { Node } from '@xyflow/react';
 import type { Agent, DocumentSummary, Effort, ExternalSession, Harness, PullRequest, RecentFolder, Shell, TicketChatKind, TicketWatchChange } from '@agent-board/daemon/protocol';
 import type { ClickOpens } from './click-opens';
+import type { WindowPath } from './expanded';
 import type { TicketView, TicketViews } from './ticket-view';
 import { renameDirect, type RenameTarget } from './rename';
 import type { ShownStart } from './use-agent-starts';
@@ -81,10 +82,20 @@ export interface TileActions {
    * top-left, relative to its parent) if that isn't where its place is saved.
    */
   resizeExpanded(nodeId: string, size: { width: number; height: number }, place: { x: number; y: number }): void;
-  /** Opens the tile's session window, maximised (an agent's or a shell tile's; an external session has none). */
-  maximise(tile: TileData): void;
+  /**
+   * Opens the tile's session window, maximised (an agent's or a shell tile's; an external session has none), asked by
+   * `path`: the header's Maximise opens a pinned tile's window, opening the tile brings a pinned one forward instead.
+   */
+  maximise(tile: TileData, path: WindowPath): void;
   /** Opens the agent's session window (maximised), collapsing it if expanded. */
   openAgent(agent: Agent): void;
+  /**
+   * Opens the agent's pop-up over the dimmed board, collapsing it if expanded, asked by `path` ('popUp' unless given):
+   * a double-click opens a pinned tile's pop-up, opening the tile (Enter, ⌘K ↵) brings a pinned one forward instead.
+   * A ticket's opens on its chat's tab, or on the helper `on` names; a helper its ticket's tile holds opens its
+   * ticket's, on its own tab.
+   */
+  popUp(agent: Agent, path?: WindowPath, on?: string): void;
   /** Opens the shell tile's session window, with its panes, collapsing it if expanded. */
   openShell(shell: Shell): void;
   /** Opens the agent's session window in its own OS window, collapsing it if expanded. */
@@ -102,6 +113,11 @@ export interface TileActions {
    * paused one is closed as it is, no longer paused.
    */
   stopAgent(sessionId: string): void;
+  /**
+   * Closes a ticket once the user confirms: its helpers' sessions end, then its chat's; their worktrees, branches and
+   * conversations stay.
+   */
+  closeTicket(chatSessionId: string): void;
   /** Interrupts what the agent is doing mid-turn, as Ctrl-C at its prompt does. */
   interruptAgent(sessionId: string): void;
   /** Asks which issue to link the agent to. */
@@ -154,6 +170,13 @@ export interface TileActions {
   clearUndelivered(sessionId: string): Promise<void>;
   /** Restarts an ended agent, asking first if the shell its pane dropped into is running something. */
   restartAgent(sessionId: string): void;
+  /**
+   * Wake, by what the agent is (`wakeAct`): starts it again if it is asleep, restarts it in its worktree if it is done or
+   * exited, or runs it now if it waits for its clock, whose next time stays as it was. Settles once sent (or said why).
+   */
+  wakeAgent(agent: Agent): Promise<void>;
+  /** Turns the agent's clock off: it keeps the clock, which runs it no more until it is turned on again. */
+  turnClockOff(agent: Agent): void;
   /** Starts a shell tile's panes stopped by a restart again; settles once it has (or failing that, said why). */
   resumeShell(shell: Shell): Promise<void>;
   /** Starts the agent's next review round, spawning its reviewer. */
@@ -207,6 +230,7 @@ export const TileActionsContext = createContext<TileActions>({
   resizeExpanded: () => {},
   maximise: () => {},
   openAgent: () => {},
+  popUp: () => {},
   openShell: () => {},
   popOutAgent: () => {},
   popOutShell: () => {},
@@ -214,6 +238,7 @@ export const TileActionsContext = createContext<TileActions>({
   saveAsPrefab: () => {},
   deleteAgent: () => {},
   stopAgent: () => {},
+  closeTicket: () => {},
   interruptAgent: () => {},
   linkIssue: () => {},
   scheduleAgent: () => {},
@@ -238,6 +263,8 @@ export const TileActionsContext = createContext<TileActions>({
   resendUndelivered: async () => {},
   clearUndelivered: async () => {},
   restartAgent: () => {},
+  wakeAgent: async () => {},
+  turnClockOff: () => {},
   resumeShell: async () => {},
   startReview: () => {},
   setTicketChat: () => {},

@@ -185,13 +185,13 @@ for (const harness of ['Claude', 'Codex'] as const) {
       await (await more(/^Stop/)).click();
       await expect(tile(window)).toHaveAttribute('data-state', 'done');
       await expect(window.getByTestId('session-window-status')).toHaveText('ended · shell');
-      await expect(sessionWindow(window).getByTestId('agent-exit-banner')).toContainText(`${harness.toLowerCase()} exited`);
-      // The terminal view has no composer; the exit banner offers Restart, and the chat's composer says why it is off.
+      await expect(sessionWindow(window).getByTestId('agent-exit-banner')).toContainText('Done. Wake carries on this conversation.');
+      // The terminal view has no composer; the exit banner offers Wake, and the chat's composer says a message wakes it too.
       await expect(composer).toHaveCount(0);
       await expect(sessionWindow(window).getByTestId('restart-agent')).toBeEnabled();
       await view.getByRole('button', { name: 'Chat' }).click();
-      await expect(composer).toBeDisabled();
-      await expect(composer).toHaveAttribute('placeholder', 'The agent has ended');
+      await expect(composer).toBeEnabled();
+      await expect(composer).toHaveAttribute('placeholder', 'Done. Wake carries on this conversation.');
       await view.getByRole('button', { name: 'Terminal' }).click();
       await expect(await more(/^Stop/)).toBeDisabled();
       await window.keyboard.press('Escape');

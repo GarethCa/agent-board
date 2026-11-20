@@ -41,6 +41,11 @@ function cutOff(state: SessionState, harness: Harness | null, transcriptPath: st
   return harness !== 'claude' || transcriptPath === null || !turnInterruptedInTranscript(readTranscriptTailSync(transcriptPath));
 }
 
+/** 1 when an agent cut off in `state` was on a permission prompt, asking rather than working; else 0. */
+function asking(state: SessionState): number {
+  return state === 'needs-permission' ? 1 : 0;
+}
+
 /**
  * Marks the agents a daemon that died left at work as cut off mid-turn. Run at daemon start, before their sessions are
  * marked ended: their last state is still the one they had when it died.
@@ -52,8 +57,8 @@ export function markTurnsCutOff(db: DatabaseSync): void {
         WHERE s.ended_at IS NULL`,
     )
     .all() as { session_id: string; state: SessionState; transcript_path: string | null; harness: Harness | null }[];
-  const mark = db.prepare('UPDATE agents SET turn_cut_off = 1 WHERE session_id = ?');
-  for (const row of live) if (cutOff(row.state, row.harness, row.transcript_path)) mark.run(row.session_id);
+  const mark = db.prepare('UPDATE agents SET turn_cut_off = 1, turn_cut_off_asking = ? WHERE session_id = ?');
+  for (const row of live) if (cutOff(row.state, row.harness, row.transcript_path)) mark.run(asking(row.state), row.session_id);
 }
 
 /** The terminal a relaunched agent starts in, until a client attaches and sizes it. */
@@ -167,7 +172,7 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
   const selectReviewBy = db.prepare('SELECT * FROM branch_reviews WHERE session_id = ?');
   const keepBranchReview = db.prepare('UPDATE branch_reviews SET review_path = ?, session_id = NULL WHERE id = ?');
   const updateNotice = db.prepare('UPDATE agents SET notice = ? WHERE session_id = ?');
-  const updateCutOff = db.prepare('UPDATE agents SET turn_cut_off = ? WHERE session_id = ?');
+  const updateCutOff = db.prepare('UPDATE agents SET turn_cut_off = ?, turn_cut_off_asking = ? WHERE session_id = ?');
   const selectChildren = db.prepare('SELECT session_id FROM agents WHERE spawned_by = ?');
   const orphanCrew = db.prepare('UPDATE agents SET spawned_by = NULL, orphaned_from = ? WHERE spawned_by = ?');
   const selectHelpers = db.prepare('SELECT session_id FROM agents WHERE ticket = ?');
@@ -299,7 +304,7 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
     updateNotice.run(noConversation && prompt === undefined && !fresh && row.had_turn === 1 ? NO_CONVERSATION_NOTICE : null, sessionId);
     // A cut-off turn is kept until a turn begins (`agents.ts`'s `save`), so a restart before the line is typed tells it
     // again; one started on a new conversation, or afresh on its task, has none to carry on.
-    if (noConversation || fresh) updateCutOff.run(0, sessionId);
+    if (noConversation || fresh) updateCutOff.run(0, 0, sessionId);
     options.setState(sessionId, 'idle');
     options.unsee(sessionId);
     watchLaunched(sessionId, row.harness, row.cwd, row.worktree, bypassed, codexSessionId);
@@ -455,10 +460,10 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
       if (stoppedByRestart) {
         codexResuming.delete(sessionId);
         const row = getRow(sessionId);
-        if (row !== undefined && cutOff(lastState, row.harness, row.transcript_path)) updateCutOff.run(1, sessionId);
+        if (row !== undefined && cutOff(lastState, row.harness, row.transcript_path)) updateCutOff.run(1, asking(lastState), sessionId);
         return;
       }
-      updateCutOff.run(0, sessionId);
+      updateCutOff.run(0, 0, sessionId);
       if (codexResuming.delete(sessionId) && !stopping.has(sessionId)) startAfresh(sessionId);
       else startFallbackShell(sessionId);
     },

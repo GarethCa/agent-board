@@ -3,7 +3,8 @@
 // them. Pure, so every case is unit-tested.
 import type { Rect } from '../geometry';
 import type { ExpandedTiles, OverlapsAllowed } from './expanded';
-import { boundsOnBoard } from './items/items';
+import { boundsOnBoard, isItemNode } from './items/items';
+import { isGatheredKind } from '@agent-board/daemon/zone-clean-up';
 import { clearOf, PERCH_ROOM, SPACING_GAPS, TILE_GAP, ZONE_PADDING } from '@agent-board/daemon/board-layout';
 import { drawnZoneSize } from '@agent-board/daemon/protocol';
 import { CREW_PADDING } from './crews';
@@ -39,18 +40,21 @@ const EPSILON = 1e-6;
  * Where each of `movables` goes so that none is under, or within the gap of, the expanded rects `fixed`. Each one an
  * expanded rect covers is pushed out along its shortest axis, away from it, and pushes whatever it then lands on the
  * same way. Any push that would leave `bounds`, or come back under something, is put right by moving that one to the
- * clear spot nearest where it was. Only the movables that move are in the result, by id.
+ * clear spot nearest where it was. One `kept` that no expanded rect covers is never pushed: what would land on it goes to
+ * the clear spot nearest where it was instead. Only the movables that move are in the result, by id.
  */
 export function clearOfExpanded(
   fixed: readonly Rect[],
   movables: readonly Movable[],
   bounds?: Bounds,
+  kept: (id: string) => boolean = () => false,
 ): Map<string, { x: number; y: number }> {
   // In reading order, then by id: the same layout, however it is listed, moves the same way.
   const order = movables.toSorted(inReadingOrder);
   const at = new Map(order.map((movable) => [movable.id, movable.rect]));
   const allowed = (rect: Rect) => withinHard(rect, bounds) && withinSoft(rect, bounds);
   let budget = 8 * order.length;
+  const stuck = new Set(order.filter((movable) => kept(movable.id) && clearOf(movable.rect, fixed)).map((movable) => movable.id));
 
   const push = (id: string, from: Rect, direction: Direction): void => {
     if (budget-- <= 0) return;
@@ -58,7 +62,7 @@ export function clearOfExpanded(
     if (!allowed(next)) return;
     at.set(id, next);
     for (const other of order) {
-      if (other.id !== id && !clearOf(at.get(other.id)!, [next])) push(other.id, next, direction);
+      if (other.id !== id && !stuck.has(other.id) && !clearOf(at.get(other.id)!, [next])) push(other.id, next, direction);
     }
   };
   for (const rect of fixed) {
@@ -80,7 +84,7 @@ export function clearOfExpanded(
   // if that is clear, or else at the clear spot nearest where it was.
   const moved = (movable: Movable) => at.get(movable.id) !== movable.rect;
   const movedRects = order.filter(moved).map((movable) => at.get(movable.id)!);
-  const stays = (movable: Movable) => !moved(movable) && clearOf(movable.rect, [...fixed, ...movedRects]);
+  const stays = (movable: Movable) => stuck.has(movable.id) || (!moved(movable) && clearOf(movable.rect, [...fixed, ...movedRects]));
   const accepted = [...fixed, ...order.filter(stays).map((movable) => movable.rect)];
   const result = new Map<string, { x: number; y: number }>();
   for (const movable of order) {
@@ -200,6 +204,7 @@ function clearOfFixed(
   partner: Partner,
   compactOf: (id: string) => Rect | undefined = () => undefined,
   gridsOf: (grown: readonly Grown[], movables: readonly Movable[]) => readonly Grid[] = (grown, movables) => [{ grown, movables }],
+  kept: (id: string) => boolean = () => false,
 ) {
   const exempt = (movable: Movable) => fixed.some((rect) => partner(movable.id).includes(rect.id));
   const grown = fixed.flatMap((rect) => {
@@ -226,6 +231,7 @@ function clearOfFixed(
     fixed.map((rect) => rect.rect),
     pushed,
     bounds,
+    kept,
   );
   const original = new Map(movables.map((movable) => [movable.id, movable.rect]));
   const result = new Map<string, { x: number; y: number }>();
@@ -407,6 +413,9 @@ export function heldFrom(nodes: readonly BoardNode[], shown: readonly BoardNode[
  * layout, unless one of them is expanded, changing or dropped onto a tile (`overlaps`), when each moves on its own.
  * `compactSizes` are the sizes compact tiles were resized to (an expanded tile grows from its own).
  * A tile in `pinned` (pinned expanded) keeps its place, and so does the zone it is in: the other expanded tiles go round it.
+ * A tile in `putDown` (the user put it down while these tiles are open) is saved where it was drawn, the push already in
+ * it: it is moved only if an expanded tile is in its way, never with its row or column, so it stays where it was put.
+ * Anything read here from a node must be in `geometryKey`: `useDisplaced` lays out again only when that key changes.
  */
 export function displaced(
   nodes: BoardNode[],
@@ -416,6 +425,7 @@ export function displaced(
   crews: readonly (readonly string[])[] = [],
   compactSizes: TileSizes = {},
   pinned: ReadonlySet<string> = new Set(),
+  putDown: ReadonlySet<string> = new Set(),
 ): BoardNode[] {
   if (expanded.length === 0) return nodes;
   const open = new Map(expanded.map((entry) => [entry.id, entry]));
@@ -448,6 +458,18 @@ export function displaced(
   };
   /** The tiles of each block moved as one, by the id it moves by. */
   const blockTiles = new Map<string, readonly BoardNode[]>();
+  /** Whether a movable is a tile: what the rows and columns pushed aside are made of, never zones, notes or other items. */
+  const isTile = (id: string) => {
+    const node = byId.get(id);
+    return node !== undefined && isSessionTile(node);
+  };
+  /** Whether a movable is a note or doc that stays with its agent's tile: gathered by a Clean up, never put by hand. */
+  const gathered = (id: string) => {
+    const node = byId.get(id);
+    return node !== undefined && isItemNode(node) && isGatheredKind(node.data.item.kind) && node.data.item.data.placedByHand !== true;
+  };
+  /** Whether a movable was put down by the user while these tiles are open: a tile, or a crew frame with one of them. */
+  const wasPutDown = (id: string) => putDown.has(id) || (blockTiles.get(id)?.some((node) => putDown.has(node.id)) ?? false);
   const move = (moves: Map<string, { x: number; y: number }>, movables: readonly Movable[]) => {
     for (const { id, rect } of movables) {
       const spot = moves.get(id);
@@ -506,7 +528,13 @@ export function displaced(
       return node === undefined ? undefined : { ...(placed.get(id) ?? at(node)), ...tileSizeOf(compactSizes, id) };
     };
     const bounds = { ...inside, right: room.width - padding, bottom: room.height - padding };
-    const pushed = clearOfFixed(fixed, movables, bounds, partner, compact);
+    // Only its tiles, crew frames and the notes and docs gathered to them are pushed as rows and columns. Any other
+    // item (a queue, a memory, one the user put down) moves only if the expanded tile is in its way, so one put down
+    // clear of it is drawn where it was put, and the tiles pushed make way for it.
+    // So is a tile the user put down while the tile is open: it was saved where it was drawn, pushed already.
+    const gridded = (id: string) => !wasPutDown(id) && (blockTiles.has(id) || isTile(id) || gathered(id));
+    const zoneGrid = (grown: readonly Grown[], all: readonly Movable[]): Grid[] => [{ grown, movables: all.filter((each) => gridded(each.id)) }];
+    const pushed = clearOfFixed(fixed, movables, bounds, partner, compact, zoneGrid, (id) => !gridded(id));
     // What the blocks pushed past its edges goes into its empty space first, if that grows it less: it grows only by
     // what still doesn't fit, and neither wider nor taller than the blocks alone would grow it.
     const movedBy = (moves: Map<string, { x: number; y: number }>) =>
@@ -566,11 +594,10 @@ export function displaced(
     const place = placedLoose.get(id);
     return node === undefined || place === undefined ? undefined : { ...place, ...tileSizeOf(compactSizes, id) };
   };
-  const tiles = (movable: Movable) => {
-    const node = byId.get(movable.id);
-    return node !== undefined && isSessionTile(node);
-  };
-  move(clearOfFixed(fixed, loose, undefined, onBoard, looseCompact, looseGrids(tiles)), loose);
+  move(
+    clearOfFixed(fixed, loose, undefined, onBoard, looseCompact, looseGrids((movable) => isTile(movable.id) && !wasPutDown(movable.id)), wasPutDown),
+    loose,
+  );
 
   const changed = (node: BoardNode) => {
     const position = positions.get(node.id);
@@ -584,6 +611,52 @@ export function displaced(
     // A grown zone says so: its edges follow the expanded tile, so they are no snap target.
     const grown = size !== undefined && isZone(node) ? { data: { ...node.data, grown: true as const } } : {};
     return { ...node, ...(position && { position }), ...size, ...grown } as BoardNode;
+  });
+}
+
+/**
+ * Everything of `nodes` that `displaced` reads, as one string: their order, ids, kinds, zones, places, sizes and the
+ * drags and resizes under way, and of a zone its fold, size and spacing, of an item its kind, its turn and whether it was
+ * put by hand. Two boards with the same key are laid out the same, so a node's text or status changing lays nothing out.
+ */
+export function geometryKey(nodes: readonly BoardNode[]): string {
+  return nodes
+    .map((node) => {
+      const own = isZone(node)
+        ? `${node.data.zone.folded}|${node.data.zone.width}|${node.data.zone.height}|${node.data.zone.spacing}`
+        : isItemNode(node)
+          ? `${node.data.item.kind}|${node.data.item.rotation}|${node.data.item.data.placedByHand === true}`
+          : '';
+      return [
+        node.id,
+        node.type,
+        node.parentId,
+        node.position.x,
+        node.position.y,
+        node.width,
+        node.height,
+        node.measured?.width,
+        node.measured?.height,
+        node.dragging === true,
+        node.resizing === true,
+        own,
+      ].join('|');
+    })
+    .join('\n');
+}
+
+/**
+ * `displaced(previous)` (`shown`) moved onto `nodes`, which have the same `geometryKey` as `previous`: each node moved
+ * there is moved the same way here, with its own data. Nodes that don't move are `nodes`' own objects.
+ */
+export function redisplaced(nodes: BoardNode[], previous: readonly BoardNode[], shown: readonly BoardNode[]): BoardNode[] {
+  if (shown === previous) return nodes;
+  return nodes.map((node, index) => {
+    const was = previous[index]!;
+    const now = shown[index]!;
+    if (now === was) return node;
+    const grown = now.data !== was.data ? { data: { ...node.data, grown: true as const } } : {};
+    return { ...node, position: now.position, width: now.width, height: now.height, ...grown } as BoardNode;
   });
 }
 

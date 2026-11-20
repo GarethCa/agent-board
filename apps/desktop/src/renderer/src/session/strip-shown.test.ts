@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { stripShown } from './strip-shown';
+import { OWN_SURFACE } from '@agent-board/daemon/window-layout';
+import { ownPaneShown, stripShown } from './strip-shown';
 
 describe('stripShown', () => {
   it('always draws the row of a single-pane window, with the pane state', () => {
@@ -22,5 +23,25 @@ describe('stripShown', () => {
   it('keeps the row for an astray shell or a window problem, without the healthy pane state', () => {
     expect(stripShown(true, true, false, { state: 'attached' }, false)).toEqual({ row: true, paneStatus: false });
     expect(stripShown(true, false, true, { state: 'attached' }, false)).toEqual({ row: true, paneStatus: false });
+  });
+
+  it('draws no row under a row of tabs of its own, as in a split, but keeps it for what is amiss', () => {
+    expect(stripShown(false, false, false, { state: 'attached' }, true, true)).toEqual({ row: false, paneStatus: false });
+    expect(stripShown(false, false, false, { state: 'detached' }, true, true)).toEqual({ row: true, paneStatus: true });
+    expect(stripShown(false, true, false, { state: 'attached' }, true, true)).toEqual({ row: true, paneStatus: false });
+  });
+});
+
+describe('ownPaneShown', () => {
+  const showing = (key: string) => ({ showing: (asked: string) => asked === key });
+
+  it("is whether the agent's own pane shows: it does with no panes, or when it is the one on", () => {
+    expect(ownPaneShown(false, undefined)).toBe(true);
+    expect(ownPaneShown(false, showing(OWN_SURFACE))).toBe(true);
+    expect(ownPaneShown(false, showing('shell-1'))).toBe(false);
+  });
+
+  it("always shows under a row of tabs of another's, whatever shell tab has the keyboard in its own window", () => {
+    expect(ownPaneShown(true, showing('shell-1'))).toBe(true);
   });
 });

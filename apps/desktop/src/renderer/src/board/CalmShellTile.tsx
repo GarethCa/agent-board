@@ -1,7 +1,7 @@
 import { useContext } from 'react';
-import { Expand, SquareArrowOutUpRight } from 'lucide-react';
+import { Expand } from 'lucide-react';
 import type { Shell } from '@agent-board/daemon/protocol';
-import { EditableName, RenameButton, useRenaming, useSlowClickRename } from '../ui';
+import { EditableName, useRenaming, useSlowClickRename } from '../ui';
 import { dropKey, dropOver as dropOverValue } from '../session/shell-moves';
 import { calmShellFace, shellPanesLine } from './calm-tile';
 import { HarnessMark } from './HarnessMark';
@@ -14,14 +14,14 @@ import { ClickOpensContext, TileActionsContext } from './tile';
 import { nameClass, TileButton, TileMenu } from './tile-parts';
 
 /**
- * A shell's tile under the Simplified design, the calm tile's shape (docs/adr/0022-simplified-design.md): its name and window
- * controls (Expand, Pop out and ⋯, always shown), the folder it is in, and a status with Resume only when a restart stopped
+ * A shell's tile under the Simplified design, the calm tile's shape (docs/adr/0022-simplified-design.md): its name and, on hover,
+ * Expand and ⋯, the folder it is in, and a status with Resume only when a restart stopped
  * it or its panes have ended. Show technical details adds its panes under it. It keeps the Classic shell tile's root and
  * data, so the board finds, drops onto and measures it as it does that one.
  */
 export function CalmShellTile({ id, shell, selected }: { id: string; shell: Shell; selected: boolean }) {
   const tileActions = useContext(TileActionsContext);
-  const { expand, openShell, popOutShell, resumeShell, rename } = tileActions;
+  const { expand, openShell, resumeShell, rename } = tileActions;
   const clickOpens = useContext(ClickOpensContext);
   const renaming = useRenaming(shell.name, (name) => rename({ kind: 'shell', shellId: shell.id }, name));
   const dropOver = dropOverValue.use();
@@ -34,6 +34,7 @@ export function CalmShellTile({ id, shell, selected }: { id: string; shell: Shel
       className="hybrid-tile hybrid-tile-agent hybrid-tile-shell calm-tile"
       data-testid="shell-tile"
       data-representation="hybrid"
+      data-corner="hover"
       data-harness="shell"
       data-shell-id={shell.id}
       data-zone={shell.zoneId ?? ''}
@@ -46,10 +47,9 @@ export function CalmShellTile({ id, shell, selected }: { id: string; shell: Shel
     >
       <div className="hybrid-tile-head calm-tile-head">
         <EditableName className={nameClass(shell.name)} value={shell.name} title={shell.name} renaming={renaming} clicks={nameClicks} label="Shell name" />
-        <RenameButton renaming={renaming} />
+        {/* The same corner on every tile: Expand and ⋯, which holds Pop out, Rename and the rest. */}
         <span className="calm-tile-controls" data-testid="tile-controls">
           <TileButton icon={<Expand />} aria-label="Expand" title="Expand it here, with its panes" onClick={() => expand(id)} />
-          <TileButton icon={<SquareArrowOutUpRight />} aria-label="Pop out" title="Open its terminal in its own window" onClick={() => popOutShell(shell)} />
           <TileMenu entries={shellMenu({ nodeId: id, shell, clickOpens, rename: renaming.startSoon, actions: tileActions })} />
         </span>
       </div>

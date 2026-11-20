@@ -3,6 +3,8 @@ import { AGENT_TILE_SIZE } from '@agent-board/daemon/board-layout';
 import { useMemo } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
 import { HybridTile } from './HybridTile';
+import { PopupTabs } from './AgentPopup';
+import { popUpRow } from './agent-popup';
 import { tokenNumber } from '../theme';
 import { PopoverPreview } from '../ui';
 import { newStickyData } from './items/StickyNode';
@@ -73,7 +75,7 @@ const news = (kind: TicketWatchNews['kind'], text: string, by: string | null = n
 const watchedPr = [pr(648, 'open')];
 
 /** A ticket's tile in each of its looks at rest, by the name its screenshot takes. */
-const TICKETS: Record<string, { chat: Agent; helpers: Agent[] }> = {
+export const TICKETS: Record<string, { chat: Agent; helpers: Agent[] }> = {
   'at-rest': {
     // Its reviews watch is grey, which Simplified hides; its checks are green.
     chat: chat('ticket-rest', 'running', { status: line('Builder is adding the watch settings; the design is done.'), pullRequests: watchedPr, watch: watch({ reviews: tileOnly, checks: tileOnly }) }),
@@ -129,7 +131,7 @@ function standIn(shown: Agent, view: TicketView) {
 }
 
 /** A ticket's tile with its watches on, by the name its screenshot takes. */
-const WATCHED: Record<string, { chat: Agent; helpers: Agent[] }> = {
+export const WATCHED: Record<string, { chat: Agent; helpers: Agent[] }> = {
   // Tell chat off: the review is the user's to read, the ticket's one ask.
   'new-review': {
     chat: chat('watch-review', 'running', {
@@ -307,5 +309,41 @@ export function TicketOpenReadGallery() {
         </div>
       </TicketViewsContext>
     </ReactFlowProvider>
+  );
+}
+
+const ROW = TICKETS['needs-you']!;
+const ROW_TABS = popUpRow(ROW.chat, ROW.helpers);
+const REVIEWER = ROW.helpers[2]!.sessionId;
+/** Wide enough for the whole row; and narrow enough that it folds, but holds the Board, the amber tab and the one on. */
+const ROW_WIDE = { width: 960 };
+const ROW_NARROW = { width: 560 };
+const nothing = () => {};
+
+/**
+ * A ticket pop-up's one row of tabs: its Board, its chat, and its helpers, the reviewer's on and the chat underlined as
+ * the one it came from, the builder amber as it asks; then the same row folded into "+n".
+ */
+export function TicketPopupRowGallery() {
+  const row = (testId: string, size: { width: number }) => (
+    <div style={size} data-testid={testId}>
+      <PopupTabs
+        row={ROW_TABS}
+        active={REVIEWER}
+        from={ROW.chat.sessionId}
+        nodeId={`agent:${ROW.chat.sessionId}`}
+        closed={[]}
+        onSelect={nothing}
+        onClose={nothing}
+        onMove={nothing}
+        onOpenWindow={nothing}
+      />
+    </div>
+  );
+  return (
+    <div className="tile-gallery" data-testid="ticket-popup-row-gallery">
+      {row('ticket-popup-row-wide', ROW_WIDE)}
+      {row('ticket-popup-row-narrow', ROW_NARROW)}
+    </div>
   );
 }

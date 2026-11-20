@@ -176,7 +176,7 @@ test('Clean up lays a zone out clear of a pinned tile and of one its session win
     expect(await places(page)).toEqual(arranged);
   } finally {
     await app.close();
-    rmSync(dir, { recursive: true, force: true });
     await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
   }
 });

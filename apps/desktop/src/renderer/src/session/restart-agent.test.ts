@@ -26,8 +26,9 @@ describe('restarting an ended agent', () => {
     expect(canRestartLive(agent({}))).toBe(false);
   });
 
-  it('says how its process went, with the code when there is one', () => {
-    expect(exitText(agent({}))).toBe('claude exited (code 0)');
-    expect(exitText(agent({ harness: 'codex', exitCode: null }))).toBe('codex exited');
+  it('says how its process went, with the code only when it is not 0', () => {
+    expect(exitText(agent({ state: 'done' }))).toBe('Done. Wake carries on this conversation.');
+    expect(exitText(agent({ state: 'failed', exitCode: 1 }))).toBe('Exited on an error (code 1). Wake carries on this conversation.');
+    expect(exitText(agent({ state: 'failed', exitCode: 0 }))).toBe('Exited on an error. Wake carries on this conversation.');
   });
 });

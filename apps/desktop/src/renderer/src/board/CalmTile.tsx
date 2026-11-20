@@ -1,12 +1,12 @@
 import { useContext, useState, type CSSProperties } from 'react';
-import { Expand, FoldVertical, SquareArrowOutUpRight, X } from 'lucide-react';
-import { isClosed } from '@agent-board/daemon/board-layout';
+import { Expand } from 'lucide-react';
 import { needsYouNow, waitsForYou, type Agent } from '@agent-board/daemon/protocol';
-import { Button, EditableName, HoverCard, RenameButton, Spinner, useRenaming, useSlowClickRename } from '../ui';
+import { Button, EditableName, HoverCard, Spinner, useRenaming, useSlowClickRename } from '../ui';
 import { useNeedsYouShows } from '../needs-you-setting';
 import { dropKey, dropOver as dropOverValue } from '../session/shell-moves';
 import { calmFace, technicalLine, type CalmAction } from './calm-tile';
-import { ticketTileAsk } from './ticket-tile';
+import { ticketHead, ticketSaysDone, ticketStatus, ticketTileAsk, type TicketButton, type TicketTileAsk } from './ticket-tile';
+import { OneButton as TicketOneButton } from './ticket-parts';
 import { TileRobot } from './CommandFigure';
 import { HandoffsContext } from './flow-edges';
 import { JobTicket, useHeldJobs } from './items/taken-jobs';
@@ -14,6 +14,7 @@ import { useJobDropOver } from './items/queue-board';
 import { useBoardCommands } from './commands';
 import { HarnessMark } from './HarnessMark';
 import { useAgentTileMenu } from './agent-tile-menu';
+import { useTicketChatMenu } from './use-ticket-chat-menu';
 import { useMenuBarSection } from '../keys/menu-bar-bridge';
 import { useNowForSince, useNowToward } from '../inbox/use-now';
 import { calmTimes, QUIET_TILE, tileProgress, type TileShows } from './tile-shows';
@@ -23,20 +24,21 @@ import { lookShown } from '@agent-board/daemon/character';
 import { poseOfStatus } from './tile-pose';
 import { SubagentPerch } from './SubagentPerch';
 import { ClickOpensContext, TileActionsContext, type TileActions, type TileData } from './tile';
+import { agentTileTip, answerTicket, openAgentTile } from './click-opens';
 import { lastMessageCard, nameClass, stopPropagation, TileButton, TileMenu, TrustRow, UndeliveredRow, UnsentRow, UntypedRow } from './tile-parts';
 import { useFittedLines } from './use-fitted-lines';
 import { quickAskOf, tileDialogOf } from './quick-ask';
 import { TileQuickAsk } from './TileQuickAsk';
 import { TileDialogAsk } from './DialogQuickAsk';
 import { HandPlacedMark } from './HandPlacedMark';
-import { FrostMark } from './FrostMark';
+import { FrostMark, FrostWatermark } from './FrostMark';
 import { frostedClasses } from './paused';
 
 type CalmTileProps = { id: string; selected: boolean; agent: Agent } & Pick<TileData, 'repo' | 'from' | 'crew' | 'crewFlags' | 'implementer' | 'helpers'>;
 
 /**
- * An agent's tile under the Simplified design, a calm tile (docs/adr/0022-simplified-design.md): its name and its window
- * controls (Fold, Expand, Pop out, ⋯ and Close, always shown), one grey line of what it is doing or asks, its status, and
+ * An agent's tile under the Simplified design, a calm tile (docs/adr/0022-simplified-design.md): its name and, on hover,
+ * Expand and ⋯, one grey line of what it is doing or asks, its status, and
  * one button only when there is something to do, filled only while it needs the user. Show technical details adds a
  * mono line of its AI, branch, pull requests and raw state under it. It keeps the Classic tile's root and its data, so
  * the board finds, drops onto and measures it as it does that one.
@@ -44,14 +46,16 @@ type CalmTileProps = { id: string; selected: boolean; agent: Agent } & Pick<Tile
 export function CalmTile({ id, selected, agent, repo, from, crew, crewFlags, implementer, helpers }: CalmTileProps) {
   const shows = useNeedsYouShows();
   const tileActions = useContext(TileActionsContext);
-  const { expand, openAgent, popOutAgent, setFolded, stopAgent, rename, sendUnsent, clearUnsent, typeFirstPrompt, trustFolder, resendUndelivered, clearUndelivered } = tileActions;
+  const { expand, rename, sendUnsent, clearUnsent, typeFirstPrompt, trustFolder, resendUndelivered, clearUndelivered } = tileActions;
   const clickOpens = useContext(ClickOpensContext);
   const dropOver = dropOverValue.use();
   const jobDrop = useJobDropOver() === agent.sessionId;
   const handoffs = useContext(HandoffsContext);
   const renaming = useRenaming(agent.name, (name) => rename({ kind: 'agent', sessionId: agent.sessionId }, name));
   const menu = useAgentTileMenu(id, agent, { from, implementer }, renaming.startSoon);
-  useMenuBarSection('agent', selected, menu.entries);
+  // A ticket's chat: the ticket's own items lead its ⋯ menu, and Close ticket… ends it, the one place a ticket closes.
+  const ticket = useTicketChatMenu(agent, helpers, [], menu.entries, ticketHead(agent).id ?? agent.name);
+  useMenuBarSection('agent', selected, ticket.entries);
   useRenameRequest(id, renaming);
   const nameClicks = useSlowClickRename(renaming, selected);
   const fitted = useFittedLines();
@@ -62,7 +66,15 @@ export function CalmTile({ id, selected, agent, repo, from, crew, crewFlags, imp
   const rolled = helpers === undefined ? undefined : ticketTileAsk(agent, helpers, shows);
   const asker = rolled?.dot === true ? rolled.asker : agent;
   const face = calmFace(asker, shows, asker === agent ? implementer : undefined);
-  const line = asker === agent ? face.line : (rolled?.line ?? face.line);
+  // Or for the ticket itself, as Classic's tile does: Ready to merge with Merge, New review with Read, and a merged Done,
+  // in place of the chat's own status, which never reads Needs you then.
+  const own = rolled?.dot === false ? rolled : undefined;
+  const status = own === undefined ? face.status : ticketStatus(own, face.status);
+  // Classic's word only for those three, and no ask of the chat's then; news alone keeps Simplified's own words and the
+  // chat's own ask.
+  const saysDone = own !== undefined && ticketSaysDone(own);
+  const action = saysDone ? null : face.action;
+  const line = asker === agent && own === undefined ? face.line : (rolled?.line ?? face.line);
   const look: TileShows = QUIET_TILE;
   // Its times are re-read as each would read differently: once a minute, never by the second.
   const sinceNow = useNowForSince(agent.stateSince);
@@ -72,22 +84,21 @@ export function CalmTile({ id, selected, agent, repo, from, crew, crewFlags, imp
   const quick = quickAskOf(asker);
   // Claude's own question dialog, answered from the same chip.
   const dialog = quick === undefined ? tileDialogOf(asker) : undefined;
-  const sending = handoffs.sending.has(agent.sessionId) && face.status !== 'needs-you';
+  const sending = handoffs.sending.has(agent.sessionId) && status !== 'needs-you';
   const card = lastMessageCard(agent);
-  const open = () => (clickOpens !== 'expand' ? openAgent(agent) : expand(id));
-  const closed = isClosed(agent);
+  const open = () => openAgentTile(clickOpens, tileActions, id, agent);
   const { startup } = agent;
   const drop = dropKey({ kind: 'agent', id: agent.sessionId });
   return (
     <HoverCard label={card?.label ?? 'Last message'} content={card?.text}>
       <div
-        className={frostedClasses('hybrid-tile hybrid-tile-agent calm-tile', agent)}
+        className={frostedClasses('hybrid-tile hybrid-tile-agent calm-tile', agent, shows)}
         data-testid="agent-tile"
         data-representation="hybrid"
         data-corner="hover"
         data-harness={agent.harness}
         data-state={agent.state}
-        data-status={face.status}
+        data-status={status}
         data-start={startup === null ? undefined : startup.failed ? 'failed' : 'starting'}
         data-session-id={agent.sessionId}
         data-zone={agent.zoneId ?? ''}
@@ -102,35 +113,20 @@ export function CalmTile({ id, selected, agent, repo, from, crew, crewFlags, imp
         data-reviewer={agent.reviewOf !== null || undefined}
         data-orchestrator={crew !== undefined || undefined}
         data-master={agent.master || undefined}
-        title={card !== undefined ? undefined : clickOpens !== 'expand' ? 'Double-click to open its session window' : 'Double-click to expand it here'}
+        title={card !== undefined ? undefined : agentTileTip(clickOpens)}
         onDoubleClick={open}
       >
+        <FrostWatermark agent={agent} />
         <div className="hybrid-tile-head calm-tile-head">
           {startup !== null && !startup.failed && <Spinner />}
           <EditableName className={nameClass(agent.name)} value={agent.name} title={agent.name} renaming={renaming} clicks={nameClicks} label="Agent name" />
           <FrostMark agent={agent} />
           <HandPlacedMark nodeId={id} />
+          {/* The same corner on every tile: Expand and ⋯, which holds the rest (Pop out, Fold, Rename, Stop and the like). */}
           <span className="calm-tile-controls" data-testid="tile-controls">
-            <RenameButton renaming={renaming} />
-            <TileButton
-              icon={<FoldVertical />}
-              aria-label="Fold to a chip"
-              title={closed ? 'Collapse it to a chip' : 'Collapse: only a closed agent folds to a chip'}
-              disabled={!closed}
-              onClick={() => setFolded(id, true)}
-            />
             <TileButton icon={<Expand />} aria-label="Expand" title="Expand it here, with its terminal" onClick={() => expand(id)} />
-            <TileButton icon={<SquareArrowOutUpRight />} aria-label="Pop out" title="Open its session in its own window" onClick={() => popOutAgent(agent)} />
-            <TileMenu entries={menu.entries} onOpen={menu.reread} />
-            {/* Close never deletes: live, it stops (asking first); closed, it folds to its chip. A paused agent, one a
-                restart stopped and one whose pane is a live shell are woken, resumed or restarted, so it is disabled. */}
-            <TileButton
-              icon={<X />}
-              aria-label="Close agent"
-              title={agent.endedAt === null ? 'Close: stop it, asking first' : closed ? 'Close: fold it to its chip' : 'Close: it isn’t running; Delete agent is in ⋯'}
-              disabled={agent.endedAt !== null && !closed}
-              onClick={() => (agent.endedAt === null ? stopAgent(agent.sessionId) : setFolded(id, true))}
-            />
+            <TileMenu entries={ticket.entries} onOpen={menu.reread} />
+            {ticket.watches}
           </span>
         </div>
         {crew !== undefined && (
@@ -162,7 +158,12 @@ export function CalmTile({ id, selected, agent, repo, from, crew, crewFlags, imp
           )
         )}
         <span className="calm-tile-foot">
-          <StatusMark status={face.status} character={{ harness: agent.harness, ...(sending ? { pose: 'handing-off' } : lookShown(poseOfStatus(face.status, agent), agent)) }} />
+          <StatusMark
+            status={status}
+            word={saysDone ? own.word : status === face.status ? face.word : undefined}
+            ask={askColour(own)}
+            character={{ harness: agent.harness, ...(sending ? { pose: 'handing-off' } : lookShown(poseOfStatus(status, agent), agent)) }}
+          />
           {repo !== undefined && (
             // Outside every zone of its repo, the tile says which repo it works in.
             <span className="calm-tile-repo" data-testid="tile-repo" title={`Works in ${agent.repoRoot}`}>
@@ -190,9 +191,12 @@ export function CalmTile({ id, selected, agent, repo, from, crew, crewFlags, imp
           {quick !== undefined ? (
             <TileQuickAsk sessionId={asker.sessionId} name={asker.name} ask={quick} />
           ) : dialog !== undefined ? (
-            <TileDialogAsk sessionId={asker.sessionId} name={asker.name} prompt={dialog} onOpen={() => openAgent(asker)} />
+            <TileDialogAsk sessionId={asker.sessionId} name={asker.name} prompt={dialog} onOpen={() => answerTicket(clickOpens, tileActions, agent, asker)} />
+          ) : action !== null ? (
+            // The chat's own ask (its Answer) comes before the ticket's button, which shows while the chat asks nothing.
+            <CalmButton action={action} agent={asker} actions={tileActions} open={asker === agent ? open : () => answerTicket(clickOpens, tileActions, agent, asker)} />
           ) : (
-            face.action !== null && <CalmButton action={face.action} agent={asker} actions={tileActions} open={asker === agent ? open : () => openAgent(asker)} />
+            own?.button !== undefined && <TicketAskButton chat={agent} own={own} button={own.button} actions={tileActions} className="calm-tile-action" />
           )}
         </span>
         <span className="calm-tile-technical" data-testid="tile-technical" data-technical-detail="">
@@ -206,6 +210,29 @@ export function CalmTile({ id, selected, agent, repo, from, crew, crewFlags, imp
         <TileRobot agent={agent} sending={sending} />
       </div>
     </HoverCard>
+  );
+}
+
+/** Which of a ticket's own asks stand up in their own colour: green to merge, blue for a new review. A glance tile reads it too. */
+export function askColour(own: TicketTileAsk | undefined): 'merge' | 'new' | undefined {
+  return own?.wordKind === 'merge' || own?.wordKind === 'new' ? own.wordKind : undefined;
+}
+
+/**
+ * A ticket's own one button on a Simplified, Porthole or Shelf tile, as Classic's: Merge opens its pull request, Read marks
+ * its watches' news read, Wake wakes its chat. A glance tile draws it too.
+ */
+export function TicketAskButton({ chat, own, button, actions, className }: { chat: Agent; own: TicketTileAsk; button: TicketButton; actions: TileActions; className: string }) {
+  const clickOpens = useContext(ClickOpensContext);
+  return (
+    <TicketOneButton
+      button={button}
+      className={className}
+      onOpen={() => answerTicket(clickOpens, actions, chat, own.asker)}
+      onMerge={() => own.pullRequest !== undefined && actions.openPullRequest(own.pullRequest.owner, own.pullRequest.pr)}
+      onWake={() => actions.resumeAgent(own.asker.sessionId)}
+      onRead={() => actions.readWatches(own.asker.sessionId)}
+    />
   );
 }
 
@@ -228,9 +255,8 @@ export function CalmButton({ action, agent, actions, open, className = 'calm-til
       }
       case 'retry':
         return actions.retryAgentStart(agent.sessionId);
-      case 'resume':
       case 'wake':
-        return run(() => actions.resumeAgent(agent.sessionId));
+        return run(() => actions.wakeAgent(agent));
       case 'credits':
         return run(() => actions.continueOnCredits(agent.sessionId));
     }
@@ -242,6 +268,7 @@ export function CalmButton({ action, agent, actions, open, className = 'calm-til
       className={`${className} nodrag`}
       data-testid="tile-action"
       data-prominent={action.prominent || undefined}
+      data-on-hover={action.onHover}
       disabled={pending}
       onClick={press}
       onDoubleClick={stopPropagation}

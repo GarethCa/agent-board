@@ -146,9 +146,17 @@ describe("the board MCP server's instructions", () => {
   it('list the memories with memory_read before reading one, and name the moment in the memory tools too', () => {
     expect(BOARD_MCP_INSTRUCTIONS).toMatch(/list memories with `memory_read`, then read/);
     const description = (name: string) => BOARD_MCP_TOOLS.find((tool) => tool.name === name)!.description;
-    expect(description('memory_read')).toMatch(/^Read what other agents left before you start\./);
+    expect(description('memory_read')).toMatch(/^Read what other agents left before you start: your zone shares one memory\./);
     expect(description('memory_update')).toMatch(/^Change a memory:/);
-    expect(description('memory_update')).toContain('Add what the next agent should know before you finish.');
+    expect(description('memory_update')).toContain("Add what the next agent should know to your zone's memory before you finish, rather than a new memory.");
+  });
+
+  it('say a zone shares one memory, added to rather than started again for each ticket', () => {
+    expect(BOARD_MCP_INSTRUCTIONS).toContain('A zone shares one memory: add to it, and never start a memory of your own for a ticket.');
+    const memoryNew = BOARD_MCP_TOOLS.find((tool) => tool.name === 'memory_new')!;
+    expect(memoryNew.description).toContain('never start one for each ticket');
+    expect(memoryNew.description).toContain('make a second only for a different subject the whole zone needs, with second');
+    expect(memoryNew.inputSchema.properties).toHaveProperty('second');
   });
 });
 
@@ -210,7 +218,8 @@ describe('the board MCP tools and the agent-board CLI', () => {
     { tool: 'list_edges', command: 'edges' },
     { tool: 'remove_edge', command: 'edge', positional: ['edge'], options: [] },
     { tool: 'move', command: 'move', positional: ['tile'] },
-    { tool: 'arrange', command: 'arrange', positional: ['zone'] },
+    // The CLI's --place pairs are the tool's placements object.
+    { tool: 'arrange', command: 'arrange', positional: ['zone'], renamed: { placements: 'place' } },
     // `zone map`, `zone screenshot` and `zone layout` alone: the other zone commands change groups, the CLI's alone.
     { tool: 'map', command: 'zone', positional: ['zone'], options: ['boxes', 'sections'] },
     // The CLI writes the picture to a file (--out) as the tool hands it to the model.
@@ -253,7 +262,7 @@ describe('the board MCP tools and the agent-board CLI', () => {
     { tool: 'steps_new', command: 'steps', renamed: { steps: 'file' }, options: ['title', 'file'] },
     { tool: 'steps_read', command: 'steps', positional: ['card'], options: ['mine'] },
     { tool: 'steps_update', command: 'steps', positional: ['card', 'action', 'step', 'answer'], renamed: { steps: 'file' }, options: ['file', 'undo', 'send'] },
-    { tool: 'memory_new', command: 'memory', positional: ['title'], options: [] },
+    { tool: 'memory_new', command: 'memory', positional: ['title'], options: ['second'] },
     { tool: 'memory_read', command: 'memory', positional: ['memory', 'entry', 'history'], options: ['search'] },
     {
       tool: 'memory_update',

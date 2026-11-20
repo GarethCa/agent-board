@@ -8,9 +8,10 @@ import { runGit } from './git.ts';
 import { keyedQueue } from './keyed-queue.ts';
 import { freeTile, lanesInside } from './shelf-layout.ts';
 import { folderPath } from './repo-zone.ts';
-import { finiteNumberParam, invalidParams, oneOf, optionalBooleanParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
+import { finiteNumberParam, invalidParams, oneOf, optionalBooleanParam, optionalStringParam, paramsObject, placementsParam, stringParam } from './params.ts';
 import {
   ARRANGE_SPACINGS,
+  placementsFrom,
   ZONE_LAYOUT_MODES,
   ZONE_LAYOUT_RULES,
   DEFAULT_ARRANGE_SPACING,
@@ -67,6 +68,8 @@ interface ZoneRow {
   board_mcp: number;
   gate_command: string | null;
   spacing: ArrangeSpacing;
+  /** `Zone.placements`, as JSON. */
+  placements: string;
   layout_mode: ZoneLayoutMode;
   layout_rule: ZoneLayoutRule;
   /** Its lanes area (`Zone.lanes`): all four set, or all NULL for lanes that fill it. */
@@ -267,6 +270,7 @@ export function createZoneTable(
     boardMcp: row.board_mcp === 1,
     gateCommand: row.gate_command,
     spacing: row.spacing,
+    placements: placementsFrom(row.placements),
     layoutMode: row.layout_mode,
     layoutRule: row.layout_rule,
     lanes: rowLanes(row),
@@ -418,6 +422,7 @@ export function zoneHandlers<Context>(
   const updateBoardMcp = db.prepare('UPDATE zones SET board_mcp = ? WHERE id = ?');
   const updateGateCommand = db.prepare('UPDATE zones SET gate_command = ? WHERE id = ?');
   const updateSpacing = db.prepare('UPDATE zones SET spacing = ? WHERE id = ?');
+  const updatePlacements = db.prepare('UPDATE zones SET placements = ? WHERE id = ?');
   const updateLayoutMode = db.prepare('UPDATE zones SET layout_mode = ? WHERE id = ?');
   const updateLayoutRule = db.prepare('UPDATE zones SET layout_rule = ? WHERE id = ?');
   const updateTracker = db.prepare('UPDATE zones SET tracker_provider = ?, tracker_scope = ?, tracker_project = ? WHERE id = ?');
@@ -560,10 +565,11 @@ export function zoneHandlers<Context>(
       const boardMcp = optionalBooleanParam(fields, 'boardMcp');
       const gateCommand = gateCommandParam(fields);
       const spacing = fields.spacing === undefined ? undefined : oneOf(fields, 'spacing', ARRANGE_SPACINGS);
+      const placements = fields.placements === undefined ? undefined : placementsParam(fields.placements, 'placements');
       const layoutMode = fields.layoutMode === undefined ? undefined : oneOf(fields, 'layoutMode', ZONE_LAYOUT_MODES);
       const layoutRule = fields.layoutRule === undefined ? undefined : oneOf(fields, 'layoutRule', ZONE_LAYOUT_RULES);
-      if (bypass === undefined && trustsFolder === undefined && boardMcp === undefined && gateCommand === undefined && spacing === undefined && layoutMode === undefined && layoutRule === undefined) {
-        throw invalidParams('give codexBypassHookTrust, trustsFolder, boardMcp, gateCommand, spacing, layoutMode or layoutRule');
+      if (bypass === undefined && trustsFolder === undefined && boardMcp === undefined && gateCommand === undefined && spacing === undefined && placements === undefined && layoutMode === undefined && layoutRule === undefined) {
+        throw invalidParams('give codexBypassHookTrust, trustsFolder, boardMcp, gateCommand, spacing, placements, layoutMode or layoutRule');
       }
       // A rule moves the tiles' saved places and a view only draws them elsewhere, so a zone never has both.
       if (layoutRule !== undefined && layoutRule !== 'off' && layoutMode !== undefined && layoutMode !== 'free') {
@@ -575,6 +581,7 @@ export function zoneHandlers<Context>(
       }
       if (gateCommand !== undefined) updateGateCommand.run(gateCommand, id);
       if (spacing !== undefined) updateSpacing.run(spacing, id);
+      if (placements !== undefined) updatePlacements.run(JSON.stringify({ ...zone.placements, ...placements }), id);
       if (layoutMode !== undefined) updateLayoutMode.run(layoutMode, id);
       if (layoutMode !== undefined && layoutMode !== 'free' && layoutRule === undefined) updateLayoutRule.run('off', id);
       if (layoutRule !== undefined && layoutRule !== 'off') updateLayoutMode.run('free', id);

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent, AgentState, NeedsYouShows, PullRequest, TicketWatch, TicketWatchNews } from '@agent-board/daemon/protocol';
 import { galleryAgent } from './TileGallery';
-import { ticketHead, ticketTileAsk, helperIcon, midRowFits, TICKET_ASKS, ticketAsk, ticketFace, type TicketAsk } from './ticket-tile';
+import { glanceFace, ticketGlanceFace } from './glance-tile';
+import { calmFace } from './calm-tile';
+import { ticketHead, ticketStatus, ticketTileAsk, helperIcon, midRowFits, TICKET_ASKS, ticketAsk, ticketFace, type TicketAsk } from './ticket-tile';
 
 const AT = '2026-11-14T09:00:00.000Z';
 const SHOWS: NeedsYouShows = 'explicit';
@@ -133,15 +135,26 @@ describe('the ticket tile’s face', () => {
     expect(ticketFace(chat('failed', { notice: 'It crashed.' }), [], SHOWS)).toMatchObject({ word: 'Failed', wordKind: 'failed', line: 'It crashed.', button: { kind: 'open', label: 'Open', prominent: false } });
   });
 
-  it('asks to resume a chat a restart stopped, on its card', () => {
-    const face = ticketFace(chat('stopped-by-restart'), [helper('builder', 'idle')], SHOWS);
-    expect(face).toMatchObject({ ask: 'needs-you', line: 'Stopped by a restart · Resume carries it on', button: { kind: 'wake', label: 'Resume', prominent: true } });
+  it('wakes a chat that is done or exited on an error, with a plain Wake', () => {
+    const wake = { kind: 'wake', label: 'Wake', prominent: false };
+    expect(ticketFace(chat('done', { endedAt: AT }), [], SHOWS).button).toEqual(wake);
+    expect(ticketFace(chat('failed', { endedAt: AT, exitCode: 1 }), [], SHOWS).button).toEqual(wake);
   });
 
-  it('asks to resume a helper a restart stopped, and says who it is without saying it asks', () => {
+  it('gives a chat its clock wakes Wake now, on hover only', () => {
+    expect(ticketFace(chat('scheduled'), [], SHOWS).button).toEqual({ kind: 'wake', label: 'Wake now', prominent: false, onHover: true });
+  });
+
+  it('reads a chat a restart stopped as asleep, as a paused one: Stopped, with a plain Wake, asking nothing', () => {
+    const face = ticketFace(chat('stopped-by-restart'), [helper('builder', 'idle')], SHOWS);
+    expect(face).toMatchObject({ ask: 'working', word: 'Stopped', wordKind: 'rest', line: expect.stringMatching(/^Stopped by a restart · (just now|\d+ (min|h|d) ago)$/), button: { kind: 'wake', label: 'Wake', prominent: false } });
+  });
+
+  it('keeps to its chat while a helper a restart stopped sleeps: the helper asks nothing', () => {
     const face = ticketFace(chat('idle'), [helper('builder', 'stopped-by-restart')], SHOWS);
-    expect(face).toMatchObject({ ask: 'needs-you', line: 'Its builder: Stopped by a restart · Resume carries it on', button: { kind: 'wake', label: 'Resume', prominent: true } });
-    expect(face.asker.sessionId).toBe('builder');
+    expect(face).toMatchObject({ ask: 'working', word: 'Idle' });
+    expect(face.asker.sessionId).toBe('chat');
+    expect(face.helpers.map(({ sessionId, state }) => [sessionId, state])).toEqual([['builder', 'sleep']]);
   });
 
   it('lists its helpers as icons, in order', () => {
@@ -286,6 +299,47 @@ describe('a helper’s ask on its ticket’s tile', () => {
   });
 });
 
+describe('a ticket’s own ask on a Simplified, Porthole or Shelf tile', () => {
+  const mergeChat = chat('idle', { workCategory: ready, pullRequests: [pr(647)], status: status('Approved. Checks pass.') });
+  const reviewChat = chat('running', { watch: watch({ news: [news('reviews', 'sam reviewed')], ask: 'new-review' }) });
+  const mergedChat = chat('idle', { pullRequests: [pr(645, 'merged')] });
+  const own = (agent: Agent) => ticketTileAsk(agent, [helper('builder', 'done', { endedAt: AT })], SHOWS)!;
+
+  it('never reads as needing the user: Ready to merge, New review and Done take the done mark, in place of the chat’s Needs you', () => {
+    expect(calmFace(mergeChat, SHOWS).status).toBe('needs-you');
+    expect(ticketStatus(own(mergeChat), 'needs-you')).toBe('done');
+    expect(ticketStatus(own(reviewChat), 'working')).toBe('done');
+    expect(ticketStatus(own(mergedChat), 'needs-you')).toBe('done');
+  });
+
+  it('reads Done once merged, whether its chat sleeps or failed after', () => {
+    const asleep = chat('hibernated', { hibernated: { at: AT, by: null, byId: null }, pullRequests: [pr(645, 'merged')] });
+    const failed = chat('failed', { notice: 'It crashed.', pullRequests: [pr(645, 'merged')] });
+    for (const merged of [asleep, failed]) {
+      expect(ticketStatus(own(merged), calmFace(merged, SHOWS).status)).toBe('done');
+      expect(ticketGlanceFace(glanceFace(merged, SHOWS), own(merged))).toMatchObject({ status: 'done', state: 'done', level: 0, word: 'Done', line: 'Merged as #645.' });
+    }
+  });
+
+  it('keeps the chat’s own status, word and button while it only has news, so a working, failed, paused or asking chat still reads so', () => {
+    const working = chat('running', { watch: watch({ news: [news('checks', 'checks passed')] }) });
+    expect(ticketStatus(own(working), 'working')).toBe('working');
+    expect(ticketStatus({ wordKind: 'failed', merged: false }, 'problem')).toBe('problem');
+    expect(ticketStatus({ wordKind: 'rest', merged: false }, 'paused')).toBe('paused');
+    const asking = chat('idle', { lastMessage: 'Shall I clean up?', watch: watch({ news: [news('checks', 'checks passed')] }) });
+    const asked = glanceFace(asking, SHOWS);
+    expect(calmFace(asking, SHOWS)).toMatchObject({ status: 'needs-you', action: { label: 'Answer' } });
+    expect(ticketStatus(own(asking), 'needs-you')).toBe('needs-you');
+    expect(ticketGlanceFace(asked, own(asking))).toMatchObject({ status: 'needs-you', state: asked.state, word: asked.word, action: asked.action });
+  });
+
+  it('says Classic’s words on a glance tile, quiet in colour, with the ticket’s line and no action of its own', () => {
+    expect(ticketGlanceFace(glanceFace(mergeChat, SHOWS), own(mergeChat))).toMatchObject({ status: 'done', state: 'done', level: 0, word: 'Ready to merge', line: 'Approved. Checks pass.', action: null });
+    expect(ticketGlanceFace(glanceFace(reviewChat, SHOWS), own(reviewChat))).toMatchObject({ state: 'done', level: 0, word: 'New review', line: 'sam reviewed on #648.' });
+    expect(ticketGlanceFace(glanceFace(mergedChat, SHOWS), own(mergedChat))).toMatchObject({ state: 'done', word: 'Done', line: 'Merged as #645.' });
+  });
+});
+
 describe('a ticket’s name and about line', () => {
   it('shows the ticket’s title as the name of a chat named after its ticket alone, and its id alone in the about line', () => {
     expect(ticketHead(chat('running', { name: 'ACME-726', purpose: null, description: '' }))).toEqual({ name: 'Ticket tiles', id: 'ACME-726', about: undefined });
@@ -316,6 +370,16 @@ describe('a helper’s icon', () => {
     expect(helperIcon(helper('b', 'idle'), SHOWS).state).toBe('sleep');
     expect(helperIcon(helper('b', 'hibernated', { hibernated: { at: AT, by: null, byId: null } }), SHOWS).state).toBe('sleep');
     expect(helperIcon(helper('b', 'failed'), SHOWS).state).toBe('failed');
+  });
+
+  it('carries its frost: a clock, tick or warning badge for a scheduled, done or exited helper, and a snowflake asleep', () => {
+    const clock = galleryAgent('scheduled').schedule;
+    expect(helperIcon(helper('b', 'scheduled', { schedule: clock }), SHOWS).frozen).toBe('scheduled');
+    expect(helperIcon(helper('b', 'done', { endedAt: AT, schedule: null }), SHOWS).frozen).toBe('done');
+    const exited = helperIcon(helper('b', 'failed', { endedAt: AT, exitCode: 1, schedule: null }), SHOWS);
+    expect(exited).toMatchObject({ frozen: 'exited', word: 'Exited' });
+    expect(helperIcon(helper('b', 'hibernated', { hibernated: { at: AT, by: null, byId: null } }), SHOWS).frozen).toBe('paused');
+    expect(helperIcon(helper('b', 'running'), SHOWS).frozen).toBeUndefined();
   });
 
   it('says who it is and what it is doing', () => {

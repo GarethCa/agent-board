@@ -1,4 +1,5 @@
 import { MiniMap, MiniMapNode, useReactFlow, useStore, type MiniMapNodeProps, type Node } from '@xyflow/react';
+import { memo, useCallback } from 'react';
 import { Grid3x3, Map as MapIcon, Minus, Plus } from 'lucide-react';
 import { expandedTrace } from '../board/expanded-trace';
 import { useSimplified } from '../design';
@@ -41,7 +42,6 @@ export function ZoomControls({
     expandedTrace.noteView('zoomToFit');
     return flow.fitView(options);
   };
-  const zoom = useStore((state) => state.transform[2]);
   const simplified = useSimplified();
   // Shown by default under Classic and hidden under the Simplified design, until it is turned on or off here.
   const [minimap, setMinimap] = useMinimapShown();
@@ -61,16 +61,7 @@ export function ZoomControls({
       <Island className="zoom-controls island-bottom-right" role="group" aria-label="Zoom">
         {usageOnBoard && !simplified && <UsagePill separated />}
         <ToolButton size="sm" icon={<Minus />} label="Zoom out" onClick={() => void zoomOut()} />
-        <Button
-          size="sm"
-          variant="ghost"
-          className="zoom-level"
-          aria-label={`Fit view (${Math.round(zoom * 100)}%)`}
-          tooltip="Fit the board in view"
-          onClick={() => void fitView({ maxZoom: 1 })}
-        >
-          {Math.round(zoom * 100)}%
-        </Button>
+        <ZoomLevel onFit={() => void fitView({ maxZoom: 1 })} />
         <ToolButton size="sm" icon={<Plus />} label="Zoom in" onClick={() => void zoomIn()} />
         <IslandSeparator />
         {simplified ? (
@@ -87,11 +78,23 @@ export function ZoomControls({
   );
 }
 
+/** The zoom, which fits the board in view when clicked: alone, it is the one part that draws again at every step of a zoom. */
+function ZoomLevel({ onFit }: { onFit(): void }) {
+  const percent = useStore((state) => Math.round(state.transform[2] * 100));
+  return (
+    <Button size="sm" variant="ghost" className="zoom-level" aria-label={`Fit view (${percent}%)`} tooltip="Fit the board in view" onClick={onFit}>
+      {percent}%
+    </Button>
+  );
+}
+
 /**
  * A board's minimap, the same on every level: the main board's and each ticket's own. Its colours come from the theme
  * variables `.board` and `.ticket-board` set.
  */
-export function BoardMinimap({ nodeColor, nodeMarked, label }: { nodeColor(node: Node): string; nodeMarked?(node: Node): boolean; label: string }) {
+export const BoardMinimap = memo(function BoardMinimap({ nodeColor, nodeMarked, label }: { nodeColor(node: Node): string; nodeMarked?(node: Node): boolean; label: string }) {
+  // The same function while what marks a node is: a new one draws every node on the minimap again.
+  const nodeClassName = useCallback((node: Node) => (nodeMarked?.(node) === true ? MARKED : ''), [nodeMarked]);
   return (
     <MiniMap
       className="board-minimap"
@@ -99,12 +102,12 @@ export function BoardMinimap({ nodeColor, nodeMarked, label }: { nodeColor(node:
       zoomable
       nodeColor={nodeColor}
       nodeStrokeColor="var(--raised-edge)"
-      nodeClassName={(node) => (nodeMarked?.(node) === true ? MARKED : '')}
+      nodeClassName={nodeClassName}
       nodeComponent={MarkedNode}
       ariaLabel={label}
     />
   );
-}
+});
 
 /** The class of a node on the minimap that carries the mark of its own board inside. */
 const MARKED = 'board-minimap-marked';

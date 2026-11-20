@@ -111,11 +111,31 @@ export function frontToCollapse(expanded: ExpandedTiles, pinned: ReadonlySet<str
 }
 
 /**
- * Whether the tile is kept on the board in place of its session window: pinned expanded, and open. One pinned
- * while in its window has no tile open to show: that window is shown.
+ * What asked for a session window: the header's Maximise, a pop-out, opening a tile (Enter, ⌘K ↵, the sessions list, a
+ * notification, a message), the pop-up over the board, or any other show of a window. A pinned tile is kept on the
+ * board for some of them.
  */
-export function keptOnBoard(id: string, pinned: ReadonlySet<string>, expanded: ExpandedTiles): boolean {
-  return pinned.has(id) && expanded.some((entry) => entry.id === id);
+export type WindowPath = 'maximise' | 'popOut' | 'openAgent' | 'showWindow' | 'popUp';
+
+/**
+ * The ways to a session window the user picks on purpose: the expanded tile's Maximise, every pop-out (its Pop out,
+ * the tile menu's, a session's tab dragged out of the board), and the pop-up over the board (a double-click, the tile
+ * menu's Open). A tile pinned expanded opens its window for them as any
+ * tile does, and is back where it was, pinned, once the window closes. Its terminal is never drawn twice: the window
+ * takes the tile out of the expanded tiles as for any tile (`windowedExpanded`, not `collapse`, which a pin refuses),
+ * and `pinnedToOpen` leaves it out while the window has it. Another way the user opens a session's window on purpose
+ * adds its path to `WindowPath` and here. The pop-up is taken as a window there too (`poppedUp`), so a pinned tile is
+ * off the board while it is up.
+ */
+const CHOSEN_WINDOW_PATHS: ReadonlySet<WindowPath> = new Set<WindowPath>(['maximise', 'popOut', 'popUp']);
+
+/**
+ * Whether the tile is kept on the board in place of the session window `path` asked for: pinned expanded,
+ * open, and not asked by the user's own Maximise or a pop-out. Opening the tile (Enter, ⌘K ↵), a notification or a
+ * message brings the pinned tile forward instead. One pinned while in its window has no tile open to show: that window is shown.
+ */
+export function keptOnBoard(id: string, pinned: ReadonlySet<string>, expanded: ExpandedTiles, path: WindowPath): boolean {
+  return !CHOSEN_WINDOW_PATHS.has(path) && pinned.has(id) && expanded.some((entry) => entry.id === id);
 }
 
 /**

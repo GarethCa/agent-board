@@ -3,7 +3,7 @@ import { planPending, waitsOnUser, type Agent, type AgentAsk, type AgentFlag, ty
 import { InboxQuickAsk } from './InboxQuickAsk';
 import { StepsWaitBody } from './StepsWaitBody';
 import { ClipboardList, FolderCheck, SendHorizontal, SquareArrowOutUpRight, Timer } from 'lucide-react';
-import { Button, EmptyState, ErrorText, Input, Kbd } from '../ui';
+import { Button, EmptyState, ErrorText, Input, Kbd, Truncate } from '../ui';
 import { useAction } from '../use-action';
 import { PermissionRow } from './PermissionRow';
 import { RemoveAskRow } from './RemoveAskRow';
@@ -95,7 +95,7 @@ function InboxItem({ agent, kind, lead, now, onOpen }: { agent: Agent; kind: Nee
     <li className="inbox-item" data-testid="inbox-item" data-session-id={agent.sessionId} data-state={agent.state} data-kind={kind} data-read={read}>
       <div className="inbox-item-head">
         <HarnessMark className="inbox-item-mark" harness={agent.harness} />
-        <span className="inbox-item-name">{agent.name}</span>
+        <span className="inbox-item-name" title={agent.name}>{agent.name}</span>
         <span className="inbox-kind" data-testid="inbox-kind" data-kind={kind}>
           {tag.icon}
           {tag.label}
@@ -106,7 +106,7 @@ function InboxItem({ agent, kind, lead, now, onOpen }: { agent: Agent; kind: Nee
       </div>
       {kind === 'permission' && lead !== undefined && (
         <p className="inbox-item-meta">
-          crew of <span className="inbox-crew">◆ {lead.name}</span> · permission prompts always reach you
+          crew of <Truncate text={`◆ ${lead.name}`} title={lead.name} className="inbox-crew" /> · permission prompts always reach you
         </p>
       )}
       {/* A flag shows whatever else the agent asks, so a seen question never hides it. */}
@@ -165,7 +165,7 @@ function AskRow({ agent, ask, now }: { agent: Agent; ask: AgentAsk; now: number 
         <div className="inbox-ask-options" role="group" aria-label={`Answers for ${agent.name}`}>
           {ask.options.map((option, index) => (
             <Button key={index} size="sm" className="inbox-ask-option" disabled={busy} aria-keyshortcuts={index < 9 ? String(index + 1) : undefined} onClick={() => answer({ option: index })}>
-              {option}
+              <Truncate text={option} />
               {index < 9 && <Kbd aria-hidden>{index + 1}</Kbd>}
             </Button>
           ))}
@@ -212,7 +212,7 @@ function FlagRow({ agent, flag, now }: { agent: Agent; flag: AgentFlag; now: num
       <p className="inbox-item-meta">
         {flag.via !== null && (
           <>
-            via <span className="inbox-crew">{flag.via}</span> ·
+            via <Truncate text={flag.via} className="inbox-crew" /> ·
           </>
         )}{' '}
         {HARNESSES[agent.harness].label} · {sinceText(flag.at, now)} · {agent.trustFolder !== null ? 'clears once its folder is trusted' : agent.undelivered.length > 0 ? 'clears once it is resent or cleared' : 'clears when you open it'}
@@ -256,7 +256,7 @@ function PlanRow({ agent, plan, now, onShow }: { agent: Agent; plan: PlanSummary
     <div className="inbox-plan" data-testid="inbox-plan">
       <div className="inbox-plan-head">
         <ClipboardList aria-hidden />
-        <span className="inbox-plan-title">{plan.title}</span>
+        <span className="inbox-plan-title" title={plan.title}>{plan.title}</span>
         <span className="inbox-plan-version">v{plan.version}</span>
         <Button size="sm" variant="ghost" aria-label={`Show ${agent.name}'s plan`} onClick={onShow}>
           Show plan

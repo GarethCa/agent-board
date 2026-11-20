@@ -3,7 +3,7 @@ import { ChevronRight, Copy, Lock, MessageSquareText, MoreHorizontal, Pencil, Pl
 import type { LibraryPrefab, PrefabMember } from '@agent-board/daemon/protocol';
 import { errorMessage } from '../../../shared/errors';
 import { isNewPrefab } from '../board/menu-model';
-import { Badge, Button, ErrorText, IconButton, Menu } from '../ui';
+import { Badge, Button, ErrorText, IconButton, Menu, Truncate } from '../ui';
 import { editStart } from './CrewFlow';
 import { CrewFaces, PrefabIcon } from './icons';
 import { libraryBoard } from './prefab-board';
@@ -125,10 +125,14 @@ export function PrefabsSetting() {
                 </span>
                 <span className="prefabs-words">
                   <span className="prefabs-name">
-                    {prefab.name}
+                    <Truncate text={prefab.name} />
                     {isNewPrefab(prefab, now) && <Badge tone="neutral">new</Badge>}
                   </span>
-                  {prefab.purpose !== '' && <span className="prefabs-purpose">{prefab.purpose}</span>}
+                  {prefab.purpose !== '' && (
+                    <span className="prefabs-purpose">
+                      <Truncate text={prefab.purpose} />
+                    </span>
+                  )}
                 </span>
                 <PrefabShape members={prefab.members} />
                 <span className="prefabs-row-actions">
@@ -168,10 +172,12 @@ export function PrefabsSetting() {
                     <PrefabIcon icon={prefab.icon} />
                   </span>
                   <span className="prefabs-words">
-                    <span className="prefabs-name">{prefab.name}</span>
+                    <span className="prefabs-name">
+                      <Truncate text={prefab.name} />
+                    </span>
                     <span className="prefabs-purpose">
                       <Lock aria-hidden />
-                      Built in: duplicate it to change it
+                      <Truncate text="Built in: duplicate it to change it" />
                     </span>
                   </span>
                   <PrefabShape members={prefab.members} />
@@ -218,8 +224,12 @@ function PrefabDrafts() {
               <Pencil aria-hidden />
             </span>
             <span className="prefabs-words">
-              <span className="prefabs-name">{draft.prefab.name}</span>
-              <span className="prefabs-purpose">Drafted by {draft.drafter.name}</span>
+              <span className="prefabs-name">
+                <Truncate text={draft.prefab.name} />
+              </span>
+              <span className="prefabs-purpose">
+                <Truncate text={`Drafted by ${draft.drafter.name}`} />
+              </span>
             </span>
             <PrefabShape members={draft.prefab.members} />
             <span className="prefabs-row-actions" data-shown>

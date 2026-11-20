@@ -82,9 +82,18 @@ export type ZoneNodeType = Node<
   'zone'
 >;
 
-/** The fill opacity the theme gives a zone that has none of its own, in percent. */
+/** The fill opacity each look (theme and design) gives a zone, read once: a look's tokens never change while the app runs. */
+const themeFills = new Map<string, number>();
+
+/** The fill opacity the theme gives a zone that has none of its own, in percent: no style lookup in a zone's render. */
 function themeFillOpacity(): number {
-  return tokenNumber('--zone-fill-default');
+  const { theme = '', design = '' } = document.documentElement.dataset;
+  const look = `${theme}|${design}`;
+  const known = themeFills.get(look);
+  if (known !== undefined) return known;
+  const fill = tokenNumber('--zone-fill-default');
+  themeFills.set(look, fill);
+  return fill;
 }
 
 /**

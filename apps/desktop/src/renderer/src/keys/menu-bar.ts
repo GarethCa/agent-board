@@ -41,6 +41,8 @@ export function acceleratorOf(chord: Chord, isMac: boolean): string | undefined 
       return `CommandOrControl+${shift || !isMac ? 'Shift+' : ''}${key}`;
     case 'pane':
       return isMac ? `CommandOrControl+Alt+${key}` : `CommandOrControl+Shift+Alt+${key}`;
+    case 'control':
+      return `Control+${shift ? 'Shift+' : ''}${key}`;
   }
 }
 
@@ -108,8 +110,8 @@ export function pressOf(entry: KeyBinding, isMac: boolean): KeyboardEventInit {
   return {
     key: chord.key ?? fromCode ?? text ?? '',
     ...(chord.code === undefined ? {} : { code: chord.code }),
-    metaKey: isMac && command,
-    ctrlKey: !isMac && command,
+    metaKey: isMac && command && chord.mod !== 'control',
+    ctrlKey: (!isMac && command) || chord.mod === 'control',
     shiftKey: shift,
     altKey: chord.mod === 'pane',
     bubbles: true,

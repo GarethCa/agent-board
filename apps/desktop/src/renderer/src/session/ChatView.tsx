@@ -16,7 +16,7 @@ import { sentLabel, sentMessages, settle, useSentMessages, type SentMessage } fr
 import { useLiveAgents } from './use-live-board';
 import { useTranscript } from './use-transcript';
 
-interface ChatViewProps {
+export interface ChatViewProps {
   agent: Agent;
   /** Whether it is on show: it reads the transcript only then. */
   active: boolean;
@@ -38,6 +38,10 @@ interface ChatViewProps {
  * chat (`useChatStyle`): cards, a timeline rail, or chips and one status line over the message box. What the agent
  * waits on you for is answered where it shows. A transcript its adapter can't read leaves only the terminal, saying
  * so. It shows the latest messages of a long one; the earlier ones are in the terminal.
+ *
+ * With the keep-sessions setting on, it is drawn in a React root of its own (`KeptChatView.tsx`), which has the app's
+ * strict mode and tooltips and nothing else: its tree reads no other context from around it (no toasts), or it fails
+ * only there.
  */
 export function ChatView({ agent, active, onShowTerminal, runs, onOpenLink, onOpenPlan, rail = false }: ChatViewProps) {
   const { sessionId, harness, name } = agent;

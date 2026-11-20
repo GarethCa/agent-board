@@ -88,6 +88,8 @@ describe('to-do lines', () => {
     // Folded, it keeps the size it had open, which the user may have given it.
     expect(() => checkTodoData({ owner: USER, lines: [], folded: true, openSize: { width: 360, height: 420 } })).not.toThrow();
     expect(() => checkTodoData({ owner: USER, lines: [], openSize: { width: 360 } })).toThrow(/openSize must be \{ width, height \}/);
+    expect(() => checkTodoData({ owner: USER, lines: [], foldedSize: { width: 368, height: 72 } })).not.toThrow();
+    expect(() => checkTodoData({ owner: USER, lines: [], foldedSize: { width: 368 } })).toThrow(/foldedSize must be \{ width, height \}/);
   });
 
   it("shows a time today as the clock, and another day's with its date", () => {

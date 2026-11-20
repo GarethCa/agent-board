@@ -1,5 +1,5 @@
 import type { HTMLAttributes, ReactNode } from 'react';
-import { ArrowRight, Check, Clock, Hourglass, Pause, RotateCcw, ShieldAlert, Timer, X } from 'lucide-react';
+import { ArrowRight, Check, Clock, Hourglass, Pause, ShieldAlert, Timer, X } from 'lucide-react';
 import type { AgentState } from '@agent-board/daemon/protocol';
 import { STATE_LABELS } from '../states';
 import { cx } from './cx';
@@ -23,7 +23,8 @@ const STATE_ICONS: Partial<Record<AgentState, ReactNode>> = {
   failed: <X aria-hidden />,
   done: <Check aria-hidden />,
   scheduled: <Clock aria-hidden />,
-  'stopped-by-restart': <RotateCcw aria-hidden />,
+  // Asleep, as a paused one is: Wake carries either on.
+  'stopped-by-restart': <Pause aria-hidden />,
   hibernated: <Pause aria-hidden />,
   'handing-off': <ArrowRight aria-hidden />,
   // A stopwatch, not the rate limit's hourglass, nor the spinner of a tile starting.

@@ -73,6 +73,18 @@ describe('the header’s one state button', () => {
   it('is Pause between turns', () => {
     expect(lead({ state: 'waiting' })).toBe('pause');
   });
+  it('is Wake once it is done or exited, but not for a reviewer whose round ended, nor a harness in its shell', () => {
+    const ended = { endedAt: '2026-10-30T10:00:00Z', reviewOf: null, shellHarness: null };
+    expect(lead({ ...ended, state: 'done' }, false)).toBe('wake');
+    expect(lead({ ...ended, state: 'failed' }, false)).toBe('wake');
+    expect(lead({ ...ended, state: 'done', reviewOf: 'impl' }, false)).toBeUndefined();
+    expect(lead({ ...ended, state: 'done', shellHarness: 'claude' }, false)).toBeUndefined();
+  });
+  it('is Wake now for one its clock pauses between runs, which runs its clock', () => {
+    const schedule = { clockId: 'c', cron: '30 22 * * *', prompt: 'Sweep', enabled: true, nextRunAt: '2026-10-30T22:30:00Z', lastRun: null, hibernates: true };
+    const agent = { state: 'hibernated', endedAt: '2026-10-30T10:00:00Z', reviewOf: null, shellHarness: null, ask: null, plan: null, permissions: [], hibernated: null, schedule } as unknown as Agent;
+    expect(leadControl(sessionControls({ agent, live: false }))).toMatchObject({ id: 'wake', label: 'Wake now' });
+  });
   it('is none for one that has gone, ended or with its session lost', () => {
     expect(lead({ state: 'done', endedAt: '2026-10-30T10:00:00Z' }, false)).toBeUndefined();
     expect(lead({ state: 'waiting' }, false)).toBeUndefined();

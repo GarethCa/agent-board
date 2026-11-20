@@ -12,7 +12,7 @@ import { SessionDetails } from './SessionDetails';
 import { DetailsHandle } from './DetailsHandle';
 import { LiveShelves, ShelfControls } from './LiveShelves';
 import { showsShelves } from './agent-sidebar';
-import { ChatView } from './ChatView';
+import { KeptChatView } from './KeptChatView';
 import { openingView, useConversationAs } from './conversation-as';
 import { Composer } from './Composer';
 import { watchPastePane } from './paste-pane';
@@ -25,7 +25,7 @@ import { useChatTheme } from './chat-theme';
 import { ChatControls } from './ChatControls';
 import { useChatRunsShow } from '../board/view-settings';
 import { ShellPanes } from './ShellPanes';
-import { stripShown } from './strip-shown';
+import { ownPaneShown, stripShown } from './strip-shown';
 import { TerminalPane, type AttachState, type PaneStatus } from './TerminalPane';
 import { composerBlock } from './composer-block';
 import { canRestart, endedShellLabel, exitText, RestartAgent } from './RestartAgent';
@@ -101,6 +101,14 @@ interface SessionBodyProps {
    * opened in place names one, and shows no details beside it; anywhere else the view is the one picked for the session.
    */
   view?: 'terminal' | 'chat';
+  /**
+   * Whether it draws its own strip over its pane, naming the pane and holding its + and Split: false straight under a row
+   * of tabs of another's (a ticket's pop-up), which then draws one only for what is amiss, its view switch going to
+   * `switchSlot`. True by default.
+   */
+  ownStrip?: boolean;
+  /** Where its Terminal | Chat switch goes without a strip of its own (null until it is drawn). */
+  switchSlot?: HTMLElement | null;
 }
 
 /**
@@ -123,6 +131,8 @@ export function SessionBody({
   chatControlsSlot,
   compactControls = false,
   view,
+  ownStrip = true,
+  switchSlot,
 }: SessionBodyProps) {
   const agent = content.kind === 'session' ? content.agent : undefined;
   const shell = content.kind === 'shell' ? content.shell : undefined;
@@ -155,7 +165,9 @@ export function SessionBody({
   const tabFocus = panes === undefined ? undefined : ownFocused ? anyFocus : panes.focusIn(panes.surfaces[0]!);
   // Whatever way in this session was opened by (⌘K, the inbox, ‹ ›, a restored window...), showing the agent's own pane
   // is seeing its ask: not while a shell tab of its pane, or its Review or Activity tab, covers it.
-  useSeenWhileShown(content.kind === 'session' ? content.sessionId : undefined, shown && (panes === undefined || panes.showing(OWN_SURFACE)));
+  // Under another's row of tabs it shows only the agent's own pane, whatever shell tab has the keyboard in its own window.
+  const ownShown = ownPaneShown(!ownStrip, panes);
+  useSeenWhileShown(content.kind === 'session' ? content.sessionId : undefined, shown && ownShown);
   // A shell pane of one of the window's tabs with the keyboard, not an agent's own.
   const tabShellFocused = tabFocus !== undefined && tabFocus !== agent?.sessionId;
   // The session's own pane: a shell tile's focused pane, or the agent's (whose window and controls it is, whichever
@@ -163,7 +175,7 @@ export function SessionBody({
   const own = (shell && tabFocus !== undefined && paneStatuses[tabFocus]) || single;
   // What the strip says: the focused pane, a shell pane in an agent's tab or another session shown here too.
   const otherFocused = !ownFocused && anyFocus !== undefined;
-  const pane = (otherFocused && paneStatuses[anyFocus]) || (tabShellFocused && paneStatuses[tabFocus]) || own;
+  const pane = (ownStrip && ((otherFocused && paneStatuses[anyFocus]) || (tabShellFocused && paneStatuses[tabFocus]))) || own;
   // A shell tile not listed yet has no pane for its controls to act on.
   const controlSession = content.kind === 'session' ? content.sessionId : tabFocus;
   const live = controlSession !== undefined && own.state !== 'exited' && own.state !== 'unavailable';
@@ -195,7 +207,7 @@ export function SessionBody({
   const pickedView = view ?? savedView;
   const chatPicked = pickedView !== 'terminal' && agent !== undefined;
   const onShowTerminal = () => switchView('terminal');
-  const chat = chatPicked && (panes === undefined || panes.showing(OWN_SURFACE));
+  const chat = chatPicked && ownShown;
   // A chat can be light; a terminal is dark whatever it says.
   const chatTheme = useChatTheme();
   useEffect(watchPastePane, []);
@@ -219,7 +231,7 @@ export function SessionBody({
     pickView(next);
     // Chat picked while a shell tab shows brings the agent's own tab forward. Only on a pick: a tab asked for as the
     // window opens (a row of the shells chip) still shows.
-    if (next !== 'terminal') select?.(OWN_SURFACE);
+    if (next !== 'terminal' && ownStrip) select?.(OWN_SURFACE);
   };
   // ⌥⌘T, with the switch in the header: the terminal, and from it back to the chat or timeline last shown, or to the
   // conversation as it is shown when neither has shown yet.
@@ -263,7 +275,7 @@ export function SessionBody({
       </div>
       {agent && (
         <div className="session-chat-view" hidden={!chatPicked} data-chat-theme={chatTheme}>
-          <ChatView
+          <KeptChatView
             key={agent.sessionId}
             agent={agent}
             active={chatPicked}
@@ -300,7 +312,7 @@ export function SessionBody({
       : null;
   // A split window's panes have strips of their own; the switch ends the one holding the agent's own tab.
   const split = panes !== undefined && panes.panes.length > 1;
-  const strip = stripShown(split, Boolean(astray), problem !== undefined, pane, agent !== undefined && !tabShellFocused && !otherFocused);
+  const strip = stripShown(split, Boolean(astray), problem !== undefined, pane, agent !== undefined && !tabShellFocused && !otherFocused, !ownStrip);
   const showsStatus = strip.paneStatus && (content.kind !== 'tabs' || otherFocused);
   const here = agent ? 'in this worktree' : 'in this folder';
   /** A surface's tab: an agent's own dot is its attachment unless a shell split beside it failed; a shell's, its shells'. */
@@ -395,6 +407,7 @@ export function SessionBody({
         {strip.row && (
           <div className="session-window-strip">
             {panes ? (
+              ownStrip &&
               panes.panes.length === 1 && (
                 <PaneStrip panes={panes} pane={panes.panes[0]!} stripTab={stripTabOf} here={here} panelId={tabPanel} focused={false} />
               )
@@ -414,9 +427,10 @@ export function SessionBody({
               {showsStatus ? statusText(pane, tabShellFocused || otherFocused ? undefined : agent) : null}
               {problem && `${showsStatus ? ' · ' : ''}${problem}`}
             </span>
-            {!split && viewSwitch}
+            {!split && ownStrip && viewSwitch}
           </div>
         )}
+        {!ownStrip && switchSlot && viewSwitch && createPortal(viewSwitch, switchSlot)}
         {notice}
         {agent && !(simplified && chat && paneDecision(agent, deferredIds)?.kind === 'permission' && agent.permissions.every(inPane)) && <BlockedBanner agent={agent} chat={chat} onShowTerminal={onShowTerminal} />}
         {agent && canRestart(agent) && (
@@ -426,8 +440,8 @@ export function SessionBody({
           </div>
         )}
         <div className="session-panes">
-          {panes ? (
-            <WindowPanes panes={panes} stripTab={stripTabOf} renderSurface={renderSurface} here={here} panelId={tabPanel} inlineStrip={panes.panes.length === 1} trailingOf={(pane) => (pane.surfaces.some((surface) => surface.key === OWN_SURFACE) ? viewSwitch : undefined)} />
+          {panes && ownStrip ? (
+            <WindowPanes panes={panes} stripTab={stripTabOf} renderSurface={renderSurface} here={here} panelId={tabPanel} inlineStrip={panes.panes.length === 1} trailingOf={(pane) => (ownStrip && pane.surfaces.some((surface) => surface.key === OWN_SURFACE) ? viewSwitch : undefined)} />
           ) : content.kind === 'session' ? (
             sessionView
           ) : content.kind === 'tabs' ? null : (
@@ -486,7 +500,7 @@ function CloseTabDialog({ surface, onAnswer }: { surface: WindowSurface; onAnswe
         </>
       }
     >
-      {`${surface.label} ${live === 1 ? 'still has a running shell. Closing the tab ends it.' : `still has ${live} running shells. Closing the tab ends them.`}`}
+      <p>{`${surface.label} ${live === 1 ? 'still has a running shell. Closing the tab ends it.' : `still has ${live} running shells. Closing the tab ends them.`}`}</p>
     </Dialog>
   );
 }
@@ -500,15 +514,15 @@ function focusTerminal(from: HTMLElement): boolean {
 
 /**
  * The slim banner over the panes (the exit banner's) when an agent can't take a message and something gets it
- * going: Resume after a restart, Show prompt for a permission prompt. An ended agent's Restart is the exit banner's.
+ * going: Wake after a restart, Show prompt for a permission prompt. An ended agent's Restart is the exit banner's.
  * From the chat, where the terminal is hidden, Show prompt switches to it.
  */
 function BlockedBanner({ agent, chat, onShowTerminal }: { agent: Agent; chat: boolean; onShowTerminal(): void }) {
   const [problem, setProblem] = useState<string>();
   const { busy, error, run } = useAction();
   const blocked = composerBlock(agent);
-  if (blocked?.action !== 'resume' && blocked?.action !== 'show-prompt') return null;
-  const resume = blocked.action === 'resume';
+  if (blocked?.action !== 'wake' && blocked?.action !== 'show-prompt') return null;
+  const wake = blocked.action === 'wake';
   return (
     <div className="agent-exit-banner" role="status" data-testid="agent-blocked-banner">
       {blocked.reason}
@@ -519,12 +533,12 @@ function BlockedBanner({ agent, chat, onShowTerminal }: { agent: Agent; chat: bo
         loading={busy}
         onClick={(event) => {
           setProblem(undefined);
-          if (resume) run(() => window.agentBoard.agents.resume(agent.sessionId));
+          if (wake) run(() => window.agentBoard.agents.resume(agent.sessionId));
           else if (chat) onShowTerminal();
           else if (!focusTerminal(event.currentTarget)) setProblem('the terminal is not attached yet');
         }}
       >
-        {resume ? 'Resume' : 'Show prompt'}
+        {wake ? 'Wake' : 'Show prompt'}
       </Button>
       {(error ?? problem) && <ErrorText className="banner-error">{error ?? problem}</ErrorText>}
     </div>

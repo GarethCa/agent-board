@@ -38,7 +38,7 @@ function arrangedZone(
   ].map(move);
   const parts = new Map(clusters.flatMap((cluster) => [[`${cluster.key}#label`, `item:${cluster.key}-label`] as const, [`${cluster.key}#note`, `item:${cluster.key}-note`] as const]));
   const arrange = { ...DEFAULT_ARRANGE_SETTINGS, by, layout };
-  return { zoneId: 'z', name: 'web', ...size, arrange, spacing, unmeasured: false, things, ...buildZoneMap({ lanes: lanesOf(tiles, links), things, parts, arrange, spacing, arranged: positions }) };
+  return { zoneId: 'z', name: 'web', ...size, arrange, spacing, unmeasured: false, things, placed: [], ...buildZoneMap({ lanes: lanesOf(tiles, links), things, parts, arrange, spacing, arranged: positions }) };
 }
 
 /** A ref as the CLI writes one: its kind and the start of its id. */
@@ -324,7 +324,7 @@ describe('a zone map', () => {
   it('calls a zone mostly empty when a wide band across it holds nothing, whatever lies at its far edges', () => {
     const lint = (things: ZoneMapThing[], width: number, height: number) => {
       const tiles = [agent('lead', { lead: true })];
-      const map: ZoneMap = { zoneId: 'z', name: 'web', width, height, arrange: DEFAULT_ARRANGE_SETTINGS, spacing: 'normal', unmeasured: false, things, ...buildZoneMap({ lanes: lanesOf(tiles, []), things, parts: new Map(), arrange: DEFAULT_ARRANGE_SETTINGS }) };
+      const map: ZoneMap = { zoneId: 'z', name: 'web', width, height, arrange: DEFAULT_ARRANGE_SETTINGS, spacing: 'normal', unmeasured: false, things, placed: [], ...buildZoneMap({ lanes: lanesOf(tiles, []), things, parts: new Map(), arrange: DEFAULT_ARRANGE_SETTINGS }) };
       return laneTable(map, 'zone:z', ref).split('\n').at(-1)!;
     };
     const thing = (key: string, itemKind: string | null, x: number, y: number, width: number, height: number): ZoneMapThing => ({ key, itemKind, name: key, state: null, x, y, width, height });

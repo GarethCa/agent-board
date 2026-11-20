@@ -3,6 +3,7 @@ import * as RadixMenu from '@radix-ui/react-dropdown-menu';
 import { ChevronRight, Circle, CircleDot } from 'lucide-react';
 import { Swatch } from './Field';
 import { Kbd } from './Label';
+import { Truncate } from './Truncate';
 
 /** A row that does something. */
 export interface MenuAction {
@@ -221,7 +222,7 @@ function Entries({ entries }: { entries: MenuEntry[] }) {
         <RadixMenu.Sub key={entry.label}>
           <RadixMenu.SubTrigger className="ui-menu-item" data-hinted={entry.hint === undefined ? undefined : true} disabled={entry.disabled}>
             {entry.icon}
-            {entry.label}
+            <Truncate text={entry.label} className="ui-menu-text" />
             {entry.detail !== undefined && <span className="ui-menu-detail" title={entry.detail}>{entry.detail}</span>}
             <ChevronRight className="ui-menu-chevron" />
             {entry.hint !== undefined && <span className="ui-menu-hint">{entry.hint}</span>}
@@ -245,7 +246,7 @@ function Entries({ entries }: { entries: MenuEntry[] }) {
         {...(entry.checked === undefined ? {} : { role: 'menuitemradio', 'aria-checked': entry.checked })}
       >
         {entry.icon ?? radioOf(entry.checked)}
-        {entry.label}
+        <Truncate text={entry.label} className="ui-menu-text" />
         {entry.badge !== undefined && <span className="ui-menu-badge">{entry.badge}</span>}
         {entry.detail !== undefined && <span className="ui-menu-detail" title={entry.detail}>{entry.detail}</span>}
         {entry.shortcut !== undefined && <Kbd>{entry.shortcut}</Kbd>}
@@ -380,7 +381,7 @@ export function MenuPreview({ entries, active }: { entries: MenuEntry[]; active?
             aria-disabled={entry.disabled || undefined}
           >
             {entry.icon ?? (submenu ? undefined : radioOf(entry.checked))}
-            {entry.label}
+            <Truncate text={entry.label} className="ui-menu-text" />
             {entry.detail !== undefined && <span className="ui-menu-detail" title={entry.detail}>{entry.detail}</span>}
             {submenu && <ChevronRight className="ui-menu-chevron" />}
             {!submenu && entry.shortcut !== undefined && <Kbd>{entry.shortcut}</Kbd>}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fadeEdges, foldTo, wholeRowsHeight, heightPulled, keptFrame, scrollToShow } from './card-size';
+import { fadeEdges, foldTo, foldedBounds, pictureScale, wholeRowsHeight, heightPulled, keptFrame, scrollToShow } from './card-size';
 
 const sizes = { folded: { width: 128, height: 132 }, open: { width: 340, height: 220 } };
 
@@ -8,10 +8,48 @@ describe('foldTo', () => {
     expect(foldTo({ width: 480, height: 600, data: {} }, true, sizes)).toEqual({ size: sizes.folded, kept: { openSize: { width: 480, height: 600 } } });
   });
 
-  it('unfolds to the size it kept, or the card’s own for one that kept none', () => {
-    expect(foldTo({ width: 128, height: 132, data: { openSize: { width: 480, height: 600 } } }, false, sizes)).toEqual({ size: { width: 480, height: 600 }, kept: {} });
-    expect(foldTo({ width: 128, height: 132, data: {} }, false, sizes)).toEqual({ size: sizes.open, kept: {} });
-    expect(foldTo({ width: 128, height: 132, data: { openSize: { width: 'wide' } } }, false, sizes)).toEqual({ size: sizes.open, kept: {} });
+  it('folds to the icon size it kept, as the user last sized it folded', () => {
+    expect(foldTo({ width: 480, height: 600, data: { foldedSize: { width: 256, height: 264 } } }, true, sizes)).toEqual({
+      size: { width: 256, height: 264 },
+      kept: { openSize: { width: 480, height: 600 } },
+    });
+    expect(foldTo({ width: 480, height: 600, data: { foldedSize: { height: 9 } } }, true, sizes).size).toEqual(sizes.folded);
+  });
+
+  it('unfolds to the size it kept, or the card’s own for one that kept none, keeping its icon’s size', () => {
+    const icon = { foldedSize: { width: 128, height: 132 } };
+    expect(foldTo({ width: 128, height: 132, data: { openSize: { width: 480, height: 600 } } }, false, sizes)).toEqual({ size: { width: 480, height: 600 }, kept: icon });
+    expect(foldTo({ width: 128, height: 132, data: {} }, false, sizes)).toEqual({ size: sizes.open, kept: icon });
+    expect(foldTo({ width: 128, height: 132, data: { openSize: { width: 'wide' } } }, false, sizes)).toEqual({ size: sizes.open, kept: icon });
+    expect(foldTo({ width: 192, height: 198, data: {} }, false, sizes).kept).toEqual({ foldedSize: { width: 192, height: 198 } });
+  });
+
+  it('keeps each size through a fold and an unfold', () => {
+    const open = { width: 480, height: 600, data: {} as Record<string, unknown> };
+    const folded = foldTo(open, true, sizes);
+    const resized = { width: 64, height: 66, data: { ...open.data, ...folded.kept } };
+    const unfolded = foldTo(resized, false, sizes);
+    expect(unfolded.size).toEqual({ width: 480, height: 600 });
+    expect(foldTo({ ...unfolded.size, data: { ...resized.data, ...unfolded.kept } }, true, sizes).size).toEqual({ width: 64, height: 66 });
+  });
+});
+
+describe('pictureScale', () => {
+  it('is how much bigger than its icon a folded card is drawn, by its width', () => {
+    expect(pictureScale({ width: 128, height: 132 }, sizes.folded)).toBe(1);
+    expect(pictureScale({ width: 256, height: 264 }, sizes.folded)).toBe(2);
+    expect(pictureScale({ width: 64, height: 66 }, sizes.folded)).toBe(0.5);
+  });
+
+  it('is 1 for a frame with no width yet', () => {
+    expect(pictureScale({ width: 0, height: 0 }, sizes.folded)).toBe(1);
+    expect(pictureScale({ width: Number.NaN, height: 0 }, sizes.folded)).toBe(1);
+  });
+});
+
+describe('foldedBounds', () => {
+  it('lets a folded icon go from half its size to four times it', () => {
+    expect(foldedBounds(sizes.folded)).toEqual({ least: { width: 64, height: 66 }, most: { width: 512, height: 528 } });
   });
 });
 

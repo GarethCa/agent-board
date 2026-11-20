@@ -1,13 +1,13 @@
 import { expect, type ElectronApplication, type Page } from '@playwright/test';
 import { AGENT_TILE_SIZE, PERCH_ROOM } from '@agent-board/daemon/board-layout';
-import type { EdgePoint } from '@agent-board/daemon/protocol';
+import { LIST_CARD_FOLDED_SIZE, STEPS_ICON_SIZE, TODO_PILL_SIZE, type EdgePoint } from '@agent-board/daemon/protocol';
 import { rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { agents, closeAgent, launch, listFinishedTurns, screen, sessionWindow, spawnAgent, tile, tileAction, TURN_MS, zones } from '../agent-helpers.ts';
 import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone } from '../launch.ts';
 import { RENDER_ARGS, RENDER_ENV, VIEWPORT, ignorePointer, pinFonts, pinNow, pinRandomText, settle } from '../render.ts';
 import { scratch } from '../scratch.ts';
-import { showTethers, untilStill } from '../board-helpers.ts';
+import { showTethers, tokenOf, untilStill, withDaemon, zoomUntil } from '../board-helpers.ts';
 import { SHOT, needsBaselines, viewSettled, nodesStill, PACK_SHOTS, pinChatTimes } from './shared.ts';
 
 test.use({ viewport: null });
@@ -827,5 +827,121 @@ for (const { shot, layout, prompt } of [
     await app.close();
     await removeDataDir(dataDir);
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/** A zone's lead, a note about it and three of the user's items, arranged with every kind beside its agent, down the side, then under the top row. */
+test("arrange places a zone's items beside their agent, down the side, or under the top row", async () => {
+  const shots = ['arranged-items-cluster', 'arranged-items-sidebar', 'arranged-items-top'];
+  needsBaselines(...shots);
+  const { dir, repo, env } = scratch('orchestrate');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
+  await listFinishedTurns(window);
+  try {
+    await window.setViewportSize(VIEWPORT);
+    await pinFonts(window);
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await spawnAgent(window, 'monorepo', 'Print your board identity');
+    if (await sessionWindow(window).isVisible()) await sessionWindow(window).getByRole('button', { name: 'Close session window' }).click();
+    await expect(tile(window)).toHaveCount(1);
+    const [lead] = await agents(window);
+    const [zone] = await zones(window);
+    const token = await withDaemon(dataDir, (client) => tokenOf(client, lead!.sessionId));
+    await expect(tile(window).first()).not.toHaveAttribute('data-state', 'working', { timeout: 2 * TURN_MS });
+    await window.evaluate(
+      async ({ zoneId, agent }) => {
+        const { items } = globalThis.window.agentBoard;
+        const user = { kind: 'user' };
+        await items.create({ kind: 'agent-note', zoneId, x: 500, y: 300, width: 180, height: 136, data: { text: 'Found the flaky test', agent, writtenAt: new Date().toISOString(), editedByUser: false } } as never);
+        await items.create({ kind: 'todo', zoneId, x: 40, y: 260, width: 300, height: 196, data: { owner: user, lines: [] } } as never);
+      },
+      { zoneId: zone!.id, agent: { sessionId: lead!.sessionId, name: lead!.name, harness: 'claude', role: null } },
+    );
+    // The agent makes a queue and a memory, so they cluster beside it; the user's to-do has no agent, so it goes down the side.
+    await withDaemon(dataDir, async (client) => {
+      await client.call('board.newQueue', { token, title: 'Backlog' });
+      await client.call('board.newMemory', { token, title: 'Notes' });
+    });
+    for (const [at, placement] of (['cluster', 'sidebar', 'top'] as const).entries()) {
+      const placements = Object.fromEntries(['notes', 'todos', 'queues', 'memory'].map((kind) => [kind, placement]));
+      await withDaemon(dataDir, (client) => client.call('orchestrator.arrange', { token, placements, once: true }));
+      await nodesStill(window);
+      await window.getByRole('button', { name: /^Fit view/ }).click();
+      await viewSettled(window);
+      await pinRandomText(window);
+      // The note's badge says when it was written.
+      await window.evaluate(() => {
+        for (const element of document.querySelectorAll("[data-testid='agent-note']")) {
+          const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+          while (walker.nextNode()) (walker.currentNode as Text).data = (walker.currentNode as Text).data.replace(/\d\d:\d\d/, '14:31');
+        }
+      });
+      const restorePointer = await ignorePointer(window);
+      await settle(window);
+      await expect.soft(window.locator('.board')).toHaveScreenshot(`${shots[at]}.png`, SHOT);
+      await restorePointer();
+    }
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/**
+ * Folded board objects beside a note, at the fitted zoom and zoomed far out: a memory (and one made twice its size by
+ * hand), a queue, a to-do list and a steps card, each drawn as a picture that scales with the board as the note does.
+ */
+test('folded memories, a queue, a to-do list and a steps card scale with the board like a note, at two zooms', async () => {
+  needsBaselines('board-objects', 'board-objects-far');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, RENDER_ENV, RENDER_ARGS);
+  await listFinishedTurns(window);
+  try {
+    await window.setViewportSize(VIEWPORT);
+    await pinFonts(window);
+    await window.evaluate(
+      async ({ folded, pill, icon }) => {
+        const { items } = globalThis.window.agentBoard;
+        const user = { kind: 'user' as const };
+        await items.create({ kind: 'sticky', zoneId: null, x: 0, y: 0, width: 200, height: 140, data: { text: 'Ship Friday', color: '#fff3a3' } });
+        const memory = await items.create({ kind: 'memory', zoneId: null, x: 240, y: 0, ...folded, data: { title: 'Facts', madeBy: user, noAgents: false, count: 0, folded: true } });
+        await items.changeMemory(memory.id, { action: 'add', text: 'Deploys on Tuesdays' });
+        await items.create({ kind: 'memory', zoneId: null, x: 400, y: 0, width: folded.width * 2, height: folded.height * 2, data: { title: 'Big facts', madeBy: user, noAgents: false, count: 0, folded: true } });
+        const queue = await items.create({ kind: 'queue', zoneId: null, x: 700, y: 0, ...folded, data: { title: 'Jobs', madeBy: user, audience: 'agents', noAgents: false, count: 0, folded: true } });
+        await items.changeQueue(queue.id, { action: 'add', text: 'Fix the checkout flake' });
+        const at = '2026-10-16T09:00:00.000Z';
+        await items.create({ kind: 'todo', zoneId: null, x: 0, y: 300, ...pill, data: { owner: user, folded: true, lines: [{ id: 't1', text: 'Book the room', by: user, at, done: null }] } });
+        await items.create({
+          kind: 'steps',
+          zoneId: null,
+          x: 240,
+          y: 300,
+          ...icon,
+          data: { title: 'Release', madeBy: user, answeredBy: user, steps: [], sent: null, waits: [], closedAt: null, collapsed: true },
+        });
+      },
+      { folded: LIST_CARD_FOLDED_SIZE, pill: TODO_PILL_SIZE, icon: STEPS_ICON_SIZE },
+    );
+    await expect(window.locator('.react-flow__node')).toHaveCount(6);
+    await window.getByRole('button', { name: /^Fit view/ }).click();
+    await viewSettled(window);
+    await pinRandomText(window);
+    const restorePointer = await ignorePointer(window);
+    await settle(window);
+    await expect.soft(window.locator('.board')).toHaveScreenshot('board-objects.png', SHOT);
+    await restorePointer();
+
+    await zoomUntil(window, window.locator('.react-flow__node').first(), 'Zoom Out', (zoom) => zoom < 0.35);
+    await viewSettled(window);
+    const restoreFar = await ignorePointer(window);
+    await settle(window);
+    await expect.soft(window.locator('.board')).toHaveScreenshot('board-objects-far.png', SHOT);
+    await restoreFar();
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
   }
 });

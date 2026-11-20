@@ -86,6 +86,7 @@ import {
   addNote,
   addShape,
   arrangeZone,
+  placeOption,
   setZoneLayout,
   changeGroup,
   checkArrange,
@@ -113,7 +114,9 @@ import {
 } from './layout-ops.ts';
 import {
   ARRANGE_BYS,
+  ARRANGE_ITEM_KINDS,
   ARRANGE_LAYOUTS,
+  ARRANGE_PLACEMENTS,
   BOARD_CALLER_METHODS,
   RELATIONS,
   CREW_EVENT_KINDS,
@@ -218,7 +221,8 @@ COMMANDS
                         wait|add|answer|close\` work with cards. See \`steps --help\`.
   memory ls|read|add|edit|rm|history|restore|new ...
                         Shared context: keyed values, notes and whole files that the agents
-                        of its zone read and write, and people on the board. See \`memory --help\`.
+                        of its zone read and write, and people on the board. A zone shares
+                        one memory: add to it. See \`memory --help\`.
   remind "<text>"... | remind ls [--mine] | remind done|undo|rm <n>
                         Add a to-do for the user to your to-do list, under your tile (agents
                         only): something only they can do. A tick tells you nothing; \`remind
@@ -321,8 +325,10 @@ ORCHESTRATING
   move <ref> [--to <zone ref>] [--at <x>,<y>] [--near <ref> [--side below|right|left|above]]
                         Move a tile (an agent, a shell) or a note.
   arrange [<zone ref>] [--by issue|role|state] [--layout rows|columns|cards|grid|wrap|masonry|treemap] [--auto on|off]
+          [--place <kind>=cluster|sidebar|top|stay,…] [--once] [--all]
                         Lay out your zone's tiles: you first, then a lane per issue, its
                         implementer, reviewer and follow-up in columns, then its note.
+                        Its items too, each kind where --place puts it.
                         --auto on arranges by itself as you start agents and add notes.
                         arrange board lays out the whole board's zones and loose tiles;
                         arrange ticket, a ticket's own board.
@@ -1281,7 +1287,9 @@ the zone over another zone is refused.
   --json           Print where it went as JSON.`,
   },
   arrange: {
-    usage: 'agent-board arrange [<zone ref>] [--by issue|role|state] [--layout rows|columns|cards|grid|wrap|masonry|treemap] [--auto on|off] [--json] | arrange board [--json] | arrange ticket|<ticket chat ref> [--json]',
+    usage:
+      'agent-board arrange [<zone ref>] [--by issue|role|state] [--layout rows|columns|cards|grid|wrap|masonry|treemap] [--auto on|off] [--place <kind>=<placement>,…] [--once] [--all] [--json] | ' +
+      'arrange board [--json] | arrange ticket|<ticket chat ref> [--json]',
     text: `Lays out the tiles of your zone (or <zone ref>) that you may move, for an
 orchestrator: you first, then
 
@@ -1324,13 +1332,32 @@ labels and notes line up beside the crew until you arrange by issue again. Agent
 column's room (or a row's) past every tile and row the rail between them runs by, so the rail
 has room for its document and label at either end.
 Every tile lands on the zone's grid, so rows and columns line up across clusters. What it may
-not move (the user's notes and cards, and the agents the user started by hand) stays put, and the rows keep
-clear of it. The zone then fits what it holds, growing or shrinking to it (and what stays put)
+not move (the agents the user started by hand, and the items it leaves where they are, below)
+stays put, and the rows keep clear of it. The zone then fits what it holds, growing or shrinking to it (and what stays put)
 plus its margin, never over another zone. A tile expanded in place counts at its expanded size,
 so its lane is taller and its column wider. The same board always arranges the
 same way, so arranging again moves nothing. A reviewer you start on a clustered agent's branch
 (--base agent:<ref> --role reviewer) joins its cluster, after it. After it arranges, it prints
 the zone's map (\`zone map\`), so you can check the layout at once.
+
+It places the zone's items too, each kind as the zone says (--place changes it):
+
+  cluster   beside the agent it belongs with (that made it, or that an agent note is about),
+            in that agent's lane after its tiles; beside you, with your own notes. One of an
+            agent no longer in the zone, or of no agent (the user's), goes down the sidebar.
+  sidebar   in one column down the right of the crew, grouped by kind.
+  top       on a row under the top row (you, the shells and your crew's clocks), grouped by
+            kind: so lanes start below it. In columns, the column after the top row's.
+  stay      left where it is, in the way of the rest.
+
+The kinds, and where each goes until a zone says otherwise: notes (agent notes) and files
+(documents, plans, images, link and issue cards) cluster; clocks, todos, queues, memory and
+steps top; stickies, shapes and text stay. An item the user dragged or turned stays where it
+is unless --all; one in the zone's free area (zone layout lanes), or on a stage board, always
+does. Sidebar and top lie in the area arrange lays out, never in the free area.
+--place notes=sidebar,clocks=stay sets kinds for the zone, kept for its next arrange, by
+anyone (the user picks them in the zone's menu, Arrange items); with --once, for this arrange
+only. The map says how many of each kind went where.
 
 --by, --layout and --auto are kept as your settings: a bare arrange arranges as you last asked
 (by issue, in rows, until you ask otherwise). With --auto on, your zone is arranged by itself
@@ -1341,18 +1368,23 @@ need not call arrange; --auto off stops it.
 itself, never what is in a zone: whole zones, at their sizes and with all they hold, in rows in
 reading order a roomy gap apart, from the top-left of where they are, and the agents and shells
 loose on the board in rows below them. The notes, shapes and text loose on the board stay put,
-and what moves keeps clear of them. It is never run by itself. It takes no --by, --layout or
---auto.
+and what moves keeps clear of them. It is never run by itself. It takes none of a zone's
+options: --by, --layout, --auto, --place, --once or --all.
 
 \`arrange ticket\` (your ticket's) or \`arrange <ticket chat's ref>\` lays out a ticket's own board:
 its chat, with its helpers in a column on its right, the block a gap to the left of the notes
 and cards there, which stay put. Only the tiles' places on that board move, never anything on
 the main board, and arranging a zone or the board never moves what is on a ticket's board. It
-takes no --by, --layout or --auto. After it arranges, it prints the ticket board's map.
+takes none of a zone's options. After it arranges, it prints the ticket board's map.
 
   --by <b>         ${ARRANGE_BYS.join(', ')}.
   --layout <l>     ${ARRANGE_LAYOUTS.join(', ')}.
   --auto on|off    Arrange by itself as the crew changes, or not (off at first).
+  --place <k>=<p>  Where to place a kind of item: ${ARRANGE_PLACEMENTS.join(', ')}. Pairs
+                   comma-separated; kept as the zone's. The kinds: ${ARRANGE_ITEM_KINDS.slice(0, 4).join(', ')},
+                   ${ARRANGE_ITEM_KINDS.slice(4).join(', ')}.
+  --once           The --place given for this arrange only, not kept.
+  --all            Tidy the items the user dragged or turned too.
   --json           Print what moved, and the map, as JSON.`,
   },
   zone: {
@@ -1610,11 +1642,11 @@ instead, and is told. Naming an agent on a to-do sends it nothing: it finds its 
     usage:
       'agent-board memory ls | memory read <memory> [<entry>] [--search <text>] | memory add <memory> [--key <key>|--no-key] [--file <path>|--doc <title>] [--] <text>... | ' +
       'memory edit <memory> <entry> [--key <key>|--no-key] [--pin|--unpin] [--] [<text>...] | memory rm <memory> <entry> | ' +
-      'memory history <memory> <entry> | memory restore <memory> <entry> <version> | memory confirm <memory> <entry> | memory new <title>...',
+      'memory history <memory> <entry> | memory restore <memory> <entry> <version> | memory confirm <memory> <entry> | memory new [--second] <title>...',
     text: `A memory is shared context on the board: what agents and people want kept, read and changed
 by those it is for. In a zone, it is for that zone's agents; loose on the board, every
-agent's; set to No agents, only the user's. Read the
-memories you can at the start of work, and keep what the next agent needs in one.
+agent's; set to No agents, only the user's. A zone shares one memory: read it at the start of
+work, and add what the next agent needs to it, not to a new memory for each ticket.
 
 It holds facts and documents:
   key: value       A fact under a key (one word). Setting a key again replaces its value.
@@ -1640,7 +1672,9 @@ It holds facts and documents:
                                 Put a version back, undoing the changes after it.
   memory confirm <memory> <entry>
                                 Say it is still true: it no longer reads as stale.
-  memory new <title>            Put a new memory beside your tile.
+  memory new <title>            Put a new memory beside your tile, when your zone has none. With
+                                one there, it is refused, naming it to add to; --second makes
+                                another anyway, for a different subject the whole zone needs.
 
 <memory> is its ref (item:3f2a) or its title. An entry left 30 days reads as stale. Reading a fact,
 or a document by name, counts you among its readers. Anyone it is for
@@ -1989,6 +2023,9 @@ const OPTIONS = {
   by: { type: 'string' },
   layout: { type: 'string' },
   auto: { type: 'string' },
+  place: { type: 'string' },
+  once: { type: 'boolean' },
+  all: { type: 'boolean' },
   boxes: { type: 'boolean' },
   sections: { type: 'boolean' },
   group: { type: 'boolean' },
@@ -2030,6 +2067,7 @@ const OPTIONS = {
   search: { type: 'string' },
   pin: { type: 'boolean' },
   unpin: { type: 'boolean' },
+  second: { type: 'boolean' },
   link: { type: 'string' },
   front: { type: 'boolean' },
   'for-user': { type: 'boolean' },
@@ -2071,7 +2109,7 @@ export const COMMAND_OPTIONS: Record<string, readonly Option[]> = {
   handoff: ['to', 'message', 'handover', 'data'],
   edge: ['carries', 'path', 'trigger', 'condition'],
   move: ['to', 'at', 'near', 'side'],
-  arrange: ['by', 'layout', 'auto'],
+  arrange: ['by', 'layout', 'auto', 'place', 'once', 'all'],
   zone: ['group', 'name', 'color', 'at', 'size', 'boxes', 'sections', 'style', 'out'],
   note: ['text', 'kind', 'color', 'size', 'lines', 'to', 'at', 'near', 'side'],
   shape: ['text', 'attribute', 'method', 'fill', 'kind', 'to', 'at', 'near', 'side'],
@@ -2080,7 +2118,7 @@ export const COMMAND_OPTIONS: Record<string, readonly Option[]> = {
   diagram: ['file', 'to', 'at', 'near', 'side'],
   schedule: ['to', 'fresh', 'self', 'after', 'why', 'template', 'from', 'zone', 'harness', 'model', 'role', 'keep', 'result', 'handoff-to', 'file'],
   steps: ['title', 'file', 'mine', 'undo', 'send'],
-  memory: ['key', 'no-key', 'file', 'doc', 'search', 'pin', 'unpin'],
+  memory: ['key', 'no-key', 'file', 'doc', 'search', 'pin', 'unpin', 'second'],
   remind: ['mine'],
   queue: ['kind', 'front', 'link', 'file', 'for-user', 'most', 'body', 'result'],
   watches: ['every'],
@@ -2138,9 +2176,9 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
     return positionals[0]!;
   };
   /** Runs a check of the arguments, its `BoardError` a usage error: checked before anything connects. */
-  const checked = (check: () => void) => {
+  const checked = <T,>(check: () => T): T => {
     try {
-      check();
+      return check();
     } catch (error) {
       throw new UsageError((error as Error).message);
     }
@@ -2542,7 +2580,15 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
     }
     case 'arrange': {
       if (positionals.length > 1) throw new UsageError('give at most one zone ref');
-      const options = { by: string('by'), layout: string('layout'), auto: string('auto') };
+      const place = string('place');
+      const options = {
+        by: string('by'),
+        layout: string('layout'),
+        auto: string('auto'),
+        ...(place === undefined ? {} : { place: checked(() => placeOption(place)) }),
+        ...(values.once === true ? { once: true } : {}),
+        ...(values.all === true ? { all: true } : {}),
+      };
       checked(() => checkArrange(options));
       return async (session) => print(await arrangeZone(session, positionals[0], options));
     }
@@ -2864,8 +2910,8 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
     }
     case 'memory': {
       const [sub, ref, ...after] = positionals;
-      const allowed: Record<string, readonly Option[]> = { read: ['search'], add: ['key', 'no-key', 'file', 'doc'], edit: ['key', 'no-key', 'pin', 'unpin'] };
-      for (const option of ['key', 'no-key', 'file', 'doc', 'search', 'pin', 'unpin'] as const) {
+      const allowed: Record<string, readonly Option[]> = { read: ['search'], add: ['key', 'no-key', 'file', 'doc'], edit: ['key', 'no-key', 'pin', 'unpin'], new: ['second'] };
+      for (const option of ['key', 'no-key', 'file', 'doc', 'search', 'pin', 'unpin', 'second'] as const) {
         if (values[option] !== undefined && !(allowed[sub ?? ''] ?? []).includes(option)) throw new UsageError(`--${option} is not for \`memory ${sub ?? ''}\``);
       }
       if (values.key !== undefined && values['no-key'] === true) throw new UsageError('give --key or --no-key, not both');
@@ -2941,7 +2987,7 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
         case 'new': {
           const title = positionals.slice(1).join(' ');
           if (title.trim() === '') throw new UsageError('give the memory a title');
-          return async (session) => print(await newMemory(session, title));
+          return async (session) => print(await newMemory(session, title, values.second === true));
         }
         default:
           throw new UsageError('the memory commands are `memory ls`, `read`, `add`, `edit`, `rm`, `history`, `restore`, `confirm` and `new`');

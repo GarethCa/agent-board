@@ -101,8 +101,8 @@ export function registerZoneIpc(daemon: DaemonLink): void {
     daemon.call('zone.update', { id, ...layout }),
   );
   ipcMain.handle(ZONE_IPC.configure, (_event, id: string, settings: Partial<ZoneSettings>) => {
-    const { codexBypassHookTrust, trustsFolder, boardMcp, gateCommand, spacing, layoutMode, layoutRule } = settings;
-    return daemon.call('zone.configure', { id, codexBypassHookTrust, trustsFolder, boardMcp, gateCommand, spacing, layoutMode, layoutRule });
+    const { codexBypassHookTrust, trustsFolder, boardMcp, gateCommand, spacing, placements, layoutMode, layoutRule } = settings;
+    return daemon.call('zone.configure', { id, codexBypassHookTrust, trustsFolder, boardMcp, gateCommand, spacing, placements, layoutMode, layoutRule });
   });
   ipcMain.handle(ZONE_IPC.followRule, (_event, id: string, tiles: string[], reflow?: boolean) =>
     daemon.call('zone.followRule', { id, tiles, ...(reflow === true ? { reflow } : {}) }),

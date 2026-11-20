@@ -19,7 +19,8 @@ import { useWebLinkOpener } from './web-links';
 import { gpuPool, type GpuPool } from './terminal-gpu';
 import { onBoardSettled, sharpen } from './terminal-sharpness';
 import { keptTerminals, terminalBytes, type KeptEntry } from './kept-terminals';
-import { subscribe, useViewSettings, useViewSettingsLoaded, viewSettings, viewSettingsLoaded } from '../board/view-settings';
+import { useViewSettings, useViewSettingsLoaded } from '../board/view-settings';
+import { CACHE_BYTES, keepingOffScreen, letGoWhenTurnedOff, timing } from './keep-off-screen';
 
 /** The click that opens a local address in the output in a web tab, as the platform writes it. */
 
@@ -29,13 +30,8 @@ const REFIT_INTERVAL_MS = 80;
 /**
  * With the setting on, a pane's terminal outlives the pane, still attached, so a pane mounted again for its session (an
  * expanded tile panned back into view) shows it at once, rather than building a terminal and parsing the session's
- * snapshot again (`kept-terminals.ts`). `?terminalCache=<bytes>`, a positive number, turns it on whatever the setting, with
- * that budget: main sets it from `AGENT_BOARD_TERMINAL_CACHE`, never in a packaged build, for the benchmarks and tests.
+ * snapshot again (`kept-terminals.ts`). `keep-off-screen.ts` says when it is on.
  */
-// Unit tests import this module under node, where there is no `location`.
-const asked = typeof location === 'undefined' ? 0 : Number(new URLSearchParams(location.search).get('terminalCache'));
-const CACHE_BYTES = asked > 0 ? asked : null;
-
 /** What a page's parked terminals may hold: about ten sessions with a full scrollback, at 100 columns. */
 const KEPT_BYTES = CACHE_BYTES ?? 150_000_000;
 
@@ -79,21 +75,8 @@ interface KeptTerminal extends KeptEntry {
 
 const kept = keptTerminals<KeptTerminal>({ budget: KEPT_BYTES });
 
-/** Whether a terminal built or brought back now is kept: read at the mount, so a change of the setting re-attaches no pane. */
-function keepingTerminals(): boolean {
-  return CACHE_BYTES !== null || (viewSettingsLoaded() && viewSettings().keepTerminals);
-}
-
-let followingSetting = false;
-
-/** From the first kept terminal: turned off, the setting lets them all go, though no pane may be mounted to hear it. */
-function letGoWhenTurnedOff(): void {
-  if (followingSetting) return;
-  followingSetting = true;
-  subscribe(() => {
-    if (!keepingTerminals() && viewSettingsLoaded()) kept.forgetAll('setting');
-  });
-}
+/** From the first kept terminal: turned off, the setting lets them all go. */
+const followSetting = letGoWhenTurnedOff(() => kept.forgetAll('setting'));
 
 /**
  * Tells this page which sessions are in folded zones now (all of them, each time that changes): their kept terminals
@@ -180,7 +163,7 @@ export function TerminalPane({ sessionId, onStatus, focused = true, autoFocus = 
     const pane = container.current!;
     const binding: PaneBinding = { report, harness: harnessRef, openWeb };
     // One whose run isn't known yet suits: a pop-out's pane mounts before its agent arrives, and again as it does.
-    const keeping = keepingTerminals();
+    const keeping = keepingOffScreen();
     const reusable = keeping ? kept.take(sessionId, (entry) => startedAt === undefined || entry.startedAt === undefined || entry.startedAt === startedAt) : undefined;
     // Whether it takes a kept terminal over, which parses no snapshot.
     timing('terminal.mount', mountedAt, { sessionId, kept: reusable !== undefined });
@@ -330,9 +313,7 @@ export function TerminalPane({ sessionId, onStatus, focused = true, autoFocus = 
     let shown = false;
     let everShown = false;
     // Out of view it waits: it settles as it comes back, so a zoom costs only the terminals that show.
-    const stopHearingBoard = onBoardSettled(() => {
-      if (shown) sharp.settle();
-    });
+    const stopHearingBoard = onBoardSettled(() => shown && sharp.settle());
     const seat = gpu().seat(gpuTerminal, (renderer) => {
       xterm.dataset.renderer = renderer;
       sharp.setRenderer(renderer);
@@ -511,7 +492,7 @@ export function TerminalPane({ sessionId, onStatus, focused = true, autoFocus = 
       },
     };
     kept.add(sessionId, entry);
-    letGoWhenTurnedOff();
+    followSetting();
     return () => {
       terminalRef.current = null;
       park(sessionId, entry);
@@ -560,17 +541,6 @@ export function TerminalPane({ sessionId, onStatus, focused = true, autoFocus = 
   };
 
   return <div ref={container} className="terminal-pane nowheel" data-testid="session-terminal" onPasteCapture={pasteImage} />;
-}
-
-/**
- * A User Timing measure from `start` to now, for profiles and the rendering benchmark (e2e/render-bench.spec.ts): a
- * terminal's mount, its open and fit, its snapshot from attaching to parsed, and its fill from the snapshot arriving to
- * parsed. Cleared as soon as it is written, so the
- * page's timeline never fills with them; a `PerformanceObserver` still hears each one.
- */
-function timing(name: string, start: number, detail: unknown): void {
-  performance.measure(name, { start, detail });
-  performance.clearMeasures(name);
 }
 
 /**

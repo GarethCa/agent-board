@@ -3,7 +3,7 @@ import { Check } from 'lucide-react';
 import { ZONE_COLORS, type Agent, type ExternalSession, type GateRun, type LibraryPrefab, type ReviewRound, type Shell, type Zone } from '@agent-board/daemon/protocol';
 import { keyText } from '../keys/registry';
 import { runGateShortcut } from '../session/window-keys';
-import { agentMenu, agentTileMenu, menuBarAgentEntries, stateTileMenu, bindEntries, chipMenu, externalMenu, menuIds, newAgentMenu, projectContextMenu, projectMenu, shellMenu, tidyMenu, zoneMenu, zoneTabEntries, type ZoneBindingActions, type AgentMenuInput, type AgentTileMenuInput, type ModelEntry, type ProjectContextMenuInput, type ZoneMenuInput, type ShellMenuInput, type TileBoardActions } from './menu-model';
+import { agentMenu, agentTileMenu, menuBarAgentEntries, stateTileMenu, bindEntries, chipMenu, externalMenu, menuIds, newAgentMenu, projectContextMenu, projectMenu, pullRequestEntries, shellMenu, tidyMenu, zoneMenu, zoneTabEntries, type ZoneBindingActions, type AgentMenuInput, type AgentTileMenuInput, type ModelEntry, type ProjectContextMenuInput, type ZoneMenuInput, type ShellMenuInput, type TileBoardActions } from './menu-model';
 import { galleryAgent } from './TileGallery';
 import type { MenuBarRow } from '../../../shared/menu-bar';
 import { menuBarRows, runRow } from '../keys/menu-bar';
@@ -125,14 +125,29 @@ describe("an agent's menu", () => {
     expect(menuIds(agentMenu(agentInput(running, { clickOpens: 'maximised' })))[0]).toBe('expand');
   });
 
-  it('folds and restarts an ended agent, with nothing to pause', () => {
+  it('opens its pop-up from Open while a click opens the pop-up', () => {
+    const actions = spies<AgentMenuInput['actions']>();
+    const open = row(agentMenu(agentInput(running, { clickOpens: 'popup', actions })), 'open') as { label: string; onSelect(): void };
+    expect(open.label).toBe('Open');
+    open.onSelect();
+    const tileActions = spies<AgentTileMenuInput['actions']>();
+    (row(agentTileMenu(tileInput(running, { clickOpens: 'popup', actions: tileActions })), 'open') as { onSelect(): void }).onSelect();
+    (row(stateTileMenu(tileInput(running, { clickOpens: 'popup', actions: tileActions })), 'open') as { onSelect(): void }).onSelect();
+    expect([...actions.calls, ...tileActions.calls].map(([name]) => name)).toEqual(['popUp', 'popUp', 'popUp']);
+  });
+
+  it('folds and wakes an ended agent, with nothing to pause', () => {
     const ids = menuIds(agentMenu(agentInput(ended)));
-    expect(ids.slice(0, 4)).toEqual(['expand', 'pop-out', 'fold', 'restart']);
+    expect(ids.slice(0, 4)).toEqual(['expand', 'pop-out', 'fold', 'wake']);
+    expect(row(agentMenu(agentInput(ended)), 'wake')).toMatchObject({ label: 'Wake' });
+    expect(ids).not.toContain('restart');
     expect(ids).not.toContain('pause');
   });
 
-  it('resumes an agent stopped by a restart, and wakes a paused one', () => {
-    expect(menuIds(agentMenu(agentInput({ ...galleryAgent('stopped-by-restart'), endedAt: AT })))).toContain('resume');
+  it('wakes an agent stopped by a restart, as it wakes a paused one', () => {
+    const stopped = menuIds(agentMenu(agentInput({ ...galleryAgent('stopped-by-restart'), endedAt: AT })));
+    expect(stopped).toContain('wake');
+    expect(stopped).not.toContain('resume');
     expect(menuIds(agentMenu(agentInput({ ...galleryAgent('hibernated'), endedAt: AT })))).toContain('wake');
   });
 
@@ -159,7 +174,7 @@ describe("an agent's menu", () => {
     const entries = agentMenu(agentInput({ ...running, muted: true, issue: { id: 'X-1' } as Agent['issue'], schedule: {} as Agent['schedule'] }));
     expect(row(entries, 'mute').label).toBe('Unmute notifications');
     expect(row(entries, 'link-issue').label).toBe('Change issue…');
-    expect(row(entries, 'schedule').label).toBe('Edit schedule…');
+    expect(row(entries, 'schedule').label).toBe('Edit its clock…');
     expect(row(entries, 'delete')).toMatchObject({ label: 'Delete agent', danger: true });
   });
 
@@ -229,6 +244,12 @@ describe("an agent tile's menu, grouped", () => {
     expect(topIds(agentTileMenu(tileInput(reviewer, { review: round('reviewing') })))[0]).toBe('expand');
   });
 
+  it('goes to its question in its pop-up while a click opens the pop-up', () => {
+    const actions = spies<AgentTileMenuInput['actions']>();
+    (row(agentTileMenu(tileInput(asking, { actions, clickOpens: 'popup' })), 'go-to-question') as { onSelect(): void }).onSelect();
+    expect(actions.calls.map(([name]) => name)).toEqual(['popUp']);
+  });
+
   it('only opens the place to answer its question, the way a click on the tile does', () => {
     const actions = spies<AgentTileMenuInput['actions']>();
     (row(agentTileMenu(tileInput(asking, { actions })), 'go-to-question') as { onSelect(): void }).onSelect();
@@ -248,8 +269,10 @@ describe("an agent tile's menu, grouped", () => {
 
   it('stops a paused agent as it is, and carries an ended one on, with nothing to interrupt or stop', () => {
     expect(sub(agentTileMenu(tileInput(paused)), 'run')).toMatchObject([{ id: 'stop', hint: 'Close it as it is, no longer paused: its worktree and branch stay' }]);
-    expect(menuIds(sub(agentTileMenu(tileInput(ended)), 'run'))).toEqual(['restart']);
-    expect(menuIds(sub(agentTileMenu(tileInput({ ...galleryAgent('stopped-by-restart'), endedAt: AT })), 'run'))).toEqual(['resume']);
+    // An ended agent's Wake leads the menu, as a paused one's does: Run has nothing left for either.
+    expect(topIds(agentTileMenu(tileInput(ended)))[0]).toBe('wake');
+    expect(topIds(agentTileMenu(tileInput(ended)))).not.toContain('run');
+    expect(topIds(agentTileMenu(tileInput({ ...galleryAgent('stopped-by-restart'), endedAt: AT })))).not.toContain('run');
     expect(menuIds(sub(agentTileMenu(tileInput({ ...galleryAgent('rate-limited'), harness: 'claude' })), 'run'))).toContain('continue-on-credits');
   });
 
@@ -365,7 +388,7 @@ const repoZone: Zone = {
   layoutMode: 'free',
   layoutRule: 'off',
   lanes: null,
-  handPlaced: [], free: [],
+  handPlaced: [], free: [], placements: {},
   folded: false,
   clone: null,
   managedClone: false,
@@ -375,6 +398,11 @@ const repoZone: Zone = {
   createdAt: AT,
 };
 const group: Zone = { ...repoZone, kind: 'unbound', repoRoot: null };
+
+/** The ids of Arrange items ▸: a row per kind, and in each its four places. */
+const PLACE_KINDS = ['notes', 'files', 'clocks', 'todos', 'queues', 'memory', 'steps', 'stickies', 'shapes', 'text'];
+const placeIds = (kind: string) => [`place-${kind}`, ...['cluster', 'sidebar', 'top', 'stay'].map((place) => `place-${kind}/place-${kind}-${place}`)];
+const PLACEMENT_IDS = ['placements', ...PLACE_KINDS.flatMap(placeIds).map((id) => `placements/${id}`)];
 
 function zoneInput(zone: Zone, more: Partial<ZoneMenuInput> = {}): ZoneMenuInput {
   return { zone, folded: [], themeFill: 8, rename: () => {}, actions: spies(), ...more };
@@ -396,6 +424,7 @@ describe("a zone's ⋯ menu", () => {
       'spacing/spacing-compact',
       'spacing/spacing-normal',
       'spacing/spacing-roomy',
+      ...PLACEMENT_IDS,
       'stage-board',
       'fold',
       'rename',
@@ -542,6 +571,23 @@ describe("a zone's tab menus", () => {
     expect(layouts({ ...repoZone, layoutRule: 'spine' }).map((entry) => (entry as { checked: boolean }).checked)).toEqual([false, true, false, false, false]);
   });
 
+  it("offers where an arrange places each kind of the zone's items, the zone's own ticked, and keeps a pick as the zone's", () => {
+    const actions = spies<ZoneMenuInput['actions']>();
+    const placed = { ...repoZone, placements: { todos: 'sidebar' as const } };
+    const items = row(zoneMenu(zoneInput(placed, { actions })), 'placements') as { label: string; entries: ModelEntry[] };
+    expect(items.label).toBe('Arrange items');
+    expect(menuIds(items.entries)).toEqual(PLACE_KINDS.flatMap(placeIds));
+    // Each kind says where it goes now: the zone's own pick, else where every zone puts it.
+    expect(row(items.entries, 'place-notes')).toMatchObject({ label: 'Agent notes', detail: 'Beside its agent' });
+    expect(row(items.entries, 'place-todos')).toMatchObject({ label: 'To-dos', detail: 'Down the side' });
+    expect(row(items.entries, 'place-clocks')).toMatchObject({ label: 'Clocks', detail: 'Under the top row' });
+    expect(row(items.entries, 'place-stickies')).toMatchObject({ label: 'Stickies', detail: 'Where it is' });
+    const todos = (row(items.entries, 'place-todos') as { entries: ModelEntry[] }).entries;
+    expect(todos.map((entry) => (entry as { checked: boolean }).checked)).toEqual([false, true, false, false]);
+    (row(todos, 'place-todos-top') as { onSelect(): void }).onSelect();
+    expect(actions.calls).toEqual([['setPlacement', [placed, 'todos', 'top']]]);
+  });
+
   it('lists Tidy ▾: Tidy now, its layouts, its spacings, and the spacing for new zones', () => {
     expect(menuIds(tidyMenu(repoZone, undefined, spies()))).toEqual(['tidy', 'layout-free', 'layout-spine', 'layout-lanes', 'layout-shelves', 'layout-clusters', 'spacing-compact', 'spacing-normal', 'spacing-roomy', 'new-zone-spacing']);
     expect(row(tidyMenu(repoZone, 'roomy', spies()), 'new-zone-spacing')).toMatchObject({ detail: 'Roomy · Settings' });
@@ -607,6 +653,12 @@ const SHORTCUTS = new Map([
  * What each row says and how it is drawn, without its icon or handler: its id and label, and its shortcut, enabled
  * rule, danger flag, hint, choice and detail where it has them. Submenus are shown in full.
  */
+/**
+ * The rows under Arrange items ▸ with only its first kind: every kind's row is the same but for its name, so one stands
+ * for them in a whole menu's pins (the kinds and their ids are pinned in `PLACEMENT_IDS`, every kind's handler below).
+ */
+const firstKind = (entry: Extract<ModelEntry, { entries: readonly ModelEntry[] }>) => (entry.id === 'placements' ? entry.entries.slice(0, 1) : entry.entries);
+
 function fields(entries: readonly ModelEntry[]): unknown[] {
   return entries.map((entry) => {
     if (entry === 'separator' || 'heading' in entry) return entry;
@@ -615,7 +667,7 @@ function fields(entries: readonly ModelEntry[]): unknown[] {
     for (const key of ['disabled', 'danger', 'hint', 'checked', 'detail'] as const) {
       if (key in entry && (entry as Record<string, unknown>)[key] !== undefined) shown[key] = (entry as Record<string, unknown>)[key];
     }
-    if ('entries' in entry) shown.entries = fields(entry.entries);
+    if ('entries' in entry) shown.entries = fields(firstKind(entry));
     if ('swatches' in entry) shown.swatches = { count: entry.swatches.length, pressed: entry.swatches.filter((swatch) => swatch.pressed).map((swatch) => swatch.name) };
     if ('onCommit' in entry) shown.slider = { value: entry.value, min: entry.min, max: entry.max, step: entry.step, shown: entry.format(entry.value) };
     return shown;
@@ -946,8 +998,9 @@ describe("every row's fields", () => {
           "label": "Fold to a chip",
         },
         {
-          "id": "restart",
-          "label": "Restart agent",
+          "hint": "Start it again in its worktree, carrying on its conversation",
+          "id": "wake",
+          "label": "Wake",
         },
         "separator",
         {
@@ -1374,6 +1427,44 @@ describe("every row's fields", () => {
           "label": "Layout and spacing",
         },
         {
+          "entries": [
+            {
+              "detail": "Beside its agent",
+              "entries": [
+                {
+                  "checked": true,
+                  "hint": "In its agent's lane; down the side if no agent here made it",
+                  "id": "place-notes-cluster",
+                  "label": "Beside its agent",
+                },
+                {
+                  "checked": false,
+                  "hint": "One column beside the lanes",
+                  "id": "place-notes-sidebar",
+                  "label": "Down the side",
+                },
+                {
+                  "checked": false,
+                  "hint": "Grouped after the top row, before the lanes",
+                  "id": "place-notes-top",
+                  "label": "Under the top row",
+                },
+                {
+                  "checked": false,
+                  "hint": "Arrange leaves it, and lays the rest out round it",
+                  "id": "place-notes-stay",
+                  "label": "Where it is",
+                },
+              ],
+              "id": "place-notes",
+              "label": "Agent notes",
+            },
+          ],
+          "hint": "Where an arrange puts each kind",
+          "id": "placements",
+          "label": "Arrange items",
+        },
+        {
           "disabled": false,
           "hint": "The work its agents started, by stage: To do, Doing, Waiting for review, Done",
           "id": "stage-board",
@@ -1567,6 +1658,44 @@ describe("every row's fields", () => {
           ],
           "id": "spacing",
           "label": "Layout and spacing",
+        },
+        {
+          "entries": [
+            {
+              "detail": "Beside its agent",
+              "entries": [
+                {
+                  "checked": true,
+                  "hint": "In its agent's lane; down the side if no agent here made it",
+                  "id": "place-notes-cluster",
+                  "label": "Beside its agent",
+                },
+                {
+                  "checked": false,
+                  "hint": "One column beside the lanes",
+                  "id": "place-notes-sidebar",
+                  "label": "Down the side",
+                },
+                {
+                  "checked": false,
+                  "hint": "Grouped after the top row, before the lanes",
+                  "id": "place-notes-top",
+                  "label": "Under the top row",
+                },
+                {
+                  "checked": false,
+                  "hint": "Arrange leaves it, and lays the rest out round it",
+                  "id": "place-notes-stay",
+                  "label": "Where it is",
+                },
+              ],
+              "id": "place-notes",
+              "label": "Agent notes",
+            },
+          ],
+          "hint": "Where an arrange puts each kind",
+          "id": "placements",
+          "label": "Arrange items",
         },
         {
           "disabled": false,
@@ -1782,10 +1911,10 @@ describe('row ids', () => {
 });
 
 /** Each action row selected in turn, with the handler it called and what with: submenu rows as `submenu/row`. */
-function wiring(entries: readonly ModelEntry[], calls: [string, unknown[]][], prefix = ''): string[] {
+function wiring(entries: readonly ModelEntry[], calls: [string, unknown[]][], prefix = '', everyKind = false): string[] {
   return entries.flatMap((entry) => {
     if (entry === 'separator' || 'heading' in entry) return [];
-    if ('entries' in entry) return wiring(entry.entries, calls, `${prefix}${entry.id}/`);
+    if ('entries' in entry) return wiring(everyKind ? entry.entries : firstKind(entry), calls, `${prefix}${entry.id}/`, everyKind);
     const before = calls.length;
     if ('onSelect' in entry) entry.onSelect();
     else if ('onPick' in entry) entry.onPick('picked');
@@ -1861,7 +1990,7 @@ describe("every row's handler", () => {
         "expand → expand("n1")",
         "pop-out → popOutAgent(#a2)",
         "fold → setFolded("n1", true)",
-        "restart → restartAgent("a2")",
+        "wake → wakeAgent(#a2)",
         "rename → rename()",
         "schedule → scheduleAgent(#a2)",
         "link-issue → linkIssue(#a2)",
@@ -1886,7 +2015,7 @@ describe("every row's handler", () => {
         "delete → deleteAgent("a2")",
         "expand → expand("n1")",
         "pop-out → popOutAgent(#a3)",
-        "resume → resumeAgent("a3")",
+        "wake → resumeAgent("a3")",
         "rename → rename()",
         "schedule → scheduleAgent(#a3)",
         "link-issue → linkIssue(#a3)",
@@ -2018,7 +2147,7 @@ describe("every row's handler", () => {
         "copy/session-id → copy("a1", "Session id")",
         "copy/save-prefab → saveAsPrefab(#a1)",
         "delete → deleteAgent("a1")",
-        "wake → resumeAgent("a2")",
+        "wake → wakeAgent(#a2)",
         "run/stop → stopAgent("a2")",
         "open-review → openReview("a1")",
         "arrange/fold → setFolded("n1", true)",
@@ -2073,6 +2202,10 @@ describe("every row's handler", () => {
         "spacing/spacing-compact → setSpacing(#z1, "compact")",
         "spacing/spacing-normal → setSpacing(#z1, "normal")",
         "spacing/spacing-roomy → setSpacing(#z1, "roomy")",
+        "placements/place-notes/place-notes-cluster → setPlacement(#z1, "notes", "cluster")",
+        "placements/place-notes/place-notes-sidebar → setPlacement(#z1, "notes", "sidebar")",
+        "placements/place-notes/place-notes-top → setPlacement(#z1, "notes", "top")",
+        "placements/place-notes/place-notes-stay → setPlacement(#z1, "notes", "stay")",
         "stage-board → addStageBoard(#z1)",
         "fold → fold(#z1)",
         "rename → rename()",
@@ -2095,6 +2228,10 @@ describe("every row's handler", () => {
         "spacing/spacing-compact → setSpacing(#g1, "compact")",
         "spacing/spacing-normal → setSpacing(#g1, "normal")",
         "spacing/spacing-roomy → setSpacing(#g1, "roomy")",
+        "placements/place-notes/place-notes-cluster → setPlacement(#g1, "notes", "cluster")",
+        "placements/place-notes/place-notes-sidebar → setPlacement(#g1, "notes", "sidebar")",
+        "placements/place-notes/place-notes-top → setPlacement(#g1, "notes", "top")",
+        "placements/place-notes/place-notes-stay → setPlacement(#g1, "notes", "stay")",
         "stage-board → addStageBoard(#g1)",
         "fold → fold(#g1)",
         "rename → rename()",
@@ -2185,6 +2322,14 @@ const projects: [string, Zone][] = [
 ];
 
 describe("a folded zone's chip menu", () => {
+  it('is wired for every kind under Arrange items, each to its four places', () => {
+    const actions = spies<ZoneMenuInput['actions']>();
+    const rows = wiring(zoneMenu(zoneInput(repoZone, { actions })), actions.calls, '', true).filter((row) => row.startsWith('placements/'));
+    expect(rows).toEqual(
+      PLACE_KINDS.flatMap((kind) => ['cluster', 'sidebar', 'top', 'stay'].map((place) => `placements/place-${kind}/place-${kind}-${place} → setPlacement(#z1, "${kind}", "${place}")`)),
+    );
+  });
+
   it('unfolds without waking, unfolds and wakes, renames and deletes', () => {
     const actions = spies<ZoneMenuInput['actions']>();
     const rename = vi.fn();
@@ -2280,6 +2425,10 @@ describe("a project's menus, under the Simplified design", () => {
         "options/layout/layout-lanes → setLayoutMode(#z1, "lanes")",
         "options/layout/layout-shelves → setLayoutMode(#z1, "shelves")",
         "options/layout/layout-clusters → setLayoutMode(#z1, "clusters")",
+        "options/placements/place-notes/place-notes-cluster → setPlacement(#z1, "notes", "cluster")",
+        "options/placements/place-notes/place-notes-sidebar → setPlacement(#z1, "notes", "sidebar")",
+        "options/placements/place-notes/place-notes-top → setPlacement(#z1, "notes", "top")",
+        "options/placements/place-notes/place-notes-stay → setPlacement(#z1, "notes", "stay")",
         "options/stage-board → addStageBoard(#z1)",
         "options/fold → fold(#z1)",
         "options/issues/tracker → pickTracker(#z1)",
@@ -2317,6 +2466,10 @@ describe("a project's menus, under the Simplified design", () => {
         "options/layout/layout-lanes → setLayoutMode(#z1, "lanes")",
         "options/layout/layout-shelves → setLayoutMode(#z1, "shelves")",
         "options/layout/layout-clusters → setLayoutMode(#z1, "clusters")",
+        "options/placements/place-notes/place-notes-cluster → setPlacement(#z1, "notes", "cluster")",
+        "options/placements/place-notes/place-notes-sidebar → setPlacement(#z1, "notes", "sidebar")",
+        "options/placements/place-notes/place-notes-top → setPlacement(#z1, "notes", "top")",
+        "options/placements/place-notes/place-notes-stay → setPlacement(#z1, "notes", "stay")",
         "options/stage-board → addStageBoard(#z1)",
         "options/fold → fold(#z1)",
         "options/issues/tracker → pickTracker(#z1)",
@@ -2364,6 +2517,7 @@ describe("a project's menus, under the Simplified design", () => {
       'layout/layout-lanes',
       'layout/layout-shelves',
       'layout/layout-clusters',
+      ...PLACEMENT_IDS,
       'stage-board',
       'fold',
       'issues',
@@ -2523,13 +2677,30 @@ describe("an agent tile's menu under Classic (M3): its first rows shaped by its 
     expect(menuIds(sub(entries, 'board'))).not.toContain('show-rev');
   });
 
-  it("takes a scheduled agent to its schedule, which then isn't repeated in Agent", () => {
+  it("leads a scheduled agent with Wake now and its clock's rows, which then aren't repeated in Agent", () => {
     const actions = spies<AgentTileMenuInput['actions']>();
     const entries = stateTileMenu(tileInput(galleryAgent('scheduled'), { actions }));
-    expect(row(entries, 'waits-on')).toMatchObject({ hint: 'Its next scheduled run' });
-    (row(entries, 'waits-on') as { onSelect(): void }).onSelect();
-    expect(actions.calls.map(([name]) => name)).toEqual(['scheduleAgent']);
+    expect(top(entries)).toEqual(['wake-now', 'schedule', 'clock-off']);
+    expect(row(entries, 'wake-now')).toMatchObject({ label: 'Wake now', hint: 'Run it now: its clock keeps its next time' });
+    expect(row(entries, 'schedule')).toMatchObject({ label: 'Edit its clock…' });
+    expect(row(entries, 'clock-off')).toMatchObject({ label: 'Turn its clock off' });
+    for (const id of ['wake-now', 'schedule', 'clock-off']) (row(entries, id) as { onSelect(): void }).onSelect();
+    expect(actions.calls.map(([name]) => name)).toEqual(['wakeAgent', 'scheduleAgent', 'turnClockOff']);
     expect(menuIds(sub(entries, 'agent'))).not.toContain('schedule');
+    // Its clock turned off, it is no longer woken by it: no Wake now, and nothing to turn off.
+    const off = { ...galleryAgent('scheduled'), schedule: { ...galleryAgent('scheduled').schedule!, enabled: false } };
+    expect(menuIds(stateTileMenu(tileInput(off)))).not.toContain('wake-now');
+  });
+
+  it("leads one its clock pauses between runs with Wake now and its clock's rows too", () => {
+    const scheduled = galleryAgent('scheduled');
+    const between = { ...scheduled, state: 'hibernated' as const, endedAt: scheduled.stateSince, schedule: { ...scheduled.schedule!, hibernates: true } };
+    expect(top(stateTileMenu(tileInput(between)))).toEqual(['wake-now', 'schedule', 'clock-off']);
+  });
+
+  it("puts Wake now and its clock's rows first in Simplified's menu too", () => {
+    expect(topIds(agentTileMenu(tileInput(galleryAgent('scheduled')))).slice(0, 3)).toEqual(['wake-now', 'schedule', 'clock-off']);
+    expect(menuIds(sub(agentTileMenu(tileInput(galleryAgent('scheduled'))), 'settings'))).not.toContain('schedule');
   });
 
   it('leads an idle agent with Open and Pause, and drops Pause from Run', () => {
@@ -2548,20 +2719,23 @@ describe("an agent tile's menu under Classic (M3): its first rows shaped by its 
 
   it('leads a finished agent with its pull request and its review, and drops them from Agent', () => {
     const entries = stateTileMenu(tileInput({ ...ended, pullRequests: [pr] }, { rounds: [round('ready')] }));
-    expect(top(entries)).toEqual(['open-pr', 'open-review']);
+    // Wake first: it starts the agent again here, before what it left.
+    expect(top(entries)).toEqual(['wake', 'open-pr', 'open-review']);
     expect(row(entries, 'open-pr').label).toBe('Open pull request #44');
     expect(menuIds(sub(entries, 'agent'))).not.toContain('open-pr');
     expect(menuIds(sub(entries, 'agent'))).not.toContain('open-review');
     expect(top(stateTileMenu(tileInput({ ...idle, workFinishedAt: AT, pullRequests: [pr] })))).toEqual(['open-pr']);
     // Finished with neither, it leads with Open.
-    expect(top(stateTileMenu(tileInput({ ...ended, pullRequests: [] })))).toEqual(['open']);
+    expect(top(stateTileMenu(tileInput({ ...ended, pullRequests: [] })))).toEqual(['wake', 'open']);
   });
 
-  it('leads a paused agent with Wake, a failed one with Open, and one a restart stopped with Resume', () => {
+  it('leads a paused agent with Wake, an exited one with Wake and Open, and one a restart stopped with Wake', () => {
     expect(top(stateTileMenu(tileInput(paused)))).toEqual(['wake']);
-    expect(top(stateTileMenu(tileInput({ ...galleryAgent('failed'), endedAt: AT })))).toEqual(['open']);
+    expect(top(stateTileMenu(tileInput({ ...galleryAgent('failed'), endedAt: AT })))).toEqual(['wake', 'open']);
+    // A live failure (its startup) has nothing to wake.
+    expect(top(stateTileMenu(tileInput({ ...galleryAgent('failed'), endedAt: null })))).toEqual(['open']);
     const stopped = stateTileMenu(tileInput({ ...galleryAgent('stopped-by-restart'), endedAt: AT }));
-    expect(top(stopped)).toEqual(['resume']);
+    expect(top(stopped)).toEqual(['wake']);
     expect(topIds(stopped)).not.toContain('run');
   });
 
@@ -2616,5 +2790,22 @@ describe("an agent tile's menu under Classic (M3): its first rows shaped by its 
     expect(topIds(entries).length).toBeLessThanOrEqual(10);
     const ids = menuIds(entries).map((id) => id.split('/').at(-1));
     expect(ids.length).toBe(new Set(ids).size);
+  });
+});
+
+describe('pullRequestEntries', () => {
+  it('lists the pull requests it made, then those it pushed to, with their state and checks, each opening it', () => {
+    const made = { number: 7, title: 'Fix the flake', url: '', state: 'open', checks: 'passing' } as Agent['pullRequests'][number];
+    const pushed = { number: 9, title: 'Their branch', url: '', state: 'open', checks: 'none' } as Agent['pullRequests'][number];
+    const openPullRequest = vi.fn();
+    const agent: Agent = { ...galleryAgent('running'), pullRequests: [made], pushedPullRequests: [pushed] };
+    const rows = pullRequestEntries(agent, { openPullRequest });
+    expect(rows).toMatchObject([
+      { id: 'pr-7', label: 'Pull request #7', hint: 'open, checks passing' },
+      { id: 'pr-9', label: 'Pushed to pull request #9', hint: 'open, no checks' },
+    ]);
+    (rows[1] as { onSelect(): void }).onSelect();
+    expect(openPullRequest).toHaveBeenCalledWith(agent, pushed);
+    expect(pullRequestEntries({ ...agent, pullRequests: [], pushedPullRequests: [] }, { openPullRequest })).toEqual([]);
   });
 });

@@ -1266,7 +1266,10 @@ export class FakeSession {
     if (this.allowedForSession.has(name)) return true;
     const fields: Record<string, unknown> = { ...inside, tool_name: name, tool_input: input };
     // Claude suggests the rule its "don't ask again" would add; `FAKE_HARNESS_PERMISSION_SUGGESTIONS=1` has the fake do too.
-    if (this.dialect.permissionSuggestions) {
+    // `none` asks as Claude does where only a person may allow the call (its own safety check): with no suggestions, and
+    // its dialog drawn only once its hooks have answered.
+    const personOnly = this.dialect.harness === 'claude' && process.env.FAKE_HARNESS_PERMISSION_SUGGESTIONS === 'none' && name !== PLAN_TOOL;
+    if (this.dialect.permissionSuggestions && !personOnly) {
       // Its plan dialog offers auto mode from then on, as its first yes does.
       fields.permission_suggestions = name === PLAN_TOOL ? [{ type: 'setMode', mode: 'auto', destination: 'session' }] :
         process.env.FAKE_HARNESS_PERMISSION_SUGGESTIONS === '1'
@@ -1276,7 +1279,7 @@ export class FakeSession {
     // Claude asks the agent's own question in its terminal while the hook runs, and whichever answers first decides: the
     // hook's later answer is dropped, and it is left running, as Claude leaves it. Codex, and Claude for a subagent, ask
     // only once the hook has said nothing.
-    const alongside = this.dialect.harness === 'claude' && inside === undefined;
+    const alongside = this.dialect.harness === 'claude' && inside === undefined && !personOnly;
     // Claude's plan dialog takes a hook's allow only with the call's input (`planDecision`); any other call, any allow.
     const decide = this.dialect.harness === 'claude' && name === PLAN_TOOL ? planDecision : permissionDecision;
     const hook = alongside ? this.fireBeside('PermissionRequest', fields) : this.fire('PermissionRequest', fields);

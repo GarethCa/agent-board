@@ -202,6 +202,9 @@ function openWindow(
     // Tests read a terminal's text from the DOM renderer's rows, so their windows keep to it unless a test asks for
     // the GPU (session/terminal-gpu.ts). Never in a packaged build.
     ...(!app.isPackaged && process.env.AGENT_BOARD_TERMINAL_RENDERER === 'dom' ? { terminalRenderer: 'dom' } : {}),
+    // What a double-click opens before one is picked (board/click-opens.ts): specs written for the session window keep
+    // it. Never in a packaged build.
+    ...(!app.isPackaged && process.env.AGENT_BOARD_CLICK_OPENS ? { clickOpens: process.env.AGENT_BOARD_CLICK_OPENS } : {}),
   };
   if (devServerUrl) {
     void window.loadURL(`${devServerUrl}?${new URLSearchParams(withAppearance)}`);

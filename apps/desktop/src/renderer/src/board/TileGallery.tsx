@@ -67,7 +67,8 @@ const EXTRAS: Record<GalleryState, { harness: Harness; name: string } & Partial<
     name: 'Triage new issues',
     schedule: { clockId: 'clock-1', cron: '0 9 * * *', prompt: 'Triage new issues', enabled: true, nextRunAt: NEXT_RUN, lastRun: null, hibernates: false },
   },
-  'stopped-by-restart': { harness: 'codex', name: 'Port the scheduler', endedAt: AT },
+  // Stopped as it entered its state, so its line's time reads the same whenever the gallery is shown.
+  'stopped-by-restart': { harness: 'codex', name: 'Port the scheduler', endedAt: new Date(Date.now() - 3 * 60_000).toISOString() },
   'handing-off': { harness: 'claude', name: 'Write the review', lastMessage: 'The diff looks good: two nits inline.' },
   hibernated: {
     harness: 'claude',
@@ -236,11 +237,13 @@ const NAMES: Agent[] = [
 ];
 
 /**
- * Agents that ended: one that exited cleanly into a shell, one that exited with 1. Each says so in its state
+ * Agents that ended: one that exited cleanly into a shell, one whose work merged (the grey Done frost), one
+ * that exited with 1. Each says so in its state
  * pill, with no Restart row on the tile.
  */
 const ENDED: Agent[] = [
   { ...galleryAgent('done'), sessionId: 'gallery-ended-0', name: 'Fix the flaky test', endedAt: AT, exitCode: 0, shellSessionId: 'gallery-ended-0-shell' },
+  { ...galleryAgent('done'), sessionId: 'gallery-ended-merged', name: 'Tidy the release notes', endedAt: AT, exitCode: 0, pullRequests: [{ number: 48, title: 'Tidy the release notes', url: '', state: 'merged', checks: 'passing' }] },
   { ...galleryAgent('failed'), sessionId: 'gallery-ended-1', name: 'Migrate the schema', notice: null, endedAt: AT, exitCode: 1, pullRequests: [{ number: 47, title: 'Migrate the schema', url: '', state: 'open', checks: 'failing' }] },
 ];
 

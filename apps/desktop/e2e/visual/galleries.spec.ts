@@ -2,7 +2,7 @@ import { expect } from '@playwright/test';
 import { test, removeDataDir, tempDataDir } from '../launch.ts';
 import { settledBox } from '../board-helpers.ts';
 import { ignorePointer, pinFonts, settle } from '../render.ts';
-import { SHOT, needsBaselines, THEMES, launchGallery } from './shared.ts';
+import { SHOT, expectWatermarkShows, needsBaselines, THEMES, launchGallery } from './shared.ts';
 
 test.use({ viewport: null });
 
@@ -18,6 +18,8 @@ for (const { theme, suffix } of THEMES) {
       await settle(window);
       await expect.soft(window.getByTestId('tile-gallery')).toHaveScreenshot(`tile-states${suffix}.png`, SHOT);
       await expect.soft(window.getByTestId('character-gallery')).toHaveScreenshot(`character-gallery${suffix}.png`, SHOT);
+
+      await expectWatermarkShows(window, window.getByTestId('tile-gallery').locator('.tile-frosted:has(.tile-frost-watermark)').first());
     } finally {
       await app.close();
       await removeDataDir(dataDir);
@@ -35,7 +37,7 @@ for (const { theme, scheme } of [
     const dataDir = tempDataDir();
     const { app, window } = await launchGallery(dataDir, theme, scheme);
     try {
-      const paused = window.getByTestId('tile-gallery').locator('.tile-frosted').first();
+      const paused = window.getByTestId('tile-gallery').locator('.tile-frosted[data-state="hibernated"]').first();
       await expect(paused).toBeVisible();
       await pinFonts(window);
       await ignorePointer(window);

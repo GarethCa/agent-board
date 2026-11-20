@@ -106,8 +106,9 @@ export const SETTINGS_CONTROLS: readonly SettingsControl[] = [
   { id: 'mode', label: 'Mode', home: 'general.appearance', also: 'light dark system' },
   { id: 'theme', label: 'Theme', home: 'general.appearance', also: 'colour color palette pack' },
   { id: 'boardBackground', label: 'Board background', home: 'general.appearance', also: 'desk dots grid lines isometric paper noise vignette plain pattern texture' },
+  { id: 'popupFrost', label: 'Frost the board behind a pop-up', home: 'general.appearance', also: 'blur dim frosted glass popup pop-up scrim backdrop transparency' },
   { id: 'extendedShortcuts', label: 'Extended keyboard shortcuts', home: 'general.keyboard', also: 'keys hotkeys' },
-  { id: 'clickOpens', label: 'Double-clicking a tile opens', home: 'board.opening', also: 'double-click expand session window maximise maximised maximize full' },
+  { id: 'clickOpens', label: 'Double-clicking a tile opens', home: 'board.opening', also: 'double-click pop-up popup overlay expand session window maximise maximised maximize full' },
   { id: 'connections', label: 'Show connections', home: 'board.connections', also: 'edges rails lines' },
   { id: 'tethers', label: 'Show tethers', home: 'board.connections', also: 'lines rails captain schedule clock orchestrator crew clutter' },
   { id: 'tileShows', label: 'Tile shows', home: 'board.tiles', classicOnly: true, also: 'quiet branch row corner buttons expand pop out hover model reasoning effort set by status line trusted muted bell' },
@@ -138,7 +139,7 @@ export const SETTINGS_CONTROLS: readonly SettingsControl[] = [
   { id: 'keepWebLogins', label: 'Keep logins between sessions', home: 'advanced.webTabs', also: 'cookies browser' },
   { id: 'clearBrowsingData', label: 'Clear browsing data', home: 'advanced.webTabs', also: 'cookies cache browser' },
   { id: 'gpuTerminals', label: 'GPU-accelerated terminals', home: 'advanced.terminals', also: 'webgl renderer graphics performance smooth' },
-  { id: 'keepTerminals', label: 'Keep terminals while off screen', home: 'advanced.terminals', also: 'memory cache stutter panes performance smooth' },
+  { id: 'keepTerminals', label: 'Keep sessions while off screen', home: 'advanced.terminals', also: 'terminals chats chat views transcript memory cache stutter panes performance smooth' },
   { id: 'daemonStatus', label: 'Background service', home: 'advanced.service', also: 'restart build version daemon pid schema' },
 ];
 

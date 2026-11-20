@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent, AgentSchedule, LinkedIssue, PullRequest, TakenJob } from '@agent-board/daemon/protocol';
-import { badgeLine, foldCount, foldRanking, setupText, tileFooter, type FooterItem } from './tile-footer';
+import { badgeLine, foldCount, footerFold, foldRanking, setupText, tileFooter, type FooterItem } from './tile-footer';
 import { QUIET_TILE } from './tile-shows';
 
 const issue = { provider: 'linear', id: 'ACME-58', title: 'Movable sessions', url: 'https://linear.app/x' } as LinkedIssue;
@@ -231,5 +231,26 @@ describe('the quiet tile’s footer', () => {
 
   it('leaves the muted bell out: it is beside the name', () => {
     expect(tileFooter(agent({ issue, muted: true }), 0, [], QUIET_TILE).shown).toEqual([{ kind: 'issue', issue }]);
+  });
+});
+
+describe('a button shown only on hover, in the footer', () => {
+  const badge = (width: number, rank: number): FooterItem => ({ kind: 'badge', width, rank });
+  const fixed = (width: number): FooterItem => ({ kind: 'fixed', width });
+  const plus = (width: number): FooterItem => ({ kind: 'plus', width });
+  const hover = (width: number): FooterItem => ({ kind: 'hover', width });
+  // A scheduled agent's footer: its setup, its clock (the first badge to fold), the "+N", its state and Wake now.
+  const scheduled = (wake: number) => [badge(90, 1), badge(100, 0), plus(25), fixed(90), hover(wake)];
+
+  it('keeps its spot while everything fits, so showing it moves nothing', () => {
+    expect(footerFold({ items: scheduled(60), available: 360, gap: 5, maxLines: 1, plusShown: false })).toEqual({ hoverHidden: false, folded: 0 });
+  });
+
+  it('gives way first when it doesn’t fit, and the clock stays: no badge folds for it, and no "+N" shows', () => {
+    expect(footerFold({ items: scheduled(80), available: 300, gap: 5, maxLines: 1, plusShown: false })).toEqual({ hoverHidden: true, folded: 0 });
+  });
+
+  it('gives way before the badges that still fold without it', () => {
+    expect(footerFold({ items: scheduled(80), available: 250, gap: 5, maxLines: 1, plusShown: false })).toEqual({ hoverHidden: true, folded: 1 });
   });
 });

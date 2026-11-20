@@ -26,6 +26,7 @@ import { motionDuration, tokenNumber } from '../theme';
 import { expandedTrace, FIT_NOTED_MS } from './expanded-trace';
 import { clearRooms, coveredView, fitView, UNCOVERED } from './view-follow';
 import { helperIcon, ticketFace, type HelperIcon, type TicketFace } from './ticket-tile';
+import { FrostBadge } from './FrostMark';
 
 /**
  * The board level the window shows, kept in the view state so a relaunch lands where the user was: a ticket's own
@@ -86,6 +87,11 @@ interface TicketBoardProps {
   focus?: TicketBoardFocus;
   /** Given, the items it shows, asking the daemon for none: a still board, as the gallery draws one. It then leaves the focus where it is. */
   shownItems?: readonly BoardItem[];
+  /**
+   * Drawn on a pop-up's Board tab rather than zoomed into: no breadcrumb, as its tab says where it is, and Esc is the
+   * pop-up's. The main board's own level leaves an Esc from inside a pop-up be.
+   */
+  inPopUp?: boolean;
 }
 
 /**
@@ -101,7 +107,7 @@ export function TicketBoard(props: TicketBoardProps) {
   );
 }
 
-function TicketBoardShown({ chatId, agents, onLeave, onOpenAgent, onError, desk, focus, shownItems }: TicketBoardProps) {
+function TicketBoardShown({ chatId, agents, onLeave, onOpenAgent, onError, desk, focus, shownItems, inPopUp = false }: TicketBoardProps) {
   const shows = useNeedsYouShows();
   const { screenToFlowPosition, getInternalNode, setViewport } = useReactFlow();
   const flowStore = useStoreApi();
@@ -250,9 +256,9 @@ function TicketBoardShown({ chatId, agents, onLeave, onOpenAgent, onError, desk,
   useEscStep(
     'level',
     (event) => {
-      if (isTyping(event) || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return false;
+      if (inPopUp || isTyping(event) || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return false;
       const active = document.activeElement;
-      return active === null || active === document.body || active.closest('.react-flow, .ticket-board') !== null;
+      return active === null || active === document.body || (active.closest('.react-flow, .ticket-board') !== null && active.closest('.agent-popup') === null);
     },
     onLeave,
   );
@@ -277,6 +283,7 @@ function TicketBoardShown({ chatId, agents, onLeave, onOpenAgent, onError, desk,
       ref={root}
       className="ticket-board"
       tabIndex={-1}
+      data-in-pop-up={inPopUp || undefined}
       data-testid="ticket-board"
       data-ticket={chatId}
       // The main board's own handlers (a note on a double-click, drops) are under this one: nothing here reaches them.
@@ -301,6 +308,7 @@ function TicketBoardShown({ chatId, agents, onLeave, onOpenAgent, onError, desk,
       }}
     >
       <div className="island-top-centre ticket-board-bar">
+        {!inPopUp && (
         <Island className="ticket-board-crumb" data-testid="ticket-board-crumb" role="navigation" aria-label="Board level">
           <button type="button" className="ticket-board-crumb-back" data-testid="ticket-board-back" title="Back to the board (Esc)" onClick={onLeave}>
             <ChevronLeft aria-hidden />
@@ -313,6 +321,7 @@ function TicketBoardShown({ chatId, agents, onLeave, onOpenAgent, onError, desk,
             <span className="ticket-board-crumb-title">{face.title}</span>
           </span>
         </Island>
+        )}
         {(face.watches.length > 0 || chat.watch !== undefined) && (
           // Its watches' news, beside the breadcrumb: what the eye and the icons on its tile say.
           <Island className="ticket-board-watches" data-testid="ticket-board-watches" role="group" aria-label="Its watches">
@@ -395,7 +404,7 @@ function minimapColor(node: Node): string {
  */
 function MemberTile({ data, selected }: NodeProps<MemberNode>) {
   const open = useContext(OpenMemberContext);
-  const { openPullRequest, resumeAgent, readWatches } = useContext(TileActionsContext);
+  const { openPullRequest, wakeAgent, readWatches } = useContext(TileActionsContext);
   if (data.kind === 'chat') {
     const { face, agent, team } = data;
     const prOwner = face.pr === undefined ? undefined : team.find((each) => each.pullRequests.includes(face.pr!));
@@ -420,7 +429,7 @@ function MemberTile({ data, selected }: NodeProps<MemberNode>) {
               button={face.button}
               onOpen={() => open(face.asker)}
               onMerge={() => prOwner !== undefined && openPullRequest(prOwner, face.pr!)}
-              onWake={() => resumeAgent(face.asker.sessionId)}
+              onWake={() => wakeAgent(face.asker)}
               onRead={() => readWatches(agent.sessionId)}
             />
           ) : (
@@ -444,11 +453,12 @@ function MemberTile({ data, selected }: NodeProps<MemberNode>) {
       title={`${helper.title}. Double-click to open its window`}
       onDoubleClick={() => open(data.agent)}
     >
-      <span className="ticket-helper-card-icon" data-state={helper.state}>
+      <span className="ticket-helper-card-icon" data-state={helper.state} data-frozen={helper.frozen}>
         {HELPER_ICONS[helper.kind]}
+        <FrostBadge kind={helper.frozen} />
       </span>
       <b className="ticket-helper-card-name">{helper.name}</b>
-      <span className="ticket-helper-card-word" data-state={helper.state}>
+      <span className="ticket-helper-card-word" data-state={helper.state} data-frozen={helper.frozen}>
         {helper.word}
       </span>
       <span className="ticket-helper-card-line">{helper.line}</span>

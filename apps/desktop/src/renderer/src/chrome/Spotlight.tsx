@@ -324,7 +324,9 @@ export function Spotlight<C>({ ref, agents, shells, zones, windows, ticketItems,
         <Plus />
       </span>
       <span className="spotlight-main">
-        <span className="spotlight-name">New agent named ‘{newName}’</span>
+        <span className="spotlight-name" title={`New agent named ‘${newName}’`}>
+          New agent named ‘{newName}’
+        </span>
       </span>
     </div>
   );
@@ -385,7 +387,7 @@ export function Spotlight<C>({ ref, agents, shells, zones, windows, ticketItems,
                     </div>
                   )}
                   {shown.rows.map((row) => (
-                    <Row key={row.key} id={`${listId}-${row.key}`} row={row} active={row.key === activeKeyNow} compact={compact} onHover={() => setActiveKey(row.key)} onPick={() => pick(row, false)} />
+                    <SpotlightResult key={row.key} id={`${listId}-${row.key}`} row={row} active={row.key === activeKeyNow} compact={compact} onHover={() => setActiveKey(row.key)} onPick={() => pick(row, false)} />
                   ))}
                 </Fragment>
               );
@@ -514,7 +516,8 @@ function columnsStacked(columns: HTMLElement | null): boolean {
 /** The arrow keys, as the moves `spotlightStep` makes. */
 const ARROW_STEPS: Partial<Record<string, SpotlightStep>> = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' };
 
-function Row({ id, row, active, compact = false, onHover, onPick }: { id: string; row: SpotlightRow; active: boolean; compact?: boolean; onHover(): void; onPick(): void }) {
+/** One row of the list: what it is, its name and sub line, and what ↵ does to it. */
+export function SpotlightResult({ id, row, active, compact = false, onHover, onPick }: { id: string; row: SpotlightRow; active: boolean; compact?: boolean; onHover(): void; onPick(): void }) {
   const { subject } = row;
   const shows = useNeedsYouShows();
   const prefabs = usePrefabs();
@@ -560,15 +563,15 @@ function Row({ id, row, active, compact = false, onHover, onPick }: { id: string
         )}
       </span>
       <span className="spotlight-main">
-        <span className="spotlight-name">
+        <span className="spotlight-name" title={row.name}>
           <Marked text={row.name} marks={row.marks} />
         </span>
         {row.snippet === undefined ? (
-          <span className="spotlight-sub" data-purpose={row.purpose || undefined}>
+          <span className="spotlight-sub" data-purpose={row.purpose || undefined} title={row.sub}>
             {row.sub}
           </span>
         ) : (
-          <span className="spotlight-sub" data-testid="spotlight-snippet">
+          <span className="spotlight-sub" data-testid="spotlight-snippet" title={row.snippet.text}>
             <span className="spotlight-field-label" data-field={row.snippet.label}>
               {row.snippet.label}
             </span>

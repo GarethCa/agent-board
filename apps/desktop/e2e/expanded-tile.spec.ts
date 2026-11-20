@@ -732,6 +732,56 @@ for (const loose of [false, true]) {
   });
 }
 
+test("a tile dragged in a zone while another is expanded stays where it is dropped, not pushed again with its row, after a restart too", async () => {
+  const dataDir = tempDataDir();
+  let { app, window } = await launch(dataDir, SHELL_ENV);
+  try {
+    await setClickOpens(window, 'Expand in place');
+    await addEmptyZone(window, 'Grid');
+    // A1 B1 / A2 B2, the room above each for its subagents: expanding A1 pushes the row below it down.
+    const STEP = { x: 256 + 16, y: 24 + 136 + 16 };
+    const [a1, , a2, b2] = await shellsAt(window, [{ x: 20, y: 44 }, { x: 20 + STEP.x, y: 44 }, { x: 20, y: 44 + STEP.y }, { x: 20 + STEP.x, y: 44 + STEP.y }]);
+    await window.evaluate(async () => {
+      const [zone] = await globalThis.window.agentBoard.zones.list();
+      await globalThis.window.agentBoard.zones.update(zone!.id, { x: zone!.x, y: zone!.y, width: 2000, height: 1400 });
+    });
+    await expect(window.getByTestId('shell-tile')).toHaveCount(4);
+    const a2Node = shellNode(window, a2!);
+    const home = await nodeRect(a2Node);
+
+    await shellNode(window, a1!).dblclick();
+    await expect(expandedTile(window)).toHaveCount(1);
+    await expect.poll(async () => (await nodeRect(a2Node)).y).toBeGreaterThan(home.y + 100);
+    await viewSettled(window);
+    await window.getByRole('button', { name: 'Fit View' }).click();
+    await viewSettled(window);
+    await expect.poll(() => a2Node.evaluate((node) => node.getAnimations().length)).toBe(0);
+    const pushed = await nodeRect(a2Node);
+    const b2Pushed = await nodeRect(shellNode(window, b2!));
+    // Dragged a little down, clear of everything.
+    const box = (await a2Node.boundingBox())!;
+    const scale = box.width / pushed.width;
+    await drag(window, { x: box.x + box.width / 2, y: box.y + box.height / 2 }, { x: box.x + box.width / 2, y: box.y + box.height / 2 + 40 * scale });
+
+    // Drawn where it was dropped, not a row's push lower; the rest of its row where it was.
+    await expect.poll(async () => Math.round((await nodeRect(a2Node)).y - pushed.y)).toBeLessThan(60);
+    await expect.poll(async () => Math.round((await nodeRect(a2Node)).y - pushed.y)).toBeGreaterThan(20);
+    expect(await nodeRect(shellNode(window, b2!))).toEqual(b2Pushed);
+    const dropped = await nodeRect(a2Node);
+
+    // Opened again with the tile still expanded, it is drawn where it was put, the row where it was.
+    await expect.poll(() => window.evaluate(async () => JSON.stringify(await globalThis.window.agentBoard.view.get('expandedTiles.putDown')))).toContain(a2!);
+    await app.close();
+    ({ app, window } = await launch(dataDir, SHELL_ENV));
+    await expect(expandedTile(window)).toHaveCount(1);
+    await expect.poll(() => nodeRect(shellNode(window, b2!))).toEqual(b2Pushed);
+    expect(await nodeRect(shellNode(window, a2!))).toEqual(dropped);
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+  }
+});
+
 test("expanding a tile in a zone with room to spare leaves the zone's size alone, its tiles moved clear into its empty space, and collapsing puts them back", async () => {
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, SHELL_ENV);

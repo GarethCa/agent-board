@@ -1,7 +1,7 @@
 // The parts an agent's tile is made of under either design: its head's buttons, its name's class, the rows that wait on
 // the user's click (unsent, undelivered, trust, untyped), and its last message for the hover card.
 import { useEffect, useState, type MouseEvent } from 'react';
-import { FolderCheck, MoreHorizontal, RotateCcw, SendHorizontal, SquareTerminal } from 'lucide-react';
+import { FolderCheck, MoreHorizontal, Power, SendHorizontal, SquareTerminal } from 'lucide-react';
 import { permissionPrompt, planPending, questionPrompt, type Agent, type UndeliveredMessage } from '@agent-board/daemon/protocol';
 import { stepsWaitLine, toolSummary } from '../../../shared/needs-you';
 import { Button, IconButton, Menu, type IconButtonProps, type MenuEntry } from '../ui';
@@ -265,7 +265,7 @@ function StopAndRestart({ onRestart }: { onRestart(): void }) {
     <Button
       size="xs"
       variant={armed ? 'danger' : undefined}
-      icon={<RotateCcw />}
+      icon={<Power />}
       className="nodrag"
       data-testid="hooks-silent-restart"
       data-armed={armed || undefined}

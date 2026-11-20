@@ -14,6 +14,7 @@ import { Readout, useToast } from '../ui';
 import { useLiveLists } from '../windows/use-live-lists';
 import { AppearanceSetting } from './AppearanceSetting';
 import { BoardBackgroundSetting } from './BoardBackgroundSetting';
+import { PopupFrostSetting } from './PopupFrostSetting';
 import { ArrangeSpacingSetting } from './ArrangeSpacingSetting';
 import { DockSetting } from './DockSetting';
 import { AgentNoteLookSetting, ChatRunsShowSetting, ClickOpensSetting, ConnectionsSetting, TethersSetting, TicketTilesOpenAsSetting, TileShowsSetting } from './BoardViewSettings';
@@ -118,6 +119,7 @@ function sectionBody(home: SettingsHome, onError: OnError): ReactNode {
         <>
           <AppearanceSetting onError={onError} />
           <BoardBackgroundSetting />
+          <PopupFrostSetting />
         </>
       );
     case 'general.keyboard':

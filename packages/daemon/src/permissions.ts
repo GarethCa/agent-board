@@ -274,6 +274,22 @@ function sessionGrantOf(suggestions: readonly object[]): string | null {
   return grants.length === 0 || grants.some((grant) => grant === undefined) ? null : grants.join(' and ');
 }
 
+/**
+ * Whether Claude's request `payload` is one only a person may allow: a check of Claude's own (a removal it can't rule
+ * out, an auto-mode block) wants a person's approval. Claude sends such a request with no `permission_suggestions` and
+ * ignores a hook's allow; it waits on its hooks before it draws its dialog, for at most its tool timeout (120 s), and a
+ * hold until then ends in its denial with no dialog shown (Claude Code 2.1.329, read from its bundle). Its other
+ * requests carry suggestions, an empty list at least. Question and plan calls ask in dialogs of their own.
+ */
+export function onlyAPersonAllows(payload: Record<string, unknown>): boolean {
+  return (
+    payload.hook_event_name === 'PermissionRequest' &&
+    !('permission_suggestions' in payload) &&
+    payload.tool_name !== QUESTION_TOOL &&
+    payload.tool_name !== PLAN_TOOL
+  );
+}
+
 /** The permission updates the harness suggested with a request (Claude's `permission_suggestions`), as objects. */
 function suggestionsOf(payload: Record<string, unknown>): object[] {
   const suggestions = payload.permission_suggestions;

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { Agent, AgentState, ClockData, ClockResult, ClockRun, ClockStatus } from '@agent-board/daemon/protocol';
-import { Button, Checkbox, Dialog, ErrorText, Field, Fieldset, Hint, Input, Segmented, Select, StatusPill, Switch, Textarea } from '../ui';
+import { Button, Checkbox, Dialog, ErrorText, Field, Fieldset, Hint, Input, Segmented, Select, StatusPill, Switch, Textarea, Truncate } from '../ui';
 import { useAction } from '../use-action';
 import { FreshAgentFields } from './FreshAgentFields';
 import { CLOCK_PRESETS, clockData, presetCron, type ClockPreset } from './clocks';
@@ -176,9 +176,7 @@ export function ClockDialog({ editing, status, agents, onUpdate, onDelete, onClo
               <StatusPill state={RUN_PILLS[each.outcome].state} label={RUN_PILLS[each.outcome].label} />
               <time dateTime={each.firedAt}>{whenLabel(new Date(each.firedAt), now)}</time>
               <span className="clock-history-took">{took(each)}</span>
-              <span className="clock-history-what">
-                {[each.agentName, each.result ?? each.reason].filter((part) => part !== null && part !== '').join(': ')}
-              </span>
+              <Truncate className="clock-history-what" text={[each.agentName, each.result ?? each.reason].filter((part) => part !== null && part !== '').join(': ')} />
             </div>
           ))}
         </section>

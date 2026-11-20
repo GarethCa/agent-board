@@ -3,7 +3,7 @@ import { agents, launch, SHELL_ENV } from './agent-helpers.ts';
 import { connectedDaemonPid, killHard, removeDataDir, tempDataDir, test } from './launch.ts';
 import { scratch } from './scratch.ts';
 
-test('the Captain button opens a Captain a restart stopped, with a Resume that brings it back', async () => {
+test('the Captain button opens a Captain a restart stopped, with a Wake that brings it back', async () => {
   const { env } = scratch('waiting');
   const dataDir = tempDataDir();
   const appEnv = { ...env, ...SHELL_ENV };

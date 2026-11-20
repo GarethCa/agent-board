@@ -6,7 +6,7 @@ import { useEscStep, type EscPress } from '../keys/esc-ladder';
 import { pressed } from '../keys/registry';
 import { boardKey, CONTROLS, escapeCollapsesFront } from './board-shortcuts';
 import { pickedTile } from './tile-attention';
-import { tileOpenAction, type ClickOpens } from './click-opens';
+import { OPEN_TILE_WINDOW_PATH, tileOpenAction, type ClickOpens } from './click-opens';
 import type { SelectionSummary } from './editing/use-editing';
 import { isItemNode } from './items/items';
 import { isSessionTile } from './tiles';
@@ -111,11 +111,12 @@ export function useBoardShortcuts({
     () => collapseFrontTile(),
   );
 
-  // F2 renames the one agent or shell tile selected; its field opens where it is drawn (compact or expanded).
+  // F2 renames the one agent or shell tile selected; its field opens where it is drawn (compact or expanded). Not from a
+  // pop-up or dialog over the board: the tile is behind it.
   useEffect(() => {
     if (!loaded) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!pressed('tile.rename', event) || event.metaKey || event.ctrlKey || isTyping(event)) return;
+      if (!pressed('tile.rename', event) || event.metaKey || event.ctrlKey || isTyping(event) || inOverlay()) return;
       const { nodes, renamable } = selection();
       if (!renamable) return;
       event.preventDefault();
@@ -143,7 +144,9 @@ export function useBoardShortcuts({
       }
       if (node === undefined || rest.length > 0 || !isSessionTile(node) || node.data.expanded === true) return;
       event.preventDefault();
-      if (tileOpenAction(clickOpens, { hasWindow: node.data.external === undefined }) === 'window') tileActions.maximise(node.data);
+      const opens = tileOpenAction(clickOpens, { hasWindow: node.data.external === undefined, agent: node.data.agent !== undefined });
+      if (opens === 'popup' && node.data.agent !== undefined) tileActions.popUp(node.data.agent, OPEN_TILE_WINDOW_PATH);
+      else if (opens === 'window') tileActions.maximise(node.data, OPEN_TILE_WINDOW_PATH);
       else tileActions.expand(node.id);
     };
     window.addEventListener('keydown', onKeyDown);

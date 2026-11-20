@@ -10,20 +10,25 @@ import { stepsWaitLine, toolSummary } from '../../../shared/needs-you';
 import { panesLabel } from '../session/panes';
 import { STATE_LABELS } from '../states';
 import { branchLine, effortText, modelLabel } from './AgentSetup';
+import { clockWakes, exitedLine, frozenKind, wakeAct } from './paused';
 
 /**
  * The calm tile's one button: what it does (`CalmTile` wires each kind to the board), its words, and whether it is filled.
  * Only one for an agent that needs the user is filled, so the board's filled buttons are the work waiting for them.
  */
 export interface CalmAction {
-  kind: 'open' | 'plan' | 'resume' | 'pull-request' | 'wake' | 'credits' | 'retry';
+  kind: 'open' | 'plan' | 'pull-request' | 'wake' | 'credits' | 'retry';
   label: string;
   prominent: boolean;
+  /** Shown only while the tile is hovered or holds the focus: a scheduled agent's Wake now, as its clock wakes it anyway. */
+  onHover?: true;
 }
 
 /** An agent's calm tile: its status, a grey line of what it is doing or asks (null for nothing to say), and its button. */
 export interface CalmFace {
   status: HumanStatus;
+  /** Its status's word, when not the status's own: Stopped for one a restart stopped, which is Paused; Exited for one that exited on an error. */
+  word?: string;
   line: string | null;
   action: CalmAction | null;
 }
@@ -33,8 +38,11 @@ export interface CalmFace {
  * line it keeps, the first there is; never its name or its task again.
  */
 export function calmFace(agent: Agent, shows: NeedsYouShows, implementer?: ImplementerFacts | null): CalmFace {
-  const { status, detail } = humanStatus(agent, shows, implementer);
-  return { status, line: lineOf(agent, detail), action: actionOf(agent, shows, status) };
+  const reading = humanStatus(agent, shows, implementer);
+  // Its clock wakes it by itself, paused between runs or ended: Scheduled, as one at its prompt for its clock is.
+  const { status, detail } = reading.status !== 'needs-you' && clockWakes(agent) ? { status: 'scheduled' as const, detail: null } : reading;
+  const word = agent.state === 'stopped-by-restart' && status === 'paused' ? 'Stopped' : frozenKind(agent, shows) === 'exited' ? 'Exited' : undefined;
+  return { status, ...(word === undefined ? {} : { word }), line: lineOf(agent, detail), action: actionOf(agent, shows, status) };
 }
 
 function lineOf(agent: Agent, detail: string | null): string | null {
@@ -51,6 +59,9 @@ function lineOf(agent: Agent, detail: string | null): string | null {
   if (agent.stepsWait != null) return stepsWaitLine(agent.stepsWait);
   if (agent.flag !== null) return agent.flag.reason;
   if (agent.notice !== null) return agent.notice;
+  // Exited on an error, how and when: "Error (code 1) · 17:48".
+  const exited = exitedLine(agent);
+  if (exited !== undefined) return exited;
   if (detail !== null) return detail;
   return agent.status === null ? null : statusLine(agent.status);
 }
@@ -62,14 +73,16 @@ function actionOf(agent: Agent, shows: NeedsYouShows, status: HumanStatus): Calm
     // Put on the board, it is answered on its card: the tile has no button for it.
     if (kind === 'asks') return agent.ask?.card != null ? null : filled('open', 'Answer');
     if (kind === 'plan') return filled('plan', 'Read the plan');
-    if (agent.state === 'stopped-by-restart') return filled('resume', 'Resume');
     if (kind === null && agent.endedAt === null && agent.lastMessage !== null && asksInWords(agent.lastMessage)) return filled('open', 'Answer');
     if (kind === null && agent.pullRequests.some((pr) => pr.state === 'open')) return filled('pull-request', 'Review changes');
     return filled('open', 'Open');
   }
   if (agent.startup?.failed === true) return bordered('retry', 'Try again');
-  if (agent.state === 'hibernated') return bordered('wake', 'Wake');
+  const wake = wakeAct(agent);
+  // Asleep, done or exited: Wake starts it again here, carrying on its conversation.
+  if (wake === 'resume' || wake === 'restart') return bordered('wake', 'Wake');
   if (continuesOnCredits(agent)) return bordered('credits', 'Continue on credits');
+  if (wake === 'run-now') return { kind: 'wake', label: 'Wake now', prominent: false, onHover: true };
   return null;
 }
 
@@ -102,7 +115,7 @@ export function technicalLine(agent: Agent): string {
 
 /**
  * A shell's calm tile: a status only when there is one to give (a running shell has none, being a prompt rather than work),
- * a grey line for what a restart or its panes' ending left, and whether it offers Resume.
+ * a grey line for what a restart or its panes' ending left, and whether it offers Wake.
  */
 export interface CalmShellFace {
   status: HumanStatus | null;

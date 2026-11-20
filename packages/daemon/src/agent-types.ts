@@ -476,6 +476,8 @@ export interface AgentRow extends PositionColumns {
   stopped_by_restart: number;
   /** 1 once its daemon went away under it at work, until it is started again (migration 0069). */
   turn_cut_off: number;
+  /** 1 when that cut-off turn was on a permission prompt, asking rather than working (migration 0106). */
+  turn_cut_off_asking: number;
   /** 1 once its current conversation has had a turn of its own (migration 0078); a fresh restart resets it. */
   had_turn: number;
   review_of: string | null;

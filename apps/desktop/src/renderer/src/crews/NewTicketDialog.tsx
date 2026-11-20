@@ -2,6 +2,7 @@ import { useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { Hammer, MessagesSquare, PenLine, Search, Ticket } from 'lucide-react';
 import { DEFAULT_TICKET_CHAT_KIND, type LibraryPrefab, type TicketChatKind, type Zone } from '@agent-board/daemon/protocol';
 import { Button, Choice, Choices, Dialog, ErrorText, Field, Fieldset, Hint, Input, Kbd, Select, Textarea } from '../ui';
+import { ZoneName } from '../board/ZoneName';
 import { keyText } from '../keys/registry';
 import { useAction } from '../use-action';
 import type { HelperKind } from '../board/ticket-tile';
@@ -97,7 +98,7 @@ export function NewTicketDialog({ prefabs, prefab: asked, zones, zone: inZone, s
           <span>
             New ticket
             {inZone !== undefined && ' in '}
-            {inZone !== undefined && <span className="new-agent-zone">{inZone.name}</span>}
+            {inZone !== undefined && <ZoneName name={inZone.name} />}
           </span>
         </span>
       }
