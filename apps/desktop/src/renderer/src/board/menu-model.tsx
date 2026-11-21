@@ -42,6 +42,8 @@ import {
   MessageCircleQuestion,
   Network,
   OctagonX,
+  Columns2,
+  RotateCcw,
   Palette,
   Pause,
   MessageSquareText,
@@ -117,7 +119,7 @@ import { keyText } from '../keys/registry';
 import { openAgentTile, type ClickOpens } from './click-opens';
 import { checksLabel } from './tile-footer';
 import { folderLabel } from './folders';
-import { asleep, pauseControl, wakeAct, wakeLabel } from './paused';
+import { asleep, pauseControl, restartsInPlace, wakeAct, wakeLabel } from './paused';
 import type { Reorder } from './editing/arrange';
 import { sessionControls, type ControlId } from '../session/controls';
 import type { TileActions } from './tile';
@@ -267,6 +269,75 @@ export function agentMenu(input: AgentMenuInput): ModelEntry[] {
     'separator',
     { id: 'delete', label: 'Delete agent', icon: <Trash2 />, danger: true, onSelect: () => actions.deleteAgent(agent.sessionId) },
   ];
+}
+
+type PopUpAgentMenuActions = AgentMenuActions & Pick<TileActions, 'interruptAgent' | 'stopAgent' | 'restartAgent'>;
+
+/** What an agent's menu in its pop-up is drawn from: its agent menu's input, and how the pop-up splits beside it. */
+export interface PopUpAgentMenuInput extends AgentMenuInput {
+  actions: PopUpAgentMenuActions;
+  /**
+   * The agents it can be split beside, each opening the pop-up's split with that agent on the right; none where it
+   * can't be split.
+   */
+  openBeside?: readonly BesideChoice[] | undefined;
+  /** Opens this agent beside the one shown, on another agent's tab; undefined where it can't. */
+  openBesideThis?: (() => void) | undefined;
+  /** Ends the split, on the tab of one side of it; undefined outside a split. */
+  closeSide?: (() => void) | undefined;
+}
+
+/** An agent Open beside… offers, by name. */
+export interface BesideChoice {
+  id: string;
+  label: string;
+  onSelect(): void;
+}
+
+/** The rows of an agent's menu kept apart in its pop-up, as the run of it and its session. */
+const POP_UP_RUN = ['pause', 'wake', 'continue-on-credits', 'run-gate', 'open-review', 'pop-out', 'fold'];
+
+/**
+ * An agent's menu in its pop-up, on its tab's ⋯ (or a right-click on the tab) and on a lone agent's header ⋯: its name,
+ * then what it runs (Pause, Run gate, Open beside…, Open review, Pop out, Fold to a chip), its session (Interrupt, Rename,
+ * Restart agent, Stop session), the rest of its menu, and Delete agent last. Open stays out: the pop-up is it.
+ */
+export function popUpAgentMenu(input: PopUpAgentMenuInput): ModelEntry[] {
+  const { agent, actions, openBeside = [], openBesideThis, closeSide, rename } = input;
+  const rows = agentMenu(input).filter((entry): entry is ModelEntry & { id: string } => entry !== 'separator' && 'id' in entry);
+  const byId = (id: string) => rows.filter((entry) => entry.id === id);
+  const controls = sessionControls({ agent, live: true });
+  const interrupt = controls.find((each) => each.id === 'interrupt');
+  const stop = controls.find((each) => each.id === 'stop');
+  const run: ModelEntry[] = [
+    ...byId('wake'),
+    ...byId('pause'),
+    ...byId('continue-on-credits'),
+    ...byId('run-gate'),
+    ...(closeSide !== undefined
+      ? [{ id: 'close-side', label: 'Close this side', icon: <Columns2 />, hint: 'ends the split', onSelect: closeSide }]
+      : openBesideThis !== undefined
+        ? [{ id: 'open-beside', label: 'Open beside', icon: <Columns2 />, hint: 'splits the pop-up, this agent on the right', onSelect: openBesideThis }]
+        : openBeside.length > 0
+        ? [{ id: 'open-beside', label: 'Open beside…', icon: <Columns2 />, detail: 'split', entries: openBeside.map((each) => ({ id: `beside-${each.id}`, label: each.label, onSelect: each.onSelect })) }]
+        : []),
+    ...byId('open-review'),
+    ...byId('pop-out'),
+    ...byId('fold'),
+  ];
+  const session: ModelEntry[] = [
+    ...(agent.endedAt === null && interrupt !== undefined
+      ? [{ id: 'interrupt', label: 'Interrupt', icon: <Zap />, disabled: !interrupt.enabled, hint: interrupt.hint, onSelect: () => actions.interruptAgent(agent.sessionId) }]
+      : []),
+    { id: 'rename', label: 'Rename', icon: <Pencil />, shortcut: keyText('tile.rename'), onSelect: rename },
+    ...(agent.endedAt === null && restartsInPlace(agent)
+      ? [{ id: 'restart', label: 'Restart agent', icon: <RotateCcw />, hint: 'Stops it and starts it again, carrying on its conversation', onSelect: () => actions.restartAgent(agent.sessionId) }]
+      : []),
+    ...(stop?.enabled === true ? [{ id: 'stop', label: 'Stop session', icon: <OctagonX />, hint: stop.hint, onSelect: () => actions.stopAgent(agent.sessionId) }] : []),
+  ];
+  const placed = new Set([...POP_UP_RUN, 'open', 'open-window', 'expand', 'rename', 'delete']);
+  const rest = rows.filter((entry) => !placed.has(entry.id));
+  return [{ heading: agent.name }, ...run, 'separator', ...session, ...(rest.length > 0 ? ['separator' as const, ...rest] : []), 'separator', ...byId('delete')];
 }
 
 /**

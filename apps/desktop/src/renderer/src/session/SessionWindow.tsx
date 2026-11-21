@@ -33,7 +33,8 @@ import { dropKey } from './shell-moves';
 import { useHomeDir } from './SessionDetails';
 import { tildify } from './live-folder';
 import { tokenNumber } from '../theme';
-import { clampFrame, defaultFrame, EDGES, fromFractions, resizeFrame, toFractions, type Bounds, type Edge, type Frame, type SavedFrame } from '../windows/window-frame';
+import { usePopupFill } from '../board/popup-fill';
+import { capFrame, widestFrame, clampFrame, defaultFrame, EDGES, fromFractions, maximisedAcross, resizeFrame, toFractions, type Bounds, type Edge, type Frame, type SavedFrame } from '../windows/window-frame';
 import { FrostMark, FrozenOr } from '../board/FrostMark';
 import { frostedClasses } from '../board/paused';
 
@@ -518,11 +519,16 @@ function useWindowFrame(root: React.RefObject<HTMLDivElement | null>, frame: Ses
       fullScreen.disconnect();
     };
   }, [root, onChange]);
-  const kept = saved === null || bounds === undefined ? undefined : clampFrame(fromFractions(saved.frame, bounds), bounds);
-  const shown = live ?? kept;
+  // On a wide screen, unless set to fill it, the window stops at the pop-up's cap, as the pop-up does.
+  const fill = usePopupFill();
+  const kept = saved === null || bounds === undefined ? undefined : capFrame(clampFrame(fromFractions(saved.frame, bounds), bounds), bounds, fill);
+  const shown = live === undefined || bounds === undefined ? kept : capFrame(live, bounds, fill);
+  const across = bounds === undefined ? undefined : maximisedAcross(bounds.width, fill);
   const style: CSSProperties | undefined =
     maximised && live === undefined
-      ? undefined
+      ? across === undefined
+        ? undefined
+        : { left: across.left, right: 'auto', width: across.width }
       : shown === undefined
         ? undefined
         : { inset: 'auto', left: shown.x, top: shown.y, width: shown.width, height: shown.height };
@@ -556,7 +562,7 @@ function useWindowFrame(root: React.RefObject<HTMLDivElement | null>, frame: Ses
       const origin = { x: event.clientX, y: event.clientY };
       let latest = start;
       const move = (next: PointerEvent) => {
-        latest = resizeFrame(start, edge, next.clientX - origin.x, next.clientY - origin.y, bounds);
+        latest = resizeFrame(start, edge, next.clientX - origin.x, next.clientY - origin.y, bounds, widestFrame(bounds, fill));
         setLive(latest);
       };
       const stop = () => {
@@ -564,7 +570,7 @@ function useWindowFrame(root: React.RefObject<HTMLDivElement | null>, frame: Ses
         handle.removeEventListener('pointerup', stop);
         handle.removeEventListener('pointercancel', stop);
         setLive(undefined);
-        frame.onChange({ frame: toFractions(latest, bounds), maximised: false });
+        frame.onChange({ frame: toFractions(capFrame(latest, bounds, fill), bounds), maximised: false });
       };
       handle.addEventListener('pointermove', move);
       handle.addEventListener('pointerup', stop);

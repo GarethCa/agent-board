@@ -110,6 +110,60 @@ describe('the view picked for a session', () => {
     expect(JSON.parse(storage.get(KEY)!)).toEqual({ kept: 'chat' });
   });
 
+  it("keeps one pick for a ticket's whole pop-up, its chat's own pick until then, and forgets it with its chat", async () => {
+    const { chosenView, forgetViewsExcept, popUpViewKey, setChosenView } = await import('./session-view');
+    const ticket = popUpViewKey({ sessionId: 'chat' }, true);
+    expect(popUpViewKey({ sessionId: 'lone' }, false)).toBe('lone');
+    // Before a pick in the pop-up, it shows what its chat was last on, so nothing changes as it opens.
+    setChosenView('chat', 'chat');
+    expect(chosenView(ticket)).toBe('chat');
+    setChosenView(ticket, 'terminal');
+    expect(chosenView(ticket)).toBe('terminal');
+    // Its helpers read the same pick, whatever each was on elsewhere: one switch flips every agent in it.
+    setChosenView('helper', 'chat');
+    expect(chosenView(popUpViewKey({ sessionId: 'chat' }, true))).toBe('terminal');
+    // Its chat's own pick, in its pop-out, stays its own.
+    expect(chosenView('chat')).toBe('chat');
+    forgetViewsExcept(['chat']);
+    expect(chosenView(ticket)).toBe('terminal');
+    forgetViewsExcept([]);
+    expect(JSON.parse(storage.get(KEY)!)).toEqual({});
+  });
+
+  it("moves its chat's pick into a ticket's pop-up once, as it first opens: later picks of the chat's own don't follow", async () => {
+    const { adoptChatView, chosenView, popUpViewKey, setChosenView } = await import('./session-view');
+    const ticket = popUpViewKey({ sessionId: 'chat' }, true);
+    setChosenView('chat', 'chat');
+    adoptChatView(ticket);
+    expect(JSON.parse(storage.get(KEY)!)).toEqual({ chat: 'chat', [ticket]: 'chat' });
+    setChosenView('chat', 'terminal');
+    expect(chosenView(ticket)).toBe('chat');
+    // Once moved, it is never moved again; a lone agent's key is its own, with nothing to move.
+    adoptChatView(ticket);
+    expect(chosenView(ticket)).toBe('chat');
+    adoptChatView('lone');
+    expect(chosenView('lone')).toBe('terminal');
+    // A chat with no pick of its own moves nothing: the pop-up opens as any does.
+    adoptChatView(popUpViewKey({ sessionId: 'fresh' }, true));
+    expect(Object.keys(JSON.parse(storage.get(KEY)!))).toEqual(['chat', ticket]);
+  });
+
+  it("flips every agent pane in a ticket's pop-up with its one switch, and no shell", async () => {
+    const { bodyViewKey, chosenView, paneShows, popUpViewKey, setChosenView } = await import('./session-view');
+    const ticket = popUpViewKey({ sessionId: 'chat' }, true);
+    setChosenView('helper', 'terminal');
+    setChosenView(ticket, 'chat');
+    // The chat's body and a helper's both read the pop-up's key, not their own sessions'.
+    for (const shown of ['chat', 'helper']) expect(paneShows(chosenView(bodyViewKey(ticket, shown)), { own: true, agent: true })).toBe('chat');
+    // A shell tab of either keeps its terminal.
+    expect(paneShows(chosenView(bodyViewKey(ticket, 'helper')), { own: false, agent: true })).toBe('terminal');
+    setChosenView(ticket, 'terminal');
+    for (const shown of ['chat', 'helper']) expect(paneShows(chosenView(bodyViewKey(ticket, shown)), { own: true, agent: true })).toBe('terminal');
+    // With no pop-up's key, a body reads its session's own, as a window does; a shell tile's body has no agent pane.
+    expect(chosenView(bodyViewKey(undefined, 'helper'))).toBe('terminal');
+    expect(paneShows('chat', { own: true, agent: false })).toBe('terminal');
+  });
+
   it('keeps the choice for the run when storage cannot be written', async () => {
     vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => { throw new Error('full'); } });
     const { chosenView, setChosenView } = await import('./session-view');

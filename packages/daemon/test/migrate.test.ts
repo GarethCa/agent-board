@@ -225,6 +225,40 @@ describe('the shipped migrations', () => {
     expect(() => db.exec("UPDATE zones SET fill_opacity = 40")).not.toThrow();
   });
 
+  it("mark for the start the sessions the daemon before them stopped as it shut down, and none an earlier restart left", () => {
+    const db = new DatabaseSync(':memory:');
+    const added = MIGRATIONS.findIndex((m) => m.name === 'resume_at_start');
+    expect(added).toBeGreaterThan(0);
+    migrate(db, MIGRATIONS.slice(0, added));
+    const insert = db.prepare(
+      'INSERT INTO sessions (id, hook_token_sha256, created_at, ended_at, stopped_by_restart) VALUES (?1, ?1, ?2, ?3, ?4)',
+    );
+    // An earlier restart's, left stopped; one done since; then the last shutdown's two, ended seconds apart.
+    insert.run('old', '2026-11-18T09:00:00.000Z', '2026-11-18T10:00:00.000Z', 1);
+    insert.run('done', '2026-11-19T09:00:00.000Z', '2026-11-20T17:59:00.000Z', 0);
+    insert.run('a', '2026-11-19T09:00:00.000Z', '2026-11-20T18:00:00.000Z', 1);
+    insert.run('b', '2026-11-19T09:00:00.000Z', '2026-11-20T18:00:04.512Z', 1);
+
+    migrate(db);
+
+    const marked = () => db.prepare('SELECT id FROM sessions WHERE resume_at_start = 1 ORDER BY id').all().map((row) => row.id);
+    expect(marked()).toEqual(['a', 'b']);
+  });
+
+  it('mark nothing when a session started after the latest restart, as that batch is an earlier one', () => {
+    const db = new DatabaseSync(':memory:');
+    migrate(db, MIGRATIONS.slice(0, MIGRATIONS.findIndex((m) => m.name === 'resume_at_start')));
+    const insert = db.prepare(
+      'INSERT INTO sessions (id, hook_token_sha256, created_at, ended_at, stopped_by_restart) VALUES (?1, ?1, ?2, ?3, ?4)',
+    );
+    insert.run('old', '2026-11-18T09:00:00.000Z', '2026-11-18T10:00:00.000Z', 1);
+    insert.run('since', '2026-11-19T09:00:00.000Z', '2026-11-19T11:00:00.000Z', 0);
+
+    migrate(db);
+
+    expect(db.prepare('SELECT COUNT(*) AS n FROM sessions WHERE resume_at_start = 1').get()).toEqual({ n: 0 });
+  });
+
   it('give existing zones normal spacing, the gaps they were laid out at, and refuse any other than the three', () => {
     const db = new DatabaseSync(':memory:');
     const added = MIGRATIONS.findIndex((m) => m.name === 'zone_spacing');

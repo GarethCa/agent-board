@@ -34,6 +34,8 @@ interface TestOverrides {
   startLimitMs?: number;
   /** `$AGENT_BOARD_SUBMIT_CONFIRM_MS`: how long a submitted prompt waits to be confirmed. */
   submitConfirmMs?: number;
+  /** `$AGENT_BOARD_RESUME_AFTER_RESTART=0`: the start leaves what a restart stopped stopped, for the restart banner's tests. */
+  noResumeAfterRestart?: boolean;
 }
 
 /** The overrides `env` sets, or none when `honour` is false. An empty value, or a number that isn't one, is no override. */
@@ -54,5 +56,6 @@ export function readTestOverrides(honour: boolean, env: NodeJS.ProcessEnv = proc
     flowRecheckMs: ms('AGENT_BOARD_FLOW_RECHECK_MS'),
     startLimitMs: ms('AGENT_BOARD_START_LIMIT_MS'),
     submitConfirmMs: ms('AGENT_BOARD_SUBMIT_CONFIRM_MS'),
+    noResumeAfterRestart: env.AGENT_BOARD_RESUME_AFTER_RESTART === '0' || undefined,
   };
 }

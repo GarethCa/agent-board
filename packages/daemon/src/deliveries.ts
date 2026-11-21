@@ -1502,14 +1502,14 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
      * even asking) and holds no message never sent, so never into a turn, a question or dialog, or the user's
      * half-typed line. Says why not, busy, if it isn't; a caller tries again later.
      */
-    async tell(to: string, text: string): Promise<RunStart> {
+    async tell(to: string, text: string, what = 'A crew flag'): Promise<RunStart> {
       const row = getRow(to);
       if (row === undefined) return { started: false, reason: 'the agent has been deleted' };
       if (row.ended_at !== null) return { started: false, reason: 'it has ended' };
       if (beingPaused(row)) return { started: false, reason: 'it was being paused', busy: true };
       const reason = unsent.has(to) ? UNSENT_REASON : whyNotReadyNow(to, row, true);
       if (reason !== undefined) return { started: false, reason, busy: true };
-      const typed = await typeInput(to, inputFor(to, answerInput(text)), 'A crew flag', () => stillReady(to, true), true);
+      const typed = await typeInput(to, inputFor(to, answerInput(text)), what, () => stillReady(to, true), true);
       if (!typed.typed) return { started: false, reason: typed.reason, busy: true };
       return typed.sent ? { started: true } : { started: true, unsent: true };
     },

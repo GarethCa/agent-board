@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent, Shell } from '@agent-board/daemon/protocol';
-import { dismissedStill, restartBannerShown, restartMessage, stoppedByRestart, wakeAll } from './restart';
+import {
+  carryOn,
+  cutOffBack,
+  dismissedStill,
+  restartBannerShown,
+  restartIds,
+  restartMessage,
+  restartPassRunning,
+  stoppedByRestart,
+  undismissed,
+  wakeAll,
+} from './restart';
 
 const agent = (sessionId: string, state: Agent['state'], cutOffMidTurn = false, cutOffAsking = false) => ({ sessionId, state, cutOffMidTurn, cutOffAsking }) as Agent;
 const ids = (woken: { agents: Agent[]; shells: Shell[] } | null) => woken === null ? [] : [...woken.agents.map((each) => each.sessionId), ...woken.shells.map((each) => each.id)];
@@ -73,5 +84,60 @@ describe('sessions stopped by a restart', () => {
     expect(dismissed).toEqual(['b']);
     // A later restart stops A again.
     expect(restartBannerShown(['a', 'b'], dismissed)).toBe(true);
+  });
+});
+
+describe('agents the daemon brought back after a restart', () => {
+  /** An agent the daemon's start brought back, live at its prompt. */
+  const back = (sessionId: string, cutOffMidTurn = false, cutOffAsking = false) =>
+    ({ sessionId, state: 'idle', endedAt: null, backAfterRestart: true, cutOffMidTurn, cutOffAsking }) as Agent;
+
+  it('waits while the daemon is still bringing any of them back', () => {
+    const coming = { sessionId: 'c', state: 'stopped-by-restart', endedAt: '2026-11-20', comingBackAfterRestart: true } as Agent;
+    expect(restartPassRunning([back('a'), coming])).toBe(true);
+    expect(restartPassRunning([back('a'), { ...coming, comingBackAfterRestart: false }])).toBe(false);
+  });
+
+  it('says how many came back, how many of those were cut off mid-turn, and how many stayed stopped', () => {
+    const agents = [back('a'), back('b', true), back('c', true), agent('d', 'stopped-by-restart')];
+    expect(restartMessage(stoppedByRestart(agents, []), true, agents)).toBe('3 came back after the restart · 2 were cut off mid-turn · 1 stayed stopped');
+    const one = [back('a', true)];
+    expect(restartMessage(stoppedByRestart(one, []), true, one)).toBe('1 came back after the restart · 1 was cut off mid-turn');
+  });
+
+  it('offers Carry on to the ones cut off mid-turn only: not one idle, nor one on a permission prompt, nor one not brought back', () => {
+    const agents = [back('idle'), back('cut', true), back('asking', true, true), agent('stopped', 'stopped-by-restart', true), { ...back('ended', true), endedAt: '2026-11-20' }];
+
+    expect(cutOffBack(agents).map((each) => each.sessionId)).toEqual(['cut']);
+  });
+
+  it('shows no banner once all came back with none cut off, and one while some wait to carry on', () => {
+    const all = [back('a'), back('b')];
+    expect(restartBannerShown(restartIds(stoppedByRestart(all, []), cutOffBack(all)), [])).toBe(false);
+    const some = [back('a'), back('b', true)];
+    expect(restartIds(stoppedByRestart(some, []), cutOffBack(some))).toEqual(['b']);
+    // Once told to carry on, it is no longer cut off: its dismissal is forgotten with it.
+    expect(dismissedStill(['b'], restartIds(stoppedByRestart(all, []), cutOffBack(all)))).toEqual([]);
+  });
+
+  it('carries on with Carry on only the cut-off ones it is given, waking none still stopped, and settles with those told', async () => {
+    const told: string[] = [];
+    const tell = async (sessionId: string) => {
+      told.push(sessionId);
+      // The user is typing at this one: it keeps its Carry on.
+      return sessionId !== 'typing';
+    };
+    const agents = [back('cut', true), back('typing', true), agent('old', 'stopped-by-restart', true)];
+
+    await expect(carryOn(cutOffBack(agents), tell)).resolves.toEqual(['cut']);
+    expect(told).toEqual(['cut', 'typing']);
+  });
+
+  it('counts as stayed stopped, and wakes with Wake all, only what the user has not dismissed, so an earlier restart is left be', () => {
+    const agents = [back('a'), agent('old', 'stopped-by-restart', true), agent('new', 'stopped-by-restart', true)];
+    const shown = undismissed(stoppedByRestart(agents, [shell('s', ['p1']), shell('t', ['p2'])]), ['old', 'p2']);
+
+    expect(restartMessage(shown, true, agents)).toBe('1 came back after the restart · 2 stayed stopped');
+    expect(ids(wakeAll(shown))).toEqual(['new', 's']);
   });
 });

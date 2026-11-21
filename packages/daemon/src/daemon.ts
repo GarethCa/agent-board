@@ -57,6 +57,7 @@ import { createHarnessPaths } from './harness-path.ts';
 import { adoptLoginShellPath } from './login-path.ts';
 import { migrate, schemaVersion as readSchemaVersion } from './migrate.ts';
 import { readTestOverrides } from './test-overrides.ts';
+import { NOTHING_AFTER_RESTART, resumeAfterRestart } from './resume-after-restart.ts';
 import { daemonPaths, listenOnSocket, prepareDataDir, prepareSocketDir } from './paths.ts';
 import {
   AGENT_ERROR,
@@ -72,6 +73,7 @@ import {
   type BuildInfo,
   type ClosedKept,
   type DaemonEvent,
+  type AfterRestart,
   type DaemonHealth,
   type DaemonCall,
   type DaemonMethods,
@@ -138,6 +140,11 @@ export interface DaemonOptions {
    * run from source. A packaged app's daemon turns them off unless `$AGENT_BOARD_TEST=1`.
    */
   testOverrides?: boolean;
+  /**
+   * Whether its start brings back what the restart before it stopped (`resume-after-restart.ts`): by default; off in
+   * unit tests, which start their own daemons, and for `$AGENT_BOARD_RESUME_AFTER_RESTART=0`, a test override.
+   */
+  resumeAfterRestart?: boolean;
   /** How long the daemon waits with no clients and no live sessions before it exits. */
   idleTimeoutMs?: number;
   /** How often it checks whether it is idle. */
@@ -947,7 +954,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     listeners.push((event) => clocks.onEvent(event));
     // A reasoning effort set mid-turn is typed at the agent's prompt once that turn ends.
     listeners.push((event) => event.type === 'agent.updated' && event.agent.effortPending === 'after-turn' && agents.applyEffort(event.agent.sessionId));
-    clocks.resumeRuns();
+    const leftToClocks = clocks.resumeRuns();
     // A crew started from a prefab: the board starts its reviewers at each hand-off and hands their reviews back.
     const crews = createCrewLoop(db, {
       agent: (sessionId) => agents.get(sessionId),
@@ -1089,7 +1096,12 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       documents,
       log,
     });
+    /** What the start brought back of what the restart before it stopped, once it has (`daemon.afterRestart`). */
+    let afterRestart: Promise<AfterRestart> = Promise.resolve(NOTHING_AFTER_RESTART);
+    /** Set as the daemon shuts down: the start's pass resumes nothing more. */
+    let restartPassStopping = false;
     const handlers: RpcHandlers<DaemonMethods, SessionSubscriber & BoardConnection> = {
+      'daemon.afterRestart': () => afterRestart,
       'daemon.health': (): DaemonHealth => ({
         version: DAEMON_VERSION,
         build: options.build ?? null,
@@ -1427,6 +1439,23 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       });
     });
     await listenOnSocket(server, paths.socket);
+    // In the background, once clients can connect: an app waiting for its daemon doesn't wait for every agent too.
+    if (options.resumeAfterRestart ?? !overrides.noResumeAfterRestart) {
+      afterRestart = resumeAfterRestart({
+        db,
+        agents,
+        shells: { list: () => shells.list(), resumePane: async (shellId, sessionId) => handlers['shell.resumePane']({ shellId, sessionId }, DAEMON_ITSELF) },
+        leftToClocks,
+        stopping: () => restartPassStopping,
+        log,
+      }).catch((error: unknown) => {
+        log(`could not bring back what the restart stopped: ${(error as Error).message}`);
+        return NOTHING_AFTER_RESTART;
+      });
+    } else {
+      // Marks only ever name what the latest restart stopped: a later start never takes them for its own.
+      db.prepare('UPDATE sessions SET resume_at_start = 0 WHERE resume_at_start = 1').run();
+    }
 
     let resolveClosed!: (exit: DaemonExit) => void;
     const closed = new Promise<DaemonExit>((resolve) => (resolveClosed = resolve));
@@ -1435,6 +1464,10 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       (shuttingDown ??= (async () => {
         log(`shutting down (${reason})`);
         clearInterval(idleTimer);
+        restartPassStopping = true;
+        // The start's pass resumes nothing more, and the one it is resuming is up before the sessions are killed, so
+        // none is left running past them. Bounded: a resume that hangs doesn't hold the daemon up.
+        await Promise.race([afterRestart, new Promise((resolve) => setTimeout(resolve, 5000).unref())]);
         // External hooks go back to doing nothing, without even starting the app.
         removeExternalHookFile(externalHookFile, externalToken);
         externalSessions.stop();

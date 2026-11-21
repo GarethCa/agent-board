@@ -35,13 +35,9 @@ describe('stripShown', () => {
 describe('ownPaneShown', () => {
   const showing = (key: string) => ({ showing: (asked: string) => asked === key });
 
-  it("is whether the agent's own pane shows: it does with no panes, or when it is the one on", () => {
-    expect(ownPaneShown(false, undefined)).toBe(true);
-    expect(ownPaneShown(false, showing(OWN_SURFACE))).toBe(true);
-    expect(ownPaneShown(false, showing('shell-1'))).toBe(false);
-  });
-
-  it("always shows under a row of tabs of another's, whatever shell tab has the keyboard in its own window", () => {
-    expect(ownPaneShown(true, showing('shell-1'))).toBe(true);
+  it("is whether the agent's own pane shows: it does with no panes, or when it is the one on, under a pop-up's row of tabs too", () => {
+    expect(ownPaneShown(undefined)).toBe(true);
+    expect(ownPaneShown(showing(OWN_SURFACE))).toBe(true);
+    expect(ownPaneShown(showing('shell-1'))).toBe(false);
   });
 });

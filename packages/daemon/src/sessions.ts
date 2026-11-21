@@ -258,12 +258,13 @@ export interface SessionHost {
 }
 
 /**
- * Marks sessions the database still has live as ended, and stopped by restart. Run at daemon start: they belong to a
- * daemon that died (or a machine that went down), and their PTYs went with it. Returns how many there were.
+ * Marks sessions the database still has live as ended, and stopped by restart, for this start to bring back. Run at
+ * daemon start: they belong to a daemon that died (or a machine that went down), and their PTYs went with it. Returns
+ * how many there were.
  */
 export function reconcileLostSessions(db: DatabaseSync): number {
   const lost = db
-    .prepare('UPDATE sessions SET ended_at = ?, stopped_by_restart = 1 WHERE ended_at IS NULL')
+    .prepare('UPDATE sessions SET ended_at = ?, stopped_by_restart = 1, resume_at_start = 1 WHERE ended_at IS NULL')
     .run(new Date().toISOString());
   return Number(lost.changes);
 }
@@ -292,9 +293,11 @@ export function createSessionHost(options: SessionHostOptions): SessionHost {
   const upsert = db.prepare(
     `INSERT INTO sessions (id, harness, hook_token_sha256, cwd, created_at) VALUES (?, ?, ?, ?, ?)
      ON CONFLICT (id) DO UPDATE SET harness = excluded.harness, hook_token_sha256 = excluded.hook_token_sha256,
-       cwd = excluded.cwd, created_at = excluded.created_at, ended_at = NULL, exit_code = NULL, stopped_by_restart = 0`,
+       cwd = excluded.cwd, created_at = excluded.created_at, ended_at = NULL, exit_code = NULL, stopped_by_restart = 0,
+       resume_at_start = 0`,
   );
-  const markEnded = db.prepare('UPDATE sessions SET ended_at = ?, exit_code = ?, stopped_by_restart = ? WHERE id = ?');
+  // A session its daemon's shutdown stopped is the next start's to bring back (`resume_at_start`).
+  const markEnded = db.prepare('UPDATE sessions SET ended_at = ?1, exit_code = ?2, stopped_by_restart = ?3, resume_at_start = ?3 WHERE id = ?4');
   const selectRow = db.prepare(
     'SELECT id, harness, cwd, created_at, ended_at, exit_code, stopped_by_restart FROM sessions WHERE id = ?',
   );

@@ -8,9 +8,9 @@ test.use({ viewport: null });
 /**
  * An agent's sidebar from the gallery (session/ShelvesGallery.tsx): a busy agent and a quiet one with the shelves open on
  * the page, the page styled by the agent, the page at 200px, a page of links and a note with a failing pull request, and
- * Made, Crew and Setup, and a page that is the one shelf. In both designs, light and dark.
+ * Made, Crew and Setup, a page that is the one shelf, and a pop-up's views in the sidebar and on the rail with Activity as a view. In both designs, light and dark.
  */
-const ROWS = ['open', 'rail', 'shelves'] as const;
+const ROWS = ['open', 'rail', 'views', 'shelves'] as const;
 
 for (const design of ['classic', 'simplified'] as const) {
   for (const { theme, suffix } of THEMES) {
@@ -28,7 +28,7 @@ for (const design of ['classic', 'simplified'] as const) {
         });
         const gallery = window.getByTestId('shelves-gallery');
         await expect(gallery).toBeVisible();
-        await expect(gallery.getByTestId('agent-shelves')).toHaveCount(17);
+        await expect(gallery.getByTestId('agent-shelves')).toHaveCount(18);
         await expect(gallery.getByTestId('agent-shelves-peek')).toHaveCount(5);
         if (design === 'classic') await pinFonts(window);
         else await window.evaluate(() => document.fonts.ready);

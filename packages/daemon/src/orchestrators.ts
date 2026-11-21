@@ -1311,8 +1311,10 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
             const agent = agentNamed(stringParam(p, 'sessionId'));
             entry.on = agentTarget(agent);
             checkSteerable(me, agent);
-            if (agent.state !== 'hibernated') throw invalidParams(`${agent.name} is not paused`);
-            // Never forced: a paused agent's pane drops into no shell.
+            if (agent.state !== 'hibernated' && agent.state !== 'stopped-by-restart') {
+              throw invalidParams(`${agent.name} is not paused or stopped by a restart`);
+            }
+            // Never forced: the pane of an agent paused, or stopped by a restart, drops into no shell.
             return agents.resume(agent.sessionId, actedBy(me, 'wake'), false);
           });
         },

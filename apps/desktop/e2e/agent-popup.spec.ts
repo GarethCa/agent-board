@@ -28,6 +28,8 @@ test("a double-click opens the agent's pop-up over the dimmed board; Esc, – an
     for (const name of ['Expand', 'Pop out', 'More', 'Back to its tile']) await expect(popup.getByRole('button', { name, exact: true })).toBeVisible();
     await expect(window.getByTestId('session-window')).toHaveCount(0);
     await expect(window.getByTestId('expanded-tile')).toHaveCount(0);
+    // One agent alone, with no second tab open, has no row of tabs.
+    await expect(popup.getByTestId('agent-popup-tabs')).toHaveCount(0);
     const scrim = window.getByTestId('agent-popup-scrim');
     await expect(scrim).toHaveCSS('position', 'absolute');
     const board = (await window.locator('.board').boundingBox())!;
@@ -87,7 +89,7 @@ const start = (window: Page, params: { zoneId: string; prompt: string; ticketCha
     return result.agent;
   }, params);
 
-test("a ticket's pop-up has one row of tabs, its Board, its chat and its helper; a click, ⌃Tab, ⌘1–9 and ⌘[ move along it, a drag reorders it and the order stays", async () => {
+test("a ticket's pop-up has one row of tabs, its Board, its chat and its helper; its sidebar lists its views, a click opening one or going to its tab; a click, ⌃Tab, ⌘1–9 and ⌘[ move along it, a drag reorders it and the order stays", async () => {
   const { repo, env } = scratch('output');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, { ...env, AGENT_BOARD_CLICK_OPENS: '' });
@@ -121,16 +123,115 @@ test("a ticket's pop-up has one row of tabs, its Board, its chat and its helper;
     await expect(tabs.nth(2)).toHaveAttribute('data-tab', helper.sessionId);
     await expect(popup.getByTestId('agent-popup-tab-dot')).toHaveCount(2);
     await expect(popup.getByTestId('agent-popup-plus')).toBeVisible();
-    // The tab that is on has its ⋯; one row of tabs, the session under it drawing no strip of its own, with no + or Split.
+    // The tab that is on has its ⋯; one row of tabs, the session under it drawing no strip of its own: its one + is the
+    // row's, and there is no Split.
     await expect(tab(chat.sessionId).getByTestId('agent-popup-tab-more')).toBeVisible();
     await expect(tab(helper.sessionId).getByTestId('agent-popup-tab-more')).toHaveCount(0);
     await expect(popup.locator('.session-tabs-list')).toHaveCount(1);
-    await expect(popup.getByRole('button', { name: 'New tab' })).toHaveCount(0);
+    await expect(popup.getByRole('button', { name: 'New tab' })).toHaveCount(1);
     await expect(popup.getByRole('button', { name: 'Split pane' })).toHaveCount(0);
-    // Its Terminal | Chat switch is in the header.
-    await expect(popup.locator('.agent-popup-head').getByRole('group', { name: 'View' })).toBeVisible();
+    // The + opens what the strip's + did (shells, a page), the views, or one beside.
+    await popup.getByTestId('agent-popup-plus').click();
+    for (const name of [/^New shell in this worktree/, /^New shell at a folder…/, /^Web…/, /^Open beside…/]) await expect(window.getByRole('menuitem', { name })).toBeVisible();
+    await window.keyboard.press('Escape');
+    await expect(window.getByRole('menuitem', { name: /New shell/ })).toHaveCount(0);
+    await expect(popup).toBeVisible();
+
+    // Open beside… splits it: the helper on the right, the chat staying left; the window grows to 16px in from the
+    // board's edges, both tabs on with their sides' pills, one row, and the header's split button pressed.
+    const popupBoard = (await window.locator('.board').boundingBox())!;
+    const before = (await popup.boundingBox())!;
+    await popup.getByTestId('agent-popup-plus').click();
+    await window.getByRole('menuitem', { name: /^Open beside…/ }).click();
+    await window.getByRole('menu').last().getByRole('menuitem').first().click();
+    await expect(popup.getByTestId('agent-popup-pane-right')).toBeVisible();
+    await expect(popup).toHaveAttribute('data-split', 'true');
+    await expect(async () => {
+      const grown = (await popup.boundingBox())!;
+      expect(Math.abs(grown.x - popupBoard.x - 16)).toBeLessThan(2);
+      expect(Math.abs(grown.y - popupBoard.y - 16)).toBeLessThan(2);
+      expect(Math.abs(grown.width - (popupBoard.width - 32))).toBeLessThan(2);
+    }).toPass();
+    await expect(tab(chat.sessionId)).toHaveAttribute('data-active', 'true');
+    await expect(tab(chat.sessionId).locator('.session-tab-pill')).toHaveText('left');
+    await expect(tab(helper.sessionId)).toHaveAttribute('data-beside', 'true');
+    await expect(tab(helper.sessionId).locator('.session-tab-pill')).toHaveText('right');
+    await expect(popup.locator('.session-tabs-list')).toHaveCount(1);
+    await expect(popup.getByTestId('agent-popup-divider')).toHaveCount(1);
+    const splitButton = popup.getByTestId('agent-popup-split');
+    await expect(splitButton).toHaveAttribute('aria-pressed', 'true');
+    // A click on the right's tab focuses its pane; its ⋯ has Close this side, back to the chat alone at its own size.
+    await tab(helper.sessionId).getByRole('tab').click();
+    await expect(tab(helper.sessionId)).toHaveAttribute('data-active', 'true');
+    await expect(popup.getByTestId('agent-popup-pane-right')).toHaveAttribute('data-focused', 'true');
+    await tab(helper.sessionId).getByTestId('agent-popup-tab-more').click();
+    await window.getByRole('menuitem', { name: /^Close this side/ }).click();
+    await expect(popup.getByTestId('agent-popup-pane-right')).toHaveCount(0);
+    await expect(async () => {
+      const back = (await popup.boundingBox())!;
+      expect(Math.abs(back.width - before.width)).toBeLessThan(2);
+      expect(Math.abs(back.height - before.height)).toBeLessThan(2);
+    }).toPass();
+    await expect(tab(chat.sessionId)).toHaveAttribute('data-active', 'true');
+    // Split again from a right-click on the helper's tab, then the row's keys move the focus and never end the split.
+    await expect(splitButton).toHaveAttribute('aria-pressed', 'false');
+    await tab(helper.sessionId).getByRole('tab').click({ button: 'right' });
+    await window.getByRole('menuitem', { name: /^Open beside(?!…)/ }).click();
+    await expect(popup.getByTestId('agent-popup-pane-right')).toBeVisible();
+    await tab(chat.sessionId).getByRole('tab').focus();
+    await window.keyboard.press('Meta+3');
+    await expect(tab(helper.sessionId)).toHaveAttribute('data-active', 'true');
+    await expect(popup.getByTestId('agent-popup-pane-right')).toHaveAttribute('data-focused', 'true');
+    await window.keyboard.press('Meta+2');
+    await expect(tab(chat.sessionId)).toHaveAttribute('data-active', 'true');
+    await expect(popup.getByTestId('agent-popup-pane-left')).toHaveAttribute('data-focused', 'true');
+    // The Board's tab, picked with the right focused, is the one on, the left showing it.
+    await tab(helper.sessionId).getByRole('tab').click();
+    await tab('board').getByRole('tab').click();
+    await expect(tab('board')).toHaveAttribute('data-active', 'true');
+    await expect(popup.getByTestId('agent-popup-pane-left')).toHaveAttribute('data-focused', 'true');
+    await expect(popup.getByTestId('agent-popup-pane-right')).toBeVisible();
+    // The pressed button ends it.
+    await splitButton.click();
+    await expect(popup.getByTestId('agent-popup-pane-right')).toHaveCount(0);
+    // Split, – closes the whole pop-up, and it opens again on one agent.
+    await splitButton.click();
+    await window.getByRole('menu').last().getByRole('menuitem').first().click();
+    await expect(popup.getByTestId('agent-popup-pane-right')).toBeVisible();
+    await popup.getByRole('button', { name: 'Back to its tile', exact: true }).click();
+    await expect(popup).toHaveCount(0);
+    await card.dblclick();
+    await expect(popup).toBeVisible();
+    await expect(popup.getByTestId('agent-popup-pane-right')).toHaveCount(0);
+    await expect(popup).not.toHaveAttribute('data-split', 'true');
+    // So does Esc.
+    await splitButton.click();
+    await window.getByRole('menu').last().getByRole('menuitem').first().click();
+    await expect(popup.getByTestId('agent-popup-pane-right')).toBeVisible();
+    await popup.locator('.agent-popup-head .session-window-head-fill').click();
+    await window.keyboard.press('Escape');
+    await expect(popup).toHaveCount(0);
+    await card.dblclick();
+    await expect(popup.getByTestId('agent-popup-pane-right')).toHaveCount(0);
+    // Its one Chat | Terminal switch, for every agent in it, is in the header.
+    await expect(popup.locator('.agent-popup-head').getByRole('group', { name: 'View of every agent in this pop-up' })).toBeVisible();
     // Its helper stays off the board.
     await expect(tile(window)).toHaveCount(1);
+
+    // Its views lead its sidebar: the Board, a tab not on, has the dot; a click goes to its tab, never a second one.
+    const boardRow = popup.getByTestId('agent-shelves-views').locator('[data-view="board"]');
+    await expect(boardRow).toHaveAttribute('data-state', 'open');
+    await expect(boardRow.getByTestId('agent-shelves-view-dot')).toBeVisible();
+    await boardRow.click();
+    await expect(tab('board')).toHaveAttribute('data-active', 'true');
+    await expect(boardRow).toHaveAttribute('data-state', 'on');
+    await boardRow.click();
+    await expect(tabs).toHaveCount(3);
+    // The sidebar stays beside the Board, the chat's terminal kept under it, out of view.
+    await expect(popup.getByTestId('session-window-cover')).toBeVisible();
+    await expect(popup.locator('.session-window-main')).toBeHidden();
+    await tab(chat.sessionId).getByRole('tab').click();
+    await expect(popup.getByTestId('session-window-cover')).toHaveCount(0);
 
     // A click on the helper's tab shows the helper, the chat's underlined as the one it came from; ⌘[ goes back to it.
     // The row holds still: the ⋯ moves to the helper's tab in room each tab keeps for it.
@@ -162,6 +263,7 @@ test("a ticket's pop-up has one row of tabs, its Board, its chat and its helper;
     await expect(popup.getByTestId('ticket-board')).toHaveAttribute('data-in-pop-up', 'true');
     await tab('board').getByRole('button', { name: 'Close Board' }).click();
     await expect(tab('board')).toHaveCount(0);
+    await expect(boardRow).toHaveAttribute('data-state', 'closed');
     await expect(tab(helper.sessionId)).toHaveAttribute('data-active', 'true');
     await expect(popup.locator('[data-from]')).toHaveCount(0);
     await popup.getByTestId('agent-popup-plus').click();
@@ -232,6 +334,78 @@ test("Answer on a ticket's tile opens its pop-up on the helper that asks", async
     await expect(tabs.nth(2)).toHaveAttribute('data-ask', 'true');
   } finally {
     await app.close();
+    await removeDataDir(dataDir);
+  }
+});
+
+test('on a wide board the pop-up stops at 1600px, centred; the header button fills the board and the choice is kept; a narrow board has no button', async () => {
+  const { repo, env } = scratch('waiting');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, { ...env, AGENT_BOARD_CLICK_OPENS: '' });
+  // Zoomed out, the board's CSS pixels outnumber the screen's: a 1280px window at 0.35 is a board some 3600px wide.
+  const zoom = (factor: number) => app.evaluate(({ BrowserWindow }, f) => BrowserWindow.getAllWindows().forEach((w) => w.webContents.setZoomFactor(f)), factor);
+  const ACT = { timeout: 10_000 };
+  // Where it got to, printed as it goes, so a timeout shows the last stage reached.
+  const reached = (stage: string) => console.log(`wide board: ${stage} at ${Math.round(performance.now())}ms`);
+  test.setTimeout(120_000);
+  reached('launched');
+  try {
+    await window.emulateMedia({ reducedMotion: 'reduce' });
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    reached('zone added');
+    await spawnAgent(window, 'monorepo', 'Pick a database');
+    reached('agent spawned');
+    const popup = window.getByTestId('agent-popup');
+    const fill = popup.getByTestId('agent-popup-fill');
+    const agentTile = tile(window).filter({ hasText: 'Pick a database' });
+    const width = async () => Math.round((await popup.boundingBox(ACT))?.width ?? 0);
+    await test.step('a 1280px window: no cap, no button', async () => {
+      await agentTile.dblclick(ACT);
+      await expect(popup).toBeVisible();
+      await expect(fill).toHaveCount(0);
+      reached('opened at 1x');
+    });
+
+    await test.step('a wide board: 1600 wide, centred, as tall as the board less its margin', async () => {
+      await zoom(0.35);
+      await expect(fill).toBeVisible();
+      await expect(fill).toHaveAttribute('aria-pressed', 'false');
+      await expect.poll(width).toBe(1600);
+      const board = (await window.locator('.board').boundingBox(ACT))!;
+      const capped = (await popup.boundingBox(ACT))!;
+      expect(board.width).toBeGreaterThan(1632);
+      expect(Math.abs(capped.x + capped.width / 2 - (board.x + board.width / 2))).toBeLessThan(2);
+      expect(Math.abs(capped.height - (board.height - 32))).toBeLessThan(2);
+      reached('capped');
+    });
+
+    await test.step('pressed, it fills the board, the button in the accent', async () => {
+      await fill.click(ACT);
+      await expect(fill).toHaveAttribute('aria-pressed', 'true');
+      await expect.poll(width).toBeGreaterThan(1700);
+      reached('filled');
+    });
+
+    await test.step('a narrow board again: the button goes; the next pop-up, on a wide board, opens filled', async () => {
+      await zoom(1);
+      await expect(fill).toHaveCount(0);
+      await window.keyboard.press('Escape');
+      await expect(popup).toHaveCount(0);
+      await agentTile.dblclick(ACT);
+      await expect(popup).toBeVisible();
+      await zoom(0.35);
+      await expect(fill).toHaveAttribute('aria-pressed', 'true');
+      await expect.poll(width).toBeGreaterThan(1700);
+      await fill.click(ACT);
+      await expect.poll(width).toBe(1600);
+      reached('kept and un-filled');
+    });
+  } finally {
+    await zoom(1).catch(() => {});
+    reached('closing');
+    await app.close();
+    reached('closed');
     await removeDataDir(dataDir);
   }
 });

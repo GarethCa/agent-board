@@ -1,6 +1,7 @@
 import { expect, type Page } from '@playwright/test';
 import { launch, screen, SHELL_ENV, sessionWindow } from './agent-helpers.ts';
 import { test, newShell, removeDataDir, tempDataDir } from './launch.ts';
+import { fillWideScreen } from './settings-helpers.ts';
 
 const size = async (page: Page) => (await sessionWindow(page).boundingBox())!;
 const savedFrame = (page: Page) => page.evaluate(() => window.agentBoard.view.get('windowFrame'));
@@ -88,6 +89,8 @@ for (const viewport of [{ width: 1280, height: 800 }, { width: 2560, height: 144
     const { app, window } = await launch(dataDir, SHELL_ENV);
     try {
       await window.setViewportSize(viewport);
+      // Set to fill a wide screen, as the window did before the 1600px cap; the cap is checked in agent-popup.spec.ts.
+      await fillWideScreen(window);
       await newShell(window);
       await expect(sessionWindow(window)).toHaveAttribute('data-state', 'attached');
       await expect(sessionWindow(window)).toHaveAttribute('data-maximised', 'true');

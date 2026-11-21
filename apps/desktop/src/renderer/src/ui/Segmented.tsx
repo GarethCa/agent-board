@@ -36,7 +36,7 @@ export function Segmented<T extends string>({ options, value, onChange, classNam
           onClick={() => option.id !== value && onChange(option.id)}
         >
           {option.icon}
-          {option.label}
+          <span className="ui-segmented-label">{option.label}</span>
         </button>
       ))}
     </div>

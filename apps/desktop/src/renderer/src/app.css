@@ -1254,6 +1254,8 @@ kbd {
 }
 
 .session-window-head.agent-popup-head {
+  /* A size container, for its Chat | Terminal switch to fold to its icons when it is narrow. */
+  container-type: inline-size;
   gap: var(--space-2);
   height: var(--popup-header-height);
   padding: 0 var(--space-2-25) 0 var(--space-3);
@@ -1280,10 +1282,38 @@ kbd {
   white-space: nowrap;
 }
 
-/* The shown session's Terminal | Chat switch, in the header as it has no strip of its own. */
+/* The switch and, on a wide screen, the fill button after it: one group. */
+.agent-popup-switch-group {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+/* The pop-up's one Chat | Terminal switch, for every agent in it; dimmed while a view or a shell tab is on. */
 .agent-popup-switch {
   display: flex;
   align-items: center;
+}
+
+.agent-popup-switch[data-dimmed] {
+  opacity: 0.4;
+}
+
+/* A narrow header keeps the switch's two icons; their words stay its buttons' names. */
+@container (max-width: 720px) {
+  .agent-popup-switch .ui-segmented-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
+/* An agent's name field, in place of its tab's label while it is renamed. */
+.agent-popup-tab-rename {
+  width: var(--size-tile-name);
 }
 
 .agent-popup-tabs {
@@ -1328,6 +1358,66 @@ kbd {
   border-color: var(--ask-edge);
   border-bottom-color: transparent;
   background: var(--ask-edge);
+}
+
+/* The pop-up split: two agents side by side under its one row, the row's own on the left, a thick rule between them and
+   a divider on it that drags. A tab dragged over a pane lights it; over the right edge of a body not split, the edge
+   it opens beside at. */
+.agent-popup-pane {
+  position: relative;
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+
+.agent-popup-body[data-split] > .agent-popup-pane[data-side='left'] {
+  flex-grow: 0;
+  flex-shrink: 0;
+}
+
+.agent-popup-pane[data-side='right'] {
+  border-left: 3px solid var(--window-line);
+}
+
+.agent-popup-body[data-drop='left'] > .agent-popup-pane[data-side='left'],
+.agent-popup-body[data-drop='right'] > .agent-popup-pane[data-side='right'] {
+  outline: 3px solid var(--shell-drop-halo);
+  outline-offset: -3px;
+}
+
+.agent-popup-body[data-drop='edge']::after {
+  position: absolute;
+  z-index: var(--layer-raised);
+  inset: 0 0 0 80%;
+  background: var(--accent-soft);
+  outline: 3px solid var(--shell-drop-halo);
+  outline-offset: -3px;
+  content: '';
+  pointer-events: none;
+}
+
+/* Both its sides' tabs are on; their ⋯ shows on a hover, or while its menu is open. */
+.agent-popup-tabs .session-tab[data-beside] {
+  border-color: var(--border);
+  border-bottom-color: transparent;
+  background: var(--raised);
+  color: var(--text);
+}
+
+.agent-popup-tabs[data-split] .agent-popup-tab-more:not([aria-expanded='true']) {
+  opacity: 0;
+}
+
+.agent-popup-tabs[data-split] .session-tab:is(:hover, :focus-within) .agent-popup-tab-more {
+  opacity: 1;
+}
+
+/* The header's split button, pressed while split, and the fill button, pressed while filling: the accent fill. */
+.ui-icon-button.agent-popup-split[aria-pressed='true'],
+.ui-icon-button.agent-popup-fill[aria-pressed='true'] {
+  background: var(--accent);
+  color: var(--on-accent);
 }
 
 .agent-popup-tab-end-slot {
@@ -5634,6 +5724,24 @@ kbd {
   background: var(--window-bg);
   color: var(--window-ink);
 }
+/* A pop-up's view on, in place of the terminal's column, which stays attached under it, out of view. */
+.session-window-main[hidden] {
+  display: none;
+}
+.session-window-cover:focus {
+  outline: none;
+}
+.session-window-cover {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  background: var(--window-bg);
+  color: var(--window-ink);
+}
 
 .session-window-strip {
   container-type: inline-size;
@@ -6683,6 +6791,15 @@ kbd {
 
 .session-window-chat-controls {
   display: contents;
+}
+
+/* Under a pop-up's row, the chat's controls at its top, its header having none of them. */
+/* The chat's own controls, as a line at its top: no bar of their own, no rule under them. */
+.session-chat-top {
+  display: flex;
+  flex: none;
+  justify-content: flex-end;
+  padding: 0 var(--space-2);
 }
 
 .session-window-chat-controls .chat-style-switch {
@@ -13093,6 +13210,17 @@ button.chat-chip[aria-expanded='true'] {
   color: var(--muted);
   font-weight: var(--weight-regular);
 }
+/* In a pop-up, with no title row, its count stays at the top right as the lines scroll under it, in a row of its own. */
+.activity-log-float {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  align-self: flex-end;
+  padding: 0 var(--space-1-5);
+  border-radius: var(--radius-md);
+  background: var(--raised);
+  font-size: var(--font-size-sm);
+}
 
 .activity-log-empty {
   margin: 0;
@@ -15452,6 +15580,90 @@ tr[data-status='running'] .gate-step-icon {
 }
 .agent-shelves-tab[aria-selected='true'] .agent-shelves-dot {
   outline-color: var(--raised);
+}
+/*
+ * A pop-up's views, first in its sidebar, above the shelves: one row each, which opens its view as a tab or goes to it.
+ * The one on is the accent's soft fill; one open as a tab but not on has a small accent dot after its name.
+ */
+.agent-shelves-views {
+  display: grid;
+  gap: var(--space-px);
+  padding: var(--space-2-5) var(--space-2-5) var(--space-2);
+  border-bottom: 1px solid var(--separator);
+}
+.agent-shelves-views-head {
+  margin: 0 0 var(--space-1) var(--space-1);
+  color: var(--muted);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+}
+.agent-shelves-view {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-1-25) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: start;
+}
+.agent-shelves-view > svg {
+  flex: none;
+  width: var(--icon-md);
+  height: var(--icon-md);
+  color: var(--muted);
+}
+.agent-shelves-view:hover {
+  background: var(--hover);
+}
+.agent-shelves-view:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+.agent-shelves-view[data-state='on'] {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+.agent-shelves-view[data-state='on'] > svg {
+  color: var(--accent-ink);
+}
+.agent-shelves-view-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-shelves-view-dot {
+  flex: none;
+  width: var(--space-1-5);
+  height: var(--space-1-5);
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+}
+/* On the rail, the dot sits on the view's icon, and the views end in a rule before the shelves. */
+.agent-shelves-rail-view[data-state='on'] {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+.agent-shelves-rail-view > .agent-shelves-face svg {
+  width: var(--icon-md);
+  height: var(--icon-md);
+}
+.agent-shelves-rail-view > .agent-shelves-view-dot {
+  position: absolute;
+  top: var(--space-1);
+  right: var(--space-1-5);
+}
+.agent-shelves-rail-rule {
+  width: 60%;
+  margin: var(--space-0-5) 0;
+  border: 0;
+  border-top: 1px solid var(--separator);
 }
 .agent-shelves-body {
   display: grid;

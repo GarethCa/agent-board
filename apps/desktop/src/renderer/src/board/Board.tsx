@@ -1260,6 +1260,17 @@ function BoardView() {
       },
       resumeAgent: (sessionId) => lifecycleOnce(sessionId, () => window.agentBoard.agents.resume(sessionId).then(agentHeard, report('resume the agent'))),
       continueOnCredits: (sessionId) => window.agentBoard.agents.continueOnCredits(sessionId).then(agentHeard, report('continue it on credits')),
+      carryOnAgent: (sessionId) =>
+        window.agentBoard.agents.carryOn(sessionId).then(
+          (agent) => {
+            agentHeard(agent);
+            return true;
+          },
+          (error: unknown) => {
+            report('tell it to carry on')(error);
+            return false;
+          },
+        ),
       pauseAgent: (sessionId) => lifecycleOnce(sessionId, () => window.agentBoard.agents.pause(sessionId).then(agentHeard, report('pause the agent'))),
       sendUnsent: (sessionId) => window.agentBoard.agents.sendUnsent(sessionId).then(agentHeard, report('send the message')),
       clearUnsent: (sessionId) => window.agentBoard.agents.clearUnsent(sessionId).then(agentHeard, report('clear the message')),

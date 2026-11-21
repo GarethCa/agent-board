@@ -44,3 +44,10 @@ export async function showTileParts(window: Page, parts: (keyof TileShows)[]): P
   }
   await settings.close();
 }
+
+/** Turns on Settings › General › Appearance › "Pop-up fills a wide screen" from `window`, so a pop-up or session window fills a wide board as it did before the 1600px cap. */
+export async function fillWideScreen(window: Page): Promise<void> {
+  const settings = await openSettings(window, 'general.appearance');
+  await settings.getByRole('switch', { name: 'Pop-up fills a wide screen' }).check();
+  await settings.close();
+}

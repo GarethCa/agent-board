@@ -4,7 +4,7 @@ import { createAgentPageStore } from './agent-page.ts';
 import { createAgentRecordStore, guessedDocOf, recordHandlers } from './agent-records.ts';
 import { runGit } from './git.ts';
 import { stateAfterExit } from './claude-state.ts';
-import { createAgentLifecycle, NO_CONVERSATION_NOTICE } from './agent-lifecycle.ts';
+import { CONTINUE_LINE, createAgentLifecycle, NO_CONVERSATION_NOTICE } from './agent-lifecycle.ts';
 import { isClosed } from './board-layout.ts';
 import { systemClock } from './clock.ts';
 import { createComposerWatch } from './codex-screen.ts';
@@ -240,6 +240,10 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   };
   /** Live Codex agents set to a reasoning effort their session doesn't have: they take it when next started. */
   const effortAtRestart = new Set<string>();
+  /** The live agents this daemon's start brought back after a restart (`Agent.backAfterRestart`), until they end. */
+  const backAfterRestart = new Set<string>();
+  /** The agents the daemon's start is bringing back after a restart (`Agent.comingBackAfterRestart`), as it runs. */
+  const comingBackAfterRestart = new Set<string>();
 
   /**
    * Types the reasoning effort the live Claude agent waits for at its prompt, if it is ready for it now; resolves
@@ -1173,6 +1177,8 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       notice: row.notice,
       cutOffMidTurn: row.turn_cut_off === 1,
       cutOffAsking: row.turn_cut_off === 1 && row.turn_cut_off_asking === 1,
+      backAfterRestart: backAfterRestart.has(row.session_id),
+      comingBackAfterRestart: comingBackAfterRestart.has(row.session_id),
       hibernated: isHibernated(row)
         ? { at: row.hibernated_at!, ...pausedBy(row.hibernated_by) }
         : null,
@@ -1721,6 +1727,40 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
 
     resume: lifecycle.resume,
 
+    async carryOn(sessionId) {
+      const agent = requireAgent(sessionId);
+      if (agent.endedAt !== null) throw invalidParams(`${agent.name} has ended: resume it first`, 'it has ended');
+      if (agent.cutOffMidTurn !== true) throw invalidParams(`${agent.name} was not cut off mid-turn`, 'it was not cut off mid-turn');
+      // One the start brought back may still be loading its conversation: told once it is up, never typed blind.
+      if (!(await deliveries.untilUp(sessionId))) throw invalidParams(`${agent.name} can't be told to carry on: it didn't come up`, "it didn't come up");
+      const told = await deliveries.tell(sessionId, CONTINUE_LINE, 'The line to carry on');
+      if (!told.started) throw invalidParams(`${agent.name} can't be told to carry on: ${told.reason}`, told.reason);
+      return get(sessionId)!;
+    },
+
+    broughtBack(sessionId) {
+      if (getRow(sessionId)?.ended_at !== null) return;
+      backAfterRestart.add(sessionId);
+      options.broadcast({ type: 'agent.updated', agent: get(sessionId)! });
+    },
+
+    comingBack(sessionIds) {
+      for (const sessionId of sessionIds) {
+        comingBackAfterRestart.add(sessionId);
+        const agent = get(sessionId);
+        if (agent !== undefined) options.broadcast({ type: 'agent.updated', agent });
+      }
+    },
+
+    restartPassDone() {
+      const marked = [...comingBackAfterRestart];
+      comingBackAfterRestart.clear();
+      for (const sessionId of marked) {
+        const agent = get(sessionId);
+        if (agent !== undefined) options.broadcast({ type: 'agent.updated', agent });
+      }
+    },
+
     decidePermission(sessionId, requestId, decision) {
       const agent = requireAgent(sessionId);
       const prompt = permissions.prompts(sessionId).find((each) => each.id === requestId);
@@ -2082,6 +2122,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       // Its next start takes the effort it was last set to.
       effortAfterTurn.delete(session.id);
       effortAtRestart.delete(session.id);
+      backAfterRestart.delete(session.id);
       lifecycle.stopGuard(session.id);
       // What was never delivered to it is flagged on, for Resend.
       if (flags.get(session.id)?.keepsEnded !== true) flags.delete(session.id);
@@ -2235,6 +2276,7 @@ export function agentHandlers<Context>(
       if (p.force !== undefined && typeof p.force !== 'boolean') throw invalidParams('force must be a boolean');
       return agents.resume(stringParam(p, 'sessionId'), "the app's agent.resume", p.force === true);
     },
+    'agent.carryOn': (params) => agents.carryOn(stringParam(paramsObject(params), 'sessionId')),
     'agent.decidePermission': (params) => {
       const p = paramsObject(params);
       const behavior = p.behavior;

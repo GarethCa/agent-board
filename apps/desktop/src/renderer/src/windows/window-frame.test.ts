@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clampFrame, defaultFrame, frameFrom, fromFractions, MIN_HEIGHT, MIN_WIDTH, openedMaximised, resizeFrame, toFractions } from './window-frame';
+import { clampFrame, defaultFrame, frameFrom, fromFractions, MIN_HEIGHT, MIN_WIDTH, openedMaximised, resizeFrame, toFractions, capFrame, maximisedAcross, widestFrame } from './window-frame';
 
 const bounds = { width: 1200, height: 800 };
 const frame = { x: 100, y: 80, width: 600, height: 400 };
@@ -121,5 +121,38 @@ describe('a window opening under the Maximised setting', () => {
   it('leaves it for no window shown, and for no kept frame, which already fills the board', () => {
     expect(openedMaximised({ ...opens, shownId: undefined, previousId: 'a' })).toBeUndefined();
     expect(openedMaximised({ ...opens, kept: null })).toBeUndefined();
+  });
+});
+
+describe('on a wide screen a board window stops at 1600px, unless set to fill it', () => {
+  it('maximised, is 1600 wide and centred on a board wider than 1632px', () => {
+    expect(maximisedAcross(3440, false)).toEqual({ left: 920, width: 1600 });
+    expect(maximisedAcross(1633, false)).toEqual({ left: 17, width: 1600 });
+  });
+
+  it('maximised, fills the board as before on 1632px or less, or set to fill', () => {
+    expect(maximisedAcross(1632, false)).toBeUndefined();
+    expect(maximisedAcross(1440, false)).toBeUndefined();
+    expect(maximisedAcross(3440, true)).toBeUndefined();
+  });
+
+  it('placed wider than the cap, is narrowed to it about its own centre', () => {
+    const wide = { width: 3440, height: 1400 };
+    expect(capFrame({ x: 100, y: 50, width: 2400, height: 900 }, wide, false)).toEqual({ x: 500, y: 50, width: 1600, height: 900 });
+    expect(capFrame({ x: 100, y: 50, width: 1200, height: 900 }, wide, false)).toEqual({ x: 100, y: 50, width: 1200, height: 900 });
+    expect(capFrame({ x: 100, y: 50, width: 2400, height: 900 }, wide, true)).toEqual({ x: 100, y: 50, width: 2400, height: 900 });
+    expect(capFrame({ x: 0, y: 0, width: 1620, height: 900 }, { width: 1632, height: 900 }, false)).toEqual({ x: 0, y: 0, width: 1620, height: 900 });
+  });
+});
+
+describe('a board window dragged past the cap on a wide screen', () => {
+  const wide = { width: 3440, height: 1400 };
+  it('stops at it, the opposite edge staying put', () => {
+    const start = { x: 500, y: 50, width: 1500, height: 900 };
+    expect(widestFrame(wide, false)).toBe(1600);
+    expect(widestFrame(wide, true)).toBe(3440);
+    expect(resizeFrame(start, 'e', 400, 0, wide, 1600)).toEqual({ x: 500, y: 50, width: 1600, height: 900 });
+    expect(resizeFrame(start, 'w', -400, 0, wide, 1600)).toEqual({ x: 400, y: 50, width: 1600, height: 900 });
+    expect(resizeFrame(start, 'e', 400, 0, wide)).toEqual({ x: 500, y: 50, width: 1900, height: 900 });
   });
 });

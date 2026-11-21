@@ -59,8 +59,10 @@ first goes.
 **Update**: the board survives reboots. A session that ends because its daemon went away is marked
 `stopped_by_restart`: those a dead daemon left live (found at start, as before), and those the daemon ends as it shuts
 down (a reboot's SIGTERM, `daemon.stop` with force, a removed data dir), which before were `done` or `failed` from their
-exit. The user stopping or killing a session never marks it, even when the shutdown lands while that stop is under way. Nothing restarts on its own: `agent.resume` and
-`shell.resumePane` start one again when the user asks, under the same session id, which clears the mark. Each session's
+exit. The user stopping or killing a session never marks it, even when the shutdown lands while that stop is under way. `agent.resume` and
+`shell.resumePane` start one again under the same session id, which clears the mark; the next daemon's start does so
+for what its restart stopped (see "A restart brings back what it stopped", below, which supersedes "nothing restarts
+on its own"). Each session's
 screen and scrollback are saved to `<data dir>/scrollback/<id>.json` (atomically, once its output has been quiet for 2 s,
 at most every 20 s while it never is, and as it exits: serializing a full scrollback holds the daemon's one thread for
 tens of milliseconds), so attaching to an ended session sends its saved screen and then `session.exited`, instead of
@@ -81,9 +83,9 @@ state: the new board read fields the old daemon never sent, threw while renderin
 to restart the daemon with it. So the board and every popped-out window first ask `daemon.health`, and on another build
 show only that offer, until the restart. `agent-board restart-daemon --data-dir <dir>` restarts the daemon as its own
 build for the app's updater: it stops the old daemon with force, so its sessions are stopped by restart, starts its
-own, and resumes each agent and shell pane that stop ended (not those stopped earlier), as Resume all would. Running it is the user asking for the resume, as pressing Resume all is. It says what it restarted and resumed,
-and names the agents it cut off mid-turn, which that resume tells to carry on. It resumes nothing when another build's daemon answers in
-its place. It starts the daemon from the home folder, with the caller's environment less every `AGENT_BOARD_*`, pnpm's script
+own, and waits while that daemon's start brings back each agent and shell pane the stop ended (`daemon.afterRestart`).
+It says what it restarted and what came back, and names the agents it cut off mid-turn, which wait at their prompt for
+the user's Carry on. It fails when another build's daemon answers in its place, which may bring back nothing. It starts the daemon from the home folder, with the caller's environment less every `AGENT_BOARD_*`, pnpm's script
 variables, the Claude Code session it may run in, and `node_modules/.bin` on PATH, which a daemon would otherwise hand
 all its sessions. It refuses to run inside a session of the daemon it restarts (that daemon an ancestor of it), as
 stopping the daemon would end it first, and when it can't tell (no `ps`, or Windows). `pnpm update:app` runs
@@ -95,15 +97,41 @@ it was at work (running, thinking, or on a permission prompt) has its turn cut o
 (`agents.turn_cut_off`) as its session ends at a shutdown, or at the next start for a daemon that died, where the
 agent's last state is still the one it had. A Claude agent whose transcript ends in Claude's own "Request interrupted by
 user" was stopped by the user with Esc, which Claude fires no hook for, so it is not cut off. Any resume in its
-conversation (`agent.resume`: Resume, Resume all, `restart-daemon`; and an orchestrator's restart or wake of its crew)
-carries on its conversation with the harness's own resume and types one fixed line as its next message, "The app
+conversation that the user or an orchestrator asks for (`agent.resume`: Resume, Wake all; and an orchestrator's restart
+or wake of its crew) carries on its conversation with the harness's own resume and types one fixed line as its next message, "The app
 restarted; carry on from where you were." Each was asked for, by the user or an orchestrator they set going, so it is
 that ask relayed, not the app acting on its own. The record stays until a turn begins, so a restart before the line
 could be typed tells it again; it goes once its session ends any other way, or it starts on a new conversation. An agent
 that was idle, or had ended its turn on a question, is told nothing. With no conversation to carry on it starts afresh
 on its task, as before. `Agent.cutOffMidTurn` says it is still to be told, which is how `restart-daemon` names the
-agents it told, rather than guessing from their states before the stop. A resume after a restart is normal, so it puts no
+agents cut off, rather than guessing from their states before the stop. The daemon's own start, below, never types it. A resume after a restart is normal, so it puts no
 notice on the tile. Only an agent that had turns but lost its conversation is told so, until a turn begins.
+
+**A restart brings back what it stopped**: after the app or the machine restarts, every agent comes back as it was, and
+the user presses nothing. The daemon marks each session its own shutdown ends, or each that a dead daemon left live, as
+the latest restart's (`sessions.resume_at_start`, set with `stopped_by_restart`; the migration that adds it marks the
+latest batch an older daemon stopped as it shut down, so the first start onto this build brings that back too). Once its
+socket listens, the next
+start brings back each marked agent still stopped by restart, one at a time, with a quiet resume: in its conversation,
+tile, worktree and branch, typing nothing to it. An agent that was idle comes back idle at its prompt; one cut off
+mid-turn comes back at its prompt too, still `cutOffMidTurn`, and its tile reads `backAfterRestart`. A task the agent
+never had (its first prompt never reached it) is still typed, as that was its own start; one it had is not typed
+again. Each marked shell pane is reopened. A paused, done or exited agent was never marked, and stays as it was; so
+does one an earlier restart stopped, as every start spends the marks (a start that brings nothing back, as the e2e
+suite runs with `AGENT_BOARD_RESUME_AFTER_RESTART=0`, clears them). Each session is tried once: one that fails stays
+stopped by restart, named in `daemon.afterRestart`'s `notResumed`, and waits for its Wake. The agent of a clock run the
+restart stopped is left to its clock, which closes or keeps it. One woken while the start ran is counted as back if it
+is live, and otherwise left as it was then (paused, done or exited): the start resumes only what is still stopped by
+restart and still marked. A daemon that shuts down while its start is running resumes nothing more, waits for the
+resume in hand, and leaves the untried their marks for the next start. This relaunches what was running and never prompts
+anyone, so it is not the app acting on the agents' behalf beyond what the harness does: a relaunched harness sits at
+its prompt as it was left. The board's restart banner says how many came back, how many were cut off mid-turn and how
+many stayed stopped; its Carry on (`agent.carryOn`) types the fixed line to the cut-off ones only, once each is up,
+and wakes nothing; it is the user's ask, as Wake all's line is. One it couldn't tell keeps its Carry on, and Wake all is
+offered for what stayed stopped once none is left to tell. One cut off on a permission prompt is counted as neither by
+the start nor by the banner. The banner waits while the start is still bringing agents back
+(`Agent.comingBackAfterRestart`), so a Wake all pressed then can't race the start's own resume. `wake` (an orchestrator's, or the CLI's) takes an agent stopped by a restart as well as a
+paused one, as `restart` does.
 
 Keeping the agents themselves alive across a daemon restart was considered and left for later. A PTY is owned by the
 process that opened it, so it would take a holder process per agent and a protocol to reattach to it; and each agent

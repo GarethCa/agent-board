@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { ClipboardList, FileCheck, FileText, GitPullRequest, Globe, SquareCheckBig, SquareTerminal } from 'lucide-react';
 import type { PaneLayout } from '@agent-board/daemon/pane-layout';
@@ -11,6 +11,7 @@ import { errorMessage } from '../../../shared/errors';
 import { SessionDetails } from './SessionDetails';
 import { DetailsHandle } from './DetailsHandle';
 import { LiveShelves, ShelfControls } from './LiveShelves';
+import type { ShelfViews } from './AgentShelves';
 import { showsShelves } from './agent-sidebar';
 import { KeptChatView } from './KeptChatView';
 import { openingView, useConversationAs } from './conversation-as';
@@ -23,6 +24,7 @@ import { inPane, paneDecision, showsStepsStrip, useDeferredDecisions } from './p
 import type { RunsChoice, RunsMode } from './chat';
 import { useChatTheme } from './chat-theme';
 import { ChatControls } from './ChatControls';
+import { viewKeyOf } from '../board/agent-popup';
 import { useChatRunsShow } from '../board/view-settings';
 import { ShellPanes } from './ShellPanes';
 import { ownPaneShown, stripShown } from './strip-shown';
@@ -31,10 +33,10 @@ import { composerBlock } from './composer-block';
 import { canRestart, endedShellLabel, exitText, RestartAgent } from './RestartAgent';
 import { HARNESS_COMMANDS, wordedTabLabel, planSurfaceOf, pullRequestSurfaceOf, shellOwner, tabLiveShells, windowShells, worstState, type TabOwner, type WindowSurface } from './tabs';
 import { agentWorktrees, dropKey, dropOver as dropOverValue, foreignFolder, tabMover } from './shell-moves';
-import type { StripTab } from './TabStrip';
+import type { StripTab, TabAdds } from './TabStrip';
 import { useWindowPanes, type WindowPanesControl } from './use-window-panes';
-import { PaneStrip, WindowPanes } from './WindowPanes';
-import { chosenView, useSessionView, type SessionView } from './session-view';
+import { PaneStrip, paneAdds, WindowPanes } from './WindowPanes';
+import { bodyViewKey, chosenView, paneShows, useSessionView, type SessionView } from './session-view';
 import { useOpensOn } from './opens-on';
 import { pressed } from '../keys/registry';
 import { PullRequestTab } from './PullRequestTab';
@@ -102,13 +104,25 @@ interface SessionBodyProps {
    */
   view?: 'terminal' | 'chat';
   /**
-   * Whether it draws its own strip over its pane, naming the pane and holding its + and Split: false straight under a row
-   * of tabs of another's (a ticket's pop-up), which then draws one only for what is amiss, its view switch going to
-   * `switchSlot`. True by default.
+   * Whether it draws its own strip over its pane, naming the pane and holding its + and Split, and its Terminal | Chat
+   * switch: false straight under a pop-up's row of tabs, which holds its shell tabs (`onRow`) and whose header has the
+   * one switch, and which then draws a strip only for what is amiss. True by default.
    */
   ownStrip?: boolean;
-  /** Where its Terminal | Chat switch goes without a strip of its own (null until it is drawn). */
-  switchSlot?: HTMLElement | null;
+  /**
+   * What its Terminal | Chat pick is kept under: a ticket's pop-up's one for all its agents; unless given, its ticket's
+   * for a ticket's chat, else its session's own.
+   */
+  viewKey?: string;
+  /** Hears its shell tabs and what they do, for a pop-up's row to draw them, as they change. */
+  onRow?(row: PaneRow): void;
+  /** A pop-up's views, listed first in its sidebar, each opening as a tab of the pop-up's row. */
+  views?: ShelfViews | undefined;
+  /**
+   * The view on in a pop-up, shown in place of the terminal's column, the sidebar staying beside it; the terminal stays
+   * attached under it, out of view, to come back as it was.
+   */
+  cover?: ReactNode;
 }
 
 /**
@@ -132,10 +146,16 @@ export function SessionBody({
   compactControls = false,
   view,
   ownStrip = true,
-  switchSlot,
+  viewKey,
+  onRow,
+  views,
+  cover,
 }: SessionBodyProps) {
   const agent = content.kind === 'session' ? content.agent : undefined;
   const shell = content.kind === 'shell' ? content.shell : undefined;
+  const coverRef = useRef<HTMLDivElement>(null);
+  const mainRef = useRef<HTMLDivElement>(null);
+  useCoverFocus(cover !== undefined, coverRef, mainRef);
   const [single, setSingle] = useState<PaneStatus>({ state: 'attaching' });
   const [problem, setProblem] = useState<string>();
   const [paneStatuses, setPaneStatuses] = useState<Record<string, PaneStatus>>({});
@@ -165,8 +185,7 @@ export function SessionBody({
   const tabFocus = panes === undefined ? undefined : ownFocused ? anyFocus : panes.focusIn(panes.surfaces[0]!);
   // Whatever way in this session was opened by (⌘K, the inbox, ‹ ›, a restored window...), showing the agent's own pane
   // is seeing its ask: not while a shell tab of its pane, or its Review or Activity tab, covers it.
-  // Under another's row of tabs it shows only the agent's own pane, whatever shell tab has the keyboard in its own window.
-  const ownShown = ownPaneShown(!ownStrip, panes);
+  const ownShown = ownPaneShown(panes);
   useSeenWhileShown(content.kind === 'session' ? content.sessionId : undefined, shown && ownShown);
   // A shell pane of one of the window's tabs with the keyboard, not an agent's own.
   const tabShellFocused = tabFocus !== undefined && tabFocus !== agent?.sessionId;
@@ -203,11 +222,13 @@ export function SessionBody({
   const deferredIds = useDeferredDecisions();
   const conversationAs = useConversationAs();
   const windowOpensOn = headerSwitch ? openingView(opensOn, conversationAs) : 'terminal';
-  const [savedView, pickView] = useSessionView(agent?.sessionId, windowOpensOn);
+  // A ticket's chat, in its pop-out or expanded, follows its ticket's pop-up's switch.
+  const viewOf = bodyViewKey(viewKey ?? (agent && viewKeyOf(agent, [agent])), agent?.sessionId);
+  const [savedView, pickView] = useSessionView(viewOf, windowOpensOn);
   const pickedView = view ?? savedView;
   const chatPicked = pickedView !== 'terminal' && agent !== undefined;
   const onShowTerminal = () => switchView('terminal');
-  const chat = chatPicked && ownShown;
+  const chat = paneShows(pickedView, { own: ownShown, agent: agent !== undefined }) !== 'terminal';
   // A chat can be light; a terminal is dark whatever it says.
   const chatTheme = useChatTheme();
   useEffect(watchPastePane, []);
@@ -227,7 +248,7 @@ export function SessionBody({
   }, [chatPicked]);
   const switchView = (next: SessionView) => {
     // A pick that changes nothing sets no flag: the next change heard from elsewhere is still not this body's.
-    pickedHere.current = chosenView(agent?.sessionId, windowOpensOn) !== next;
+    pickedHere.current = chosenView(viewOf, windowOpensOn) !== next;
     pickView(next);
     // Chat picked while a shell tab shows brings the agent's own tab forward. Only on a pick: a tab asked for as the
     // window opens (a row of the shells chip) still shows.
@@ -292,7 +313,7 @@ export function SessionBody({
 
   // How the agent's pane shows it, over the pane it changes: the same in a session window and an expanded tile. Over a
   // shell tab it reads Terminal, which is what shows; pressing Chat brings the agent's own tab forward.
-  const viewSwitch = agent && !headerSwitch && view === undefined && <Segmented<SessionView> className="session-view-switch" aria-label="View" value={chat ? 'chat' : 'terminal'} onChange={switchView} options={VIEW_OPTIONS} />;
+  const viewSwitch = agent && ownStrip && !headerSwitch && view === undefined && <Segmented<SessionView> className="session-view-switch" aria-label="View" value={chat ? 'chat' : 'terminal'} onChange={switchView} options={VIEW_OPTIONS} />;
   // In the header, the three views, always there: Terminal reads as picked while a shell tab shows, as it is what shows.
   // The chat's controls, while it shows. The style switch is the header's Chat | Timeline | Terminal under Simplified.
   const runsShow = useChatRunsShow();
@@ -335,6 +356,7 @@ export function SessionBody({
     const dot = agent && surface.key === OWN_SURFACE ? (dots === 'failed' ? 'failed' : single.state) : (dots ?? 'idle');
     return { ...base, dot, closeHint: 'Close the tab, ending its shells' };
   };
+  usePaneRow(onRow, panes, here, panes?.surfaces.filter((surface) => surface.key !== OWN_SURFACE).map(stripTabOf) ?? []);
   const renderSurface = (surface: WindowSurface, visible: boolean) =>
     panes === undefined ? null : (
       <SurfaceView
@@ -384,6 +406,7 @@ export function SessionBody({
             onOpenPullRequest={openPullRequest}
             onOpenSurface={panes && ((surface) => panes.open(surface))}
             onOpenWeb={panes?.openWeb ?? openLink}
+            views={views}
           />
           <DetailsHandle collapsed={detailsCollapsed} onCollapsed={onDetailsCollapsed} />
         </>
@@ -402,7 +425,12 @@ export function SessionBody({
           />,
           controlsSlot,
         )}
-      <div className="session-window-main" data-surface="window">
+      {cover !== undefined && (
+        <div ref={coverRef} className="session-window-cover" data-testid="session-window-cover" tabIndex={-1}>
+          {cover}
+        </div>
+      )}
+      <div ref={mainRef} className="session-window-main" data-surface="window" hidden={cover !== undefined}>
         {/* A split window's panes have strips of their own, each tab with its state: this row is only for what is amiss. */}
         {strip.row && (
           <div className="session-window-strip">
@@ -430,7 +458,8 @@ export function SessionBody({
             {!split && ownStrip && viewSwitch}
           </div>
         )}
-        {!ownStrip && switchSlot && viewSwitch && createPortal(viewSwitch, switchSlot)}
+        {/* Under a pop-up's row, whose header has no room for them, the chat's controls sit at its top. */}
+        {!ownStrip && chatControls && chatControlsSlot === null && <div className="session-chat-top">{chatControls}</div>}
         {notice}
         {agent && !(simplified && chat && paneDecision(agent, deferredIds)?.kind === 'permission' && agent.permissions.every(inPane)) && <BlockedBanner agent={agent} chat={chat} onShowTerminal={onShowTerminal} />}
         {agent && canRestart(agent) && (
@@ -440,7 +469,7 @@ export function SessionBody({
           </div>
         )}
         <div className="session-panes">
-          {panes && ownStrip ? (
+          {panes ? (
             <WindowPanes panes={panes} stripTab={stripTabOf} renderSurface={renderSurface} here={here} panelId={tabPanel} inlineStrip={panes.panes.length === 1} trailingOf={(pane) => (ownStrip && pane.surfaces.some((surface) => surface.key === OWN_SURFACE) ? viewSwitch : undefined)} />
           ) : content.kind === 'session' ? (
             sessionView
@@ -464,6 +493,65 @@ export function SessionBody({
     </div>
     </WebLinkContext.Provider>
   );
+}
+
+/** A body's shell tabs and what they do, for a pop-up's row to draw beside its agents' tabs. */
+export interface PaneRow {
+  /** Its tabs other than the agent's own: its shells, then whatever else it opened (a plan, a pull request). */
+  tabs: readonly StripTab[];
+  /** The one of them on, if one covers the agent's own pane. */
+  active: string | undefined;
+  select(key: string): void;
+  close(key: string): void;
+  /** What its + offers, as Today's strip did, acting on the agent's own pane: read as the + is drawn. */
+  adds(): TabAdds;
+  /** Splits the pane, a new shell beside it. */
+  split(): void;
+}
+
+/** A + with nothing to act on: a body not drawn yet. */
+const NO_ADDS: TabAdds = { here: '', onNewShell: () => {}, onNewShellAt: () => {}, onRunScript: () => {}, scripts: () => Promise.reject(new Error('no panes')), sessions: [], named: false, shells: false, onSplit: () => {} };
+
+/**
+ * Tells `onRow` of the body's tabs as they change: only when what they say does, so the pop-up redraws once per change
+ * and not on every frame of the body.
+ */
+function usePaneRow(onRow: ((row: PaneRow) => void) | undefined, panes: WindowPanesControl | undefined, here: string, tabs: readonly StripTab[]): void {
+  const active = tabs.find((tab) => panes?.showing(tab.id) === true)?.id;
+  const latest = useRef({ panes, tabs, onRow, here });
+  latest.current = { panes, tabs, onRow, here };
+  const said = JSON.stringify([active, tabs.map((tab) => [tab.id, tab.label, tab.dot, tab.closable, tab.title])]);
+  useEffect(() => {
+    const { onRow: tell, tabs: drawn } = latest.current;
+    if (tell === undefined) return;
+    tell({
+      tabs: drawn,
+      active,
+      select: (key) => latest.current.panes?.select(key),
+      close: (key) => latest.current.panes?.close(key),
+      adds: () => {
+        const { panes: now, here: where } = latest.current;
+        if (now === undefined) return NO_ADDS;
+        return paneAdds(now, now.panes.find((pane) => pane.surfaces.some((surface) => surface.key === OWN_SURFACE)) ?? now.focusedPane, where);
+      },
+      split: () => latest.current.panes?.split('horizontal'),
+    });
+    // `said` is what the row shows; the handlers read the latest panes when they run.
+  }, [said]);
+}
+
+/**
+ * Keeps the keyboard in the window as a view covers the terminal's column and leaves it: hidden, the column lets the
+ * focus go, so it goes to the view, and back to the terminal (or the composer) as the view goes.
+ */
+function useCoverFocus(covered: boolean, coverRef: RefObject<HTMLElement | null>, mainRef: RefObject<HTMLElement | null>): void {
+  const was = useRef(covered);
+  useLayoutEffect(() => {
+    if (was.current === covered) return;
+    was.current = covered;
+    if (covered) coverRef.current?.focus({ preventScroll: true });
+    else mainRef.current?.querySelector<HTMLElement>('.xterm-helper-textarea, textarea')?.focus({ preventScroll: true });
+  }, [covered, coverRef, mainRef]);
 }
 
 const VIEW_OPTIONS: SegmentedOption<SessionView>[] = [

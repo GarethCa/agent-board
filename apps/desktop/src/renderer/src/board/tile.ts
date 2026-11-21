@@ -154,6 +154,8 @@ export interface TileActions {
   resumeAgent(sessionId: string): Promise<void>;
   /** Resumes the rate-limited agent's turn on usage credits; settles once its turn starts (or failing that, said why). */
   continueOnCredits(sessionId: string): Promise<void>;
+  /** Tells an agent a restart cut off mid-turn to carry on; settles true once it has, or false once it has said why not. */
+  carryOnAgent(sessionId: string): Promise<boolean>;
   /** Pauses the idle agent (hibernates it) to free what it holds; settles once it has (or failing that, said why). */
   pauseAgent(sessionId: string): Promise<void>;
   /** Presses Enter on the message typed at the agent's prompt and never sent; settles once done (or failing that, said why). */
@@ -255,6 +257,7 @@ export const TileActionsContext = createContext<TileActions>({
   resumeExternal: () => {},
   resumeAgent: async () => {},
   continueOnCredits: async () => {},
+  carryOnAgent: async () => false,
   pauseAgent: async () => {},
   sendUnsent: async () => {},
   clearUnsent: async () => {},

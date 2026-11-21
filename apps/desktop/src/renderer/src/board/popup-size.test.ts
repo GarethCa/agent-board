@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clampPopup, dragPopup, fitPopup, parsePopupSize, POPUP_MIN, POPUP_SIZE_KEY, popupSize, readPopupSize, writePopupSize } from './popup-size';
+import { capBites, clampPopup, dragPopup, fitPopup, parsePopupSize, POPUP_CAP, POPUP_MIN, POPUP_SIZE_KEY, popupRoom, popupSize, readPopupSize, splitPopupSize, writePopupSize } from './popup-size';
 
 // The room each board leaves the pop-up: the board less the 16px margin round it.
 const LAPTOP = { width: 1408, height: 828 };
@@ -107,5 +107,68 @@ describe('the size kept for every pop-up', () => {
     };
     expect(readPopupSize(blocked)).toBeNull();
     expect(() => writePopupSize({ width: 900, height: 500 }, blocked)).not.toThrow();
+  });
+});
+
+describe('the pop-up split, two agents side by side', () => {
+  it('grows to the board, 16px in from each of its edges, on any board', () => {
+    expect(splitPopupSize(LAPTOP)).toEqual(LAPTOP);
+    expect(splitPopupSize(ULTRAWIDE)).toEqual(ULTRAWIDE);
+    expect(splitPopupSize({ width: -4, height: 10 })).toEqual({ width: 0, height: 10 });
+  });
+
+  it('grows past the size dragged to, and that size comes back as the split ends', () => {
+    const saved = { width: 900, height: 600 };
+    expect(popupSize(LAPTOP, saved, { split: true })).toEqual(LAPTOP);
+    expect(popupSize(LAPTOP, saved)).toEqual(saved);
+    expect(popupSize(LAPTOP, null, { split: true })).toEqual(LAPTOP);
+    expect(popupSize(LAPTOP, null)).toEqual(fitPopup(LAPTOP));
+  });
+});
+
+describe('on a wide screen the pop-up stops at 1600px, unless set to fill it', () => {
+  // A 3440px board less its margins, and the widest board the cap leaves alone (1632px), and one a pixel wider.
+  const WIDE = { width: 3408, height: 1408 };
+  const AT = { width: 1600, height: 1000 };
+  const PAST = { width: 1601, height: 1000 };
+
+  it('bites only on a board wider than 1632px', () => {
+    expect(POPUP_CAP).toBe(1600);
+    expect(capBites(LAPTOP)).toBe(false);
+    expect(capBites(AT)).toBe(false);
+    expect(capBites(PAST)).toBe(true);
+    expect(capBites(WIDE)).toBe(true);
+  });
+
+  it('opens 1600px wide on a 3440px board, with its full height', () => {
+    expect(popupSize(WIDE, null)).toEqual({ width: 1600, height: 1408 });
+    expect(popupRoom(WIDE, false)).toEqual({ width: 1600, height: 1408 });
+  });
+
+  it('split, is two panes of about 800px', () => {
+    expect(popupSize(WIDE, null, { split: true })).toEqual({ width: 1600, height: 1408 });
+  });
+
+  it('set to fill, fills the board as before, split or not', () => {
+    expect(popupSize(WIDE, null, { fill: true })).toEqual(fitPopup(WIDE));
+    expect(popupSize(WIDE, null, { split: true, fill: true })).toEqual(WIDE);
+    expect(popupRoom(WIDE, true)).toEqual(WIDE);
+  });
+
+  it('keeps a dragged size, no wider than the cap unless set to fill', () => {
+    const saved = { width: 2400, height: 900 };
+    expect(popupSize(WIDE, saved)).toEqual({ width: 1600, height: 900 });
+    expect(popupSize(WIDE, saved, { fill: true })).toEqual(saved);
+    expect(popupSize(WIDE, { width: 1200, height: 900 })).toEqual({ width: 1200, height: 900 });
+  });
+
+  it('changes nothing on a board of 1632px or less', () => {
+    for (const room of [LAPTOP, AT]) {
+      for (const split of [false, true]) {
+        expect(popupSize(room, null, { split })).toEqual(popupSize(room, null, { split, fill: true }));
+        expect(popupSize(room, { width: 900, height: 500 }, { split })).toEqual(popupSize(room, { width: 900, height: 500 }, { split, fill: true }));
+      }
+    }
+    expect(popupSize(AT, null, { split: true })).toEqual(AT);
   });
 });

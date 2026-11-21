@@ -1754,6 +1754,24 @@ describe('restarting an ended agent', () => {
     expect(line).toMatchObject({ orchestratorName: 'you', action: 'restart', outcome: 'done', targetId: worker.sessionId });
   }, 30_000);
 
+  it('wakes an agent stopped by a restart of agent-board, as restart does', async () => {
+    const dataDir = tempDataDir();
+    const home = tempDataDir();
+    const setup = await orchestrateDaemon({ dataDir, home });
+    const { agent: worker } = await agentSide(setup, setup.zone.id);
+    await setup.daemon.stop();
+    const client = await connectTestClient(await startOrchestrateDaemon({ dataDir, home }));
+    const recorder = recordEvents(client);
+
+    const woken = await client.call('orchestrator.wake', { sessionId: worker.sessionId });
+
+    expect(woken).toMatchObject({ endedAt: null, zoneId: worker.zoneId, worktree: worker.worktree, branch: worker.branch });
+    const sessionStart = await recorder.waitFor(
+      (e: DaemonEvent): e is HookEvent => e.type === 'hook' && e.sessionId === worker.sessionId && e.event === 'SessionStart',
+    );
+    expect(sessionStart.payload).toMatchObject({ source: 'resume', session_id: worker.sessionId });
+  }, 30_000);
+
   it('never forces: while the shell its pane dropped into runs something, the restart is refused and the shell runs on', async () => {
     const setup = await orchestrateDaemon();
     const { agent: me, token, connection } = await agentSide(setup, setup.zone.id);
@@ -1896,7 +1914,7 @@ describe('pausing and waking an agent', () => {
     ]);
   }, 30_000);
 
-  it('refuses to wake an agent that is not paused, and pauses one the user started by hand', async () => {
+  it('refuses to wake an agent that is neither paused nor stopped by a restart, and pauses one the user started by hand', async () => {
     const setup = await orchestrateDaemon();
     const lead = await agentSide(setup, setup.zone.id);
     const worker = await crewAgent(setup, { zoneId: setup.zone.id, name: 'worker' });
@@ -1904,7 +1922,7 @@ describe('pausing and waking an agent', () => {
 
     await expect(lead.connection.call('orchestrator.wake', { token: lead.token, sessionId: worker.sessionId })).rejects.toMatchObject({
       code: RPC_ERROR.invalidParams,
-      message: 'worker is not paused',
+      message: 'worker is not paused or stopped by a restart',
     });
     await untilAgentAfter(setup, 0, elsewhere.sessionId, (agent) => agent.state === 'idle' || agent.state === 'waiting');
     expect((await lead.connection.call('orchestrator.pause', { token: lead.token, sessionId: elsewhere.sessionId })).hibernated).toMatchObject({ by: lead.agent.name });

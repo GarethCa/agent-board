@@ -179,6 +179,8 @@ function testDaemonOptions(): Omit<DaemonOptions, 'dataDir'> {
     credentials: createMemoryCredentialStore(),
     // Never asks gh for pull requests unless a test wants it to, with a fake gh.
     pullRequestPollMs: 0,
+    // Brings back nothing a restart stopped unless a test wants it to: most restart a daemon to see what stopped.
+    resumeAfterRestart: false,
   };
 }
 

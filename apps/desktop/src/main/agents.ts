@@ -53,6 +53,7 @@ export function registerAgentIpc(daemon: DaemonLink, dataDir: string): void {
   passthrough(daemon, AGENT_IPC.subagentTranscript, 'agent.subagentTranscript', (sessionId: string, toolUseId: string, agentId?: string) => ({ sessionId, toolUseId, agentId }));
   passthrough(daemon, AGENT_IPC.interrupt, 'agent.interrupt', (sessionId: string) => ({ sessionId }));
   passthrough(daemon, AGENT_IPC.continueOnCredits, 'agent.continueOnCredits', (sessionId: string) => ({ sessionId }));
+  passthrough(daemon, AGENT_IPC.carryOn, 'agent.carryOn', (sessionId: string) => ({ sessionId }));
   passthrough(daemon, AGENT_IPC.sendUnsent, 'agent.sendUnsent', (sessionId: string) => ({ sessionId }));
   passthrough(daemon, AGENT_IPC.clearUnsent, 'agent.clearUnsent', (sessionId: string) => ({ sessionId }));
   passthrough(daemon, AGENT_IPC.typeFirstPrompt, 'agent.typeFirstPrompt', (sessionId: string) => ({ sessionId }));

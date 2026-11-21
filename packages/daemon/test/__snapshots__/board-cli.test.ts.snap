@@ -1513,8 +1513,9 @@ Exits 0 when they are there, and 3 (not 0) when it gave up first: wait again. So
 exports[`agent-board --help > has help for wake 1`] = `
 "usage: agent-board wake <ref> [--json]
 
-Wakes a paused agent: starts it again in its tile, worktree and branch, carrying on its
-conversation, as its tile's Wake does. Refused for an agent that is not paused.
+Wakes a paused agent, or one a restart stopped: starts it again in its tile, worktree and
+branch, carrying on its conversation, as its tile's Wake does (one a restart cut off mid-turn is
+told to carry on). Refused for an agent that is neither.
 
   --json   Print the agent as JSON.
 "

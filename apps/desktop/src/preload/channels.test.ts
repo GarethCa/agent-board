@@ -7,6 +7,7 @@ const CHANNELS: string[] = [
   'agent:answerQuestion',
   'agent:askSelection',
   'agent:captureSelection',
+  'agent:carryOn',
   'agent:changed',
   'agent:clearUndelivered',
   'agent:clearUnsent',

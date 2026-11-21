@@ -168,6 +168,56 @@ test('Wake all after a daemon restart wakes only the agent that was working, tol
   }
 });
 
+test('after a daemon restart every agent comes back by itself, typed nothing, and Carry on tells only the cut-off one', async () => {
+  const { dir, repo, env } = scratch('output');
+  const dataDir = tempDataDir();
+  const apps: ElectronApplication[] = [];
+  const resumeEnv = { ...env, AGENT_BOARD_RESUME_AFTER_RESTART: '1' };
+  try {
+    const first = await launch(dataDir, { ...resumeEnv, FAKE_HARNESS_HANG_TOOL: '1' });
+    apps.push(first.app);
+    await pickFolderNext(first.app, repo);
+    await browseForZone(first.window);
+    await spawnAgent(first.window, 'monorepo', 'Run the tests', { name: 'busy' });
+    await spawnAgent(first.window, 'monorepo', 'Lint the docs', { name: 'quiet' });
+    const busy = (page: Page) => tile(page).filter({ hasText: 'busy' });
+    const quiet = (page: Page) => tile(page).filter({ hasText: 'quiet' });
+    await expect(busy(first.window)).toHaveAttribute('data-state', 'running');
+    await expect(quiet(first.window)).toHaveAttribute('data-state', 'running');
+    await first.window.evaluate(async () => {
+      const agent = (await self.agentBoard.agents.list()).find((a) => a.name === 'quiet')!;
+      await self.agentBoard.agents.interrupt(agent.sessionId);
+    });
+    await expect(quiet(first.window)).toHaveAttribute('data-state', 'idle');
+    await connectedDaemonPid(first.window);
+    await first.app.close();
+    await stopDaemon(dataDir);
+
+    const second = await launch(dataDir, resumeEnv);
+    apps.push(second.app);
+    const again = second.window;
+    // Both back in their conversations, the user having pressed nothing.
+    await expect(busy(again)).not.toHaveAttribute('data-state', 'stopped-by-restart');
+    await expect(quiet(again)).not.toHaveAttribute('data-state', 'stopped-by-restart');
+    await expect(banner(again)).toContainText(/^2 came back after the restart · 1 was cut off mid-turn/);
+    await expect(banner(again)).toHaveAttribute('data-cut-off', '1');
+    // Nothing typed to either: the cut-off one waits at its prompt for the user's say.
+    await busy(again).dblclick();
+    await expect(screen(again)).not.toContainText('carry on from where you were');
+
+    await banner(again).getByRole('button', { name: 'Carry on' }).click();
+    await expect(banner(again)).toBeHidden();
+    await expect(screen(again)).toContainText('The app restarted; carry on from where you were.');
+    const told = await again.evaluate(() => self.agentBoard.agents.list());
+    expect(told.find((agent: Agent) => agent.name === 'quiet')).toMatchObject({ endedAt: null, cutOffMidTurn: false });
+    await expect(quiet(again)).toHaveAttribute('data-state', /^(idle|waiting)$/);
+  } finally {
+    for (const app of apps) await app.close().catch(() => {});
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('Dismiss puts the banner away for good, and each stopped tile keeps its own Wake', async () => {
   const { dir, repo, env } = scratch('waiting');
   const dataDir = tempDataDir();

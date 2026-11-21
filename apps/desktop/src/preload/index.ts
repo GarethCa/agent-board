@@ -314,6 +314,7 @@ const api: AgentBoardApi = {
     subagentTranscript: (sessionId, toolUseId, agentId) => invoke(AGENT_IPC.subagentTranscript, sessionId, toolUseId, agentId),
     interrupt: (sessionId) => invoke(AGENT_IPC.interrupt, sessionId),
     continueOnCredits: (sessionId) => invoke(AGENT_IPC.continueOnCredits, sessionId),
+    carryOn: (sessionId) => invoke(AGENT_IPC.carryOn, sessionId),
     sendUnsent: (sessionId) => invoke(AGENT_IPC.sendUnsent, sessionId),
     clearUnsent: (sessionId) => invoke(AGENT_IPC.clearUnsent, sessionId),
     typeFirstPrompt: (sessionId) => invoke(AGENT_IPC.typeFirstPrompt, sessionId),

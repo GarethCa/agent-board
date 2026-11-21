@@ -326,9 +326,23 @@ export interface AgentHost {
    * new prompt: Claude with `--resume`, Codex with `codex resume` (or afresh if it can't). Ends the shell its pane
    * dropped into, refusing with `shellBusy` while that runs something, unless `force`. Refuses a running agent.
    * With `fresh` it starts a new conversation under a new harness session id instead (the old one goes to
-   * `Agent.earlierConversations`), on `fresh.prompt` if given. `why` says who asked, for the log.
+   * `Agent.earlierConversations`), on `fresh.prompt` if given. `why` says who asked, for the log. One cut off mid-turn
+   * is told to carry on (`CONTINUE_LINE`) as it resumes in its conversation, unless `quiet`: then it comes back at its
+   * prompt typed nothing, still `cutOffMidTurn`, for the user to tell to carry on (`carryOn`).
    */
-  resume(sessionId: string, why: string, force: boolean, fresh?: { prompt?: string }): Promise<Agent>;
+  resume(sessionId: string, why: string, force: boolean, fresh?: { prompt?: string }, quiet?: boolean): Promise<Agent>;
+  /**
+   * Types the continue line (`CONTINUE_LINE`) at the prompt of a live agent whose turn a restart cut off
+   * (`cutOffMidTurn`), once it is ready for its next message, as `tell` does: the user's Carry on. Refuses one that
+   * wasn't cut off, has ended, or isn't ready, saying why.
+   */
+  carryOn(sessionId: string): Promise<Agent>;
+  /** Marks the live agent as one the daemon's start brought back after a restart (`backAfterRestart`), and says so. */
+  broughtBack(sessionId: string): void;
+  /** Marks the agents the daemon's start is about to bring back (`comingBackAfterRestart`), and says so. */
+  comingBack(sessionIds: readonly string[]): void;
+  /** Drops every `comingBackAfterRestart` mark once the start has tried them all, and says so. */
+  restartPassDone(): void;
   /** Answers one of the agent's held permission prompts. */
   decidePermission(sessionId: string, requestId: string, decision: PermissionDecision): void;
   /** Releases one of the agent's held permission prompts unanswered, so the harness asks in its terminal now. */
@@ -354,7 +368,7 @@ export interface AgentHost {
    * Types `text` for the board at the live agent's prompt, once it is ready for its next message, as a hand-off is
    * (`whyNotReady`): never into a turn, a question or the user's half-typed line. Not started, busy, otherwise.
    */
-  tell(to: string, text: string): Promise<RunStart>;
+  tell(to: string, text: string, what?: string): Promise<RunStart>;
   /** The agent's final message from the turn it last finished, if it has finished one. */
   finalMessage(sessionId: string): string | undefined;
   /** Hears what a client typed into the agent's terminal, so a run never adds to a draft at its prompt. */
