@@ -222,7 +222,8 @@ export const TicketViewsContext = createContext<TicketViews>({});
 /** What a double-click on an agent's or shell tile opens: its tiles' tooltips and ⋯ menus say so. */
 export const ClickOpensContext = createContext<ClickOpens>('window');
 
-export const TileActionsContext = createContext<TileActions>({
+/** What a tile's actions do with no board to do them on: nothing, but rename. A popped-out window starts from these. */
+export const NO_TILE_ACTIONS: TileActions = {
   expand: () => {},
   collapse: () => {},
   setTicketView: () => {},
@@ -281,7 +282,9 @@ export const TileActionsContext = createContext<TileActions>({
   retryAgentStart: () => {},
   dismissStart: () => {},
   renameStart: async () => {},
-});
+};
+
+export const TileActionsContext = createContext<TileActions>(NO_TILE_ACTIONS);
 
 /** What a shell tile's folder chip needs: home, to show it as `~`, and where to open a new pane. */
 export interface ShellFolders {

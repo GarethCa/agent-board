@@ -21,7 +21,9 @@ export const VIEWPORT = { width: 1280, height: 800 };
  */
 export async function settle(page: Page) {
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  await page.waitForFunction(() => document.querySelector<HTMLElement>('.react-flow__viewport')?.style.willChange !== 'transform');
+  await expect
+    .poll(() => page.evaluate(() => document.querySelector<HTMLElement>('.react-flow__viewport')?.style.willChange ?? ''), { message: 'the board drawn sharp after its camera stopped (no will-change: transform)' })
+    .not.toBe('transform');
   await page.evaluate(async () => {
     await document.fonts.ready;
     await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));

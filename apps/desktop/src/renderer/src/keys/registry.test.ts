@@ -223,6 +223,14 @@ describe('a key of the Simplified design', () => {
 });
 
 describe('the cheat sheet', () => {
+  it("in a pop-up, leaves out a session window's keys a pop-up doesn't answer, and keeps the rest of the window's first", () => {
+    const sheet = cheatSheet('pop-up', { extended: true, simplified: false });
+    expect(sheet[0]?.id).toBe('window');
+    expect(ids(sheet)).not.toContain('window.details');
+    expect(ids(sheet)).not.toContain('window.next');
+    expect(ids(sheet)).toContain('window.newTab');
+    expect(ids(cheatSheet('window', { extended: true, simplified: false }))).toContain('window.details');
+  });
 
   it('lists every active key once under Classic, its own keys alone, and leaves the new ones out with the setting off', () => {
     const classic = ids(cheatSheet('board', { extended: true, simplified: false }));

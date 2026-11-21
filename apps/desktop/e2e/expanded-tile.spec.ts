@@ -301,9 +301,8 @@ test('a Claude agent tile expands in place with its details and live terminal, m
     await tile(window).dblclick();
     await expect(expandedTile(window)).toHaveCount(0);
     if (simplified) {
-      // Back to board is in its header's ⋯ under the Simplified design, and Done closes the window it comes back to.
-      await popped.locator('.session-window-head').getByRole('button', { name: 'More', exact: true }).click();
-      await clickClosing(popped, popped.getByRole('menuitem', { name: 'Back to board' }));
+      // Back to board is in its header, as in the Classic design, and Done closes the window it comes back to.
+      await clickClosing(popped, popped.getByRole('button', { name: 'Back to board' }));
       await expect(sessionWindow(window)).toHaveAttribute('data-state', 'attached');
       await window.getByRole('button', { name: 'Done, close Pick a database' }).click();
     } else {

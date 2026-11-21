@@ -1,9 +1,25 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { Agent, Shell } from '@agent-board/daemon/protocol';
 import { WINDOW_QUERY, type WindowTarget } from '../../../preload/api';
 import { errorMessage } from '../../../shared/errors';
 import { HeldPromptsNotice } from '../inbox/Inbox';
+import { SquareArrowDownLeft, X } from 'lucide-react';
+import { PopUpSession, TicketPopupBody, type PopUpSplitting, type PopUpWindow } from '../board/AgentPopup';
+import type { PopupSplit } from '../board/popup-split';
+import { popUpHelpers } from '../board/agent-popup';
+import { tokenNumber } from '../theme';
+import { NO_TILE_ACTIONS, TileActionsContext } from '../board/tile';
+import { tileNodeId } from '../board/tiles';
+import { frostedClasses } from '../board/paused';
+import { useNeedsYouShows } from '../needs-you-setting';
+import { requestPopUpReview } from '../review/review-tab';
 import { SessionWindow } from '../session/SessionWindow';
+import { dropKey } from '../session/shell-moves';
+import { requestTab } from '../session/tab-request';
+import type { AttachState } from '../session/TerminalPane';
+import { Button, useToast } from '../ui';
+import { POP_OUT_DROPS, popOutActions } from './pop-out-actions';
+import { withChange } from './live-agents';
 import { keptLayout } from '../session/use-window-panes';
 import { PopOutSpotlight } from './PopOutSpotlight';
 import { useCheatSheet } from '../keys/CheatSheet';
@@ -11,8 +27,8 @@ import { ParkThought } from '../keys/ParkThought';
 import { handOffWebTabs } from './SessionWindows';
 import { usePopOutMoves } from './use-pop-out-moves';
 
-/** A popped-out window is a session window: its cheat sheet opens on the window's keys. */
-const windowContext = () => 'window' as const;
+/** A popped-out agent is its pop-up, and its cheat sheet opens on the pop-up's keys; a shell or tab window's on a session window's. */
+const sheetContextOf = (kind: WindowTarget['kind']) => () => (kind === 'session' ? ('pop-up' as const) : ('window' as const));
 
 /**
  * A session window popped out into its own OS window: the whole window, with a button to pop it back in; or a tab
@@ -37,7 +53,7 @@ export function PopOutWindow({ target: opened }: { target: WindowTarget }) {
     setTarget(to);
   };
   // ⌘/ opens the cheat sheet here too, on the session window's keys.
-  const cheatSheet = useCheatSheet(windowContext);
+  const cheatSheet = useCheatSheet(useMemo(() => sheetContextOf(target.kind), [target.kind]));
   return (
     <>
       {target.kind === 'tabs' ? (
@@ -78,10 +94,17 @@ function useWindowTitle(name: string | undefined) {
 /** Back to the board, its web tabs' pages going with it as they are. */
 const popIn = (target: WindowTarget) => () => void handOffWebTabs(target).then(() => window.agentBoard.windows.popIn(target.id));
 
+/**
+ * A popped-out agent: its pop-up, in a window of its own, with the same header, tabs and sidebar views; its header holds
+ * the OS window's traffic lights, Back to board and, in its ⋯, Close window. Until its agent is listed, a plain session
+ * window. The board's Open review on it opens its Review view here.
+ */
 function PoppedSession({ target, notice }: PoppedProps) {
   const { id, title } = target;
-  const agent = useLiveAgent(id);
+  const { agent, agents } = useLiveAgents(id);
   useWindowTitle(agent?.name);
+  useEffect(() => window.agentBoard.windows.onReviewAsked(() => requestPopUpReview(id)), [id]);
+  if (agent !== undefined) return <PoppedAgent agent={agent} agents={agents} target={target} notice={notice} />;
   return (
     <SessionWindow
       content={{ kind: 'session', sessionId: id, agent }}
@@ -96,6 +119,74 @@ function PoppedSession({ target, notice }: PoppedProps) {
         </>
       }
     />
+  );
+}
+
+/**
+ * The pop-up of a popped-out agent, filling its window, its menu doing in the window what it can and asking the board
+ * the rest: a ticket's chat with its helpers' tabs and its Board view, as its pop-up on the board has.
+ */
+function PoppedAgent({ agent, agents, target, notice }: PoppedProps & { agent: Agent; agents: readonly Agent[] }) {
+  const root = useRef<HTMLElement>(null);
+  const [attach, setAttach] = useState<AttachState>('attaching');
+  // Two agents side by side, as in the pop-up; the window is already all its own, so a split fills it as it is.
+  const [split, setSplit] = useState<PopupSplit>();
+  const shows = useNeedsYouShows();
+  const toast = useToast();
+  const nodeId = tileNodeId('agent', agent.sessionId);
+  const report = useMemo(() => (action: string) => (error: unknown) => toast.show({ tone: 'error', message: `Could not ${action}: ${errorMessage(error)}` }), [toast]);
+  const actions = useMemo(
+    () =>
+      popOutActions(NO_TILE_ACTIONS, {
+        api: window.agentBoard,
+        sessionId: agent.sessionId,
+        requestTab,
+        requestReviewTab: requestPopUpReview,
+        report,
+      }),
+    [report, agent.sessionId],
+  );
+  const helpers = popUpHelpers(agent, agents);
+  const others = usePoppedOut().filter((id) => id !== agent.sessionId);
+  const splitting: PopUpSplitting = { split, onSplit: setSplit, agents, popped: others };
+  const board = useMemo(() => ({ agents, desk: { gap: tokenNumber('--desk-dot-gap'), size: tokenNumber('--desk-dot-size') }, onError: report }), [agents, report]);
+  const own: PopUpWindow = {
+    buttons: (
+      <Button size="sm" icon={<SquareArrowDownLeft />} onClick={popIn(target)}>
+        Back to board
+      </Button>
+    ),
+    menuEnd: [{ label: 'Close window', icon: <X />, onSelect: () => window.close() }],
+    drops: POP_OUT_DROPS,
+    notice: (
+      <>
+        {notice}
+        <HeldPromptsNotice agent={agent} />
+      </>
+    ),
+    onAttachState: setAttach,
+  };
+  return (
+    <TileActionsContext value={actions}>
+      <section
+        ref={root}
+        className={frostedClasses('agent-popup agent-popup-own-window', agent, shows)}
+        data-testid="session-window"
+        data-session-id={agent.sessionId}
+        // A tab, pane or shell tile dropped on it, header too, joins its tabs: as a session window's.
+        data-tab-drop={dropKey({ kind: 'agent', id: agent.sessionId })}
+        data-state={attach}
+        data-ticket={helpers !== undefined || undefined}
+      data-split={split !== undefined || undefined}
+        aria-label={`${agent.name}, popped out`}
+      >
+        {helpers === undefined ? (
+          <PopUpSession agent={agent} nodeId={nodeId} onClose={() => window.close()} root={root} splitting={splitting} window={own} />
+        ) : (
+          <TicketPopupBody chat={agent} helpers={helpers} on={undefined} popped={others} nodeId={nodeId} onClose={() => window.close()} root={root} board={board} splitting={splitting} window={own} />
+        )}
+      </section>
+    </TileActionsContext>
   );
 }
 
@@ -162,32 +253,45 @@ function useTabWindowLayout(id: string): void {
   }, [id]);
 }
 
-/** The session's agent, kept live; undefined for a shell session (or until the list arrives). Closes the window when the agent is deleted. */
-function useLiveAgent(sessionId: string): Agent | undefined {
-  const [agent, setAgent] = useState<Agent>();
+/**
+ * The session's agent and every agent, kept live: undefined until the list arrives (and for a shell session). Closes
+ * the window when its agent is deleted. A change that lands while the list is in flight is newer than it; without the
+ * list, the window knows what has changed since.
+ */
+function useLiveAgents(sessionId: string): { agent: Agent | undefined; agents: readonly Agent[] } {
+  const [agents, setAgents] = useState<readonly Agent[]>([]);
   useEffect(() => {
-    let changed = false;
+    let listed: readonly Agent[] | undefined;
+    const early = new Map<string, Agent | null>();
+    const show = (list: readonly Agent[]) => {
+      listed = list;
+      setAgents(list);
+    };
     const unsubscribe = window.agentBoard.agents.onChanged((change) => {
-      if ((change.type === 'agent.updated' ? change.agent.sessionId : change.sessionId) !== sessionId) return;
-      if (change.type === 'agent.removed') {
-        // The agent was deleted, perhaps from the CLI or by an orchestrator: nothing is left to show.
-        window.close();
-        return;
-      }
-      changed = true;
-      setAgent(change.agent);
+      const id = change.type === 'agent.updated' ? change.agent.sessionId : change.sessionId;
+      // The agent was deleted, perhaps from the CLI or by an orchestrator: nothing is left to show.
+      if (change.type === 'agent.removed' && id === sessionId) return void window.close();
+      const now = change.type === 'agent.updated' ? change.agent : null;
+      if (listed === undefined) early.set(id, now);
+      else show(withChange(listed, id, now));
     });
-    // A change that lands while the list is in flight is newer than it. Without the list, the window is a plain
-    // session's until the agent's next change.
-    window.agentBoard.agents.list().then(
-      (agents) => {
-        if (!changed) setAgent(agents.find((known) => known.sessionId === sessionId));
-      },
-      () => {},
-    );
+    const settle = (list: readonly Agent[]) => show([...early].reduce((each, [id, now]) => withChange(each, id, now), list));
+    window.agentBoard.agents.list().then(settle, () => settle([]));
     return unsubscribe;
   }, [sessionId]);
-  return agent;
+  return { agent: agents.find((known) => known.sessionId === sessionId), agents };
+}
+
+/** The sessions popped out into windows of their own, read as the window opens and each time it comes forward. */
+function usePoppedOut(): readonly string[] {
+  const [popped, setPopped] = useState<readonly string[]>([]);
+  useEffect(() => {
+    const read = () => void window.agentBoard.windows.poppedOut().then(setPopped, () => {});
+    read();
+    window.addEventListener('focus', read);
+    return () => window.removeEventListener('focus', read);
+  }, []);
+  return popped;
 }
 
 /**

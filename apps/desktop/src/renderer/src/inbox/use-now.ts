@@ -1,17 +1,24 @@
-import { useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useState } from 'react';
 import { startSinceClock } from '../../../shared/needs-you';
 import { toGoChangesIn } from '../board/tile-shows';
 
+/**
+ * A fixed time for the hooks below to give in place of the clock's, under a page that must look the same on any day
+ * (a gallery its screenshots are taken from). The app gives none, so they keep the clock's.
+ */
+export const FixedNow = createContext<number | null>(null);
+
 /** The time now, re-rendering every second while `ticking`, for countdowns. */
 export function useNow(ticking: boolean): number {
+  const fixed = useContext(FixedNow);
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
-    if (!ticking) return;
+    if (!ticking || fixed !== null) return;
     setNow(Date.now());
     const timer = setInterval(() => setNow(Date.now()), 1_000);
     return () => clearInterval(timer);
-  }, [ticking]);
-  return now;
+  }, [ticking, fixed]);
+  return fixed ?? now;
 }
 
 /**
@@ -21,9 +28,10 @@ export function useNow(ticking: boolean): number {
  * late or early, as `at` falls anywhere within a minute.
  */
 export function useNowForSince(at: string): number {
+  const fixed = useContext(FixedNow);
   const [now, setNow] = useState(Date.now);
-  useEffect(() => startSinceClock(at, setNow), [at]);
-  return now;
+  useEffect(() => (fixed === null ? startSinceClock(at, setNow) : undefined), [at, fixed]);
+  return fixed ?? now;
 }
 
 /**
@@ -31,9 +39,10 @@ export function useNowForSince(at: string): number {
  * differently, at each whole minute before `at`, so a tile showing one re-renders once a minute. Never moves with no `at`.
  */
 export function useNowToward(at: string | null): number {
+  const fixed = useContext(FixedNow);
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
-    if (at === null) return;
+    if (at === null || fixed !== null) return;
     let timer: ReturnType<typeof setTimeout>;
     const tick = () => {
       const time = Date.now();
@@ -42,6 +51,6 @@ export function useNowToward(at: string | null): number {
     };
     tick();
     return () => clearTimeout(timer);
-  }, [at]);
-  return now;
+  }, [at, fixed]);
+  return fixed ?? now;
 }

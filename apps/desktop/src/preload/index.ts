@@ -488,6 +488,9 @@ const api: AgentBoardApi = {
       take();
       return unsubscribe;
     },
+    askReview: (id) => invoke(WINDOW_IPC.askReview, id),
+    poppedOut: () => invoke(WINDOW_IPC.poppedOut),
+    onReviewAsked: (listener) => subscribe(WINDOW_IPC.reviewAsked, () => listener()),
     chrome: windowChrome(process.platform),
     acceptAfterMs: acceptAfterFrom(process.argv),
     isFullScreen: () => invoke(WINDOW_IPC.isFullScreen),

@@ -1,7 +1,7 @@
 import { expect, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
-import { agents, clickPopOut, launch, sessionWindow, SHELL_ENV, showTerminalView, spawnAgent, TURN_MS, windowKey } from './agent-helpers.ts';
-import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test, tabText, newShellInZone } from './launch.ts';
+import { agents, launch, sessionWindow, SHELL_ENV, showTerminalView, spawnAgent, TURN_MS, windowKey } from './agent-helpers.ts';
+import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test, newShellInZone } from './launch.ts';
 import { scratch } from './scratch.ts';
 import { serveWebPages } from './web-server.ts';
 
@@ -80,11 +80,6 @@ async function dragEventAt(page: Page, type: 'dragover' | 'drop', point: { x: nu
   );
 }
 
-/** Holds the drag over the point of `page` until the window there would take it, as it does once it has heard of the drag. */
-async function holdOver(page: Page, point: { x: number; y: number }, json: string): Promise<void> {
-  await expect.poll(() => dragEventAt(page, 'dragover', point, json)).toBe(true);
-}
-
 const middleOf = async (element: Locator) => {
   const box = (await element.boundingBox())!;
   return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
@@ -134,26 +129,10 @@ async function undoIn(page: Page, redo = false): Promise<void> {
   await page.keyboard.press(redo ? redoKey : undoKey);
 }
 
-/** A point of bare board in view on the board's window. */
-const bareBoard = (page: Page) =>
-  page.evaluate(() => {
-    for (let y = 120; y < window.innerHeight - 120; y += 20) {
-      for (let x = window.innerWidth - 260; x > 160; x -= 20) {
-        if (document.elementFromPoint(x, y)?.classList.contains('react-flow__pane') === true) return { x, y };
-      }
-    }
-    throw new Error('no bare board in view');
-  });
-
-/** Pops the session window shown on the board out, by its button. */
-async function popOutShown(app: ElectronApplication, board: Page): Promise<Locator> {
-  const [popped] = await Promise.all([app.waitForEvent('window'), clickPopOut(sessionWindow(board))]);
-  const shown = sessionWindow(popped);
-  await expect(shown).toBeVisible();
-  return shown;
-}
-
-test('a shell tab drags out to a window of its own, from a pop-out onto another window and the board, between two pop-outs, each undone with ⌘Z from any window, the shell never restarting', async () => {
+// Shell tabs drag between windows from the board's session window and from shell and tab windows. An agent's pop-out
+// is its pop-up, whose tab row reorders its own tabs but has no drag to another window and takes none: dragging a
+// shell tab out of a pop-out, or onto one, is a follow-up.
+test('a shell tab drags out of the board\'s session window to a window of its own, and ⌘Z on the board puts it back, the shell never restarting', async () => {
   const { dir, repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env);
@@ -162,9 +141,7 @@ test('a shell tab drags out to a window of its own, from a pop-out onto another 
     await browseForZone(window);
     await spawnAgent(window, 'monorepo', 'Wire the fallback');
     await expect(window.getByTestId('agent-tile')).toHaveCount(1, { timeout: TURN_MS });
-    await spawnAgent(window, 'monorepo', 'Review the fallback');
-    await expect(window.getByTestId('agent-tile')).toHaveCount(2, { timeout: TURN_MS });
-    const [impl, review] = await agents(window);
+    const [impl] = await agents(window);
 
     // A shell tab in the implementer's window, with output of its own.
     await agentTile(window, impl!.sessionId).dblclick();
@@ -192,105 +169,6 @@ test('a shell tab drags out to a window of its own, from a pop-out onto another 
     await expect(tabsOf(implWindow)).toHaveCount(2);
     await expect(shellTiles(window)).toHaveCount(0);
     expect(await ownerOf(window, pane)).toEqual({ kind: 'agent', id: impl!.sessionId });
-
-    // From the implementer's popped-out window onto the reviewer's tab strip on the board.
-    const implPopped = await popOutShown(app, window);
-    await expect(tabsOf(implPopped)).toHaveCount(2);
-    await agentTile(window, review!.sessionId).dblclick();
-    const reviewWindow = sessionWindow(window);
-    await expect(reviewWindow.getByTestId('session-tabs')).toBeVisible();
-    // Its end says no window took it, with the pointer off every window: the reviewer's window did, and nothing pops out.
-    await pointerAt(app, OFF_EVERY_WINDOW);
-    const windowsBefore = app.windows().length;
-    await dragAcross(tabNamed(implPopped, 'sh'), reviewWindow.getByTestId('session-tabs'), undefined, undefined, 'none');
-    await expect(tabsOf(reviewWindow)).toHaveCount(2);
-    await expect(tabsOf(implPopped)).toHaveCount(1);
-    expect(await ownerOf(window, pane)).toEqual({ kind: 'agent', id: review!.sessionId });
-    expect(await running(window, pane)).toBe(true);
-    await window.waitForTimeout(500);
-    expect(app.windows()).toHaveLength(windowsBefore);
-
-    // ⌘Z in the pop-out takes it back there, through the board's history; ⇧⌘Z does it again, ⌘Z undoes that.
-    await undoIn(implPopped.page());
-    await expect(tabsOf(implPopped)).toHaveCount(2);
-    await expect(tabsOf(reviewWindow)).toHaveCount(1);
-    await undoIn(implPopped.page(), true);
-    await expect(tabsOf(reviewWindow)).toHaveCount(2);
-    await undoIn(implPopped.page());
-    await expect(tabsOf(implPopped)).toHaveCount(2);
-
-    // Between two pop-outs, onto the body of the reviewer's, and back with ⌘Z on the board.
-    const reviewPopped = await popOutShown(app, window);
-    await showTerminalView(reviewPopped.page());
-    await expect(tabsOf(reviewPopped)).toHaveCount(1);
-    await dragAcross(tabNamed(implPopped, 'sh'), reviewPopped.getByTestId('session-terminal').first(), reviewPopped.getByTestId('window-pane-drop'), { attribute: 'data-zone', value: 'center' });
-    await expect(tabsOf(reviewPopped)).toHaveCount(2);
-    await expect(tabsOf(implPopped)).toHaveCount(1);
-    expect(await ownerOf(window, pane)).toEqual({ kind: 'agent', id: review!.sessionId });
-    await expect(reviewPopped.getByTestId('session-window-astray')).toHaveText(`sh runs in ${impl!.name}'s worktree`);
-    await tabNamed(reviewPopped, 'sh').getByRole('tab').click();
-    await expect(shownTab(reviewPopped).locator('.xterm-rows')).toContainText('moved-42');
-    await undoIn(window);
-    await expect(tabsOf(implPopped)).toHaveCount(2);
-    await expect(tabsOf(reviewPopped)).toHaveCount(1);
-
-    // From a pop-out onto bare board: a shell tile there, and ⌘Z in the pop-out takes it back.
-    const json = await startDrag(tabNamed(implPopped, 'sh'));
-    const bare = await bareBoard(window);
-    await holdOver(window, bare, json);
-    await dragEventAt(window, 'drop', bare, json);
-    await endDrag(implPopped.page(), 'move');
-    await expect(shellTiles(window)).toHaveCount(1);
-    await expect(tabsOf(implPopped)).toHaveCount(1);
-    expect(await ownerOf(window, pane)).toBeNull();
-    await undoIn(implPopped.page());
-    await expect(shellTiles(window)).toHaveCount(0);
-    await expect(tabsOf(implPopped)).toHaveCount(2);
-    expect(await running(window, pane)).toBe(true);
-
-    // Let go over a window that won't take it (its own pop-out), a drag pops nothing out.
-    await startDrag(tabNamed(implPopped, 'sh'));
-    const bounds = await app.evaluate(
-      ({ BrowserWindow }, id) => BrowserWindow.getAllWindows().find((each) => each.webContents.getURL().includes(`popOut=${id}`))!.getBounds(),
-      impl!.sessionId,
-    );
-    await letGo(app, implPopped.page(), { x: bounds.x + 40, y: bounds.y + 20 });
-    await implPopped.page().waitForTimeout(500);
-    expect(app.windows()).toHaveLength(3);
-    expect(await ownerOf(window, pane)).toEqual({ kind: 'agent', id: impl!.sessionId });
-
-    // With the board's window closed, a tab dragged out of a pop-out opens the board, and pops out as ever.
-    await Promise.all([
-      window.waitForEvent('close'),
-      app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((each) => !each.webContents.getURL().includes('popOut='))!.close()),
-    ]);
-    await startDrag(tabNamed(implPopped, 'sh'));
-    const opened: Page[] = [];
-    const boardAndPopOut = new Promise<void>((resolve) => {
-      const heard = (page: Page) => {
-        opened.push(page);
-        if (opened.length < 2) return;
-        app.off('window', heard);
-        resolve();
-      };
-      app.on('window', heard);
-    });
-    await letGo(app, implPopped.page(), OFF_EVERY_WINDOW);
-    await boardAndPopOut;
-    const board = opened.find((page) => !page.url().includes('popOut='))!;
-    const outAgain = opened.find((page) => page.url().includes('kind=shell'))!;
-    await expect(sessionWindow(outAgain).locator('.xterm-rows')).toContainText('moved-42');
-    await expect(shellTiles(board)).toHaveCount(1);
-    await expect(tabsOf(implPopped)).toHaveCount(1);
-    expect(await ownerOf(board, pane)).toBeNull();
-    expect(await running(board, pane)).toBe(true);
-
-    // The agent's own tab let go on bare board pops its window back in.
-    const own = await startDrag(tabNamed(implPopped, tabText('claude')));
-    const spot = await bareBoard(board);
-    await holdOver(board, spot, own);
-    await Promise.all([implPopped.page().waitForEvent('close'), dragEventAt(board, 'drop', spot, own)]);
-    await expect(sessionWindow(board)).toHaveAttribute('data-session-id', impl!.sessionId);
   } finally {
     await app.close();
     await removeDataDir(dataDir);

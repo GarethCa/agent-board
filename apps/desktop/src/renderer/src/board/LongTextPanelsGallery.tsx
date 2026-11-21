@@ -4,6 +4,7 @@ import { AgentShelves, type ShelfActions } from '../session/AgentShelves';
 import type { RecordDeletes } from '../session/RecordList';
 import type { ShelfId } from '../session/shelves';
 import { Inbox } from '../inbox/Inbox';
+import { FixedNow } from '../inbox/use-now';
 import { ZoneJump } from '../chrome/ZoneJump';
 import { ForYou } from '../master/MasterPanel';
 import { SinceYouLooked } from '../master/SinceYouLooked';
@@ -238,31 +239,34 @@ export function LongTextPanelsGallery() {
   // Before its children first render, so the digest reads this look; never at import, which every window does.
   useState(seedLastLook);
   return (
-    <section className="long-text-gallery" data-testid="long-text-gallery" aria-label="Long text in panels">
-      <div className="long-text-gallery-row">
-        <Sidebar agent={SIDEBAR_AGENT} />
-        <Sidebar agent={NOW_AGENT} />
-        <Sidebar agent={SIDEBAR_AGENT} shelf="made" />
-        <Sidebar agent={SIDEBAR_AGENT} shelf="setup" />
-        <Sidebar agent={SIDEBAR_AGENT} width={200} />
-      </div>
-      <div className="long-text-gallery-row">
-        <div className="long-text-box long-text-panel" style={{ width: 380 }} data-testid="long-text-box">
-          <Inbox agents={INBOX} zones={[]} onOpen={noop} heading={false} />
+    // Every age and countdown in it from `NOW`, not the clock, so it looks the same on any day.
+    <FixedNow.Provider value={NOW.getTime()}>
+      <section className="long-text-gallery" data-testid="long-text-gallery" aria-label="Long text in panels">
+        <div className="long-text-gallery-row">
+          <Sidebar agent={SIDEBAR_AGENT} />
+          <Sidebar agent={NOW_AGENT} />
+          <Sidebar agent={SIDEBAR_AGENT} shelf="made" />
+          <Sidebar agent={SIDEBAR_AGENT} shelf="setup" />
+          <Sidebar agent={SIDEBAR_AGENT} width={200} />
         </div>
-        <div className="long-text-box long-text-panel" style={{ width: 380 }} data-testid="long-text-box">
-          <MasterForYou />
+        <div className="long-text-gallery-row">
+          <div className="long-text-box long-text-panel" style={{ width: 380 }} data-testid="long-text-box">
+            <Inbox agents={INBOX} zones={[]} onOpen={noop} heading={false} />
+          </div>
+          <div className="long-text-box long-text-panel" style={{ width: 380 }} data-testid="long-text-box">
+            <MasterForYou />
+          </div>
+          <div className="long-text-box long-text-panel" style={{ width: 380 }} data-testid="long-text-box">
+            <SinceYouLooked agents={MASTER_AGENTS} onOpenAgent={noop} />
+          </div>
         </div>
-        <div className="long-text-box long-text-panel" style={{ width: 380 }} data-testid="long-text-box">
-          <SinceYouLooked agents={MASTER_AGENTS} onOpenAgent={noop} />
+        <div className="long-text-gallery-row">
+          {/* Wide enough for the bar to reach its widest, so a zone's name ends in its own ellipsis. */}
+          <div className="long-text-box long-text-zones" style={{ width: 1100 }} data-testid="long-text-box">
+            <ZoneJump zones={ZONES} current={ZONES[0]!.id} onJump={noop} onKeyboardHelp={noop} />
+          </div>
         </div>
-      </div>
-      <div className="long-text-gallery-row">
-        {/* Wide enough for the bar to reach its widest, so a zone's name ends in its own ellipsis. */}
-        <div className="long-text-box long-text-zones" style={{ width: 1100 }} data-testid="long-text-box">
-          <ZoneJump zones={ZONES} current={ZONES[0]!.id} onJump={noop} onKeyboardHelp={noop} />
-        </div>
-      </div>
-    </section>
+      </section>
+    </FixedNow.Provider>
   );
 }
