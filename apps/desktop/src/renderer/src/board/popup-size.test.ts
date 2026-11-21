@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { capBites, clampPopup, dragPopup, fitPopup, parsePopupSize, POPUP_CAP, POPUP_MIN, POPUP_SIZE_KEY, popupRoom, popupSize, readPopupSize, splitPopupSize, writePopupSize } from './popup-size';
+import { capBites, clampPopup, dragPopup, fitPopup, parsePopupSize, POPUP_CAP, POPUP_LAPTOP, POPUP_MIN, POPUP_SIZE_KEY, popupRoom, popupSize, readPopupSize, splitPopupSize, writePopupSize } from './popup-size';
 
 // The room each board leaves the pop-up: the board less the 16px margin round it.
 const LAPTOP = { width: 1408, height: 828 };
@@ -56,8 +56,8 @@ describe('a size dragged by hand', () => {
     expect(clampPopup({ width: 100, height: 100 }, { width: 368, height: 268 })).toEqual({ width: 368, height: 268 });
   });
 
-  it('is kept to the board it shows on, and the fit stands in when there is none', () => {
-    expect(popupSize(LAPTOP, null)).toEqual(fitPopup(LAPTOP));
+  it('is kept to the board it shows on, and the board less its margin stands in when there is none', () => {
+    expect(popupSize(LAPTOP, null)).toEqual(LAPTOP);
     expect(popupSize(LAPTOP, { width: 900, height: 500 })).toEqual({ width: 900, height: 500 });
     // A size dragged on the ultrawide, shown on the laptop.
     expect(popupSize(LAPTOP, { width: 3000, height: 1300 })).toEqual({ width: 1408, height: 828 });
@@ -83,7 +83,7 @@ describe('the size kept for every pop-up', () => {
     expect(readPopupSize(storage)).toEqual({ width: 900, height: 501 });
   });
 
-  it('is dropped by a reset, which gives the fit back', () => {
+  it('is dropped by a reset, which gives its default size back', () => {
     const storage = memory({ [POPUP_SIZE_KEY]: '{"width":900,"height":500}' });
     writePopupSize(null, storage);
     expect(readPopupSize(storage)).toBeNull();
@@ -122,18 +122,53 @@ describe('the pop-up split, two agents side by side', () => {
     expect(popupSize(LAPTOP, saved, { split: true })).toEqual(LAPTOP);
     expect(popupSize(LAPTOP, saved)).toEqual(saved);
     expect(popupSize(LAPTOP, null, { split: true })).toEqual(LAPTOP);
-    expect(popupSize(LAPTOP, null)).toEqual(fitPopup(LAPTOP));
+    expect(popupSize(LAPTOP, null)).toEqual(LAPTOP);
+  });
+});
+
+describe('on a board the cap leaves alone, a laptop, the pop-up opens to its full width', () => {
+  // A 1512 x 982 MacBook window's board less its margins: the 16:10 fit would leave about 60px of board either side.
+  const MACBOOK = { width: 1480, height: 840 };
+
+  it('opens as wide as the room, not held to 16:10, and as tall as it', () => {
+    expect(fitPopup(MACBOOK).width).toBeLessThan(MACBOOK.width);
+    expect(popupSize(MACBOOK, null)).toEqual(MACBOOK);
+  });
+
+  it('on a tall board, is as wide as the room with the 16:10 height, so it is never taller than wide', () => {
+    expect(popupSize({ width: 968, height: 1168 }, null)).toEqual({ width: 968, height: 605 });
+  });
+
+  it("drags out from its side edge to the room's edge, and no further", () => {
+    const narrowed = dragPopup(popupSize(MACBOOK, null), 'e', -300, 0, popupRoom(MACBOOK, false));
+    expect(narrowed.width).toBe(880);
+    expect(dragPopup(narrowed, 'e', 600, 0, popupRoom(MACBOOK, false))).toEqual(MACBOOK);
+    expect(dragPopup(narrowed, 'w', -600, 0, popupRoom(MACBOOK, false))).toEqual(MACBOOK);
+  });
+
+  it('counts a 16" MacBook Pro at its default and a 14" at More Space as laptops: full width, no cap, no fill', () => {
+    for (const room of [{ width: 1696, height: 960 }, { width: 1768, height: 1004 }]) {
+      expect(capBites(room)).toBe(false);
+      expect(popupSize(room, null)).toEqual(room);
+      expect(popupSize(room, null, { split: true })).toEqual(room);
+    }
+  });
+
+  it('set to fill from a wide screen, still opens to the full width', () => {
+    expect(popupSize(MACBOOK, null, { fill: true })).toEqual(MACBOOK);
   });
 });
 
 describe('on a wide screen the pop-up stops at 1600px, unless set to fill it', () => {
-  // A 3440px board less its margins, and the widest board the cap leaves alone (1632px), and one a pixel wider.
+  // A 3440px board less its margins, and the widest board the cap leaves alone, a laptop's (1832px), and one a pixel
+  // wider.
   const WIDE = { width: 3408, height: 1408 };
-  const AT = { width: 1600, height: 1000 };
-  const PAST = { width: 1601, height: 1000 };
+  const AT = { width: 1800, height: 1000 };
+  const PAST = { width: 1801, height: 1000 };
 
-  it('bites only on a board wider than 1632px', () => {
+  it('bites only on a board wider than a laptop’s, 1832px', () => {
     expect(POPUP_CAP).toBe(1600);
+    expect(POPUP_LAPTOP).toBe(1800);
     expect(capBites(LAPTOP)).toBe(false);
     expect(capBites(AT)).toBe(false);
     expect(capBites(PAST)).toBe(true);
@@ -155,14 +190,31 @@ describe('on a wide screen the pop-up stops at 1600px, unless set to fill it', (
     expect(popupRoom(WIDE, true)).toEqual(WIDE);
   });
 
-  it('keeps a dragged size, no wider than the cap unless set to fill', () => {
+  it('keeps a dragged size past the cap: the cap holds only the size it opens at', () => {
     const saved = { width: 2400, height: 900 };
-    expect(popupSize(WIDE, saved)).toEqual({ width: 1600, height: 900 });
+    expect(popupSize(WIDE, saved)).toEqual(saved);
     expect(popupSize(WIDE, saved, { fill: true })).toEqual(saved);
+    expect(popupSize(WIDE, { width: 4000, height: 900 })).toEqual({ width: 3408, height: 900 });
     expect(popupSize(WIDE, { width: 1200, height: 900 })).toEqual({ width: 1200, height: 900 });
   });
 
-  it('changes nothing on a board of 1632px or less', () => {
+  it("drags its side edges out to the board's edges, past the cap", () => {
+    expect(dragPopup(popupSize(WIDE, null), 'e', 2000, 0, WIDE)).toEqual(WIDE);
+  });
+
+  it('on a wide but short board (a 1920 x 1080 monitor) opens at the cap with its full height, and fill fills it', () => {
+    // Wider than a laptop's, but its 16:10 fit is narrower than the cap.
+    const room = { width: 1888, height: 951 };
+    expect(popupSize(room, null)).toEqual({ width: 1600, height: 951 });
+    expect(popupSize(room, null, { fill: true })).toEqual(room);
+    expect(dragPopup(popupSize(room, null), 'w', -400, 0, room)).toEqual(room);
+  });
+
+  it('on a 1440p board, fill is the 16:10 fit as before', () => {
+    expect(popupSize({ width: 2528, height: 1310 }, null, { fill: true })).toEqual({ width: 2096, height: 1310 });
+  });
+
+  it("changes nothing on a laptop's board, 1832px or less", () => {
     for (const room of [LAPTOP, AT]) {
       for (const split of [false, true]) {
         expect(popupSize(room, null, { split })).toEqual(popupSize(room, null, { split, fill: true }));

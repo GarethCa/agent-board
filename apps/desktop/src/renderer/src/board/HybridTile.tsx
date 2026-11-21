@@ -60,7 +60,7 @@ import { canRestartLive, endedShellLabel } from '../session/RestartAgent';
 import { useReviews } from '../review/ReviewsProvider';
 import { roundsOf } from '../review/reviews';
 import { dropKey, dropOver as dropOverValue } from '../session/shell-moves';
-import { frostedClasses, pausedLine, WAKE_ENDED_HINT, WAKE_HINT, WAKE_NOW_HINT, wakeAct } from './paused';
+import { frostedClasses, pausedLine, shellWakeLabel, WAKE_ENDED_HINT, WAKE_HINT, WAKE_NOW_HINT, wakeAct } from './paused';
 import { FrostMark, FrostWatermark } from './FrostMark';
 import { externalMenu, menuBarAgentEntries, shellMenu } from './menu-model';
 import { useAgentTileMenu } from './agent-tile-menu';
@@ -71,7 +71,7 @@ import { ShelfTile } from './ShelfTile';
 import { ticketHead, ticketTileAsk } from './ticket-tile';
 import { useTicketChatMenu } from './use-ticket-chat-menu';
 import { OneButton as TicketOneButton, useSwitchTicketView, useTicketView, viewRows } from './ticket-parts';
-import { ResumeButton } from './RestartBanner';
+import { WakeButton } from './WakeButton';
 import { ShellFolderChip } from './shell-parts';
 import { useSimplified } from '../design';
 import { quickAskOf, tileDialogOf } from './quick-ask';
@@ -802,12 +802,13 @@ function ShellTile({ id, shell, selected }: { id: string; shell: Shell; selected
         </TileCorner>
       </div>
       <ShellFolderChip shell={shell} />
-      {stopped > 0 && <ResumeRow onResume={() => resumeShell(shell)} />}
       <span className="hybrid-tile-footer">
         <Tag className="hybrid-tile-state" data-testid="shell-tile-panes">
           {panesLabel(panes)}
           {live < panes && ` · ${live} live`}
         </Tag>
+        {/* Panes a restart stopped: the board's Wake, as an asleep agent's, reading Resume. */}
+        {stopped > 0 && <WakeButton className="hybrid-tile-wake" {...shellWakeLabel('resume')} onWake={() => resumeShell(shell)} />}
       </span>
     </div>
   );
@@ -853,7 +854,7 @@ function PausedLine({ hibernated }: { hibernated: NonNullable<Agent['hibernated'
  * something for the user, or starts a paused agent again as Wake always has.
  */
 function OneTileButton({ button, onOpen, onReview, onWake }: { button: OneButton; onOpen(): void; onReview(): void; onWake(): Promise<void> }) {
-  if (button.kind === 'wake') return <WakeButton label={button.label} onHover={button.onHover === true} onWake={onWake} />;
+  if (button.kind === 'wake') return <WakeButton className="hybrid-tile-wake" label={button.label} hint={button.onHover === true ? WAKE_NOW_HINT : WAKE_HINT} onHover={button.onHover === true} onWake={onWake} />;
   return (
     <Button
       size="xs"
@@ -867,42 +868,6 @@ function OneTileButton({ button, onOpen, onReview, onWake }: { button: OneButton
     >
       {button.label}
     </Button>
-  );
-}
-
-/**
- * Its Wake, in its footer: an asleep, done or exited agent starts again in its conversation; one its clock wakes runs now
- * (Wake now), the button shown only while the tile is hovered or holds the focus.
- */
-function WakeButton({ label, onHover, onWake }: { label: string; onHover: boolean; onWake(): Promise<void> }) {
-  const [pending, setPending] = useState(false);
-  return (
-    <Button
-      size="xs"
-      icon={<Play />}
-      className="hybrid-tile-wake nodrag"
-      data-testid="wake"
-      data-on-hover={onHover || undefined}
-      title={onHover ? WAKE_NOW_HINT : WAKE_HINT}
-      disabled={pending}
-      onClick={() => {
-        setPending(true);
-        void onWake().finally(() => setPending(false));
-      }}
-      onDoubleClick={stopPropagation}
-    >
-      {label}
-    </Button>
-  );
-}
-
-/** A tile's Resume button, for a session stopped by a restart: nothing starts again until it is pressed. */
-function ResumeRow({ onResume }: { onResume(): Promise<void> }) {
-  return (
-    <span className="hybrid-tile-resume" onDoubleClick={stopPropagation}>
-      <ResumeButton className="nodrag" onResume={onResume} />
-      Stopped by a restart
-    </span>
   );
 }
 

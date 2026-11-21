@@ -86,6 +86,17 @@ export const WAKE_ANYWAY_WHERE = 'Wake on the banner over its pane asks to end i
 /** What Wake does for a done or exited agent, as its hint. */
 export const WAKE_ENDED_HINT = 'Start it again in its worktree, carrying on its conversation';
 
+/** A shell's Wake, for its panes a restart stopped. */
+export const SHELL_RESUME_HINT = 'Stopped by a restart: start its panes again where they were';
+
+/** A shell's Wake, for a pane whose shell had ended. */
+export const SHELL_RESTART_HINT = 'Its shell has ended: start a new one in this pane';
+
+/** What a shell's Wake button says: Resume after a restart, Restart shell for one that ended. */
+export function shellWakeLabel(act: 'resume' | 'restart'): { label: string; hint: string } {
+  return act === 'resume' ? { label: 'Resume', hint: SHELL_RESUME_HINT } : { label: 'Restart shell', hint: SHELL_RESTART_HINT };
+}
+
 /** Wake's words and hint for the agent, by what it does: Wake now for one its clock wakes, else Wake. */
 export function wakeLabel(act: WakeAct): { label: string; hint: string } {
   if (act === 'run-now') return { label: 'Wake now', hint: WAKE_NOW_HINT };

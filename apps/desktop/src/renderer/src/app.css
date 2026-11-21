@@ -1158,8 +1158,8 @@ kbd {
   }
 }
 
-/* What holds its size (usePopupSize): the 16:10 fit, or the size dragged to, with its edges' handles round it. Until the
-   board is measured, the board less its margin. */
+/* What holds its size (usePopupSize): the board's width less its margin (no wider than the cap on a wide screen), or
+   the size dragged to, with its edges' handles round it. Until the board is measured, the board less its margin. */
 .agent-popup-frame {
   position: relative;
   width: 100%;
@@ -1658,16 +1658,6 @@ kbd {
 .react-flow__node.selected [data-on-hover],
 [data-on-hover]:focus-visible {
   opacity: 1;
-}
-
-.hybrid-tile-resume {
-  display: flex;
-  flex: none;
-  gap: var(--space-2);
-  align-items: center;
-  margin-top: auto;
-  color: var(--state-stopped-by-restart-ink);
-  font-size: var(--font-size-xs);
 }
 
 .restart-agent {

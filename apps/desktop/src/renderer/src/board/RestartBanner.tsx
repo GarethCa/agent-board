@@ -1,8 +1,8 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import type { Agent, Shell } from '@agent-board/daemon/protocol';
-import { Play, RotateCcw } from 'lucide-react';
+import { Play } from 'lucide-react';
 import { VIEW_KEYS } from '../../../shared/view-saver';
-import { Button, ToastView } from '../ui';
+import { ToastView } from '../ui';
 import {
   carryOn,
   cutOffBack,
@@ -103,39 +103,5 @@ export function useRestartBanner(
         onDismiss={() => save(ids)}
       />
     </div>
-  );
-}
-
-/**
- * Resume, for a session a restart stopped (or `label`, e.g. Restart shell for one that exited): pressed once, it waits
- * for the resume to land or fail.
- */
-export function ResumeButton({
-  onResume,
-  className,
-  label = 'Resume',
-  testId = 'resume',
-}: {
-  onResume(): Promise<unknown>;
-  className?: string;
-  label?: string;
-  testId?: string;
-}) {
-  const [pending, setPending] = useState(false);
-  return (
-    <Button
-      size="xs"
-      variant="primary"
-      icon={<RotateCcw />}
-      className={className}
-      data-testid={testId}
-      disabled={pending}
-      onClick={() => {
-        setPending(true);
-        void onResume().finally(() => setPending(false));
-      }}
-    >
-      {label}
-    </Button>
   );
 }

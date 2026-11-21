@@ -1,6 +1,6 @@
-// The size of an agent's pop-up (AgentPopup.tsx): the largest 16:10 box in the room it has, or the size the user dragged
-// it to, kept for every pop-up. The room is the board less the margin round the pop-up, which is the CSS's (the scrim's
-// padding), measured by the pop-up. Pure, so it is unit-tested; the storage is the one side effect, at the end.
+// The size of an agent's pop-up (AgentPopup.tsx): as wide as the room it has, no taller than 16:10, or the size
+// the user dragged it to, kept for every pop-up. The room is the board less the margin round the pop-up, which is the
+// CSS's (the scrim's padding), measured by the pop-up. Pure, so it is unit-tested; the storage is the one side effect, at the end.
 
 export interface Size {
   width: number;
@@ -17,19 +17,25 @@ export type PopupEdge = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
 export const POPUP_EDGES: readonly PopupEdge[] = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'];
 
 /**
- * The widest a pop-up grows, in px, on a wide screen, unless it is set to fill it: its room, split or not, stops at this
- * width, centred, and keeps its full height. A board no wider than this plus its margins never meets it.
+ * The widest a pop-up opens, in px, on a wide screen, unless it is set to fill it: its room, split or not, stops at this
+ * width, centred, and keeps its full height. A laptop's board (`POPUP_LAPTOP`) never meets it, and a drag goes past it.
  */
 export const POPUP_CAP = 1600;
 
-/** Whether `room` is wider than the cap: a wide screen, where the pop-up stops at it unless set to fill. */
+/**
+ * The widest room, in px, that counts as a laptop's, which the pop-up fills less its margin and the cap leaves alone: a
+ * 16" MacBook Pro's board at its default (a room of about 1696px) and a 14" one's at More Space (about 1768px) fit.
+ */
+export const POPUP_LAPTOP = 1800;
+
+/** Whether `room` is wider than a laptop's: a wide screen, where the pop-up stops at the cap unless set to fill. */
 export function capBites(room: Size): boolean {
-  return room.width > POPUP_CAP;
+  return room.width > POPUP_LAPTOP;
 }
 
-/** The room a pop-up may take: all of `room` set to fill, else no wider than the cap. */
+/** The room a pop-up may take: all of `room` on a laptop's board or set to fill, else no wider than the cap. */
 export function popupRoom(room: Size, fill: boolean): Size {
-  return fill ? room : { width: Math.min(room.width, POPUP_CAP), height: room.height };
+  return fill || !capBites(room) ? room : { width: Math.min(room.width, POPUP_CAP), height: room.height };
 }
 
 /** The largest 16:10 box that fits `room`. */
@@ -56,15 +62,20 @@ export function splitPopupSize(room: Size): Size {
 }
 
 /**
- * The pop-up's size in `room`: split, all the room it may take; else the size dragged to, kept to that room, else the
- * 16:10 fit, no wider than that room. Unless set to `fill`, the room stops at the cap's width with all its height.
+ * The pop-up's size in `room`. Split, all the room it may take: the cap's width on a wide screen unless set to `fill`.
+ * Else the size dragged to, kept to the whole room: the cap holds only the size it opens at, so its side edges always
+ * drag out to the board's edges. Else it opens with the 16:10 fit's height: a laptop's board as wide as the room less
+ * its margin, a wide screen's at the cap; set to fill, a wide screen's is the 16:10 fit, or the room's width where that
+ * fit is narrower than the cap.
  */
 export function popupSize(room: Size, saved: Size | null, { split = false, fill = false }: { split?: boolean; fill?: boolean } = {}): Size {
-  const most = popupRoom(room, fill);
-  if (split) return splitPopupSize(most);
-  if (saved !== null) return clampPopup(saved, most);
+  if (split) return splitPopupSize(popupRoom(room, fill));
+  if (saved !== null) return clampPopup(saved, room);
   const fit = fitPopup(room);
-  return { width: Math.min(fit.width, most.width), height: fit.height };
+  // Set to fill, a wide but short board, where the 16:10 fit is narrower than the cap, is filled to its width.
+  const filled = fit.width >= POPUP_CAP ? fit.width : room.width;
+  const width = capBites(room) ? (fill ? filled : POPUP_CAP) : Math.max(0, room.width);
+  return { width, height: fit.height };
 }
 
 /**

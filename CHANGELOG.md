@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.7.2 (2026-11-21)
+
+- After a restart, the Captain, agents' exit banners and shells all show the board's Wake button
+- On a laptop the pop-up opens to the board's full width, less its margin
+- The pop-up's tabs keep their width when you click one
+
 ## v0.7.1 (2026-11-21)
 
 - The long-text gallery's ages and countdowns come from its fixed time, not the clock

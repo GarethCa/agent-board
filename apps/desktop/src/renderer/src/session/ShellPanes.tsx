@@ -1,7 +1,8 @@
 import { useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { Shell, ShellOwner } from '@agent-board/daemon/protocol';
 import { errorMessage } from '../../../shared/errors';
-import { ResumeButton } from '../board/RestartBanner';
+import { shellWakeLabel } from '../board/paused';
+import { WakeButton } from '../board/WakeButton';
 import { paneLabel } from '../board/rename';
 import { TileActionsContext } from '../board/tile';
 import { EditableName, RenameButton, useRenaming } from '../ui';
@@ -151,8 +152,10 @@ function StoppedPane({
       <div className="shell-pane-banner shell-pane-stopped" role="status" data-testid="shell-pane-stopped">
         {problem ?? 'Stopped by a restart'}
         {/* Its problem said here: a popped-out window has no board to report it. */}
-        <ResumeButton
-          onResume={() =>
+        <WakeButton
+          {...shellWakeLabel('resume')}
+          testId="resume"
+          onWake={() =>
             window.agentBoard.shells.resumePane(shellId, sessionId).then(
               () => {},
               (error: unknown) => setProblem(`Could not resume: ${errorMessage(error)}`),
@@ -193,10 +196,10 @@ function Pane({
   }, [endedAtStart, sessionId, onStatus]);
   // Its problem said here: a popped-out window has no board to report it.
   const restart = (
-    <ResumeButton
-      label="Restart shell"
+    <WakeButton
+      {...shellWakeLabel('restart')}
       testId="restart-shell"
-      onResume={() =>
+      onWake={() =>
         window.agentBoard.shells.resumePane(shellId, sessionId).then(
           () => {
             setProblem(undefined);
