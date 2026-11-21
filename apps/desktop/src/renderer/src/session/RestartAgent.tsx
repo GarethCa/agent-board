@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import type { Agent } from '@agent-board/daemon/protocol';
-import { Play } from 'lucide-react';
 import { errorMessage } from '../../../shared/errors';
-import { restartsInPlace } from '../board/paused';
+import { restartsInPlace, WAKE_ENDED_HINT } from '../board/paused';
+import { WakeButton } from '../board/WakeButton';
 import { Button, ErrorText } from '../ui';
 
 export { canRestart } from '../board/paused';
@@ -35,10 +35,10 @@ export function RestartAgent({ agent, className, label = 'Wake', testId = 'resta
   const [pending, setPending] = useState(false);
   const [busy, setBusy] = useState<string>();
   const [problem, setProblem] = useState<string>();
-  const restart = (force: boolean) => {
+  const restart = (force: boolean): Promise<void> => {
     setPending(true);
     setProblem(undefined);
-    window.agentBoard.agents
+    return window.agentBoard.agents
       .restart(agent.sessionId, force)
       .then(
         (result) => setBusy(result.status === 'busy' ? result.message : undefined),
@@ -50,7 +50,7 @@ export function RestartAgent({ agent, className, label = 'Wake', testId = 'resta
     return (
       <span className={`restart-agent ${className ?? ''}`} role="alert" data-testid="restart-agent-busy">
         {busy}. Wake it anyway?
-        <Button size="xs" variant="danger" disabled={pending} onClick={() => restart(true)}>
+        <Button size="xs" variant="danger" disabled={pending} onClick={() => void restart(true)}>
           Wake anyway
         </Button>
         <Button size="xs" variant="ghost" onClick={() => setBusy(undefined)}>
@@ -61,9 +61,7 @@ export function RestartAgent({ agent, className, label = 'Wake', testId = 'resta
   }
   return (
     <span className={`restart-agent ${className ?? ''}`}>
-      <Button size="xs" variant="primary" icon={<Play />} data-testid={testId} disabled={pending} onClick={() => restart(false)}>
-        {label}
-      </Button>
+      <WakeButton label={label} hint={WAKE_ENDED_HINT} testId={testId} onWake={() => restart(false)} />
       {problem && <ErrorText>{problem}</ErrorText>}
     </span>
   );

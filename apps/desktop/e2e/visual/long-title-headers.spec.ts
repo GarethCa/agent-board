@@ -26,8 +26,8 @@ async function outside(head: Locator, frame: Locator): Promise<string[]> {
 }
 
 // An agent with a very long name, pinned expanded and then in its pop-up, in both designs, light and dark: the name
-// ellipsises, with its whole text on hover, and every button keeps to the header at its size. The pop-up is the
-// largest 16:10 box in the board less its small margin, over the board frosted, dimmed, or dimmed deeper with reduced
+// ellipsises, with its whole text on hover, and every button keeps to the header at its size. The pop-up is as wide
+// as the board less its small margin, no taller than 16:10, over the board frosted, dimmed, or dimmed deeper with reduced
 // transparency. Dragged smaller by a corner it keeps its new size for the next pop-up, and a double-click fits it again.
 for (const design of ['classic', 'simplified'] as const) for (const { theme, suffix: dark } of THEMES) {
   const suffix = `${design === 'simplified' ? '-simplified' : ''}${dark}`;
@@ -79,20 +79,20 @@ for (const design of ['classic', 'simplified'] as const) for (const { theme, suf
       await settle(window);
       await expect.soft(popupHead).toHaveScreenshot(`long-title-popup-header${suffix}.png`, SHOT);
 
-      // Its size: the largest 16:10 box in the board less 16px each side, centred on it.
+      // Its size: as wide as the board less 16px each side, as tall as that or 16:10, centred on it.
       const scrim = window.getByTestId('agent-popup-scrim');
       const board = (await scrim.boundingBox())!;
       const client = await scrim.evaluate((el) => ({ width: el.clientWidth, height: el.clientHeight }));
       const box = (await popup.boundingBox())!;
-      const fit = Math.min(board.width - 32, (board.height - 32) * 1.6);
+      const fit = { width: board.width - 32, height: Math.min(board.height - 32, (board.width - 32) / 1.6) };
       const seen = JSON.stringify({ board, client, box, fit });
       console.log(`pop-up fit ${suffix || '-classic'}: ${seen}`);
       const centred = (at: { x: number; y: number; width: number; height: number }) => {
         expect(Math.abs(at.x + at.width / 2 - (board.x + board.width / 2)), seen).toBeLessThanOrEqual(1);
         expect(Math.abs(at.y + at.height / 2 - (board.y + board.height / 2)), seen).toBeLessThanOrEqual(1);
       };
-      expect(Math.abs(box.width - fit), seen).toBeLessThanOrEqual(1);
-      expect(Math.abs(box.height - fit / 1.6), seen).toBeLessThanOrEqual(1);
+      expect(Math.abs(box.width - fit.width), seen).toBeLessThanOrEqual(1);
+      expect(Math.abs(box.height - fit.height), seen).toBeLessThanOrEqual(1);
       centred(box);
 
       // Dragged in by its bottom-right corner, it shrinks by twice the drag each way, staying centred, and every pop-up
@@ -153,7 +153,7 @@ for (const design of ['classic', 'simplified'] as const) for (const { theme, suf
       await expect.soft(window).toHaveScreenshot(`popup-frost-reduced-transparency${suffix}.png`, whole);
       await cdp.send('Emulation.setEmulatedMedia', { features: [] });
 
-      // A double-click on an edge gives the fit back and forgets the size.
+      // A double-click on an edge gives its default size back and forgets the size.
       await window.getByTestId('agent-popup-edge-e').dblclick();
       const refit = (await popup.boundingBox())!;
       expect(Math.abs(refit.width - box.width)).toBeLessThanOrEqual(1);

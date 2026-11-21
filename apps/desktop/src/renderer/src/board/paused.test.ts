@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent } from '@agent-board/daemon/protocol';
 import { galleryAgent } from './TileGallery';
-import { asleep, endedAs, frostedClasses, frozenChip, frozenKind, PAUSE_HINT, pauseControl, pausedLine, WAKE_ENDED_HINT, WAKE_HINT, WAKE_NOW_HINT, wakeAct, wakeLabel } from './paused';
+import { asleep, endedAs, frostedClasses, frozenChip, frozenKind, PAUSE_HINT, pauseControl, pausedLine, WAKE_ENDED_HINT, WAKE_HINT, WAKE_NOW_HINT, wakeAct, wakeLabel, shellWakeLabel, SHELL_RESTART_HINT, SHELL_RESUME_HINT } from './paused';
 
 const idle: Pick<Agent, 'endedAt' | 'state' | 'ask' | 'removeAsk' | 'plan' | 'permissions'> = { endedAt: null, state: 'idle', ask: null, removeAsk: null, plan: null, permissions: [] };
 
@@ -137,5 +137,16 @@ describe('what Wake does', () => {
     expect(wakeLabel('run-now')).toEqual({ label: 'Wake now', hint: WAKE_NOW_HINT });
     expect(wakeLabel('restart')).toEqual({ label: 'Wake', hint: WAKE_ENDED_HINT });
     expect(wakeLabel('resume')).toEqual({ label: 'Wake', hint: WAKE_HINT });
+  });
+});
+
+describe("a shell's Wake", () => {
+  it('reads Resume for panes a restart stopped, and says why', () => {
+    expect(shellWakeLabel('resume')).toEqual({ label: 'Resume', hint: SHELL_RESUME_HINT });
+    expect(SHELL_RESUME_HINT).toMatch(/^Stopped by a restart/);
+  });
+
+  it('reads Restart shell for a pane whose shell ended', () => {
+    expect(shellWakeLabel('restart')).toEqual({ label: 'Restart shell', hint: SHELL_RESTART_HINT });
   });
 });

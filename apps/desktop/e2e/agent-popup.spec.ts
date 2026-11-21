@@ -51,9 +51,10 @@ test("a double-click opens the agent's pop-up over the dimmed board; Esc, – an
     await popup.getByRole('button', { name: 'Back to its tile', exact: true }).click();
     await expect(popup).toHaveCount(0);
 
-    // And a click on the dimmed board, which reaches nothing under it.
+    // And a click on the dimmed board, which reaches nothing under it. On a board this size the pop-up fills it less the
+    // margin, whose corners resize it: the click goes halfway down the left side, outside the edge's strip.
     await agentTile.dblclick();
-    await window.getByTestId('agent-popup-scrim').click({ position: { x: 5, y: 5 } });
+    await scrim.click({ position: { x: 3, y: Math.round(dimmed.height / 2) } });
     await expect(popup).toHaveCount(0);
     await expect(tile(window)).toHaveCount(1);
 
@@ -406,6 +407,45 @@ test('on a wide board the pop-up stops at 1600px, centred; the header button fil
     reached('closing');
     await app.close();
     reached('closed');
+    await removeDataDir(dataDir);
+  }
+});
+
+test("on a laptop-size board the pop-up opens as wide as the board less its margin, and its side edges drag out to the board's edges", async () => {
+  const { repo, env } = scratch('waiting');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, { ...env, AGENT_BOARD_CLICK_OPENS: '' });
+  try {
+    await window.emulateMedia({ reducedMotion: 'reduce' });
+    // A 1512 x 982 MacBook's screen, less its menu bar and the window's title bar: wider than 16:10, so the 16:10 fit
+    // would leave board either side.
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setContentSize(1512, 900));
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await spawnAgent(window, 'monorepo', 'Pick a database');
+    const popup = window.getByTestId('agent-popup');
+    await tile(window).filter({ hasText: 'Pick a database' }).dblclick();
+    await expect(popup).toBeVisible();
+    const board = (await window.locator('.board').boundingBox())!;
+    expect(board.width / board.height).toBeGreaterThan(16 / 10);
+    // Opens as wide as the board less the margin each side, as tall as the room lets it be.
+    await expect.poll(async () => Math.round((await popup.boundingBox())?.width ?? 0)).toBe(Math.round(board.width - 32));
+    // Narrowed from its side edge, then dragged back out past the board's edge: it stops at the margin.
+    const edge = window.getByTestId('agent-popup-edge-e');
+    const drag = async (dx: number) => {
+      const at = (await edge.boundingBox())!;
+      await window.mouse.move(at.x + at.width / 2, at.y + at.height / 2);
+      await window.mouse.down();
+      await window.mouse.move(at.x + at.width / 2 + dx / 2, at.y + at.height / 2, { steps: 4 });
+      await window.mouse.move(at.x + at.width / 2 + dx, at.y + at.height / 2, { steps: 4 });
+      await window.mouse.up();
+    };
+    await drag(-200);
+    await expect.poll(async () => Math.round((await popup.boundingBox())?.width ?? 0)).toBeLessThan(Math.round(board.width - 300));
+    await drag(600);
+    await expect.poll(async () => Math.round((await popup.boundingBox())?.width ?? 0)).toBe(Math.round(board.width - 32));
+  } finally {
+    await app.close();
     await removeDataDir(dataDir);
   }
 });

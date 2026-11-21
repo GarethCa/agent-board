@@ -7,9 +7,10 @@ import { calmShellFace, shellPanesLine } from './calm-tile';
 import { HarnessMark } from './HarnessMark';
 import { shellMenu } from './menu-model';
 import { useRenameRequest } from './rename';
-import { ResumeButton } from './RestartBanner';
+import { shellWakeLabel } from './paused';
 import { ShellFolderChip } from './shell-parts';
 import { StatusMark } from './StatusMark';
+import { WakeButton } from './WakeButton';
 import { ClickOpensContext, TileActionsContext } from './tile';
 import { nameClass, TileButton, TileMenu } from './tile-parts';
 
@@ -62,7 +63,7 @@ export function CalmShellTile({ id, shell, selected }: { id: string; shell: Shel
       {face.status !== null && (
         <span className="calm-tile-foot">
           <StatusMark status={face.status} />
-          {face.resume && <ResumeButton className="calm-tile-action nodrag" onResume={() => resumeShell(shell)} />}
+          {face.resume && <WakeButton className="calm-tile-action" {...shellWakeLabel('resume')} onWake={() => resumeShell(shell)} />}
         </span>
       )}
       <span className="calm-tile-technical" data-testid="tile-technical" data-technical-detail="">

@@ -37,7 +37,7 @@ import { TicketBoard } from './TicketBoard';
 import { BackToTileButton } from './BackToTile';
 import { setPopupFill, usePopupFill } from './popup-fill';
 import { usePopupFrost } from './popup-frost';
-import { capBites, dragPopup, POPUP_CAP, POPUP_EDGES, popupRoom, popupSize, readPopupSize, writePopupSize, type PopupEdge, type Size } from './popup-size';
+import { capBites, dragPopup, POPUP_CAP, POPUP_EDGES, popupSize, readPopupSize, writePopupSize, type PopupEdge, type Size } from './popup-size';
 import { atRightEdge, besideCandidates, canDropInSplit, dropAtEdge, dropInSplit, openSplit, selectInSplit, tabOnInSplit, type PopupSplit, type SplitSide } from './popup-split';
 import { useCharacterStyle } from './characters';
 import { useNowForSince } from '../inbox/use-now';
@@ -154,8 +154,9 @@ export function AgentPopup({
 const DRAG_SLOP = 3;
 
 /**
- * The pop-up's size on the board under `scrim`: the 16:10 fit, or the size dragged to from its edges and corners, which
- * every pop-up keeps through restarts. A double-click on an edge gives the fit back. It stays centred as it is dragged.
+ * The pop-up's size on the board under `scrim`: the board's width less its margin, or the size dragged to from its
+ * edges and corners, which every pop-up keeps through restarts. A double-click on an edge gives its default size back.
+ * It stays centred as it is dragged, out to the board's edges whatever the cap.
  * Split, it grows to the board's edges, and has its size back as the split ends. On a wide screen (`wide`) it stops at
  * the cap's width, centred, unless set to fill it.
  */
@@ -186,7 +187,7 @@ function usePopupSize(scrim: RefObject<HTMLElement | null>, split: boolean): { s
     if (size === null || room === null || event.button !== 0) return;
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
-    drag.current = { edge, x: event.clientX, y: event.clientY, start: size, room: popupRoom(room, fill), moved: false, last: size };
+    drag.current = { edge, x: event.clientX, y: event.clientY, start: size, room, moved: false, last: size };
   };
   const onMove = (event: PointerEvent<HTMLElement>) => {
     const held = drag.current;
@@ -220,7 +221,7 @@ function usePopupSize(scrim: RefObject<HTMLElement | null>, split: boolean): { s
       data-edge={edge}
       data-testid={`agent-popup-edge-${edge}`}
       aria-hidden
-      title="Drag to resize · double-click to fit"
+      title="Drag to resize · double-click for its default size"
       onPointerDown={onDown(edge)}
       onPointerMove={onMove}
       onPointerUp={onUp}
@@ -1205,11 +1206,12 @@ export function PopupTabs({
         icon: viewIcon(view?.key ?? BOARD_TAB),
         closable: key === active,
         closeHint: `Close ${view?.label ?? key}`,
+        // Its slot exactly while no × is drawn.
         ...(key === active ? {} : { mark: <TabEndSlot /> }),
       };
     // One agent alone has one agent tab: its own, named for its view.
     if (ownLabel !== undefined)
-      return { id: key, label: ownLabel, icon: ownLabel === 'Chat' ? <MessageSquare /> : <SquareTerminal />, title: agent.name, closable: false, closeHint: '', ...(key === active ? {} : { mark: <TabEndSlot /> }) };
+      return { id: key, label: ownLabel, icon: ownLabel === 'Chat' ? <MessageSquare /> : <SquareTerminal />, title: agent.name, closable: false, closeHint: '' };
     const status = humanStatus(agent, shows).status;
     const side = sides?.left === key ? 'left' : sides?.right === key ? 'right' : undefined;
     return {
@@ -1242,7 +1244,8 @@ export function PopupTabs({
       ...(ownLabel !== undefined && shells.length === 1 ? { label: 'Shell', title: shell.title ?? shell.label } : {}),
       icon: shell.icon ?? <SquareTerminal />,
       closable: shell.id === active && shell.closable,
-      ...(shell.id === active ? {} : { mark: <TabEndSlot /> }),
+      // Its slot exactly while no × is drawn, so one that can't be closed keeps its width too.
+      ...(shell.id === active && shell.closable ? {} : { mark: <TabEndSlot /> }),
     });
   const [context, setContext] = useState<{ agent: Agent; at: { x: number; y: number } }>();
   const box = useRef<HTMLDivElement>(null);

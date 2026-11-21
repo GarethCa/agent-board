@@ -4,6 +4,9 @@ import { NEW_AGENT_SIZE } from '@agent-board/daemon/board-layout';
 import type { Agent, BoardItem, Zone } from '@agent-board/daemon/protocol';
 import { Button, ErrorText, StatusPill, Tag, ToolButton } from '../ui';
 import { useAction } from '../use-action';
+import { WakeButton } from '../board/WakeButton';
+import { errorMessage } from '../../../shared/errors';
+import { WAKE_HINT } from '../board/paused';
 import { agentPill, TILE_STATE_LABELS } from '../states';
 import { useNeedsYouShows } from '../needs-you-setting';
 import { heldPrompts, needsYouEntries } from '../../../shared/needs-you';
@@ -197,7 +200,7 @@ export function MasterPanel({ agents, zones, items, side, focusRequest, onSettin
 /** Over a Captain that is not running: the one button that brings it back, as its state calls for. */
 function CaptainRevive({ master }: { master: Agent }) {
   const revival = captainRevival(master);
-  const { busy, error, run } = useAction();
+  const [error, setError] = useState<string>();
   if (revival === undefined) return null;
   if (revival === 'restart') {
     return (
@@ -210,9 +213,15 @@ function CaptainRevive({ master }: { master: Agent }) {
   return (
     <div className="agent-exit-banner" role="status" data-testid="master-revive">
       {master.state === 'stopped-by-restart' ? 'The Captain was stopped by a restart' : 'The Captain is paused'}
-      <Button size="xs" variant="primary" loading={busy} data-testid="master-resume" onClick={() => run(() => window.agentBoard.agents.resume(master.sessionId))}>
-        Wake the Captain
-      </Button>
+      <WakeButton
+        label="Wake the Captain"
+        hint={WAKE_HINT}
+        testId="master-resume"
+        onWake={() => {
+          setError(undefined);
+          return window.agentBoard.agents.resume(master.sessionId).catch((failure: unknown) => setError(errorMessage(failure)));
+        }}
+      />
       {error && <ErrorText>{error}</ErrorText>}
     </div>
   );
