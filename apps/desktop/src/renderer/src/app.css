@@ -1183,6 +1183,16 @@ kbd {
   animation: session-window-in var(--motion-base) var(--ease-out);
 }
 
+/* Popped out, the pop-up is its OS window, filling it: no frame of its own, and it doesn't open in. */
+.agent-popup-own-window {
+  position: fixed;
+  inset: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  animation: none;
+}
+
 /* Its edges and corners, which resize it: a strip along each edge and a square off each corner, all in the margin round
    it, so none of them covers its scrollbars or its header's buttons. */
 .agent-popup-edge {
@@ -1637,7 +1647,8 @@ kbd {
 }
 
 /* A button its tile shows only on hover or focus (a scheduled agent's Wake now, as its clock wakes it anyway): it keeps
-   its spot, so showing it moves nothing, and stays in the tab order (opacity only), so Tab onto it shows it. */
+   its spot, so showing it moves nothing, while the footer has room for it (else it gives way first: `footerFold`), and
+   stays in the tab order (opacity only), so Tab onto it shows it. */
 [data-on-hover] {
   opacity: 0;
   transition: opacity var(--motion-fast) var(--ease-out);
@@ -5216,7 +5227,7 @@ kbd {
 }
 
 /* Popped out on macOS, its traffic lights sit at the header's start (main/chrome.ts), unless full screen hid them. */
-:root[data-chrome='inset']:not([data-full-screen='true']) .session-window-own-window .session-window-head {
+:root[data-chrome='inset']:not([data-full-screen='true']) :is(.session-window-own-window, .agent-popup-own-window) .session-window-head {
   padding-left: calc(var(--size-traffic-lights) + var(--space-3));
 }
 

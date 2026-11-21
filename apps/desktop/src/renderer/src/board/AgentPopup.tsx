@@ -11,12 +11,14 @@ import { keyText, pressed } from '../keys/registry';
 import { isTyping } from '../keys/typing';
 import { useGateRuns } from '../gate/GatesProvider';
 import { useReviews } from '../review/ReviewsProvider';
-import { roundsOf, showsReviewTab } from '../review/reviews';
+import { reviewedOf, roundsOf } from '../review/reviews';
+import { useReviewTabAsked } from '../review/review-tab';
 import { ReviewViewer } from '../review/ReviewViewer';
 import { ActivityLog, useActivity } from '../orchestrators/ActivityLog';
 import type { ShelfViews } from '../session/AgentShelves';
 import { showsShelves } from '../session/agent-sidebar';
 import { SessionBody, type PaneRow, type WindowContent } from '../session/SessionBody';
+import type { AttachState } from '../session/TerminalPane';
 import { adoptChatView, popUpViewKey, useSessionView, type SessionView } from '../session/session-view';
 import { SessionName } from '../session/SessionName';
 import { ROW_TAB_TYPE, TabStrip, useAddEntries, type StripTab, type TabAdds } from '../session/TabStrip';
@@ -41,7 +43,7 @@ import { useCharacterStyle } from './characters';
 import { useNowForSince } from '../inbox/use-now';
 import { useBoardCommands } from './commands';
 import { HarnessMark } from './HarnessMark';
-import { agentMenu, popUpAgentMenu, pullRequestEntries, type BesideChoice, type ModelEntry } from './menu-model';
+import { agentMenu, popUpAgentMenu, pullRequestEntries, withoutRows, type BesideChoice, type ModelEntry } from './menu-model';
 import { nameTarget } from './rename';
 import { StatusMark } from './StatusMark';
 import { ticketFace } from './ticket-tile';
@@ -135,7 +137,7 @@ export function AgentPopup({
         >
           <PopupWideContext.Provider value={wide}>
             {helpers === undefined ? (
-              <PopupBody agent={agent} nodeId={nodeId} onClose={onClose} root={root} splitting={splitting} />
+              <PopUpSession agent={agent} nodeId={nodeId} onClose={onClose} root={root} splitting={splitting} />
             ) : (
               <TicketPopupBody chat={agent} helpers={helpers} on={on} popped={popped} nodeId={nodeId} onClose={onClose} root={root} board={ticketBoard} splitting={splitting} />
             )}
@@ -229,31 +231,51 @@ function usePopupSize(scrim: RefObject<HTMLElement | null>, split: boolean): { s
   return { style: size === null ? undefined : { width: size.width, height: size.height }, edges, wide: room !== null && capBites(room) };
 }
 
+/** What a lone agent's pop-up is drawn in: over the board, or as an OS window of its own, popped out. */
+export interface PopUpWindow {
+  /** Its header's own buttons in place of Expand, Pop out and back to its tile: Back to board, say. */
+  buttons: ReactNode;
+  /** Rows its ⋯ adds at its end: Close window. */
+  menuEnd: MenuEntry[];
+  /** The rows of the agent's menu (by id) left out there: a window of its own is out of the board already. */
+  drops: readonly string[];
+  /** A line over its terminal: why it isn't asking yet, say. */
+  notice: ReactNode;
+  /** Hears how its terminal is attached. */
+  onAttachState(state: AttachState): void;
+}
+
 /**
  * A lone agent's pop-up: its header, with the one Chat | Terminal switch, then its terminal or chat with its sidebar, the
  * views it has listed first there. It has no row of tabs until a second tab opens (a view, a shell); its own tab is then
  * named for the view it shows, and the row goes once the last other tab closes. No row of controls anywhere: they are in
- * its header's ⋯, which is the same menu as an agent tab's ⋯ and a right-click on its tab, and in the row's +.
+ * its header's ⋯, which is the same menu as an agent tab's ⋯ and a right-click on its tab, and in the row's +. Popped
+ * out (`window`), the same, in a window of its own: its header holds the window's own buttons, and drags the window.
  */
-function PopupBody({ agent, nodeId, onClose, root, splitting }: { agent: Agent; nodeId: string; onClose(): void; root: RefObject<HTMLElement | null>; splitting: PopUpSplitting }) {
+export function PopUpSession({ agent, nodeId, onClose, root, splitting, window: own }: { agent: Agent; nodeId: string; onClose(): void; root: RefObject<HTMLElement | null>; splitting: PopUpSplitting; window?: PopUpWindow | undefined }) {
   const { expand, popOutAgent, openAgent } = useContext(TileActionsContext);
   const content: WindowContent = { kind: 'session', sessionId: agent.sessionId, agent };
   const shelves = showsShelves(content);
   const [detailsCollapsed, setDetailsCollapsed] = useSidebarCollapsed(shelves, root, () => false);
-  const kit = useViewKit([agent], agent);
+  const [asked, setAsked] = useState<string>();
+  const kit = useViewKit([agent], agent, asked);
   const row = usePopUpRow({ own: agent, helpers: [], views: kit.views, popped: [], on: undefined, openAtFirst: [], ticket: false, onPopped: openAgent, root });
+  useReviewTabAsked([agent.sessionId], (id) => {
+    setAsked(id);
+    row.openReview();
+  });
   const viewKey = popUpViewKey(agent, false);
   const [picked] = useSessionView(viewKey);
   const [paneRow, setPaneRow] = useState<PaneRow>();
   const tabs = usePaneTabs(row, paneRow);
-  const split = usePopUpSplit(splitting, row, tabs, []);
+  const split = usePopUpSplit(splitting, row, tabs, splitting.popped ?? []);
   const rowTabs = [...row.row, ...split.extra];
   const solo = soloRow([...rowTabs, ...(paneRow?.tabs ?? []).map((tab) => ({ key: tab.id, kind: 'shell' as const }))], picked === 'terminal' ? 'terminal' : 'chat');
   // Rename from ⋯ opens the header's name field, the one name it shows.
   const [renameAsk, setRenameAsk] = useState(0);
   // Another's (the one beside) is renamed in place on its tab.
   const [renamingTab, setRenamingTab] = useState<string>();
-  const menuOf = (of: Agent) => split.menuOf(of, { rename: of.sessionId === agent.sessionId ? () => setRenameAsk((n) => n + 1) : () => setRenamingTab(of.sessionId), openBeside: undefined });
+  const menuOf = (of: Agent) => split.menuOf(of, { rename: of.sessionId === agent.sessionId ? () => setRenameAsk((n) => n + 1) : () => setRenamingTab(of.sessionId), openBeside: undefined, drops: own?.drops });
   const menu = menuOf(agent);
   const instead = (then: () => void) => () => {
     onClose();
@@ -261,16 +283,20 @@ function PopupBody({ agent, nodeId, onClose, root, splitting }: { agent: Agent; 
   };
   return (
     <>
-      <PopupHeader agent={agent} renameAsk={renameAsk}>
+      <PopupHeader agent={agent} renameAsk={renameAsk} dragsWindow={own !== undefined}>
         <PopupViewSwitch viewKey={viewKey} agentOn={tabs.agentOn || split.live !== undefined} />
         <SplitButton split={split.live} beside={split.beside} onEnd={split.end} />
         {/* With no row yet, its + sits in the header: the way to a first shell or view. */}
         {!solo.shows && <PopupPlus paneRow={paneRow} views={kit.views} open={row.open} beside={split.beside} onSelect={split.select} />}
-        <StateAction agent={agent} placement="board" />
-        <IconButton icon={<Expand />} size="sm" aria-label="Expand" tooltip="Expand it here, on its terminal" onClick={instead(() => expand(nodeId))} />
-        <IconButton icon={<SquareArrowOutUpRight />} size="sm" aria-label="Pop out" tooltip="Pop out to its own window" onClick={instead(() => popOutAgent(agent))} />
-        <MoreMenu agent={agent} nodeId={nodeId} menu={menu} />
-        <BackToTileButton from={root} leave={onClose} label="Back to its tile" tooltip="Back to its tile; it keeps running" />
+        <StateAction agent={agent} placement={own === undefined ? 'board' : 'own-window'} />
+        {own === undefined && (
+          <>
+            <IconButton icon={<Expand />} size="sm" aria-label="Expand" tooltip="Expand it here, on its terminal" onClick={instead(() => expand(nodeId))} />
+            <IconButton icon={<SquareArrowOutUpRight />} size="sm" aria-label="Pop out" tooltip="Pop out to its own window" onClick={instead(() => popOutAgent(agent))} />
+          </>
+        )}
+        <MoreMenu agent={agent} nodeId={nodeId} menu={menu} end={own?.menuEnd} />
+        {own === undefined ? <BackToTileButton from={root} leave={onClose} label="Back to its tile" tooltip="Back to its tile; it keeps running" /> : own.buttons}
       </PopupHeader>
       {solo.shows && (
         <PopupTabs
@@ -308,7 +334,18 @@ function PopupBody({ agent, nodeId, onClose, root, splitting }: { agent: Agent; 
           viewKey={viewKey}
           onRow={setPaneRow}
           views={row.shelfViews}
-          cover={row.view === undefined ? undefined : kit.render(row.view, { onDismissed: () => row.close(REVIEW_TAB) })}
+          notice={own?.notice}
+          onAttachState={own?.onAttachState}
+          cover={
+            row.view === undefined
+              ? undefined
+              : kit.render(row.view, {
+                  onDismissed: () => {
+                    setAsked(undefined);
+                    row.close(REVIEW_TAB);
+                  },
+                })
+          }
         />
       </PopupPanes>
     </>
@@ -392,11 +429,13 @@ interface RowKeysTarget {
 }
 
 /** What a pop-up's body splits by: the split, kept by the pop-up (it sizes the window), and the board's agents. */
-interface PopUpSplitting {
+export interface PopUpSplitting {
   split: PopupSplit | undefined;
   onSplit(split: PopupSplit | undefined): void;
   /** Every agent on the board: Open beside… offers the zone's. */
   agents: readonly Agent[];
+  /** A lone agent's: the sessions popped out into windows of their own, which Open beside… leaves out. */
+  popped?: readonly string[] | undefined;
 }
 
 /** The split as a body acts on it (`usePopUpSplit`). */
@@ -662,12 +701,11 @@ function viewIcon(key: PopUpView['key']): ReactNode {
 
 /**
  * The views a pop-up has for its agents, `who` (its chat first) and `owner` (whose activity it shows), and how each is
- * drawn: Activity while the agent has an activity log, Review while one of them has a review to show; a ticket's Board
- * comes from `board`.
+ * drawn: Activity while the agent has an activity log, Review while one of them has a review round, its latest dismissed
+ * too (`reviewedOf`: the one `asked` for from its tile first); a ticket's Board comes from `board`.
  */
-function useViewKit(who: readonly Agent[], owner: Agent, board?: (onOpenAgent: (agent: Agent) => void) => ReactNode) {
-  const reviews = useReviews();
-  const reviewed = who.map((agent) => ({ agent, rounds: roundsOf(reviews, agent.sessionId) })).find(({ rounds }) => showsReviewTab(rounds, false));
+function useViewKit(who: readonly Agent[], owner: Agent, asked: string | undefined, board?: (onOpenAgent: (agent: Agent) => void) => ReactNode) {
+  const reviewed = reviewedOf(who, useReviews(), asked);
   const activity = useActivity(owner.sessionId);
   const hasActivity = activity.lines.length > 0 || activity.error !== undefined;
   const views = popUpViews({ board: board !== undefined, activity: hasActivity, reviewRound: reviewed?.rounds.at(-1)?.round });
@@ -763,15 +801,22 @@ function usePopUpRow({
     views: views.map((each) => ({ key: each.key, label: each.label, icon: viewIcon(each.key), state: viewRow(each.key, open, active) })),
     onOpen: pick,
   };
-  return { row, order, open, view, shown, active, from, pick, back, close, move: (key: string, index: number) => keep(owner, movedTab(order, key, index)), shelfViews, keysRef };
+  // A tile's Open review: its Review view as a tab, or on to its tab when it is open already.
+  const openReview = () => {
+    if (views.some((each) => each.key === REVIEW_TAB)) pick(REVIEW_TAB);
+  };
+  return { row, order, open, view, shown, active, from, pick, back, close, openReview, move: (key: string, index: number) => keep(owner, movedTab(order, key, index)), shelfViews, keysRef };
 }
 
-/** The header: the agent's mark, name and status, then `children`, its buttons, at the end. `renameAsk` going up opens its name field. */
-function PopupHeader({ agent, renameAsk, children }: { agent: Agent; renameAsk: number; children: ReactNode }) {
+/**
+ * The header: the agent's mark, name and status, then `children`, its buttons, at the end. `renameAsk` going up opens
+ * its name field. Popped out, it drags its window, as a window's title bar.
+ */
+function PopupHeader({ agent, renameAsk, dragsWindow, children }: { agent: Agent; renameAsk: number; dragsWindow: boolean; children: ReactNode }) {
   const shows = useNeedsYouShows();
   const simplified = useSimplified();
   return (
-    <header className="session-window-head agent-popup-head">
+    <header className="session-window-head agent-popup-head" data-drag-region={dragsWindow || undefined}>
       <HarnessMark className="session-window-mark" harness={agent.harness} />
       <SessionName agent={agent} name={agent.name} title={agent.name} ask={renameAsk} />
       {simplified ? <StatusMark status={humanStatus(agent, shows).status} /> : <StatusPill {...agentPill(agent, shows)} />}
@@ -790,16 +835,18 @@ interface PopUpMenuHooks {
   openBesideThis?: (() => void) | undefined;
   /** Ends the split, on its right side's menu. */
   closeSide?: (() => void) | undefined;
+  /** The rows of the menu, by id, left out: none, unless the pop-up is in a window of its own. */
+  drops?: readonly string[] | undefined;
 }
 
 /** A menu with nothing of the pop-up's own to do: a gallery's. */
 const NO_MENU_HOOKS = (): PopUpMenuHooks => ({ rename: () => {}, openBeside: undefined });
 
 /** A lone agent's header ⋯: its pull requests with their checks, then the same menu as an agent tab's ⋯. */
-function MoreMenu({ agent, nodeId, menu }: { agent: Agent; nodeId: string; menu: PopUpMenuHooks }) {
+function MoreMenu({ agent, nodeId, menu, end = [] }: { agent: Agent; nodeId: string; menu: PopUpMenuHooks; end?: MenuEntry[] | undefined }) {
   const actions = useContext(TileActionsContext);
   const prs = pullRequestEntries(agent, actions);
-  const entries = [...prs, ...(prs.length > 0 ? ['separator' as const] : []), ...usePopUpAgentEntries(agent, nodeId, menu)];
+  const entries = [...prs, ...(prs.length > 0 ? ['separator' as const] : []), ...usePopUpAgentEntries(agent, nodeId, menu), ...(end.length > 0 ? ['separator' as const, ...end] : [])];
   return (
     <Menu align="end" entries={entries}>
       <IconButton icon={<MoreHorizontal />} size="sm" aria-label="More" tooltip="More: Pause, Run gate, Rename, Stop session, Delete…" />
@@ -825,12 +872,13 @@ function TabContextMenu({ agent, nodeId, menu, at, onClose }: { agent: Agent; no
 }
 
 /** An agent's menu in its pop-up (`popUpAgentMenu`), wired to the board's actions and the pop-up's own. */
-function usePopUpAgentEntries(agent: Agent, nodeId: string, { rename, openBeside, openBesideThis, closeSide }: PopUpMenuHooks): ModelEntry[] {
+function usePopUpAgentEntries(agent: Agent, nodeId: string, { rename, openBeside, openBesideThis, closeSide, drops }: PopUpMenuHooks): ModelEntry[] {
   const actions = useContext(TileActionsContext);
   const clickOpens = useContext(ClickOpensContext);
   const rounds = roundsOf(useReviews(), agent.sessionId);
   const gate = useGateRuns().get(agent.sessionId);
-  return popUpAgentMenu({ nodeId, agent, clickOpens, gate, rounds, rename, actions, openBeside, openBesideThis, closeSide });
+  const entries = popUpAgentMenu({ nodeId, agent, clickOpens, gate, rounds, rename, actions, openBeside, openBesideThis, closeSide });
+  return drops === undefined ? entries : withoutRows(entries, drops);
 }
 
 /** An agent's name, in place of its tab's label while it is renamed from its menu; `onDone` once the field closes. */
@@ -872,7 +920,7 @@ const PANEL_ID = 'agent-popup-panel';
  * pick a place in it. ⌥-click on a tab opens that agent in its own window. Its ⋯ has the ticket's own rows (its pull
  * request with its checks, Watches…, its board) and its chat's.
  */
-function TicketPopupBody({
+export function TicketPopupBody({
   chat,
   helpers,
   on,
@@ -882,6 +930,7 @@ function TicketPopupBody({
   root,
   board,
   splitting,
+  window: own,
 }: {
   chat: Agent;
   helpers: readonly Agent[];
@@ -892,13 +941,17 @@ function TicketPopupBody({
   root: RefObject<HTMLElement | null>;
   board: PopUpBoard | undefined;
   splitting: PopUpSplitting;
+  /** Given when it is a popped-out window's: as `PopUpSession`'s. */
+  window?: PopUpWindow | undefined;
 }) {
   const { expand, popOutAgent, openAgent, openPullRequest } = useContext(TileActionsContext);
   const shows = useNeedsYouShows();
   const face = ticketFace(chat, helpers, shows, { simplified: useSimplified() });
+  const [asked, setAsked] = useState<string>();
   const kit = useViewKit(
     [chat, ...helpers],
     chat,
+    asked,
     board &&
       ((onOpenAgent) => (
         <TicketBoard chatId={chat.sessionId} agents={board.agents} desk={board.desk} onError={board.onError} onLeave={() => row.back()} onOpenAgent={onOpenAgent} inPopUp />
@@ -907,6 +960,13 @@ function TicketPopupBody({
   // Its overview, the Board, is open as it opens.
   const [openAtFirst] = useState(() => viewsOpenAtFirst(kit.views));
   const row = usePopUpRow({ own: chat, helpers, views: kit.views, popped, on, openAtFirst, ticket: true, onPopped: openAgent, root });
+  useReviewTabAsked(
+    [chat, ...helpers].map((agent) => agent.sessionId),
+    (id) => {
+      setAsked(id);
+      row.openReview();
+    },
+  );
   const { shown, order } = row;
   const content: WindowContent = { kind: 'session', sessionId: shown.sessionId, agent: shown };
   const shelves = showsShelves(content);
@@ -919,7 +979,7 @@ function TicketPopupBody({
   const split = usePopUpSplit(splitting, row, tabs, popped);
   // The helper whose tab is renamed in place, from its menu.
   const [renamingTab, setRenamingTab] = useState<string>();
-  const menuOf = (agent: Agent): PopUpMenuHooks => split.menuOf(agent, { rename: () => setRenamingTab(agent.sessionId), openBeside: undefined });
+  const menuOf = (agent: Agent): PopUpMenuHooks => split.menuOf(agent, { rename: () => setRenamingTab(agent.sessionId), openBeside: undefined, drops: own?.drops });
   const instead = (then: () => void) => () => {
     onClose();
     then();
@@ -929,7 +989,7 @@ function TicketPopupBody({
   const name = face.ticketId ?? face.title;
   return (
     <>
-      <header className="session-window-head agent-popup-head">
+      <header className="session-window-head agent-popup-head" data-drag-region={own !== undefined || undefined}>
         {face.ticketId !== undefined && (
           <span className="ticket-tile-id" data-testid="ticket-id">
             <Ticket aria-hidden />
@@ -942,16 +1002,20 @@ function TicketPopupBody({
         <span className="session-window-head-fill" />
         <PopupViewSwitch viewKey={viewKey} agentOn={tabs.agentOn || split.live !== undefined} />
         <SplitButton split={split.live} beside={split.beside} onEnd={split.end} />
-        <StateAction agent={shown} placement="board" />
+        <StateAction agent={shown} placement={own === undefined ? 'board' : 'own-window'} />
         {face.button?.kind === 'merge' && pr !== undefined && prOwner !== undefined && (
           <Button size="sm" variant="primary" icon={<GitMerge />} data-testid="agent-popup-merge" title="Open its pull request, to merge it there" onClick={() => openPullRequest(prOwner, pr)}>
             Merge
           </Button>
         )}
-        <IconButton icon={<Expand />} size="sm" aria-label="Expand" tooltip="Expand it here, on its terminal" onClick={instead(() => expand(nodeId))} />
-        <IconButton icon={<SquareArrowOutUpRight />} size="sm" aria-label="Pop out" tooltip={`Pop out ${shown.name} to its own window`} onClick={instead(() => popOutAgent(shown))} />
-        <TicketMoreMenu chat={chat} helpers={helpers} nodeId={nodeId} name={name} />
-        <BackToTileButton from={root} leave={onClose} label="Back to its tile" tooltip="Back to its tile; it keeps running" />
+        {own === undefined && (
+          <>
+            <IconButton icon={<Expand />} size="sm" aria-label="Expand" tooltip="Expand it here, on its terminal" onClick={instead(() => expand(nodeId))} />
+            <IconButton icon={<SquareArrowOutUpRight />} size="sm" aria-label="Pop out" tooltip={`Pop out ${shown.name} to its own window`} onClick={instead(() => popOutAgent(shown))} />
+          </>
+        )}
+        <TicketMoreMenu chat={chat} helpers={helpers} nodeId={nodeId} name={name} drops={own?.drops} end={own?.menuEnd} />
+        {own === undefined ? <BackToTileButton from={root} leave={onClose} label="Back to its tile" tooltip="Back to its tile; it keeps running" /> : own.buttons}
       </header>
       <PopupTabs
         row={[...row.row, ...split.extra]}
@@ -988,11 +1052,16 @@ function TicketPopupBody({
           viewKey={viewKey}
           onRow={setPaneRow}
           views={row.shelfViews}
+          notice={own?.notice}
+          onAttachState={own?.onAttachState}
           cover={
             row.view === undefined
               ? undefined
               : kit.render(row.view, {
-                  onDismissed: () => row.close(REVIEW_TAB),
+                  onDismissed: () => {
+                    setAsked(undefined);
+                    row.close(REVIEW_TAB);
+                  },
                   // A member of the ticket's row opens on its tab; anything else in its own window.
                   onOpenAgent: (agent) => (order.includes(agent.sessionId) ? tabs.select(agent.sessionId) : openAgent(agent)),
                 })
@@ -1284,9 +1353,27 @@ function TabDot({ status, since }: { status: keyof typeof HUMAN_STATUS_LABELS; s
 }
 
 /** ⋯ of a ticket's pop-up: the ticket's rows (its board, Watches…, its pull request and checks, its chat's kind), then its chat's own, then Close ticket…. */
-function TicketMoreMenu({ chat, helpers, nodeId, name }: { chat: Agent; helpers: readonly Agent[]; nodeId: string; name: string }) {
+function TicketMoreMenu({
+  chat,
+  helpers,
+  nodeId,
+  name,
+  drops,
+  end = [],
+}: {
+  chat: Agent;
+  helpers: readonly Agent[];
+  nodeId: string;
+  name: string;
+  /** As `PopUpMenuHooks`' `drops`. */
+  drops?: readonly string[] | undefined;
+  /** Rows after the rest, a popped-out window's own. */
+  end?: MenuEntry[] | undefined;
+}) {
   const own = usePopupAgentMenu(chat, nodeId);
-  const { entries, watches } = useTicketChatMenu(chat, helpers, [], own, name);
+  const ticket = useTicketChatMenu(chat, helpers, [], own, name);
+  const entries = [...(drops === undefined ? ticket.entries : withoutRows(ticket.entries, drops)), ...(end.length > 0 ? ['separator' as const, ...end] : [])];
+  const { watches } = ticket;
   return (
     <>
       <Menu align="end" entries={entries}>

@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.7.1 (2026-11-21)
+
+- The long-text gallery's ages and countdowns come from its fixed time, not the clock
+- The popped-out window is the pop-up in a window of its own; Open review opens the Review view
+- Round-1 minors: the hover-button and spec comments follow the change, and the settle wait says what it waits for
+
 ## v0.7.0 (2026-11-21)
 
 - On a wide screen the pop-up stops at 1600 px, centred, with a Settings option and a header button to fill it

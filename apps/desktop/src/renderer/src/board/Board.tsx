@@ -72,7 +72,7 @@ import { wakeAct, wakeBusyText } from './paused';
 import { boardMoving, boardSettled } from '../session/terminal-sharpness';
 import { handOffWebTabs, SessionWindowsLayer } from '../windows/SessionWindows';
 import type { NavSession } from '../windows/session-nav';
-import { requestReviewTab } from '../review/review-tab';
+import { requestPopUpReview, requestReviewTab, reviewRoute } from '../review/review-tab';
 import { useReviews } from '../review/ReviewsProvider';
 import { reviewedPullRequests } from '../review/reviews';
 import { requestTab } from '../session/tab-request';
@@ -101,6 +101,7 @@ import {
 import { boardDrop } from '../session/window-drags';
 import { documentSurfaceOf, gateSurfaceOf, liveShellCount, planSurfaceOf, pullRequestSurfaceOf, tabSurface } from '../session/tabs';
 import { shownWindow } from '../windows/session-windows';
+import { doBoardAgentAction } from '../windows/pop-out-actions';
 import { BoardBackdrop } from './BoardBackdrop';
 import { TicketBoard, useBoardLevel } from './TicketBoard';
 import { PrefabBoard, type PrefabBoardStart } from '../crews/PrefabBoard';
@@ -1041,6 +1042,8 @@ function BoardView() {
       return known === undefined ? current : withZone(current, { ...known.data.zone, name });
     });
   }, []);
+  // Whom the pop-up shows, if it is up: its agent and the helpers its ticket holds. A tile's Open review asks it for its Review view.
+  const popUpHolds = useRef<readonly string[]>([]);
   const tileActions = useMemo<TileActions>(
     () => ({
       expand(nodeId) {
@@ -1306,9 +1309,13 @@ function BoardView() {
       startReview: (agent) => void window.agentBoard.reviews.start(agent.sessionId).catch(report('start a review')),
       setTicketChat: (sessionId, kind) => void window.agentBoard.orchestrators.setTicketChat(sessionId, kind).catch(report('switch who builds the ticket')),
       openTicketBoard: boardLevel.open,
+      // Shown in the pop-up already, it opens there as a view; popped out, in its own window, which comes forward.
       openReview(implementer) {
         const agent = agentsRef.current.find((known) => known.sessionId === implementer);
         if (agent === undefined) return;
+        const route = reviewRoute(implementer, popUpHolds.current, poppedOut(implementer));
+        if (route === 'pop-out') return void window.agentBoard.windows.askReview(implementer);
+        if (route === 'pop-up') return requestPopUpReview(implementer);
         requestReviewTab(implementer);
         openAgent(agent);
       },
@@ -2835,6 +2842,7 @@ function BoardView() {
   // Where the cheat sheet opens: in a session window or expanded tile, on the one tile selected, or on the board.
   const cheatSheet = useCheatSheet(
     useCallback((): SheetContext => {
+      if (document.activeElement?.closest('[data-testid="agent-popup"]') != null) return 'pop-up';
       if (document.activeElement?.closest(SESSION_SURFACES) != null) return 'window';
       const [node, ...rest] = editing.selection().nodes;
       return node !== undefined && rest.length === 0 && isSessionTile(node) ? 'tile' : 'board';
@@ -3503,8 +3511,11 @@ function BoardView() {
     // Likewise a prefab's board already open, which may hold changes not saved yet: it says so.
     else if (boardRequest.kind === 'prefab') openPrefab({ prefab: boardRequest.prefab, replaces: boardRequest.replaces });
     else if (boardRequest.kind === 'prefabDraft') openDraftById(boardRequest.id);
-    else showWindow(boardRequest.target);
-  }, [loaded, boardRequest, boardCommands, showWindow, crewFlow, openPrefab, openDraftById]);
+    else if (boardRequest.kind === 'agent') {
+      const agent = agentsRef.current.find((known) => known.sessionId === boardRequest.sessionId);
+      if (agent !== undefined) doBoardAgentAction(tileActions, agent, boardRequest.action);
+    } else showWindow(boardRequest.target);
+  }, [loaded, boardRequest, boardCommands, showWindow, crewFlow, openPrefab, openDraftById, tileActions]);
 
   /** How an agent starts from the issue card `item`: the New agent dialog, the repo picker, or not now. */
   const issueStartOf = useCallback((item: BoardItem, card: IssueCardData) => {
@@ -3758,6 +3769,7 @@ function BoardView() {
   if (popUpId !== undefined && popUpAgent === undefined && popUpEnded(popUpId, agents, windows, expandedRef.current, pinnedRef.current)) setPoppedUp(undefined);
   const closePopUp = useCallback(() => setPoppedUp(undefined), []);
   const popUpHelpersHeld = popUpAgent === undefined ? undefined : popUpHelpers(popUpAgent, agents);
+  popUpHolds.current = popUpAgent === undefined ? [] : [popUpAgent, ...(popUpHelpersHeld ?? [])].map((agent) => agent.sessionId);
 
   return (
     <div

@@ -20,7 +20,8 @@ const TILES: Record<string, Agent> = {
     ...galleryAgent('hibernated'),
     name: 'Mutation rate sweep',
     status: null,
-    hibernated: { at: AT, by: null, byId: null },
+    // Paused a while ago by the clock, as the gallery's other times are, so its age never grows from day to day.
+    hibernated: { at: new Date(Date.now() - 14 * 60_000).toISOString(), by: null, byId: null },
   },
   scheduled: { ...galleryAgent('scheduled'), name: 'Nightly fitness report' },
   problem: { ...galleryAgent('failed'), name: 'Migrate the schema', notice: 'Stopped while running the migration.' },

@@ -47,7 +47,7 @@ test("an agent's Schedule… puts a clock beside its tile, joined to it: the age
     const [agent] = await page.evaluate(() => window.agentBoard.agents.list());
     expect(agent!.schedule).toMatchObject({ cron: '30 6 * * *', prompt: 'Check last night’s build', enabled: true });
 
-    // The badge selects the clock; Edit schedule… opens the clock, which can be folded to a pill and deleted.
+    // The badge selects the clock; Edit its clock… opens the clock, which can be folded to a pill and deleted.
     await tile(page).getByTestId('tile-clock').click();
     await expect(page.locator('.react-flow__node.selected').getByTestId('clock')).toHaveCount(1);
     await page.getByRole('button', { name: 'Fold clock' }).click();

@@ -1433,12 +1433,18 @@ export const WINDOW_IPC = {
   /** main → the board: a `BoardRequest` waits; take it with `takeBoardRequest`. */
   boardRequested: 'window:boardRequested',
   takeBoardRequest: 'window:takeBoardRequest',
+  /** From the board: `(id)` asks the popped-out agent's window to open its Review view, bringing it forward. */
+  askReview: 'window:askReview',
+  /** A popped-out window to main: the IDs of the windows popped out now. */
+  poppedOut: 'window:poppedOut',
+  /** main → a popped-out agent's window: open its Review view (`askReview`). */
+  reviewAsked: 'window:reviewAsked',
 } as const;
 
 /**
  * What a popped-out window asks the board's window to do, from its ⌘K switcher: bring a zone into view, open New agent
- * with a name, or show a session's window there (from a tab window, which has no session of its own to switch); or, from
- * Settings, open a prefab on its own board.
+ * with a name, or show a session's window there (from a tab window, which has no session of its own to switch); from its
+ * agent's menu, what asks first or opens a dialog there; or, from Settings, open a prefab on its own board.
  */
 export type BoardRequest =
   | { kind: 'zone'; zoneId: string }
@@ -1449,7 +1455,12 @@ export type BoardRequest =
   | { kind: 'prefab'; prefab: CrewPrefab & { places?: PrefabPlaces }; replaces: string | null }
   /** A draft an agent made, by its id, opened on its prefab's board, from Settings › Prefabs › Drafts. */
   | { kind: 'prefabDraft'; id: string }
-  | { kind: 'open'; target: WindowTarget };
+  | { kind: 'open'; target: WindowTarget }
+  /** A row of an agent's menu in its popped-out window that the board does: one that asks first, or opens a dialog. */
+  | { kind: 'agent'; sessionId: string; action: BoardAgentAction };
+
+/** What a popped-out agent's menu asks the board to do for it, as its tile's menu would there. */
+export type BoardAgentAction = 'delete' | 'stop' | 'restart' | 'wake' | 'schedule' | 'link-issue' | 'save-prefab' | 'open-review' | 'ticket-board' | 'close-ticket';
 
 /**
  * What switching a popped-out window did: it shows the session now, the session was out in another OS window already
@@ -1566,6 +1577,12 @@ export interface WindowsApi {
   requestBoard(request: BoardRequest): Promise<void>;
   /** In the board: calls `listener` with each request a popped-out window made of it. Returns the unsubscribe function. */
   onBoardRequested(listener: (request: BoardRequest) => void): () => void;
+  /** From the board: asks the agent's popped-out window, if it is out, to open its Review view, and brings it forward. */
+  askReview(id: string): Promise<void>;
+  /** The IDs of the sessions popped out into windows of their own now. */
+  poppedOut(): Promise<string[]>;
+  /** In a popped-out agent's window: calls `listener` when the board asks it to open its Review view. Returns the unsubscribe function. */
+  onReviewAsked(listener: () => void): () => void;
   /** How this window is framed. */
   chrome: WindowChrome;
   /** How long Accept changes waits for Undo before it merges, in ms: 10 s, shorter only where a test sets `AGENT_BOARD_ACCEPT_AFTER_MS` (`shared/accept.ts`). */

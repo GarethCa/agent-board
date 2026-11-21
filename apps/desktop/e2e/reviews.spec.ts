@@ -105,3 +105,40 @@ test("a reviewer spawned from an implementer's tile leaves its doc and ends; the
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a popped-out implementer's tile's Open review brings its window forward on its Review tab", async () => {
+  const { dir, repo, env } = scratch('review');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, env);
+  try {
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await spawnAgent(window, 'monorepo', 'Write the code');
+    const coder = tile(window).filter({ hasText: 'Write the code' });
+    await expect(coder).toHaveAttribute('data-state', 'waiting');
+    const [coderAgent] = await agents(window);
+    await tileAction(coder, 'Review its work', 'Review & gate');
+    await expect.poll(async () => (await rounds(window))[0]?.status, { timeout: REVIEW_MS }).toBe('ready');
+
+    // Popped out from its tile (the board keeps which agents are out), it is its pop-up in a window of its own.
+    const [popped] = await Promise.all([
+      app.waitForEvent('window'),
+      tileAction(coder, 'Pop out'),
+    ]);
+    const own = popped.getByTestId('session-window');
+    await expect(own).toHaveAttribute('data-session-id', coderAgent!.sessionId);
+    const reviewTab = own.getByRole('tab', { name: 'Review · round 1' });
+    // Before it is asked for, its Review view is in the sidebar only, not a tab in the row.
+    await expect(reviewTab).toHaveCount(0);
+
+    // Its tile's Open review goes to that window, on its Review tab; the board opens no session window of its own.
+    await tileAction(coder, 'Open review', 'Review & gate');
+    await expect(reviewTab).toHaveAttribute('aria-selected', 'true');
+    await expect(own.getByTestId('review-viewer').getByTestId('review-verdict')).toContainText('Changes requested');
+    await expect(sessionWindow(window)).toHaveCount(0);
+  } finally {
+    await app.close().catch(() => {});
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -135,6 +135,15 @@ export function registerWindowIpc({ open, view, board, openBoard }: WindowIpcOpt
 
   ipcMain.handle(WINDOW_IPC.close, (_event, id: string) => popped.get(id)?.window.close());
 
+  ipcMain.handle(WINDOW_IPC.askReview, (_event, id: string) => {
+    const entry = popped.get(id);
+    if (entry === undefined) return;
+    revealWindow(entry.window);
+    entry.window.webContents.send(WINDOW_IPC.reviewAsked);
+  });
+
+  ipcMain.handle(WINDOW_IPC.poppedOut, () => [...popped.keys()]);
+
   ipcMain.handle(WINDOW_IPC.isFullScreen, (event) => BrowserWindow.fromWebContents(event.sender)?.isFullScreen() ?? false);
 
   return {

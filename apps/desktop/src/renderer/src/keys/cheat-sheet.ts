@@ -3,8 +3,11 @@ import { chordsOf, chordText, isActive, KEYS, type KeyBinding, type KeyId, type 
 
 const mac = navigator.platform.startsWith('Mac');
 
-/** Where the sheet opened: the board, the board with one agent or shell tile selected, or a session window. */
-export type SheetContext = 'board' | 'tile' | 'window';
+/** Where the sheet opened: the board, the board with one agent or shell tile selected, a session window, or a pop-up (on the board or popped out). */
+export type SheetContext = 'board' | 'tile' | 'window' | 'pop-up';
+
+/** A session window's keys a pop-up doesn't answer: its details, its gate, and the step to the previous or next session. */
+const NOT_IN_POP_UP: ReadonlySet<string> = new Set(['window.details', 'window.runGate', 'window.previous', 'window.next']);
 
 const TITLES: Record<SectionId, string> = {
   tile: 'This tile',
@@ -20,6 +23,7 @@ const ORDER: Record<SheetContext, { here: readonly SectionId[]; rest: readonly S
   board: { here: ['move', 'make', 'edit'], rest: ['tile', 'window', 'dialog'] },
   tile: { here: ['tile'], rest: ['move', 'make', 'edit', 'window', 'dialog'] },
   window: { here: ['window'], rest: ['move', 'make', 'edit', 'tile', 'dialog'] },
+  'pop-up': { here: ['window'], rest: ['move', 'make', 'edit', 'tile', 'dialog'] },
 };
 
 /** How the sheet names where it opened. */
@@ -27,6 +31,7 @@ export const CONTEXT_LABELS: Record<SheetContext, string> = {
   board: 'board',
   tile: 'board · tile selected',
   window: 'session window',
+  'pop-up': 'pop-up',
 };
 
 export interface SheetRow {
@@ -68,7 +73,7 @@ export function cheatSheet(context: SheetContext, { extended, filter = '', isMac
       id,
       title: TITLES[id],
       here: here.includes(id),
-      rows: KEYS.filter((entry) => entry.section === id && isActive(entry, extended, simplified))
+      rows: KEYS.filter((entry) => entry.section === id && isActive(entry, extended, simplified) && !(context === 'pop-up' && NOT_IN_POP_UP.has(entry.id)))
         .map(rowOf)
         .filter(kept),
     }))

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent, ReviewRound } from '@agent-board/daemon/protocol';
-import { reviewedPullRequests, roundsOf, showsReviewTab, withReviewChange } from './reviews';
+import { reviewedOf, reviewedPullRequests, roundsOf, showsReviewTab, withReviewChange } from './reviews';
 
 const round = (fields: Partial<ReviewRound> & Pick<ReviewRound, 'id' | 'round'>): ReviewRound => ({
   implementer: 'coder',
@@ -30,6 +30,26 @@ describe('roundsOf', () => {
   it("is the implementer's rounds, in order", () => {
     const rounds = [round({ id: 'b', round: 2 }), round({ id: 'x', round: 1, implementer: 'other' }), round({ id: 'a', round: 1 })];
     expect(roundsOf(rounds, 'coder').map((r) => r.id)).toEqual(['a', 'b']);
+  });
+});
+
+describe('reviewedOf', () => {
+  const coder = { sessionId: 'coder' };
+  const helper = { sessionId: 'helper' };
+  const dismissedAt = '2026-10-11T11:00:00.000Z';
+  it('is undefined while none of them has a round', () => {
+    expect(reviewedOf([coder, helper], [round({ id: 'x', round: 1, implementer: 'other' })], undefined)).toBeUndefined();
+  });
+  it('is the first whose latest round is not dismissed, else the first with any round', () => {
+    const rounds = [round({ id: 'a', round: 1, dismissedAt }), round({ id: 'h', round: 1, implementer: 'helper' })];
+    expect(reviewedOf([coder, helper], rounds, undefined)?.agent).toBe(helper);
+    const allDismissed = [round({ id: 'a', round: 1, dismissedAt }), round({ id: 'h', round: 1, implementer: 'helper', dismissedAt })];
+    expect(reviewedOf([coder, helper], allDismissed, undefined)?.agent).toBe(coder);
+  });
+  it('is the one asked for, dismissed or not, while it has a round', () => {
+    const rounds = [round({ id: 'a', round: 1, dismissedAt }), round({ id: 'h', round: 1, implementer: 'helper' })];
+    expect(reviewedOf([coder, helper], rounds, 'coder')).toEqual({ agent: coder, rounds: [rounds[0]] });
+    expect(reviewedOf([coder, helper], rounds.slice(1), 'coder')?.agent).toBe(helper);
   });
 });
 
