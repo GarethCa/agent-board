@@ -7,7 +7,7 @@ const shown = (hits: readonly SettingsHit[]) =>
 
 describe('searchSettings', () => {
   it('finds a section by its name, with every control in it', () => {
-    expect(shown(searchSettings('appearance', { simplified: false }))).toEqual(['General › Appearance: Mode, Theme, Board background, Frost the board behind a pop-up']);
+    expect(shown(searchSettings('appearance', { simplified: false }))).toEqual(['General › Appearance: Mode, Theme, Board background, Frost the board behind a pop-up, Pop-up fills a wide screen']);
   });
 
   it('finds controls by their labels across groups, in the order the sidebar lists them', () => {

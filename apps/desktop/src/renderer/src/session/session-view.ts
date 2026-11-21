@@ -70,9 +70,36 @@ function write(picks: Picks): void {
   for (const listener of listeners) listener();
 }
 
-/** The view picked for a session: `opensOn`, the terminal unless given, until one is. */
+/** What a ticket's pop-up keeps its one pick under: its chat's id, after this. */
+const POP_UP_PREFIX = 'ticket:';
+
+/**
+ * What a pop-up's one Chat | Terminal pick is kept under, for every agent in it: a lone agent's is its session's own, so
+ * its pop-out and expanded tile follow it; a ticket's is its own, its chat's pick moved into it as it first opens
+ * (`adoptChatView`) and standing in until then.
+ */
+export function popUpViewKey(chat: { sessionId: string }, ticket: boolean): string {
+  return ticket ? `${POP_UP_PREFIX}${chat.sessionId}` : chat.sessionId;
+}
+
+/** The key a body's agent pane reads its pick from: a pop-up's own, given one, else its session's. */
+export function bodyViewKey(viewKey: string | undefined, sessionId: string | undefined): string | undefined {
+  return viewKey ?? sessionId;
+}
+
+/** What a body's pane shows of a pick: the agent's own pane shows the pick, a shell (or a body with no agent) its terminal. */
+export function paneShows(pick: SessionView, pane: { own: boolean; agent: boolean }): SessionView {
+  return pane.own && pane.agent ? pick : 'terminal';
+}
+
+/** The session a key is of: its own, or a ticket pop-up's chat. */
+const sessionOfKey = (key: string): string => (key.startsWith(POP_UP_PREFIX) ? key.slice(POP_UP_PREFIX.length) : key);
+
+/** The view picked for a session (or a ticket's pop-up, its chat's until then): `opensOn`, the terminal unless given, until one is. */
 export function chosenView(sessionId: string | undefined, opensOn: SessionView = 'terminal'): SessionView {
-  return (sessionId === undefined ? undefined : read().get(sessionId)) ?? opensOn;
+  if (sessionId === undefined) return opensOn;
+  const picks = read();
+  return picks.get(sessionId) ?? picks.get(sessionOfKey(sessionId)) ?? opensOn;
 }
 
 /** Picks a session's view and tells every pane showing it. */
@@ -82,11 +109,23 @@ export function setChosenView(sessionId: string, view: SessionView): void {
   write(new Map(picks).set(sessionId, view));
 }
 
-/** Forgets the choice of every session that is not in `live`: its agent has been deleted. */
+/**
+ * Moves a chat's own pick into its ticket's pop-up's key the first time that pop-up opens with none of its own, so
+ * nobody's choice flips on the change: after that the pop-up's pick is its own. Nothing for any other key.
+ */
+export function adoptChatView(key: string): void {
+  if (!key.startsWith(POP_UP_PREFIX)) return;
+  const picks = read();
+  const chat = picks.get(sessionOfKey(key));
+  if (picks.has(key) || chat === undefined) return;
+  write(new Map(picks).set(key, chat));
+}
+
+/** Forgets the choice of every session that is not in `live`, and of the ticket pop-ups of its chat: its agent has been deleted. */
 export function forgetViewsExcept(live: readonly string[]): void {
   const keep = new Set(live);
   const picks = read();
-  const kept = [...picks].filter(([id]) => keep.has(id));
+  const kept = [...picks].filter(([id]) => keep.has(sessionOfKey(id)));
   if (kept.length !== picks.size) write(new Map(kept));
 }
 

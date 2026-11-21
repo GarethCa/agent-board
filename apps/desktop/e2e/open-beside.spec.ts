@@ -3,7 +3,7 @@ import { createFakeGitHub, FAKE_GITHUB_STATE, type FakeGitHubPullRequest } from 
 import { execFileSync } from 'node:child_process';
 import { rmSync } from 'node:fs';
 import { agents, launch, sessionWindow, spawnAgent, tile, tileAction, windowKey } from './agent-helpers.ts';
-import { showTileParts } from './settings-helpers.ts';
+import { fillWideScreen, showTileParts } from './settings-helpers.ts';
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test, tabText } from './launch.ts';
 import { scratch } from './scratch.ts';
 
@@ -87,6 +87,8 @@ test("on a wide screen ⇧↵ gives the agent's terminal 120 columns beside a PR
   try {
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setContentSize(2400, 1000));
     await showTileParts(window, ['chips']);
+    // Capped at 1600px the window has no room for 120 columns and as much page beside them, so it fills the board.
+    await fillWideScreen(window);
     await pickFolderNext(app, repo);
     await browseForZone(window);
     await spawnAgent(window, 'monorepo', 'Write the code');

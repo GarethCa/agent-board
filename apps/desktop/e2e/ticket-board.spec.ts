@@ -172,6 +172,15 @@ test("a ticket's ⋯ opens its Watches sheet, and Close ticket… asks, then end
         async (ids) => (await globalThis.window.agentBoard.agents.list()).filter((agent) => ids.includes(agent.sessionId) && agent.endedAt !== null).length,
         [chat.sessionId, helper.sessionId],
       );
+    // Ticket tiles open as their terminal by default, expanded in place, whose ⋯ has no Watches… (its header has them).
+    // It opens once the board and its settings are read, which can be after the first key below: wait for it, and put
+    // it back to its card with Esc, as the user does.
+    const open = window.locator(`section.ticket-open[data-session-id="${chat.sessionId}"]`);
+    await expect(open).toBeVisible({ timeout: 15_000 });
+    await expect(async () => {
+      await window.keyboard.press('Escape');
+      await expect(open).toBeHidden({ timeout: 1_000 });
+    }).toPass({ timeout: 10_000 });
     const tile = window.locator(`[data-session-id="${chat.sessionId}"]`).filter({ has: window.getByRole('button', { name: 'More' }) }).first();
     const menuItem = async (name: string) => {
       const item = window.getByRole('menuitem', { name });

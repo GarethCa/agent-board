@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.7.0 (2026-11-21)
+
+- On a wide screen the pop-up stops at 1600 px, centred, with a Settings option and a header button to fill it
+- The pop-up splits two agents side by side, grown to the board's edges
+- No rows of controls in the pop-up: one Chat | Terminal switch in its header, shells as tabs, the agent's controls in its tab's ⋯ and the +
+- The pop-up's sidebar views open as tabs; one agent gets a tab row only with a second tab
+- After an app restart, every agent comes back as it was
+
 ## v0.6.33 (2026-11-20)
 
 - Main's full check passes: settings search, hinted menu rows and theme names whole again, baselines

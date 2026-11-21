@@ -241,6 +241,7 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
     codexSessionId = prompt === undefined ? row.harness_session_id : null,
     fresh = false,
     carryOn = false,
+    quiet = false,
   ): RunStart => {
     const sessionId = row.session_id;
     const refusal = launchRefusal(row);
@@ -266,8 +267,11 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
     const conversationId = claudeConversationId(row);
     const noConversation =
       row.harness === 'claude' ? !hasClaudeTranscript(row.transcript_path, conversationId, row.cwd, options.env) : row.harness_session_id === null && prompt === undefined;
-    // One cut off mid-turn carries on in its conversation, told to; with none to carry on, it starts on its task.
-    const task = prompt ?? (noConversation ? (row.description !== '' ? row.description : undefined) : carryOn ? CONTINUE_LINE : undefined);
+    // One cut off mid-turn carries on in its conversation, told to; with none to carry on, it starts on its task. A quiet
+    // resume types nothing a turn has already had: only a task that never reached it.
+    const task =
+      prompt ??
+      (noConversation ? (row.description !== '' && !(quiet && row.had_turn === 1) ? row.description : undefined) : carryOn ? CONTINUE_LINE : undefined);
     let bypassed: boolean;
     try {
       bypassed = options.launch({
@@ -554,7 +558,7 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
 
     pausing: (sessionId) => pausing.get(sessionId),
 
-    async resume(sessionId, asked, force, fresh) {
+    async resume(sessionId, asked, force, fresh, quiet = false) {
       const agent = requireAgent(sessionId);
       if (agent.endedAt === null) throw invalidParams(`${agent.name} is still running`);
       // The daemon ends a reviewer once its review is in, and its round with it: a restart wouldn't reopen the round.
@@ -590,9 +594,9 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
               ? 'to wake it'
               : 'to restart it';
       const why = `${how}, for ${asked}`;
-      // Told to carry on only by a resume in its own conversation, and only once.
-      const carryOn = fresh === undefined && row.turn_cut_off === 1;
-      const resumed = relaunch(row, fresh?.prompt, why, fresh === undefined ? undefined : null, fresh !== undefined, carryOn);
+      // Told to carry on only by a resume in its own conversation, and only once; a quiet one keeps its cut-off turn.
+      const carryOn = fresh === undefined && !quiet && row.turn_cut_off === 1;
+      const resumed = relaunch(row, fresh?.prompt, why, fresh === undefined ? undefined : null, fresh !== undefined, carryOn, quiet);
       if (fresh !== undefined) {
         if (!resumed.started) restoreConversation.run(previous.conversation, previous.transcript, previous.hadTurn, sessionId);
         else {

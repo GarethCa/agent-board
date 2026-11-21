@@ -116,3 +116,37 @@ export function withKeptOrder(orders: KeptOrders, owner: string, order: readonly
   const entries = [...Object.entries(orders).filter(([key]) => key !== owner), [owner, order] as const];
   return Object.fromEntries(entries.slice(Math.max(0, entries.length - most)));
 }
+
+/**
+ * The views open after a click on `key`'s row in the sidebar: its tab opens at the end of the views open, or, open
+ * already, is gone to, never opened twice.
+ */
+export function openedView(open: readonly string[], key: string): string[] {
+  return open.includes(key) ? [...open] : [...open, key];
+}
+
+/** The views open after `key`'s × closes its tab. */
+export const closedView = (open: readonly string[], key: string): string[] => open.filter((each) => each !== key);
+
+/**
+ * The tab on once the tab `key` closes: unchanged unless it was the one on; then the one it came from, while that is still
+ * in the row, else the agent tab on last (`under`, the one shown under the views), so its terminal comes back as it was.
+ */
+export function afterClose(key: string, { active, from, order, under }: { active: string; from: string | undefined; order: readonly string[]; under: string }): string {
+  if (key !== active) return active;
+  return from !== undefined && from !== key && order.includes(from) ? from : under;
+}
+
+/** How a view's row reads in the sidebar: `on` while its tab is on, `open` (the small dot) while it is a tab not on, else `closed`. */
+export function viewRow(key: string, open: readonly string[], on: string): 'on' | 'open' | 'closed' {
+  return key === on ? 'on' : open.includes(key) ? 'open' : 'closed';
+}
+
+/**
+ * One agent's row: none while its own tab is its only one, the header naming it; once a view or a shell opens a second,
+ * the row shows, and its own tab is named for the view it shows ("Chat" or "Terminal"), as the header already names the agent.
+ */
+export function soloRow(tabs: readonly RowTab[], view: 'chat' | 'terminal' = 'terminal'): { shows: boolean; ownLabel: 'Chat' | 'Terminal' | undefined } {
+  const shows = tabs.length > 1;
+  return { shows, ownLabel: shows ? (view === 'chat' ? 'Chat' : 'Terminal') : undefined };
+}

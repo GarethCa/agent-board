@@ -1182,7 +1182,7 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
   },
   {
     name: 'wake',
-    description: 'Wake a paused agent, carrying on its conversation. As `agent-board wake`.',
+    description: 'Wake a paused agent, or one a restart stopped, carrying on its conversation. As `agent-board wake`.',
     inputSchema: { type: 'object', properties: { agent: AGENT_REF }, required: ['agent'], additionalProperties: false },
   },
   {

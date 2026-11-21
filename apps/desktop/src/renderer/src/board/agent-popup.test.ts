@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent } from '@agent-board/daemon/protocol';
 import type { SessionWindows } from '../windows/session-windows';
-import { escClosesFromBehind, popUpEnded, popUpHelpers, popUpOpening, popUpPlan, popUpShown, popUpRow, popUpRowOwner, popUpTabOn, popUpTabShown, popUpTarget, windowedTiles } from './agent-popup';
+import { escClosesFromBehind, popUpEnded, popUpHelpers, popUpOpening, popUpPlan, popUpShown, popUpRow, popUpRowOwner, popUpTabOn, popUpTabShown, popUpTarget, popUpViews, viewKeyOf, viewsOpenAtFirst, windowedTiles } from './agent-popup';
+
 import { expandTile, keptOnBoard, pinnedToOpen, windowedExpanded } from './expanded';
+
+const BOARD = { key: 'board', label: 'Board' } as const;
 
 const agent = { sessionId: 'a1' } as Agent;
 const windows = (placement: 'shown' | 'docked' | 'popped'): SessionWindows => [{ kind: 'session', id: 'a1', title: 'a1', placement }];
@@ -113,7 +116,7 @@ describe("a ticket's pop-up", () => {
   });
 
   it('puts its Board first, then the chat, then each helper', () => {
-    expect(popUpRow(chat, [designer, builder]).map((tab) => [tab.key, tab.kind, tab.agent?.sessionId, tab.chat])).toEqual([
+    expect(popUpRow(chat, [designer, builder], [BOARD]).map((tab) => [tab.key, tab.kind, tab.agent?.sessionId, tab.chat])).toEqual([
       ['board', 'view', undefined, false],
       ['chat', 'agent', 'chat', true],
       ['designer', 'agent', 'designer', false],
@@ -121,17 +124,45 @@ describe("a ticket's pop-up", () => {
     ]);
   });
 
+  it("keeps each agent's one Chat | Terminal pick where its pop-up reads it: a ticket's for its chat and helpers", () => {
+    const agents = [chat, designer, other, builder, elsewhere];
+    expect(viewKeyOf(chat, agents)).toBe('ticket:chat');
+    expect(viewKeyOf(designer, agents)).toBe('ticket:chat');
+    expect(viewKeyOf(other, agents)).toBe(other.sessionId);
+    expect(viewKeyOf(elsewhere, agents)).toBe(elsewhere.sessionId);
+    // Its pop-out and expanded tile, which know only it, read the chat's the same way.
+    expect(viewKeyOf(chat, [chat])).toBe('ticket:chat');
+    // A chat that draws as an agent for now has a pop-up of its own, and so do its helpers.
+    const starting = { ...chat, startup: { phase: 'starting' } } as unknown as Agent;
+    expect(viewKeyOf(starting, [starting, designer])).toBe('chat');
+    expect(viewKeyOf(designer, [starting, designer])).toBe('designer');
+  });
+
   it("keeps its row's order under its chat's session id", () => {
     expect(popUpRowOwner(chat)).toBe('ticket:chat');
   });
 
   it('shows its Board on the Board tab, else the agent on, as before', () => {
-    expect(popUpTabOn('board', chat, [designer, builder])).toBe('board');
-    expect(popUpTabOn('chat', chat, [designer, builder])).toBe(chat);
-    expect(popUpTabOn('builder', chat, [designer, builder], ['builder'])).toBe(chat);
-    expect(popUpTabOn('designer', chat, [designer, builder])).toBe(designer);
+    expect(popUpTabOn('board', undefined, chat, [designer, builder], [], ['board'])).toBe('board');
+    expect(popUpTabOn('chat', undefined, chat, [designer, builder], [], ['board'])).toBe(chat);
+    expect(popUpTabOn('builder', undefined, chat, [designer, builder], ['builder'], ['board'])).toBe(chat);
+    expect(popUpTabOn('designer', undefined, chat, [designer, builder], [], ['board'])).toBe(designer);
   });
 
+  it('shows a view only while its tab is open, else the chat', () => {
+    expect(popUpTabOn('review', 'designer', chat, [designer], [], ['board', 'review'])).toBe('review');
+    expect(popUpTabOn('review', undefined, chat, [designer], [], ['board'])).toBe(chat);
+    // A view gone while on (its review dismissed elsewhere) shows the agent that was under it, not the chat.
+    expect(popUpTabOn('review', 'designer', chat, [designer], [], ['board'])).toBe(designer);
+  });
+
+  it("puts the views open first, without the chat's pill for one agent alone", () => {
+    const activity = { key: 'activity', label: 'Activity' } as const;
+    expect(popUpRow(other, [], [activity], { ticket: false }).map((tab) => [tab.key, tab.kind, tab.view?.label, tab.chat])).toEqual([
+      ['activity', 'view', 'Activity', false],
+      ['other', 'agent', undefined, false],
+    ]);
+  });
   it('opens on the chat, or on the helper it was opened on while the ticket holds it', () => {
     expect(popUpTabShown(undefined, chat, [designer, builder])).toBe(chat);
     expect(popUpTabShown('builder', chat, [designer, builder])).toBe(builder);
@@ -182,5 +213,25 @@ describe('what popping a ticket up does', () => {
   it('shows no tab of a helper popped out into its own window: its chat instead', () => {
     expect(popUpTabShown('builder', chat, [builder], ['builder'])).toBe(chat);
     expect(popUpTabShown('builder', chat, [builder], [])).toBe(builder);
+  });
+});
+
+describe("a pop-up's views", () => {
+  it("lists a ticket's Board first, then Activity, then the latest review's round", () => {
+    expect(popUpViews({ board: true, activity: true, reviewRound: 2 })).toEqual([
+      { key: 'board', label: 'Board' },
+      { key: 'activity', label: 'Activity' },
+      { key: 'review', label: 'Review · round 2' },
+    ]);
+  });
+
+  it('has no Board for one agent alone, no Activity without a log, and no Review before a round', () => {
+    expect(popUpViews({ board: false, activity: true, reviewRound: undefined })).toEqual([{ key: 'activity', label: 'Activity' }]);
+    expect(popUpViews({ board: false, activity: false, reviewRound: undefined })).toEqual([]);
+  });
+
+  it('opens with its overview open, the Board, and every other view closed', () => {
+    expect(viewsOpenAtFirst(popUpViews({ board: true, activity: true, reviewRound: 1 }))).toEqual(['board']);
+    expect(viewsOpenAtFirst(popUpViews({ board: false, activity: true, reviewRound: 1 }))).toEqual([]);
   });
 });

@@ -627,6 +627,27 @@ describe('resuming an agent', () => {
     expect(launches.map((spec) => spec.task)).toEqual([CONTINUE_LINE, CONTINUE_LINE]);
   });
 
+  it('types nothing to one cut off mid-turn as a quiet resume brings it back, and keeps its cut-off turn for Carry on', async () => {
+    const { lifecycle, addAgent, launches, getRow, transcript } = setup();
+    addAgent('a', { state: 'failed', stoppedByRestart: true, transcriptPath: transcript() });
+    lifecycle.exited('a', true, 'running');
+    await lifecycle.resume('a', 'a test', false, undefined, true);
+    expect(launches[0]).toMatchObject({ task: undefined, resume: { claudeConversation: true } });
+    expect(getRow('a')!.turn_cut_off).toBe(1);
+  });
+
+  it('never types again, on a quiet resume, the task of one whose conversation is gone', async () => {
+    const { lifecycle, addAgent, launches } = setup();
+    addAgent('a', { state: 'failed', stoppedByRestart: true, description: 'Run the tests', hadTurn: true });
+    addAgent('b', { state: 'failed', stoppedByRestart: true, description: 'Fix the build', hadTurn: false });
+    lifecycle.exited('a', true, 'idle');
+    lifecycle.exited('b', true, 'idle');
+    await lifecycle.resume('a', 'a test', false, undefined, true);
+    // One whose first prompt never reached it still starts on it: that was its own start, not a nudge.
+    await lifecycle.resume('b', 'a test', false, undefined, true);
+    expect(launches.map((spec) => spec.task)).toEqual([undefined, 'Fix the build']);
+  });
+
   it('forgets the cut-off turn once its session ends any other way', async () => {
     const { lifecycle, addAgent, getRow, transcript } = setup();
     addAgent('a', { state: 'failed', stoppedByRestart: true, transcriptPath: transcript() });

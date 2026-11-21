@@ -189,7 +189,7 @@ function restartSummary(result: Extract<RestartDaemonResult, { status: 'restarte
   lines.push(resumed.length > 0 ? `resumed ${resumed.join(' and ')}` : 'no sessions were running, so none were resumed');
   if (midTurn.length > 0) {
     lines.push(
-      `${midTurn.length === 1 ? 'this agent was' : 'these agents were'} cut off mid-turn, and told to carry on once up: ${midTurn.join(', ')}.`,
+      `${midTurn.length === 1 ? 'this agent was' : 'these agents were'} cut off mid-turn, and wait at the prompt: press Carry on in the app, or tell them yourself: ${midTurn.join(', ')}.`,
     );
   }
   return lines.join('\n');

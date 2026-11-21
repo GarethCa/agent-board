@@ -16,6 +16,22 @@ export const POPUP_MIN: Size = { width: 560, height: 360 };
 export type PopupEdge = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
 export const POPUP_EDGES: readonly PopupEdge[] = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'];
 
+/**
+ * The widest a pop-up grows, in px, on a wide screen, unless it is set to fill it: its room, split or not, stops at this
+ * width, centred, and keeps its full height. A board no wider than this plus its margins never meets it.
+ */
+export const POPUP_CAP = 1600;
+
+/** Whether `room` is wider than the cap: a wide screen, where the pop-up stops at it unless set to fill. */
+export function capBites(room: Size): boolean {
+  return room.width > POPUP_CAP;
+}
+
+/** The room a pop-up may take: all of `room` set to fill, else no wider than the cap. */
+export function popupRoom(room: Size, fill: boolean): Size {
+  return fill ? room : { width: Math.min(room.width, POPUP_CAP), height: room.height };
+}
+
 /** The largest 16:10 box that fits `room`. */
 export function fitPopup(room: Size): Size {
   const width = Math.max(0, room.width);
@@ -31,9 +47,24 @@ export function clampPopup(size: Size, room: Size): Size {
   return { width: Math.round(clamp(size.width, POPUP_MIN.width, most.width)), height: Math.round(clamp(size.height, POPUP_MIN.height, most.height)) };
 }
 
-/** The pop-up's size in `room`: the size dragged to, kept to the room, else the 16:10 fit. */
-export function popupSize(room: Size, saved: Size | null): Size {
-  return saved === null ? fitPopup(room) : clampPopup(saved, room);
+/**
+ * Its size split, two agents side by side: grown to the board's edges, all of the room, the margin round it the same.
+ * Nothing kept changes, so the size it had comes back as the split ends.
+ */
+export function splitPopupSize(room: Size): Size {
+  return { width: Math.max(0, room.width), height: Math.max(0, room.height) };
+}
+
+/**
+ * The pop-up's size in `room`: split, all the room it may take; else the size dragged to, kept to that room, else the
+ * 16:10 fit, no wider than that room. Unless set to `fill`, the room stops at the cap's width with all its height.
+ */
+export function popupSize(room: Size, saved: Size | null, { split = false, fill = false }: { split?: boolean; fill?: boolean } = {}): Size {
+  const most = popupRoom(room, fill);
+  if (split) return splitPopupSize(most);
+  if (saved !== null) return clampPopup(saved, most);
+  const fit = fitPopup(room);
+  return { width: Math.min(fit.width, most.width), height: fit.height };
 }
 
 /**

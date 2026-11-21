@@ -1,38 +1,48 @@
-import { useContext, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent, type PointerEvent, type ReactNode, type RefObject } from 'react';
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type DragEvent, type MouseEvent, type PointerEvent, type ReactNode, type RefObject } from 'react';
 import type { Agent } from '@agent-board/daemon/protocol';
 import { HUMAN_STATUS_LABELS, humanStatus } from '@agent-board/daemon/human-status';
 import { lookShown } from '@agent-board/daemon/character';
-import { ChevronDown, Expand, GitMerge, LayoutDashboard, MoreHorizontal, Plus, SquareArrowOutUpRight, Ticket } from 'lucide-react';
+import { Activity as ActivityIcon, ChevronDown, Columns2, Expand, FileCheck, GitMerge, LayoutDashboard, MessageSquare, MoreHorizontal, Plus, SquareArrowOutUpRight, SquareTerminal, Ticket, UnfoldHorizontal } from 'lucide-react';
+import { OWN_SURFACE } from '@agent-board/daemon/window-layout';
 import { VIEW_KEYS } from '../../../shared/view-saver';
 import { useEscStep } from '../keys/esc-ladder';
 import { leaveToTile, useLeaveKeys } from '../keys/escape-hatch';
-import { pressed } from '../keys/registry';
+import { keyText, pressed } from '../keys/registry';
 import { isTyping } from '../keys/typing';
 import { useGateRuns } from '../gate/GatesProvider';
 import { useReviews } from '../review/ReviewsProvider';
-import { roundsOf } from '../review/reviews';
+import { roundsOf, showsReviewTab } from '../review/reviews';
+import { ReviewViewer } from '../review/ReviewViewer';
+import { ActivityLog, useActivity } from '../orchestrators/ActivityLog';
+import type { ShelfViews } from '../session/AgentShelves';
 import { showsShelves } from '../session/agent-sidebar';
-import { SessionBody, type WindowContent } from '../session/SessionBody';
+import { SessionBody, type PaneRow, type WindowContent } from '../session/SessionBody';
+import { adoptChatView, popUpViewKey, useSessionView, type SessionView } from '../session/session-view';
 import { SessionName } from '../session/SessionName';
-import { TabStrip, type StripTab } from '../session/TabStrip';
+import { ROW_TAB_TYPE, TabStrip, useAddEntries, type StripTab, type TabAdds } from '../session/TabStrip';
+import { Dividers, useDividerDrag } from '../session/use-divider-drag';
+import type { SplitTree } from '@agent-board/daemon/pane-layout';
 import { StateAction } from '../session/SimplifiedHeader';
 import { useSidebarCollapsed } from '../session/use-sidebar-collapsed';
 import { useSimplified } from '../design';
 import { useNeedsYouShows } from '../needs-you-setting';
 import { agentPill } from '../states';
-import { Button, IconButton, Menu, StatusPill, type MenuEntry } from '../ui';
+import { Button, ContextMenu, EditableName, IconButton, Kbd, Menu, Segmented, StatusPill, useRenaming, type MenuEntry, type SegmentedOption } from '../ui';
 import { tabAtDigit } from '../session/tabs';
-import { BOARD_TAB, escClosesFromBehind, popUpRow, popUpRowOwner, popUpTabOn, type PopUpRowTab } from './agent-popup';
-import { foldRow, keptOrders, movedTab, popUpRowKey, rowOrder, steppedTab, withKeptOrder, type KeptOrders, type RowKey } from './popup-tab-row';
+import { ACTIVITY_TAB, BOARD_TAB, escClosesFromBehind, isViewKey, popUpRow, popUpRowOwner, popUpTabOn, popUpTabShown, popUpViews, REVIEW_TAB, viewsOpenAtFirst, type PopUpRowTab, type PopUpView } from './agent-popup';
+import { afterClose, closedView, foldRow, keptOrders, movedTab, openedView, popUpRowKey, rowOrder, soloRow, steppedTab, viewRow, withKeptOrder, type KeptOrders, type RowKey } from './popup-tab-row';
 import { TicketBoard } from './TicketBoard';
 import { BackToTileButton } from './BackToTile';
+import { setPopupFill, usePopupFill } from './popup-fill';
 import { usePopupFrost } from './popup-frost';
-import { dragPopup, POPUP_EDGES, popupSize, readPopupSize, writePopupSize, type PopupEdge, type Size } from './popup-size';
+import { capBites, dragPopup, POPUP_CAP, POPUP_EDGES, popupRoom, popupSize, readPopupSize, writePopupSize, type PopupEdge, type Size } from './popup-size';
+import { atRightEdge, besideCandidates, canDropInSplit, dropAtEdge, dropInSplit, openSplit, selectInSplit, tabOnInSplit, type PopupSplit, type SplitSide } from './popup-split';
 import { useCharacterStyle } from './characters';
 import { useNowForSince } from '../inbox/use-now';
 import { useBoardCommands } from './commands';
 import { HarnessMark } from './HarnessMark';
-import { agentMenu, pullRequestEntries, type ModelEntry } from './menu-model';
+import { agentMenu, popUpAgentMenu, pullRequestEntries, type BesideChoice, type ModelEntry } from './menu-model';
+import { nameTarget } from './rename';
 import { StatusMark } from './StatusMark';
 import { ticketFace } from './ticket-tile';
 import { poseOfPill } from './tile-pose';
@@ -102,7 +112,10 @@ export function AgentPopup({
     pressedOnScrim.current = false;
   };
   const scrim = useRef<HTMLDivElement>(null);
-  const { style, edges } = usePopupSize(scrim);
+  // Two agents side by side, grown to the board's edges; kept only while it is open.
+  const [split, setSplit] = useState<PopupSplit>();
+  const { style, edges, wide } = usePopupSize(scrim, split !== undefined);
+  const splitting: PopUpSplitting = { split, onSplit: setSplit, agents: ticketBoard?.agents ?? [] };
   const frost = usePopupFrost();
   return (
     <div ref={scrim} className="agent-popup-scrim" data-testid="agent-popup-scrim" data-frost={frost || undefined} onPointerDown={onScrimDown} onClick={onScrim}>
@@ -118,14 +131,18 @@ export function AgentPopup({
           aria-label={`${agent.name}, pop-up`}
           tabIndex={-1}
           data-ticket={helpers !== undefined || undefined}
+          data-split={split !== undefined || undefined}
         >
-          {helpers === undefined ? (
-            <PopupBody agent={agent} nodeId={nodeId} onClose={onClose} root={root} />
-          ) : (
-            <TicketPopupBody chat={agent} helpers={helpers} on={on} popped={popped} nodeId={nodeId} onClose={onClose} root={root} board={ticketBoard} />
-          )}
+          <PopupWideContext.Provider value={wide}>
+            {helpers === undefined ? (
+              <PopupBody agent={agent} nodeId={nodeId} onClose={onClose} root={root} splitting={splitting} />
+            ) : (
+              <TicketPopupBody chat={agent} helpers={helpers} on={on} popped={popped} nodeId={nodeId} onClose={onClose} root={root} board={ticketBoard} splitting={splitting} />
+            )}
+          </PopupWideContext.Provider>
         </section>
-        {edges}
+        {/* Split, it has all the board: nothing to drag. */}
+        {split === undefined && edges}
       </div>
     </div>
   );
@@ -137,8 +154,11 @@ const DRAG_SLOP = 3;
 /**
  * The pop-up's size on the board under `scrim`: the 16:10 fit, or the size dragged to from its edges and corners, which
  * every pop-up keeps through restarts. A double-click on an edge gives the fit back. It stays centred as it is dragged.
+ * Split, it grows to the board's edges, and has its size back as the split ends. On a wide screen (`wide`) it stops at
+ * the cap's width, centred, unless set to fill it.
  */
-function usePopupSize(scrim: RefObject<HTMLElement | null>): { style: CSSProperties | undefined; edges: ReactNode } {
+function usePopupSize(scrim: RefObject<HTMLElement | null>, split: boolean): { style: CSSProperties | undefined; edges: ReactNode; wide: boolean } {
+  const fill = usePopupFill();
   const [room, setRoom] = useState<Size | null>(null);
   const [saved, setSaved] = useState(readPopupSize);
   const drag = useRef<{ edge: PopupEdge; x: number; y: number; start: Size; room: Size; moved: boolean; last: Size } | null>(null);
@@ -158,13 +178,13 @@ function usePopupSize(scrim: RefObject<HTMLElement | null>): { style: CSSPropert
     observer.observe(element);
     return () => observer.disconnect();
   }, [scrim]);
-  const size = room === null ? null : popupSize(room, saved);
+  const size = room === null ? null : popupSize(room, saved, { split, fill });
   const dragged = (event: PointerEvent, held: NonNullable<typeof drag.current>) => dragPopup(held.start, held.edge, event.clientX - held.x, event.clientY - held.y, held.room);
   const onDown = (edge: PopupEdge) => (event: PointerEvent<HTMLElement>) => {
     if (size === null || room === null || event.button !== 0) return;
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
-    drag.current = { edge, x: event.clientX, y: event.clientY, start: size, room, moved: false, last: size };
+    drag.current = { edge, x: event.clientX, y: event.clientY, start: size, room: popupRoom(room, fill), moved: false, last: size };
   };
   const onMove = (event: PointerEvent<HTMLElement>) => {
     const held = drag.current;
@@ -206,55 +226,554 @@ function usePopupSize(scrim: RefObject<HTMLElement | null>): { style: CSSPropert
       onDoubleClick={onReset}
     />
   ));
-  return { style: size === null ? undefined : { width: size.width, height: size.height }, edges };
+  return { style: size === null ? undefined : { width: size.width, height: size.height }, edges, wide: room !== null && capBites(room) };
 }
 
-function PopupBody({ agent, nodeId, onClose, root }: { agent: Agent; nodeId: string; onClose(): void; root: RefObject<HTMLElement | null> }) {
-  const { expand, popOutAgent } = useContext(TileActionsContext);
+/**
+ * A lone agent's pop-up: its header, with the one Chat | Terminal switch, then its terminal or chat with its sidebar, the
+ * views it has listed first there. It has no row of tabs until a second tab opens (a view, a shell); its own tab is then
+ * named for the view it shows, and the row goes once the last other tab closes. No row of controls anywhere: they are in
+ * its header's ⋯, which is the same menu as an agent tab's ⋯ and a right-click on its tab, and in the row's +.
+ */
+function PopupBody({ agent, nodeId, onClose, root, splitting }: { agent: Agent; nodeId: string; onClose(): void; root: RefObject<HTMLElement | null>; splitting: PopUpSplitting }) {
+  const { expand, popOutAgent, openAgent } = useContext(TileActionsContext);
   const content: WindowContent = { kind: 'session', sessionId: agent.sessionId, agent };
   const shelves = showsShelves(content);
   const [detailsCollapsed, setDetailsCollapsed] = useSidebarCollapsed(shelves, root, () => false);
-  // Where the shelves' and the chat's controls go: the header, which has no row of controls under it.
-  const [controlsSlot, setControlsSlot] = useState<HTMLElement | null>(null);
-  const [chatControlsSlot, setChatControlsSlot] = useState<HTMLElement | null>(null);
+  const kit = useViewKit([agent], agent);
+  const row = usePopUpRow({ own: agent, helpers: [], views: kit.views, popped: [], on: undefined, openAtFirst: [], ticket: false, onPopped: openAgent, root });
+  const viewKey = popUpViewKey(agent, false);
+  const [picked] = useSessionView(viewKey);
+  const [paneRow, setPaneRow] = useState<PaneRow>();
+  const tabs = usePaneTabs(row, paneRow);
+  const split = usePopUpSplit(splitting, row, tabs, []);
+  const rowTabs = [...row.row, ...split.extra];
+  const solo = soloRow([...rowTabs, ...(paneRow?.tabs ?? []).map((tab) => ({ key: tab.id, kind: 'shell' as const }))], picked === 'terminal' ? 'terminal' : 'chat');
+  // Rename from ⋯ opens the header's name field, the one name it shows.
+  const [renameAsk, setRenameAsk] = useState(0);
+  // Another's (the one beside) is renamed in place on its tab.
+  const [renamingTab, setRenamingTab] = useState<string>();
+  const menuOf = (of: Agent) => split.menuOf(of, { rename: of.sessionId === agent.sessionId ? () => setRenameAsk((n) => n + 1) : () => setRenamingTab(of.sessionId), openBeside: undefined });
+  const menu = menuOf(agent);
   const instead = (then: () => void) => () => {
     onClose();
     then();
   };
   return (
     <>
-      <PopupHeader agent={agent}>
-        <span className="session-window-chat-controls" ref={setChatControlsSlot} />
-        {shelves && <span className="session-window-shelf-controls" ref={setControlsSlot} />}
+      <PopupHeader agent={agent} renameAsk={renameAsk}>
+        <PopupViewSwitch viewKey={viewKey} agentOn={tabs.agentOn || split.live !== undefined} />
+        <SplitButton split={split.live} beside={split.beside} onEnd={split.end} />
+        {/* With no row yet, its + sits in the header: the way to a first shell or view. */}
+        {!solo.shows && <PopupPlus paneRow={paneRow} views={kit.views} open={row.open} beside={split.beside} onSelect={split.select} />}
         <StateAction agent={agent} placement="board" />
         <IconButton icon={<Expand />} size="sm" aria-label="Expand" tooltip="Expand it here, on its terminal" onClick={instead(() => expand(nodeId))} />
         <IconButton icon={<SquareArrowOutUpRight />} size="sm" aria-label="Pop out" tooltip="Pop out to its own window" onClick={instead(() => popOutAgent(agent))} />
-        <MoreMenu agent={agent} nodeId={nodeId} />
+        <MoreMenu agent={agent} nodeId={nodeId} menu={menu} />
         <BackToTileButton from={root} leave={onClose} label="Back to its tile" tooltip="Back to its tile; it keeps running" />
       </PopupHeader>
-      <div className="agent-popup-body">
+      {solo.shows && (
+        <PopupTabs
+          row={rowTabs}
+          shells={paneRow?.tabs ?? []}
+          active={split.active}
+          from={row.from}
+          nodeId={nodeId}
+          views={kit.views}
+          open={row.open}
+          ownLabel={split.live === undefined ? solo.ownLabel : undefined}
+          paneRow={paneRow}
+          menuOf={menuOf}
+          sides={split.sides}
+          beside={split.beside}
+          label="Its terminal, shells and views"
+          onSelect={split.select}
+          onClose={tabs.close}
+          onMove={split.move(row.move)}
+          onDragKey={split.dragging}
+          renaming={renamingTab}
+          onRenamed={() => setRenamingTab(undefined)}
+          onOpenWindow={(other) => instead(() => openAgent(other))()}
+        />
+      )}
+      <PopupPanes className="agent-popup-body" id={PANEL_ID} role={solo.shows ? 'tabpanel' : undefined} split={split} viewKey={viewKey}>
         <SessionBody
           content={content}
           detailsCollapsed={detailsCollapsed}
           onDetailsCollapsed={setDetailsCollapsed}
           shelves={shelves}
-          controlsSlot={controlsSlot}
-          chatControlsSlot={chatControlsSlot}
-          compactControls
+          // Its chat's controls sit at the chat's top: the header has none of them.
+          chatControlsSlot={null}
+          ownStrip={false}
+          viewKey={viewKey}
+          onRow={setPaneRow}
+          views={row.shelfViews}
+          cover={row.view === undefined ? undefined : kit.render(row.view, { onDismissed: () => row.close(REVIEW_TAB) })}
         />
-      </div>
+      </PopupPanes>
     </>
   );
 }
 
-/** The header: the agent's mark, name and status, then `children`, its buttons, at the end. */
-function PopupHeader({ agent, children }: { agent: Agent; children: ReactNode }) {
+/** The pop-up's switch's two views, the chat first. */
+const POP_UP_VIEWS: SegmentedOption<SessionView>[] = [
+  { id: 'chat', label: 'Chat', icon: <MessageSquare /> },
+  { id: 'terminal', label: 'Terminal', icon: <SquareTerminal /> },
+];
+
+/**
+ * The header's one Chat | Terminal switch, for every agent in the pop-up (a shell ignores it), kept for the pop-up the
+ * next time it opens. Dimmed while a view or a shell tab is on, which it doesn't change.
+ */
+export function PopupViewSwitch({ viewKey, agentOn }: { viewKey: string; agentOn: boolean }) {
+  const [view, pick] = useSessionView(viewKey);
+  return (
+    <span className="agent-popup-switch-group">
+      <span className="agent-popup-switch" data-testid="agent-popup-switch" data-dimmed={!agentOn || undefined} title={agentOn ? 'Every agent in this pop-up' : 'Applies when an agent tab is on'}>
+        <Segmented<SessionView> aria-label="View of every agent in this pop-up" value={view} onChange={pick} options={POP_UP_VIEWS} />
+      </span>
+      <FillButton />
+    </span>
+  );
+}
+
+/** Whether the board is wide enough for the cap to bite, and so for the fill button to show. */
+const PopupWideContext = createContext(false);
+
+/**
+ * The header's fill button, beside the Chat | Terminal switch, on a wide screen only: pressed, every pop-up fills the
+ * board; not, it stops at the cap's width. It flips the Settings option, so the next pop-up opens the same way.
+ */
+function FillButton() {
+  const wide = useContext(PopupWideContext);
+  const fill = usePopupFill();
+  if (!wide) return null;
+  return (
+    <IconButton
+      className="agent-popup-fill"
+      data-testid="agent-popup-fill"
+      icon={<UnfoldHorizontal />}
+      size="sm"
+      aria-label="Fill the screen"
+      aria-pressed={fill}
+      tooltip={fill ? `Back to ${POPUP_CAP} px wide` : 'Fill the screen'}
+      onClick={() => setPopupFill(!fill)}
+    />
+  );
+}
+
+/**
+ * A pop-up's row as its tabs act on it: the agents' and views' tabs from `row`, the shown agent's shell tabs from its
+ * body. A shell tab on covers the agent's own pane; a view on covers both. Picking an agent brings its own pane forward.
+ */
+function usePaneTabs(row: ReturnType<typeof usePopUpRow>, paneRow: PaneRow | undefined) {
+  const shell = row.view === undefined ? paneRow?.active : undefined;
+  const isShell = (key: string) => paneRow?.tabs.some((tab) => tab.id === key) === true;
+  const select = (key: string) => {
+    if (isShell(key)) {
+      // Off a view, back to the agent the shell is of, and on to its shell.
+      if (row.view !== undefined) row.pick(row.shown.sessionId);
+      paneRow?.select(key);
+      return;
+    }
+    // Its own tab again brings its own pane forward; another agent's leaves this one's layout as it was.
+    if (key === row.shown.sessionId && row.view === undefined) paneRow?.select(OWN_SURFACE);
+    row.pick(key);
+  };
+  const close = (key: string) => (isShell(key) ? paneRow?.close(key) : row.close(key));
+  return { active: row.view ?? shell ?? row.active, agentOn: row.view === undefined && shell === undefined, select, close };
+}
+
+/** What the row's keys step along and pick with: the row's own, or a split's while it is open. */
+interface RowKeysTarget {
+  order: readonly string[];
+  active: string;
+  pick(key: string): void;
+}
+
+/** What a pop-up's body splits by: the split, kept by the pop-up (it sizes the window), and the board's agents. */
+interface PopUpSplitting {
+  split: PopupSplit | undefined;
+  onSplit(split: PopupSplit | undefined): void;
+  /** Every agent on the board: Open beside… offers the zone's. */
+  agents: readonly Agent[];
+}
+
+/** The split as a body acts on it (`usePopUpSplit`). */
+type PopUpSplitControl = ReturnType<typeof usePopUpSplit>;
+
+/**
+ * A body's split: the row's own agent on the left, the one picked beside it on the right, each tab picking into the
+ * pane with the focus. An agent from outside the row gets a tab of its own while it is beside. The one beside going (it
+ * ended, or popped out) ends the split.
+ */
+function usePopUpSplit({ split, onSplit, agents }: PopUpSplitting, row: ReturnType<typeof usePopUpRow>, tabs: ReturnType<typeof usePaneTabs>, popped: readonly string[]) {
+  const rowAgents = row.row.flatMap((each) => (each.agent === undefined ? [] : [each.agent]));
+  const members = new Set(rowAgents.map((agent) => agent.sessionId));
+  const left = row.shown.sessionId;
+  const right = split === undefined ? undefined : (rowAgents.find((agent) => agent.sessionId === split.right) ?? agents.find((agent) => agent.sessionId === split.right && agent.endedAt === null));
+  const live = right === undefined || right.sessionId === left || popped.includes(right.sessionId) ? undefined : split;
+  useEffect(() => {
+    if (split !== undefined && live === undefined) onSplit(undefined);
+  });
+  const beside: BesideChoice[] =
+    live !== undefined
+      ? []
+      : besideCandidates({ shown: row.shown, row: rowAgents, agents, popped }).map((agent) => ({ id: agent.sessionId, label: agent.name, onSelect: () => onSplit(openSplit(left, agent.sessionId)) }));
+  const isAgent = (key: string) => members.has(key) || key === live?.right;
+  // The row's own pane showing `key`, as a click on its tab would, the focus on it.
+  const showLeft = (key: string) => tabs.select(key);
+  const select = (key: string) => {
+    if (live === undefined) return tabs.select(key);
+    const step = selectInSplit(live, left, key, members, isAgent(key));
+    onSplit(step.split);
+    if (step.split?.focused === 'left') showLeft(step.left ?? key);
+  };
+  const active = live === undefined ? tabs.active : tabOnInSplit(live, tabs.active);
+  const extraKeys = live !== undefined && !members.has(live.right) ? [live.right] : [];
+  const { keysRef } = row;
+  useLayoutEffect(() => {
+    keysRef.current = live === undefined ? undefined : { order: [...row.order, ...extraKeys], active, pick: select };
+  });
+  // A shell or a view coming on in the left pane (⌘T, the sidebar) while the right has the focus gives the left the focus.
+  const leftTabRef = useRef(tabs.active);
+  useEffect(() => {
+    if (leftTabRef.current === tabs.active) return;
+    leftTabRef.current = tabs.active;
+    if (live?.focused === 'right' && !isAgent(tabs.active)) onSplit({ ...live, focused: 'left' });
+  });
+  // The tab being dragged, as `getData` is empty until the drop.
+  const draggedRef = useRef<string>(undefined);
+  const dropsAgent = (key: string) => isAgent(key) || agents.some((agent) => agent.sessionId === key && agent.endedAt === null);
+  const canDrop = (side: SplitSide | 'edge') => {
+    const key = draggedRef.current;
+    return key !== undefined && canDropInSplit(live, left, side, key, members, dropsAgent(key));
+  };
+  const drop = (side: SplitSide | 'edge', key: string) => {
+    if (!dropsAgent(key)) return;
+    if (live === undefined) {
+      if (side === 'edge') onSplit(dropAtEdge(left, key));
+      return;
+    }
+    if (side === 'edge') return;
+    const step = dropInSplit(live, left, side, key, members);
+    onSplit(step.split);
+    if (step.left !== undefined) showLeft(step.left);
+  };
+  const extra: PopUpRowTab[] = live !== undefined && right !== undefined && !members.has(right.sessionId) ? [{ key: right.sessionId, kind: 'agent', agent: right, chat: false }] : [];
+  const menuOf = (agent: Agent, hooks: PopUpMenuHooks): PopUpMenuHooks => ({
+    ...hooks,
+    openBeside: live === undefined && agent.sessionId === left ? beside : undefined,
+    openBesideThis: live === undefined ? beside.find((each) => each.id === agent.sessionId)?.onSelect : undefined,
+    closeSide: live !== undefined && agent.sessionId === live.right ? () => onSplit(undefined) : undefined,
+  });
+  return {
+    live,
+    right: live === undefined ? undefined : right,
+    beside,
+    select,
+    drop,
+    extra,
+    menuOf,
+    /** The tab on: the one in the pane with the focus. */
+    active,
+    canDrop,
+    dragging: (key: string | undefined) => {
+      draggedRef.current = key;
+    },
+    sides: live === undefined ? undefined : { left, right: live.right },
+    focus: (side: SplitSide) => {
+      if (live !== undefined && live.focused !== side) onSplit({ ...live, focused: side });
+    },
+    ratio: (ratio: number) => {
+      if (live !== undefined) onSplit({ ...live, ratio });
+    },
+    end: () => onSplit(undefined),
+    /** The row's reorder, leaving out the tab of an agent from outside the row: it has no place in the row's order. */
+    move:
+      (move: (key: string, index: number) => void) =>
+      (key: string, index: number): void => {
+        if (row.order.includes(key)) move(key, index);
+      },
+  };
+}
+
+/** Open beside…, as a menu's row: each agent it can open beside the one shown. */
+const besideMenu = (beside: readonly BesideChoice[]): MenuEntry => ({ label: 'Open beside…', icon: <Columns2 />, detail: 'split', entries: beside.map(({ label, onSelect }) => ({ label, onSelect })) });
+
+/**
+ * The header's split button: pressed while split, ending it; else the agents to open beside the one shown, or nothing
+ * where there are none.
+ */
+function SplitButton({ split, beside, onEnd }: { split: PopupSplit | undefined; beside: readonly BesideChoice[]; onEnd(): void }) {
+  if (split !== undefined)
+    return <IconButton className="agent-popup-split" data-testid="agent-popup-split" icon={<Columns2 />} size="sm" aria-label="End the split" aria-pressed tooltip="End the split, back to one agent" onClick={onEnd} />;
+  if (beside.length === 0) return null;
+  return (
+    <Menu align="end" entries={[{ heading: 'Open beside' }, ...beside.map(({ label, onSelect }) => ({ label, onSelect }))]}>
+      <IconButton className="agent-popup-split" data-testid="agent-popup-split" icon={<Columns2 />} size="sm" aria-label="Open beside…" aria-pressed={false} tooltip="Split: another agent beside this one" />
+    </Menu>
+  );
+}
+
+/** A side of the split, as its divider drags it. */
+type SideLeaf = { type: 'pane'; side: SplitSide };
+const SPLIT_ID = 'popup-split';
+const percent = (fraction: number) => `${fraction * 100}%`;
+
+/**
+ * The body's panes: the row's own pane (`children`), and split, the agent beside it on the right, its chat or terminal
+ * as the header's switch has it, with no sidebar, strip or controls of its own; a divider between them drags. A tab
+ * dropped on a pane shows there; one dropped at the right edge of a body not split opens beside.
+ */
+function PopupPanes({ split, viewKey, children, className, id, role }: { split: PopUpSplitControl; viewKey: string; children: ReactNode; className: string; id: string; role: string | undefined }) {
+  const box = useRef<HTMLDivElement>(null);
+  const [view] = useSessionView(viewKey);
+  const [over, setOver] = useState<SplitSide | 'edge'>();
+  const { live, right } = split;
+  const layout: SplitTree<SideLeaf> =
+    live === undefined ? { type: 'pane', side: 'left' } : { type: 'split', id: SPLIT_ID, direction: 'horizontal', ratio: live.ratio, first: { type: 'pane', side: 'left' }, second: { type: 'pane', side: 'right' } };
+  const latest = useRef(split);
+  latest.current = split;
+  const { geometry, dividers } = useDividerDrag(box, layout, (leaf) => leaf.side, (_id, ratio) => Promise.resolve(latest.current.ratio(ratio)), { onStep: () => latest.current.ratio(0.5) });
+  const leftWidth = geometry.panes.find((pane) => pane.id === 'left')?.rect.width ?? 1;
+  const sideAt = (clientX: number): SplitSide | 'edge' | undefined => {
+    const rect = box.current?.getBoundingClientRect();
+    if (rect === undefined) return undefined;
+    const x = clientX - rect.left;
+    if (live === undefined) return atRightEdge(x, rect.width) ? 'edge' : undefined;
+    return x < rect.width * live.ratio ? 'left' : 'right';
+  };
+  const carries = (event: DragEvent) => event.dataTransfer.types.includes(ROW_TAB_TYPE);
+  const pane = (side: SplitSide) => ({
+    className: 'agent-popup-pane',
+    'data-side': side,
+    'data-testid': `agent-popup-pane-${side}`,
+    'data-focused': (live !== undefined && live.focused === side) || undefined,
+    onPointerDownCapture: () => split.focus(side),
+    onFocusCapture: () => split.focus(side),
+  });
+  return (
+    <div
+      ref={box}
+      className={className}
+      id={id}
+      role={role}
+      data-split={live !== undefined || undefined}
+      data-drop={over}
+      onDragOver={(event) => {
+        if (!carries(event)) return;
+        const at = sideAt(event.clientX);
+        const side = at !== undefined && split.canDrop(at) ? at : undefined;
+        setOver(side);
+        if (side === undefined) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+      }}
+      onDragLeave={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOver(undefined);
+      }}
+      onDrop={(event) => {
+        setOver(undefined);
+        const key = event.dataTransfer.getData(ROW_TAB_TYPE);
+        const side = sideAt(event.clientX);
+        if (key === '' || side === undefined) return;
+        event.preventDefault();
+        split.drop(side, key);
+      }}
+    >
+      <div {...pane('left')} style={live === undefined ? undefined : { flexBasis: percent(leftWidth) }}>
+        {children}
+      </div>
+      {live !== undefined && right !== undefined && (
+        <div {...pane('right')}>
+          <SessionBody
+            key={right.sessionId}
+            content={{ kind: 'session', sessionId: right.sessionId, agent: right }}
+            detailsCollapsed
+            onDetailsCollapsed={() => {}}
+            shelves={false}
+            view={view === 'terminal' ? 'terminal' : 'chat'}
+            chatControlsSlot={null}
+            ownStrip={false}
+            viewKey={viewKey}
+            autoFocus={false}
+          />
+        </div>
+      )}
+      {live !== undefined && <Dividers {...dividers} testId="agent-popup-divider" />}
+    </div>
+  );
+}
+
+/**
+ * A pop-up's + (its tooltip says ⌘T): what Today's strip's + offered for the agent's pane (shells here or at a
+ * folder, web pages, scripts, other sessions, pull requests, the to-do list), then the views, then Open beside….
+ * Nothing while it has neither a pane nor a view to offer.
+ */
+function PopupPlus({
+  paneRow,
+  views,
+  open,
+  beside,
+  onSelect,
+}: {
+  paneRow: PaneRow | undefined;
+  views: readonly PopUpView[];
+  open: readonly string[];
+  /** The agents it can open beside the one shown; none while split. */
+  beside: readonly BesideChoice[];
+  onSelect(key: string): void;
+}) {
+  const pane = useAddEntries(paneRow?.adds() ?? NOTHING_TO_ADD, { split: false });
+  const viewRows: MenuEntry[] = [
+    ...(views.length === 0 ? [] : [{ heading: 'Views' }]),
+    ...views.map((view) => ({ label: view.label, icon: viewIcon(view.key), hint: open.includes(view.key) ? 'open' : undefined, onSelect: () => onSelect(view.key) })),
+  ];
+  const before: MenuEntry[] = [...(paneRow === undefined ? [] : [{ heading: 'New tab' }, ...pane.entries, ...(viewRows.length > 0 ? ['separator' as const] : [])]), ...viewRows];
+  const entries: MenuEntry[] = [...before, ...(beside.length === 0 ? [] : [...(before.length > 0 ? ['separator' as const] : []), besideMenu(beside)])];
+  if (entries.length === 0) return null;
+  return (
+    <Menu align="end" entries={entries} open={pane.menuOpen} onOpenChange={pane.onOpenChange}>
+      <IconButton
+        className="agent-popup-plus"
+        data-testid="agent-popup-plus"
+        icon={<Plus />}
+        size="xs"
+        variant="ghost"
+        aria-label="New tab"
+        tooltip={
+          <>
+            New tab: a shell, a page, a view, or one beside<Kbd>{keyText('window.newTab')}</Kbd>
+          </>
+        }
+      />
+    </Menu>
+  );
+}
+
+/** A + before the body has drawn its panes: no shells to offer yet. */
+const NOTHING_TO_ADD: TabAdds = { here: '', onNewShell: () => {}, onNewShellAt: () => {}, onRunScript: () => {}, scripts: () => Promise.resolve({ runner: 'npm', scripts: [] }), sessions: [], named: false, shells: false, onSplit: () => {} };
+
+/** A view's icon, on its tab, its row in the sidebar and its icon on the rail. */
+function viewIcon(key: PopUpView['key']): ReactNode {
+  return key === BOARD_TAB ? <LayoutDashboard /> : key === ACTIVITY_TAB ? <ActivityIcon /> : <FileCheck />;
+}
+
+/**
+ * The views a pop-up has for its agents, `who` (its chat first) and `owner` (whose activity it shows), and how each is
+ * drawn: Activity while the agent has an activity log, Review while one of them has a review to show; a ticket's Board
+ * comes from `board`.
+ */
+function useViewKit(who: readonly Agent[], owner: Agent, board?: (onOpenAgent: (agent: Agent) => void) => ReactNode) {
+  const reviews = useReviews();
+  const reviewed = who.map((agent) => ({ agent, rounds: roundsOf(reviews, agent.sessionId) })).find(({ rounds }) => showsReviewTab(rounds, false));
+  const activity = useActivity(owner.sessionId);
+  const hasActivity = activity.lines.length > 0 || activity.error !== undefined;
+  const views = popUpViews({ board: board !== undefined, activity: hasActivity, reviewRound: reviewed?.rounds.at(-1)?.round });
+  const render = (key: PopUpView['key'], { onDismissed, onOpenAgent = () => {} }: { onDismissed(): void; onOpenAgent?(agent: Agent): void }): ReactNode =>
+    key === BOARD_TAB ? (
+      board?.(onOpenAgent)
+    ) : key === ACTIVITY_TAB ? (
+      <ActivityLog orchestrator={owner} activity={activity} titled={false} />
+    ) : reviewed !== undefined ? (
+      <ReviewViewer implementer={reviewed.agent} rounds={reviewed.rounds} onDismissed={onDismissed} />
+    ) : null;
+  return { views, render };
+}
+
+/**
+ * A pop-up's row: its views open as tabs, then its own agent and its helpers, in the order they were dragged into; which
+ * tab is on, the one it came from (⌘[ goes back to it) and the agent shown under a view that is on. A view opens from the
+ * sidebar or +, or goes to its tab when it is open already; its × closes it. ⌃Tab and ⌃⇧Tab step along the row, ⌘1–⌘9
+ * pick a place in it.
+ */
+function usePopUpRow({
+  own,
+  helpers,
+  views,
+  popped,
+  on,
+  openAtFirst,
+  ticket,
+  onPopped,
+  root,
+}: {
+  own: Agent;
+  helpers: readonly Agent[];
+  views: readonly PopUpView[];
+  popped: readonly string[];
+  on: string | undefined;
+  openAtFirst: readonly string[];
+  ticket: boolean;
+  /** Brings forward a helper popped out into a window of its own, never drawn here as well. */
+  onPopped(agent: Agent): void;
+  root: RefObject<HTMLElement | null>;
+}) {
+  const [tab, setTab] = useState(on ?? own.sessionId);
+  // The agent tab on last: the one shown, out of view, under a view that is on.
+  const [agentTab, setAgentTab] = useState(on ?? own.sessionId);
+  const [from, setFrom] = useState<string>();
+  const [opened, setOpened] = useState<readonly string[]>(openAtFirst);
+  const [kept, keep] = useKeptOrders();
+  const owner = ticket ? popUpRowOwner(own) : `agent:${own.sessionId}`;
+  // Only views it has now: one it no longer has (a review dismissed) leaves the row.
+  const openViews = views.filter((view) => opened.includes(view.key));
+  const open = openViews.map((view) => view.key);
+  const row = rowOrder(popUpRow(own, helpers, openViews, { ticket }), kept[owner]);
+  const order = row.map((each) => each.key);
+  const showing = popUpTabOn(tab, agentTab, own, helpers, popped, open);
+  const view = typeof showing === 'string' ? showing : undefined;
+  const shown = typeof showing === 'string' ? popUpTabShown(agentTab, own, helpers, popped) : showing;
+  const active = view ?? shown.sessionId;
+  const pick = (key: string) => {
+    const helper = helpers.find((each) => each.sessionId === key);
+    if (helper !== undefined && popped.includes(helper.sessionId)) return onPopped(helper);
+    if (key === active) return;
+    const isView = views.some((each) => each.key === key);
+    if (isView) setOpened((before) => openedView(before, key));
+    else setAgentTab(key);
+    setFrom(active);
+    setTab(key);
+  };
+  const back = () => pick(from !== undefined && order.includes(from) && from !== active ? from : own.sessionId);
+  // Closing the tab that is on goes back to the one it came from, or its own; that one is on now, so nothing is
+  // underlined, and a closed tab is never the one ⌘[ goes back to.
+  const close = (key: string) => {
+    if (key === active) {
+      const to = afterClose(key, { active, from, order, under: shown.sessionId });
+      setTab(to);
+      if (!isViewKey(to)) setAgentTab(to);
+    }
+    if (key === active || key === from) setFrom(undefined);
+    setOpened((before) => closedView(before, key));
+  };
+  // A split routes the keys as it routes a click (`usePopUpSplit`): its row, its tab on and its pick, while it is open.
+  const keysRef = useRef<RowKeysTarget>(undefined);
+  useRowKeys(root, (press) => {
+    const keys = keysRef.current ?? { order, active, pick };
+    // One agent alone, with no row, leaves its keys to its terminal.
+    if (keys.order.length < 2) return false;
+    if (press.kind === 'back') return from !== undefined && keys.order.includes(from) && from !== keys.active ? (keys.pick(from), true) : false;
+    const to = press.kind === 'step' ? steppedTab(keys.order, keys.active, press.step, new Set(popped)) : tabAtDigit(keys.order, press.digit);
+    if (to !== undefined) keys.pick(to);
+    return to !== undefined;
+  });
+  const shelfViews: ShelfViews = {
+    views: views.map((each) => ({ key: each.key, label: each.label, icon: viewIcon(each.key), state: viewRow(each.key, open, active) })),
+    onOpen: pick,
+  };
+  return { row, order, open, view, shown, active, from, pick, back, close, move: (key: string, index: number) => keep(owner, movedTab(order, key, index)), shelfViews, keysRef };
+}
+
+/** The header: the agent's mark, name and status, then `children`, its buttons, at the end. `renameAsk` going up opens its name field. */
+function PopupHeader({ agent, renameAsk, children }: { agent: Agent; renameAsk: number; children: ReactNode }) {
   const shows = useNeedsYouShows();
   const simplified = useSimplified();
   return (
     <header className="session-window-head agent-popup-head">
       <HarnessMark className="session-window-mark" harness={agent.harness} />
-      <SessionName agent={agent} name={agent.name} title={agent.name} />
+      <SessionName agent={agent} name={agent.name} title={agent.name} ask={renameAsk} />
       {simplified ? <StatusMark status={humanStatus(agent, shows).status} /> : <StatusPill {...agentPill(agent, shows)} />}
       <span className="session-window-head-fill" />
       {children}
@@ -262,11 +781,28 @@ function PopupHeader({ agent, children }: { agent: Agent; children: ReactNode })
   );
 }
 
-/** ⋯: its pull requests with their checks, then the agent's menu (Pause and Delete too), less what the header has. */
-function MoreMenu({ agent, nodeId }: { agent: Agent; nodeId: string }) {
+/** What an agent's menu in its pop-up does that only the pop-up can: open its name field, split beside it, end the split. */
+interface PopUpMenuHooks {
+  rename(): void;
+  /** The agents to open beside it: undefined for an agent not shown, or while split. */
+  openBeside: readonly BesideChoice[] | undefined;
+  /** Opens this agent beside the one shown, on another agent's menu; undefined where it can't. */
+  openBesideThis?: (() => void) | undefined;
+  /** Ends the split, on its right side's menu. */
+  closeSide?: (() => void) | undefined;
+}
+
+/** A menu with nothing of the pop-up's own to do: a gallery's. */
+const NO_MENU_HOOKS = (): PopUpMenuHooks => ({ rename: () => {}, openBeside: undefined });
+
+/** A lone agent's header ⋯: its pull requests with their checks, then the same menu as an agent tab's ⋯. */
+function MoreMenu({ agent, nodeId, menu }: { agent: Agent; nodeId: string; menu: PopUpMenuHooks }) {
+  const actions = useContext(TileActionsContext);
+  const prs = pullRequestEntries(agent, actions);
+  const entries = [...prs, ...(prs.length > 0 ? ['separator' as const] : []), ...usePopUpAgentEntries(agent, nodeId, menu)];
   return (
-    <Menu align="end" entries={usePopupMoreEntries(agent, nodeId)}>
-      <IconButton icon={<MoreHorizontal />} size="sm" aria-label="More" tooltip="More: its pull requests, Pause, Delete…" />
+    <Menu align="end" entries={entries}>
+      <IconButton icon={<MoreHorizontal />} size="sm" aria-label="More" tooltip="More: Pause, Run gate, Rename, Stop session, Delete…" />
     </Menu>
   );
 }
@@ -274,19 +810,44 @@ function MoreMenu({ agent, nodeId }: { agent: Agent; nodeId: string }) {
 /** The room a tab's ⋯ or × takes, kept on each tab that isn't on, so the row holds still as the tab that is on moves. */
 const TabEndSlot = () => <span className="agent-popup-tab-end-slot" aria-hidden />;
 
-/** ⋯ on the agent's tab that is on, in a ticket's pop-up: the same menu as a lone agent's pop-up has in its header. */
-function TabMoreMenu({ agent, nodeId }: { agent: Agent; nodeId: string }) {
+/** ⋯ on the agent's tab that is on: its menu, the same as a right-click on its tab. */
+function TabMoreMenu({ agent, nodeId, menu }: { agent: Agent; nodeId: string; menu: PopUpMenuHooks }) {
   return (
-    <Menu align="start" entries={usePopupMoreEntries(agent, nodeId)}>
-      <IconButton className="agent-popup-tab-more" data-testid="agent-popup-tab-more" icon={<MoreHorizontal />} size="xs" variant="ghost" aria-label={`More for ${agent.name}`} tooltip="Its pull requests, Pause, Delete…" />
+    <Menu align="start" entries={usePopUpAgentEntries(agent, nodeId, menu)}>
+      <IconButton className="agent-popup-tab-more" data-testid="agent-popup-tab-more" icon={<MoreHorizontal />} size="xs" variant="ghost" aria-label={`More for ${agent.name}`} tooltip="Pause, Run gate, Rename, Stop session, Delete…" />
     </Menu>
   );
 }
 
-function usePopupMoreEntries(agent: Agent, nodeId: string): ModelEntry[] {
+/** The menu a right-click on an agent's tab opens, at the pointer. */
+function TabContextMenu({ agent, nodeId, menu, at, onClose }: { agent: Agent; nodeId: string; menu: PopUpMenuHooks; at: { x: number; y: number }; onClose(): void }) {
+  return <ContextMenu at={at} entries={usePopUpAgentEntries(agent, nodeId, menu)} label={`${agent.name}'s menu`} onClose={onClose} />;
+}
+
+/** An agent's menu in its pop-up (`popUpAgentMenu`), wired to the board's actions and the pop-up's own. */
+function usePopUpAgentEntries(agent: Agent, nodeId: string, { rename, openBeside, openBesideThis, closeSide }: PopUpMenuHooks): ModelEntry[] {
   const actions = useContext(TileActionsContext);
-  const prs = pullRequestEntries(agent, actions);
-  return [...prs, ...(prs.length > 0 ? ['separator' as const] : []), ...usePopupAgentMenu(agent, nodeId)];
+  const clickOpens = useContext(ClickOpensContext);
+  const rounds = roundsOf(useReviews(), agent.sessionId);
+  const gate = useGateRuns().get(agent.sessionId);
+  return popUpAgentMenu({ nodeId, agent, clickOpens, gate, rounds, rename, actions, openBeside, openBesideThis, closeSide });
+}
+
+/** An agent's name, in place of its tab's label while it is renamed from its menu; `onDone` once the field closes. */
+function TabRename({ agent, onDone }: { agent: Agent; onDone(): void }) {
+  const { rename } = useContext(TileActionsContext);
+  const target = nameTarget({ agent });
+  const renaming = useRenaming(agent.name, async (next) => {
+    if (target !== undefined) await rename(target, next);
+  });
+  const opened = useRef(false);
+  useEffect(() => {
+    if (renaming.editing) opened.current = true;
+    else if (opened.current) onDone();
+    else renaming.startSoon();
+    // Only the field opening and closing matters.
+  }, [renaming.editing]);
+  return <EditableName className="agent-popup-tab-rename" value={agent.name} renaming={renaming} label="Agent name" />;
 }
 
 /** The agent's menu (Pause, Run gate, Delete…), less the rows its pop-up has of its own. */
@@ -320,6 +881,7 @@ function TicketPopupBody({
   onClose,
   root,
   board,
+  splitting,
 }: {
   chat: Agent;
   helpers: readonly Agent[];
@@ -329,54 +891,35 @@ function TicketPopupBody({
   onClose(): void;
   root: RefObject<HTMLElement | null>;
   board: PopUpBoard | undefined;
+  splitting: PopUpSplitting;
 }) {
   const { expand, popOutAgent, openAgent, openPullRequest } = useContext(TileActionsContext);
   const shows = useNeedsYouShows();
   const face = ticketFace(chat, helpers, shows, { simplified: useSimplified() });
-  const [tab, setTab] = useState(on ?? chat.sessionId);
-  const [from, setFrom] = useState<string>();
-  // A view closed by its × is out of the row until + opens it again.
-  const [closed, setClosed] = useState<readonly string[]>([]);
-  const [kept, keep] = useKeptOrders();
-  const owner = popUpRowOwner(chat);
-  const row = rowOrder(
-    popUpRow(chat, helpers).filter((each) => !closed.includes(each.key)),
-    kept[owner],
+  const kit = useViewKit(
+    [chat, ...helpers],
+    chat,
+    board &&
+      ((onOpenAgent) => (
+        <TicketBoard chatId={chat.sessionId} agents={board.agents} desk={board.desk} onError={board.onError} onLeave={() => row.back()} onOpenAgent={onOpenAgent} inPopUp />
+      )),
   );
-  const order = row.map((each) => each.key);
-  const showing = popUpTabOn(closed.includes(tab) ? undefined : tab, chat, helpers, popped);
-  const shown = showing === BOARD_TAB ? chat : showing;
-  const active = showing === BOARD_TAB ? BOARD_TAB : shown.sessionId;
-  const pick = (key: string) => {
-    // A helper popped out into its own window is brought forward there, never drawn here as well.
-    const helper = helpers.find((each) => each.sessionId === key);
-    if (helper !== undefined && popped.includes(helper.sessionId)) return openAgent(helper);
-    if (key === active) return;
-    setClosed((views) => views.filter((view) => view !== key));
-    setFrom(active);
-    setTab(key);
-  };
-  const back = () => pick(from !== undefined && order.includes(from) && from !== active ? from : chat.sessionId);
-  // Closing the tab that is on goes back to the one it came from, or the chat; that one is on now, so nothing is
-  // underlined, and a closed tab is never the one ⌘[ goes back to.
-  const close = (key: string) => {
-    if (key === active) setTab(from !== undefined && from !== key && order.includes(from) ? from : chat.sessionId);
-    if (key === active || key === from) setFrom(undefined);
-    setClosed((views) => [...views, key]);
-  };
-  useRowKeys(root, (press) => {
-    if (press.kind === 'back') return from !== undefined && order.includes(from) ? (pick(from), true) : false;
-    const to = press.kind === 'step' ? steppedTab(order, active, press.step, new Set(popped)) : tabAtDigit(order, press.digit);
-    if (to !== undefined) pick(to);
-    return to !== undefined;
-  });
+  // Its overview, the Board, is open as it opens.
+  const [openAtFirst] = useState(() => viewsOpenAtFirst(kit.views));
+  const row = usePopUpRow({ own: chat, helpers, views: kit.views, popped, on, openAtFirst, ticket: true, onPopped: openAgent, root });
+  const { shown, order } = row;
   const content: WindowContent = { kind: 'session', sessionId: shown.sessionId, agent: shown };
-  const onBoard = showing === BOARD_TAB && board !== undefined;
-  const shelves = !onBoard && showsShelves(content);
+  const shelves = showsShelves(content);
   const [detailsCollapsed, setDetailsCollapsed] = useSidebarCollapsed(shelves, root, () => false);
-  const [controlsSlot, setControlsSlot] = useState<HTMLElement | null>(null);
-  const [chatControlsSlot, setChatControlsSlot] = useState<HTMLElement | null>(null);
-  const [switchSlot, setSwitchSlot] = useState<HTMLElement | null>(null);
+  const viewKey = popUpViewKey(chat, true);
+  // The chat's own pick moves into the ticket's the first time its pop-up opens; after that it is the pop-up's.
+  useEffect(() => adoptChatView(viewKey), [viewKey]);
+  const [paneRow, setPaneRow] = useState<PaneRow>();
+  const tabs = usePaneTabs(row, paneRow);
+  const split = usePopUpSplit(splitting, row, tabs, popped);
+  // The helper whose tab is renamed in place, from its menu.
+  const [renamingTab, setRenamingTab] = useState<string>();
+  const menuOf = (agent: Agent): PopUpMenuHooks => split.menuOf(agent, { rename: () => setRenamingTab(agent.sessionId), openBeside: undefined });
   const instead = (then: () => void) => () => {
     onClose();
     then();
@@ -397,9 +940,8 @@ function TicketPopupBody({
           {face.title}
         </span>
         <span className="session-window-head-fill" />
-        <span className="session-window-chat-controls" ref={setChatControlsSlot} />
-        {shelves && <span className="session-window-shelf-controls" ref={setControlsSlot} />}
-        <span className="agent-popup-switch" ref={setSwitchSlot} />
+        <PopupViewSwitch viewKey={viewKey} agentOn={tabs.agentOn || split.live !== undefined} />
+        <SplitButton split={split.live} beside={split.beside} onEnd={split.end} />
         <StateAction agent={shown} placement="board" />
         {face.button?.kind === 'merge' && pr !== undefined && prOwner !== undefined && (
           <Button size="sm" variant="primary" icon={<GitMerge />} data-testid="agent-popup-merge" title="Open its pull request, to merge it there" onClick={() => openPullRequest(prOwner, pr)}>
@@ -412,44 +954,51 @@ function TicketPopupBody({
         <BackToTileButton from={root} leave={onClose} label="Back to its tile" tooltip="Back to its tile; it keeps running" />
       </header>
       <PopupTabs
-        row={row}
-        active={active}
-        from={from}
+        row={[...row.row, ...split.extra]}
+        shells={paneRow?.tabs ?? []}
+        active={split.active}
+        from={row.from}
         nodeId={nodeId}
-        closed={closed}
-        onSelect={pick}
-        onClose={close}
-        onMove={(key, index) => keep(owner, movedTab(order, key, index))}
+        views={kit.views}
+        open={row.open}
+        paneRow={paneRow}
+        menuOf={menuOf}
+        sides={split.sides}
+        beside={split.beside}
+        renaming={renamingTab}
+        onRenamed={() => setRenamingTab(undefined)}
+        label="The ticket's views, chat, helpers and shells"
+        onSelect={split.select}
+        onClose={tabs.close}
+        onMove={split.move(row.move)}
+        onDragKey={split.dragging}
         onOpenWindow={(agent) => instead(() => openAgent(agent))()}
       />
-      <div className="agent-popup-body" id={PANEL_ID} role="tabpanel">
-        {onBoard ? (
-          <TicketBoard
-            chatId={chat.sessionId}
-            agents={board.agents}
-            desk={board.desk}
-            onError={board.onError}
-            onLeave={back}
-            // A member of the ticket's row opens on its tab; anything else in its own window.
-            onOpenAgent={(agent) => (order.includes(agent.sessionId) ? pick(agent.sessionId) : openAgent(agent))}
-            inPopUp
-          />
-        ) : (
-          <SessionBody
-            key={shown.sessionId}
-            content={content}
-            detailsCollapsed={detailsCollapsed}
-            onDetailsCollapsed={setDetailsCollapsed}
-            shelves={shelves}
-            controlsSlot={controlsSlot}
-            chatControlsSlot={chatControlsSlot}
-            compactControls
-            // Straight under the ticket's tabs: no strip of its own over it, unless something is amiss, and its view switch in the header.
-            ownStrip={false}
-            switchSlot={switchSlot}
-          />
-        )}
-      </div>
+      <PopupPanes className="agent-popup-body" id={PANEL_ID} role="tabpanel" split={split} viewKey={viewKey}>
+        <SessionBody
+          key={shown.sessionId}
+          content={content}
+          detailsCollapsed={detailsCollapsed}
+          onDetailsCollapsed={setDetailsCollapsed}
+          shelves={shelves}
+          // Straight under the ticket's tabs: no strip of its own over it, unless something is amiss; its shell tabs in
+          // the row, the one view switch in the header, its chat's controls at the chat's top.
+          chatControlsSlot={null}
+          ownStrip={false}
+          viewKey={viewKey}
+          onRow={setPaneRow}
+          views={row.shelfViews}
+          cover={
+            row.view === undefined
+              ? undefined
+              : kit.render(row.view, {
+                  onDismissed: () => row.close(REVIEW_TAB),
+                  // A member of the ticket's row opens on its tab; anything else in its own window.
+                  onOpenAgent: (agent) => (order.includes(agent.sessionId) ? tabs.select(agent.sessionId) : openAgent(agent)),
+                })
+          }
+        />
+      </PopupPanes>
     </>
   );
 }
@@ -518,27 +1067,59 @@ const TAB_GUESS = 140;
 
 /**
  * The row of tabs: the Board, then each agent with its character, its name, "chat" on the chat's, and its status dot,
- * whose tooltip says since when. The tab that is on ends in ⋯ (its agent's menu) or, on a view, ×. Tabs drag along it
- * into any order. What doesn't fit folds into "+n ▾", from the right, but never the tab that is on nor one that asks;
- * + ends the row, with the views to open.
+ * whose tooltip says since when, then the shown agent's shells. The tab that is on ends in ⋯ (its agent's menu, which a
+ * right-click on any agent's tab opens too) or, on a view or a shell, ×. The views and agents drag along it into any
+ * order. What doesn't fit folds into "+n ▾", from the right, but never the tab that is on nor one that asks; + ends the
+ * row: a new shell, the views to open, and Open beside….
  */
 export function PopupTabs({
   row,
+  shells = [],
   active,
   from,
   nodeId,
-  closed,
+  views,
+  open,
+  ownLabel,
+  paneRow,
+  menuOf = NO_MENU_HOOKS,
+  sides,
+  beside = [],
+  renaming,
+  onRenamed,
+  onDragKey,
+  label,
   onSelect,
   onClose,
   onMove,
   onOpenWindow,
 }: {
   row: readonly PopUpRowTab[];
+  /** The shown agent's shell tabs (and what else its body opened), after the agents. */
+  shells?: readonly StripTab[];
+  /** What its shells do: undefined until its body has drawn, and in a gallery. */
+  paneRow?: PaneRow | undefined;
+  /** What an agent's menu does that only the pop-up can. */
+  menuOf?(agent: Agent): PopUpMenuHooks;
+  /** Split, the agents on each side: both their tabs are on, with a "left" and a "right" pill. */
+  sides?: { left: string; right: string } | undefined;
+  /** The agents its + offers to open beside the one shown. */
+  beside?: readonly BesideChoice[];
+  /** The agent whose tab is renamed in place, if one is. */
+  renaming?: string | undefined;
+  onRenamed?(): void;
+  /** The tab being dragged in the row, as the drag starts, then none as it ends: the body takes it to show where it drops. */
+  onDragKey?(key: string | undefined): void;
   active: string;
   from: string | undefined;
   nodeId: string;
-  /** The views closed by their ×, which + offers again. */
-  closed: readonly string[];
+  /** The views it has, which + offers: opening one, or going to its tab when it is open (`open`). */
+  views: readonly PopUpView[];
+  open: readonly string[];
+  /** What one agent alone calls its own tab ("Chat" or "Terminal"), with no ⋯ of its own: its header's is the same menu. */
+  ownLabel?: string | undefined;
+  /** What the row is, as a screen reader says it. */
+  label: string;
   onSelect(key: string): void;
   onClose(key: string): void;
   /** Moves a tab to `index` in the whole row, as the strip counts it. */
@@ -547,21 +1128,25 @@ export function PopupTabs({
 }) {
   const shows = useNeedsYouShows();
   const style = useCharacterStyle();
-  const tabs: StripTab[] = row.map(({ key, agent, chat: isChat }) => {
+  const tabs: StripTab[] = row.map(({ key, agent, view, chat: isChat }) => {
     if (agent === undefined)
       return {
         id: key,
-        label: 'Board',
-        icon: <LayoutDashboard />,
-        title: "The ticket's board",
+        label: view?.label ?? key,
+        icon: viewIcon(view?.key ?? BOARD_TAB),
         closable: key === active,
-        closeHint: 'Close the Board',
+        closeHint: `Close ${view?.label ?? key}`,
         ...(key === active ? {} : { mark: <TabEndSlot /> }),
       };
+    // One agent alone has one agent tab: its own, named for its view.
+    if (ownLabel !== undefined)
+      return { id: key, label: ownLabel, icon: ownLabel === 'Chat' ? <MessageSquare /> : <SquareTerminal />, title: agent.name, closable: false, closeHint: '', ...(key === active ? {} : { mark: <TabEndSlot /> }) };
     const status = humanStatus(agent, shows).status;
+    const side = sides?.left === key ? 'left' : sides?.right === key ? 'right' : undefined;
     return {
       id: key,
       label: agent.name,
+      beside: side !== undefined,
       closable: false,
       closeHint: '',
       lead:
@@ -570,16 +1155,27 @@ export function PopupTabs({
         ) : (
           <TileCharacter harness={agent.harness} {...lookShown(poseOfPill(agentPill(agent, shows).state), agent)} style={style} height={TAB_CHARACTER_HEIGHT} />
         ),
-      ...(isChat ? { pill: 'chat' } : {}),
+      ...(side !== undefined ? { pill: side } : isChat ? { pill: 'chat' } : {}),
       mark: (
         <>
           <TabDot status={status} since={agent.stateSince} />
-          {key === active ? <TabMoreMenu agent={agent} nodeId={nodeId} /> : <TabEndSlot />}
+          {key === active || side !== undefined ? <TabMoreMenu agent={agent} nodeId={nodeId} menu={menuOf(agent)} /> : <TabEndSlot />}
         </>
       ),
       ask: status === 'needs-you',
+      ...(renaming === agent.sessionId ? { editing: <TabRename agent={agent} onDone={() => onRenamed?.()} /> } : {}),
     };
   });
+  // The shells: "Shell" with a terminal icon in words under one agent alone, × on the one on.
+  for (const shell of shells)
+    tabs.push({
+      ...shell,
+      ...(ownLabel !== undefined && shells.length === 1 ? { label: 'Shell', title: shell.title ?? shell.label } : {}),
+      icon: shell.icon ?? <SquareTerminal />,
+      closable: shell.id === active && shell.closable,
+      ...(shell.id === active ? {} : { mark: <TabEndSlot /> }),
+    });
+  const [context, setContext] = useState<{ agent: Agent; at: { x: number; y: number } }>();
   const box = useRef<HTMLDivElement>(null);
   const folded = useFold(box, tabs, active);
   const showing = tabs.filter((tab) => !folded.includes(tab.id));
@@ -593,14 +1189,21 @@ export function PopupTabs({
   const more: MenuEntry[] = tabs
     .filter((tab) => folded.includes(tab.id))
     .map((tab) => ({ label: tab.label, onSelect: () => onSelect(tab.id) }));
-  const adds: MenuEntry[] = [{ label: 'Board', icon: <LayoutDashboard />, hint: closed.includes(BOARD_TAB) ? undefined : 'open', onSelect: () => onSelect(BOARD_TAB) }];
+  const rowKeys = new Set(row.map((each) => each.key));
   return (
-    <div ref={box} className="agent-popup-tabs" data-testid="agent-popup-tabs">
+    <div
+      ref={box}
+      className="agent-popup-tabs"
+      data-testid="agent-popup-tabs"
+      data-split={sides !== undefined || undefined}
+      onDragStart={(event) => onDragKey?.(event.dataTransfer.getData(ROW_TAB_TYPE) || undefined)}
+      onDragEnd={() => onDragKey?.(undefined)}
+    >
       <TabStrip
         tabs={showing}
         active={active}
         from={from}
-        label="The ticket's board, chat and helpers"
+        label={label}
         onSelect={onSelect}
         onAltSelect={(key) => {
           const agent = agentOf(key);
@@ -608,7 +1211,14 @@ export function PopupTabs({
         }}
         onClose={onClose}
         panelId={() => PANEL_ID}
-        reorder={(key, index) => onMove(key, placeOf(index))}
+        // Shells stay after the agents: only the views and agents move.
+        reorder={(key, index) => rowKeys.has(key) && onMove(key, Math.min(placeOf(index), row.length))}
+        onContextMenu={(key, at) => {
+          const agent = agentOf(key);
+          if (agent === undefined) return false;
+          setContext({ agent, at });
+          return true;
+        }}
         trailing={
           <span className="agent-popup-row-end">
             {more.length > 0 && (
@@ -619,12 +1229,11 @@ export function PopupTabs({
                 </button>
               </Menu>
             )}
-            <Menu align="end" entries={adds}>
-              <IconButton className="agent-popup-plus" data-testid="agent-popup-plus" icon={<Plus />} size="xs" variant="ghost" aria-label="Open a view" tooltip="Open a view as a tab" />
-            </Menu>
+            <PopupPlus paneRow={paneRow} views={views} open={open} beside={beside} onSelect={onSelect} />
           </span>
         }
       />
+      {context !== undefined && <TabContextMenu agent={context.agent} nodeId={nodeId} menu={menuOf(context.agent)} at={context.at} onClose={() => setContext(undefined)} />}
     </div>
   );
 }

@@ -16,11 +16,15 @@ const OLD_BUILD: BuildInfo = { sha: 'aaaaaaa', date: '2026-10-01T12:00:00Z' };
 const NEW_BUILD: BuildInfo = { sha: 'bbbbbbb', date: '2026-10-02T12:00:00Z' };
 const SIZE = { cols: 100, rows: 30 };
 
-/** A daemon on `dataDir` whose agents run the fake claude's `scenario`, its conversations kept under `home`. */
+/**
+ * A daemon on `dataDir` whose agents run the fake claude's `scenario`, its conversations kept under `home`, whose start
+ * brings back what the restart before it stopped.
+ */
 function daemonOptions(dataDir: string, home: string, scenario: FakeScenario, extra: Partial<DaemonOptions> = {}): Partial<DaemonOptions> {
   return {
     dataDir,
     worktreesDir: home,
+    resumeAfterRestart: true,
     agentEnv: fakeHarnessEnv({ scenario, home, idleNotifyMs: 200, hangTool: scenario === 'output' }),
     ...extra,
   };
@@ -49,7 +53,8 @@ describe('restartDaemon', () => {
     await untilState(recordEvents(firstClient), earlier.sessionId, 'waiting');
     await first.stop();
 
-    const old = await startTestDaemon(daemonOptions(dataDir, home, 'waiting', { build: OLD_BUILD }));
+    // A start that brings nothing back, as an older build's: it is left stopped, and the restart below leaves it so.
+    const old = await startTestDaemon(daemonOptions(dataDir, home, 'waiting', { build: OLD_BUILD, resumeAfterRestart: false }));
     const client = await connectTestClient(old);
     const recorder = recordEvents(client);
     const agent = await client.call('agent.spawn', { zoneId: zone.id, prompt: 'Pick a database', name: 'Pick a database', ...SIZE });
@@ -136,7 +141,7 @@ describe('restartDaemon', () => {
     expect(result).toMatchObject({ status: 'restarted', agents: ['First', 'Clocked'], notResumed: [] });
   });
 
-  it('names the agents it cut off mid-turn, and resumes them too', async () => {
+  it('names the agents it cut off mid-turn, and resumes them too, typing them nothing', async () => {
     const [dataDir, home] = [tempDataDir(), tempDataDir()];
     const old = await startTestDaemon(daemonOptions(dataDir, home, 'output'));
     const client = await connectTestClient(old);
@@ -148,6 +153,11 @@ describe('restartDaemon', () => {
     const result = await restartDaemon(dataDir, { start: () => void startTestDaemon(daemonOptions(dataDir, home, 'waiting')) });
 
     expect(result).toMatchObject({ status: 'restarted', agents: ['Build it'], midTurn: ['Build it'] });
+    const after = await connectDaemon(daemonPaths(dataDir).socket);
+    onTestFinished(() => after.close());
+    const [back] = await after.call('agent.list');
+    // Back at its prompt, its cut-off turn kept for the user's Carry on.
+    expect(back).toMatchObject({ endedAt: null, cutOffMidTurn: true, backAfterRestart: true });
   });
 
   it('names none it cut off mid-turn when the daemon it stopped kept no note of that turn, as an older build does', async () => {
@@ -174,15 +184,19 @@ describe('restartDaemon', () => {
 });
 
 describe('restartDaemon, when something goes wrong', () => {
-  it('resumes nothing when another build answers after the stop, as an app still open on it would start', async () => {
+  it('says so when another build answers after the stop, as an app still open on it would start', async () => {
     const [dataDir, home] = [tempDataDir(), tempDataDir()];
     const client = await connectTestClient(await startTestDaemon(daemonOptions(dataDir, home, 'waiting', { build: OLD_BUILD })));
     const zone = await client.call('zone.add', { path: tempRepo(), x: 0, y: 0 });
     await client.call('shell.create', { zoneId: zone.id });
 
     await expect(
-      restartDaemon(dataDir, { build: NEW_BUILD, start: () => void startTestDaemon(daemonOptions(dataDir, home, 'waiting', { build: OLD_BUILD })) }),
-    ).rejects.toThrow('stopped the old daemon, but one from build aaaaaaa · 2026-10-01 started in its place, not this build\'s bbbbbbb · 2026-10-02, so nothing was resumed');
+      // As an older build's daemon, which brings nothing back.
+      restartDaemon(dataDir, {
+        build: NEW_BUILD,
+        start: () => void startTestDaemon(daemonOptions(dataDir, home, 'waiting', { build: OLD_BUILD, resumeAfterRestart: false })),
+      }),
+    ).rejects.toThrow('stopped the old daemon, but one from build aaaaaaa · 2026-10-01 started in its place, not this build\'s bbbbbbb · 2026-10-02, which may bring back nothing');
     const after = await connectDaemon(daemonPaths(dataDir).socket);
     onTestFinished(() => after.close());
     expect((await after.call('shell.list'))[0]!.stoppedPanes).toHaveLength(1);
@@ -241,7 +255,7 @@ describe('agent-board restart-daemon', () => {
     await client.call('shell.create', { zoneId: zone.id });
 
     const code = await runAgentBoardCli(['restart-daemon', '--data-dir', dataDir], {
-      startDaemon: () => void startTestDaemon({ dataDir, build: NEW_BUILD }),
+      startDaemon: () => void startTestDaemon({ dataDir, build: NEW_BUILD, resumeAfterRestart: true }),
     });
 
     expect(code).toBe(0);

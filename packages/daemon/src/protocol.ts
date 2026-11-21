@@ -2000,7 +2000,7 @@ export interface Agent {
   notice: string | null;
   /**
    * Its daemon went away under it mid-turn, and no turn has begun since: resuming it in its conversation types the
-   * continue line. Absent from an older daemon.
+   * continue line, and so does `agent.carryOn` once the daemon's start has brought it back. Absent from an older daemon.
    */
   cutOffMidTurn?: boolean;
   /**
@@ -2008,6 +2008,16 @@ export interface Agent {
    * restart leaves it asleep. Absent from an older daemon.
    */
   cutOffAsking?: boolean;
+  /**
+   * The daemon's start brought it back after the restart that stopped it, typed nothing, and it has not ended since: the
+   * restart banner counts it. Absent from an older daemon.
+   */
+  backAfterRestart?: boolean;
+  /**
+   * Stopped by restart, and the daemon's start is bringing it back now: the restart banner waits for it, so Wake all
+   * doesn't race the start's own resume. Absent from an older daemon.
+   */
+  comingBackAfterRestart?: boolean;
   /**
    * When it was paused (`agent.pause`, `orchestrator.pause`) and by whom: the orchestrator's name as it is now and its
    * session id, or both null for the user.
@@ -5302,8 +5312,28 @@ export type CreateShellParams = TerminalSize & { cwd?: string };
 /** Lines of scrollback a session keeps, and a reattaching client gets back. */
 export const SCROLLBACK_LINES = 10_000;
 
+/**
+ * What the daemon's start brought back of the sessions the restart before it stopped (ADR-0002, "A restart brings
+ * back what it stopped"): every one is resumed in its conversation, typed nothing.
+ */
+export interface AfterRestart {
+  /** The names of the agents it resumed. */
+  agents: string[];
+  /** Of those, the ones cut off mid-turn (`Agent.cutOffMidTurn`), each waiting for the user's Carry on. */
+  cutOff: string[];
+  /** How many shell panes it reopened. */
+  panes: number;
+  /** What it could not start again, and why: each waits on the board, stopped by restart, with its own Wake. */
+  notResumed: { name: string; message: string }[];
+}
+
 export interface DaemonMethods {
   'daemon.health': { params: undefined; result: DaemonHealth };
+  /**
+   * Resolves, once the daemon's start has finished bringing back what the restart before it stopped, with what it
+   * brought back; at once, all empty, when it had nothing to bring back or doesn't (`resumeAfterRestart` off).
+   */
+  'daemon.afterRestart': { params: undefined; result: AfterRestart };
   /**
    * Makes this connection the one the daemon asks for pictures of zones (`capture.requested`): the app calls it on each
    * connection. The last connection to call it is asked, until it closes.
@@ -5763,6 +5793,13 @@ export interface DaemonMethods {
    */
   'agent.resume': { params: SessionRef & { force?: boolean }; result: Agent };
   /**
+   * Types the continue line ("The app restarted; carry on from where you were.") at the prompt of a live agent a
+   * restart cut off mid-turn (`cutOffMidTurn`), which the daemon's start brought back typed nothing: the restart
+   * banner's Carry on. Fails with `invalidParams` for an agent that wasn't cut off, has ended, or isn't ready for its
+   * next message (its `data` says why).
+   */
+  'agent.carryOn': { params: SessionRef; result: Agent };
+  /**
    * Answers the agent's permission prompt `requestId` through its held `PermissionRequest` hook. Fails with
    * `AGENT_ERROR.permissionGone` when that prompt is no longer held: it was answered, or went to the terminal.
    */
@@ -5988,7 +6025,10 @@ export interface DaemonMethods {
   'orchestrator.handover': { params: { token?: string; from: string; to: string }; result: OrchestratorHandover };
   /** Pauses the agent, as `agent.pause` does, marked as paused by the orchestrator. */
   'orchestrator.pause': { params: { token?: string; sessionId: string }; result: Agent };
-  /** Wakes a paused agent, carrying on its conversation (`agent.resume`). Fails with `invalidParams` for one not paused. */
+  /**
+   * Wakes a paused agent, or one a restart stopped, carrying on its conversation (`agent.resume`). Fails with
+   * `invalidParams` for one that is neither.
+   */
   'orchestrator.wake': { params: { token?: string; sessionId: string }; result: Agent };
   /**
    * Makes a flow edge between two agents it reaches, or itself, marked as made by it (`FlowEdge.madeBy`), as

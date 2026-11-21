@@ -189,6 +189,9 @@ export function launchApp(dataDir: string, env: Record<string, string> = {}, arg
       // A double-click opens the session window, as the specs written before the pop-up expect, until one is picked.
       // A spec about the pop-up passes `AGENT_BOARD_CLICK_OPENS: ''` for the app's own default.
       AGENT_BOARD_CLICK_OPENS: 'window',
+      // What a restart stopped stays stopped, as the specs of the restart banner, Wake and Wake all expect: a spec of
+      // the daemon's start bringing it back passes `AGENT_BOARD_RESUME_AFTER_RESTART: '1'`.
+      AGENT_BOARD_RESUME_AFTER_RESTART: '0',
       ...BACKGROUND_ENV,
       ...env,
     },

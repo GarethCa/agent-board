@@ -2,9 +2,11 @@
 // open on the page, the page styled by the agent, the page at the least width, a page of links and a note, and Made,
 // Crew and Setup. Fixed data and no daemon, so its
 // shots are the same every run.
-import type { Agent, AgentPage, AgentRecord, GateRun } from '@agent-board/daemon/protocol';
+import { Activity as ActivityIcon, FileCheck, LayoutDashboard } from 'lucide-react';
+import type { Agent, AgentPage, AgentRecord, GateRun, OrchestratorActivity } from '@agent-board/daemon/protocol';
 import { galleryAgent } from '../board/TileGallery';
-import { AgentShelves, type ShelfActions } from './AgentShelves';
+import { ActivityLog } from '../orchestrators/ActivityLog';
+import { AgentShelves, type ShelfActions, type ShelfViews } from './AgentShelves';
 import type { RecordDeletes } from './RecordList';
 import type { ShelfId } from './shelves';
 
@@ -185,11 +187,11 @@ const LINKED: Agent = {
 };
 
 /** One agent's sidebar beside a stand-in terminal, open on `shelf`. With `alone`, technical details off, as under the Simplified design by default. */
-function Frame({ agent, caption, shelf, peek, alone = false, folder, gate = GATE, width = 316, height = 760, testId }: { agent: Agent; caption: string; shelf?: ShelfId; peek?: ShelfId; alone?: boolean; folder?: string; gate?: GateRun; width?: number; height?: number; testId: string }) {
+function Frame({ agent, caption, shelf, peek, rail = peek !== undefined, views, alone = false, folder, gate = GATE, width = 316, height = 760, testId }: { agent: Agent; caption: string; shelf?: ShelfId; peek?: ShelfId; rail?: boolean; views?: ShelfViews; alone?: boolean; folder?: string; gate?: GateRun; width?: number; height?: number; testId: string }) {
   return (
     <figure className="shelves-gallery-frame" data-testid={testId}>
       <figcaption>{caption}</figcaption>
-      <div className="shelves-gallery-window" style={{ width: peek === undefined ? width + 160 : 420, height }}>
+      <div className="shelves-gallery-window" style={{ width: rail ? 420 : width + 160, height }}>
         <AgentShelves
           agent={agent}
           agents={AGENTS}
@@ -202,16 +204,53 @@ function Frame({ agent, caption, shelf, peek, alone = false, folder, gate = GATE
           records={NO_RECORDS}
           actions={NO_ACTIONS}
           width={width}
-          collapsed={peek !== undefined}
+          collapsed={rail}
           onCollapsed={() => {}}
           initialShelf={shelf}
           initialPeek={peek}
+          views={views}
         />
         <div className="shelves-gallery-terminal" aria-hidden />
       </div>
     </figure>
   );
 }
+
+/** A pop-up's views in its sidebar: the Board open but not on (its dot), Activity on, the review closed. */
+const VIEWS: ShelfViews = {
+  views: [
+    { key: 'board', label: 'Board', icon: <LayoutDashboard size={14} aria-hidden />, state: 'open' },
+    { key: 'activity', label: 'Activity', icon: <ActivityIcon size={14} aria-hidden />, state: 'on' },
+    { key: 'review', label: 'Review · round 2', icon: <FileCheck size={14} aria-hidden />, state: 'closed' },
+  ],
+  onOpen: () => {},
+};
+
+const line = (id: number, time: string, fields: Partial<OrchestratorActivity>): OrchestratorActivity => ({
+  id,
+  at: at(time),
+  orchestratorId: BUSY_ID,
+  orchestratorName: 'Export',
+  action: 'send',
+  targetId: QUIET.sessionId,
+  targetName: QUIET.name,
+  detail: '',
+  outcome: 'done',
+  reason: null,
+  ...fields,
+});
+
+/** Activity as a pop-up's view: no title row, its count at the top right, never over its first, long line. */
+const ACTIVITY = {
+  lines: [
+    line(3, '10:42', { detail: 'Stream the rows straight into the CSV writer rather than building the whole file in memory first, then rerun the export tests and the docs check' }),
+    line(2, '10:30', { action: 'spawn', detail: 'billing-api · Claude' }),
+    line(1, '10:05', { outcome: 'refused', reason: 'that agent is not in its zone', detail: 'Close it' }),
+  ],
+  older: false,
+  readOlder: () => {},
+  busy: false,
+};
 
 export function ShelvesGallery() {
   const styled = { ...BUSY, page: STYLED_PAGE };
@@ -230,6 +269,16 @@ export function ShelvesGallery() {
         <Frame testId="rail-busy-made" caption="Rail: busy agent, Made in a peek" agent={BUSY} peek="made" height={620} />
         <Frame testId="rail-busy-crew" caption="Rail: busy agent, Crew in a peek" agent={BUSY} peek="crew" height={620} />
         <Frame testId="rail-quiet-setup" caption="Rail: quiet agent, Setup in a peek" agent={QUIET} peek="setup" height={560} />
+      </div>
+      <div className="shelves-gallery-row" data-testid="shelves-gallery-views">
+        <Frame testId="views-open" caption="A pop-up's views: Activity on, the Board open (its dot), the review closed" agent={BUSY} views={VIEWS} height={620} />
+        <Frame testId="views-rail" caption="Rail: its views, then a rule, then its shelves" agent={BUSY} rail views={VIEWS} height={620} />
+        <figure className="shelves-gallery-frame" data-testid="views-activity">
+          <figcaption>Activity as a view: no title row, its count at the top right</figcaption>
+          <div className="shelves-gallery-window" style={{ width: 476, height: 260 }}>
+            <ActivityLog orchestrator={BUSY} activity={ACTIVITY} titled={false} />
+          </div>
+        </figure>
       </div>
       <div className="shelves-gallery-row" data-testid="shelves-gallery-shelves">
         <Frame testId="shelves-made" caption="Made" agent={BUSY} shelf="made" height={620} />

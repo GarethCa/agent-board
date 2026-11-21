@@ -1,6 +1,6 @@
 import { connectDaemon, ensureDaemon, type DaemonClient } from './client.ts';
 import { daemonPaths } from './paths.ts';
-import { describeBuild, sameBuild, type Agent, type BuildInfo, type Shell } from './protocol.ts';
+import { describeBuild, sameBuild, type BuildInfo } from './protocol.ts';
 import { stopDaemon } from './stop.ts';
 
 /** The daemon a restart found, or the one it started. */
@@ -25,7 +25,7 @@ export type RestartDaemonResult =
       agents: string[];
       /** How many shell panes it stopped and resumed. */
       panes: number;
-      /** The names of the agents it resumed in their conversation that the daemon tells to carry on: cut off mid-turn. */
+      /** The names of the agents it resumed that were cut off mid-turn: each waits at its prompt for the user's Carry on. */
       midTurn: string[];
       notResumed: NotResumed[];
     };
@@ -39,10 +39,10 @@ interface RestartDaemonOptions {
 
 /**
  * Restarts the daemon on `dataDir` as this build, keeping the board as it was: stops it even with sessions live (they
- * are stopped by restart, ADR-0002), starts this build's daemon with `start`, and resumes each agent and shell pane the
- * stop ended, as Resume all would. Only an agent it cut off mid-turn is told to carry on as it resumes, and is named
- * for it. Starts nothing when no daemon is running. Throws, resuming nothing, when this build's daemon doesn't start
- * or another build's answers first: what the stop ended waits on the board, stopped by restart.
+ * are stopped by restart, ADR-0002), starts this build's daemon with `start`, and waits while that daemon's start
+ * brings back each agent and shell pane the stop ended (`daemon.afterRestart`), typing nothing to any. An agent it cut
+ * off mid-turn is named for it. Starts nothing when no daemon is running. Throws when this build's daemon doesn't start
+ * or another build's answers first, whose start may not bring anything back.
  */
 export async function restartDaemon(dataDir: string, options: RestartDaemonOptions): Promise<RestartDaemonResult> {
   const { socket } = daemonPaths(dataDir);
@@ -53,11 +53,8 @@ export async function restartDaemon(dataDir: string, options: RestartDaemonOptio
     return { status: 'not-running' };
   }
   let from: DaemonRun;
-  let before: { agents: Agent[]; shells: Shell[] };
   try {
     from = run(await old.call('daemon.health'));
-    // Only the fields every daemon has sent are read: the old daemon may be from any earlier build.
-    before = { agents: await old.call('agent.list'), shells: await old.call('shell.list') };
   } finally {
     old.close();
   }
@@ -73,38 +70,10 @@ export async function restartDaemon(dataDir: string, options: RestartDaemonOptio
     const to = run(await client.call('daemon.health'));
     // An app still open on another build may start its own daemon first: resumed there, sessions would run on it.
     if (options.build !== undefined && !sameBuild(options.build, to.build)) {
-      throw new Error(`stopped the old daemon, but one from build ${describeBuild(to.build)} started in its place, not this build's ${describeBuild(options.build)}, so nothing was resumed`);
+      throw new Error(`stopped the old daemon, but one from build ${describeBuild(to.build)} started in its place, not this build's ${describeBuild(options.build)}, which may bring back nothing`);
     }
-    const wasStopped = new Set(before.agents.filter((agent) => agent.state === 'stopped-by-restart').map((agent) => agent.sessionId));
-    const agents: string[] = [];
-    const midTurn: string[] = [];
-    const notResumed: NotResumed[] = [];
-    for (const agent of await client.call('agent.list')) {
-      if (agent.state !== 'stopped-by-restart' || wasStopped.has(agent.sessionId)) continue;
-      try {
-        const resumed = await client.call('agent.resume', { sessionId: agent.sessionId });
-        agents.push(agent.name);
-        // As the daemon decided, which a restart from an older build's daemon leaves unknown, so unsaid.
-        if (resumed.cutOffMidTurn === true) midTurn.push(agent.name);
-      } catch (error) {
-        // Its clock may have relaunched it since the list was read: running again, it is back as a resume would leave it.
-        const now = (await client.call('agent.list')).find((a) => a.sessionId === agent.sessionId);
-        if (now?.endedAt === null) agents.push(agent.name);
-        else notResumed.push({ name: agent.name, message: (error as Error).message });
-      }
-    }
-    const stoppedBefore = new Set(before.shells.flatMap((shell) => shell.stoppedPanes));
-    let panes = 0;
-    for (const shell of await client.call('shell.list')) {
-      for (const sessionId of shell.stoppedPanes.filter((pane) => !stoppedBefore.has(pane))) {
-        try {
-          await client.call('shell.resumePane', { shellId: shell.id, sessionId });
-          panes += 1;
-        } catch (error) {
-          notResumed.push({ name: `a pane of ${shell.name}`, message: (error as Error).message });
-        }
-      }
-    }
+    // The daemon's start brings back what the stop ended, and says what it did once it has.
+    const { agents, cutOff: midTurn, panes, notResumed } = await client.call('daemon.afterRestart');
     return { status: 'restarted', from, to, agents, panes, midTurn, notResumed };
   } finally {
     client.close();

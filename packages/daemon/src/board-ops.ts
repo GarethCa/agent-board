@@ -1890,7 +1890,7 @@ export async function pauseAgent(session: BoardSession, ref: string): Promise<Bo
   };
 }
 
-/** `wake`: starts a paused agent again, carrying on its conversation. */
+/** `wake`: starts a paused agent, or one a restart stopped, again, carrying on its conversation. */
 export async function wakeAgent(session: BoardSession, ref: string): Promise<BoardView> {
   const { token, agent } = await orchestratorTarget(session, ref);
   await session.client.call('orchestrator.wake', { token, sessionId: agent.sessionId });

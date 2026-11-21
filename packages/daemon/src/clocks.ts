@@ -109,8 +109,11 @@ export interface ClockHost {
   turnEnded(sessionId: string): void;
   /** The agent's turn ended with no `Stop`, as `why` says: a message's run of it fails. */
   turnCut(sessionId: string, why: string): void;
-  /** Settles the runs a stopped daemon left going, once the agents are there to ask. */
-  resumeRuns(): void;
+  /**
+   * Settles the runs a stopped daemon left going, once the agents are there to ask. Returns the agents of fresh runs a
+   * restart stopped, which their clock closes or keeps as it says: the daemon's start leaves them stopped.
+   */
+  resumeRuns(): Set<string>;
   /** The agent is being deleted: the clocks joined to it are left unjoined. */
   agentRemoved(sessionId: string): void;
   /** Stops firing. */
@@ -726,6 +729,7 @@ export function createClockHost(options: ClockHostOptions): ClockHost {
     turnCut,
 
     resumeRuns() {
+      const clocksOwn = new Set<string>();
       // A run with its result kept is done; one whose agent the app stopped says so, and closes it as its clock says; one whose agent never started, or
       // has ended or gone since, fails; one whose agent is still at work carries on.
       for (const run of schedules.running()) {
@@ -739,9 +743,11 @@ export function createClockHost(options: ClockHostOptions): ClockHost {
         if (run.result !== null) schedules.updateRun(run.runId, { outcome: 'done', reason: 'the app stopped as it finished', finishedAt: now() });
         else if (run.sessionId === null) schedules.updateRun(run.runId, { outcome: 'failed', reason: 'the app stopped as it started', finishedAt: now() });
         else if (agent?.state === 'stopped-by-restart') {
+          clocksOwn.add(run.sessionId);
           void stoppedDuring(run, run.sessionId).catch((error: unknown) => log(`clock ${run.clockId}: could not close its agent: ${(error as Error).message}`));
         } else failIfOver(run.sessionId, agent);
       }
+      return clocksOwn;
     },
 
     agentRemoved(sessionId) {

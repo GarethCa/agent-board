@@ -15,9 +15,9 @@ export function stripShown(split: boolean, astray: boolean, problem: boolean, pa
 }
 
 /**
- * Whether a body shows its agent's own pane: always under a row of tabs of another's (`underTabs`), which shows only
- * that, with no strip to reach a shell tab or back; else while no shell tab or other surface covers it.
+ * Whether a body shows its agent's own pane: while no shell tab or other surface covers it, whether its tabs are on its
+ * own strip or in a pop-up's row.
  */
-export function ownPaneShown(underTabs: boolean, panes: { showing(key: string): boolean } | undefined): boolean {
-  return underTabs || panes === undefined || panes.showing(OWN_SURFACE);
+export function ownPaneShown(panes: { showing(key: string): boolean } | undefined): boolean {
+  return panes === undefined || panes.showing(OWN_SURFACE);
 }

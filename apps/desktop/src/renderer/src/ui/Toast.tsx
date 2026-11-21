@@ -14,7 +14,8 @@ export interface ToastOptions {
    * One action, such as Retry or Open, with an icon before its words if it has one, and the key that does it too, shown
    * beside it. Taking it dismisses the toast.
    */
-  action?: { label: string; onClick(): void; shortcut?: string; icon?: ReactNode };
+  /** `keepsOpen`: pressing it doesn't dismiss the toast, for one that puts away only what its action dealt with. */
+  action?: { label: string; onClick(): void; shortcut?: string; icon?: ReactNode; keepsOpen?: boolean };
   /** False for a toast with no ×: one that goes by itself, and its action, are enough. */
   dismissible?: boolean;
   /** Stays until dismissed, as an error does, for a toast that says what mode the app is in. */
@@ -134,7 +135,7 @@ export function ToastView({
             icon={action.icon}
             data-preview={preview}
             onClick={() => {
-              onDismiss();
+              if (action.keepsOpen !== true) onDismiss();
               action.onClick();
             }}
           >

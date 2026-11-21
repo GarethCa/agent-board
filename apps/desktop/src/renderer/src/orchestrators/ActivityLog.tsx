@@ -80,16 +80,23 @@ export function useActivity(orchestratorId: string | undefined): Activity {
  * agent it interrupted or closed, with times, and what it tried and was refused, with why; older pages on asking.
  * Reads and waits change nothing, so the daemon doesn't log them (ADR-0011).
  */
-export function ActivityLog({ orchestrator, activity }: { orchestrator: Agent; activity: Activity }) {
+export function ActivityLog({ orchestrator, activity, titled = true }: { orchestrator: Agent; activity: Activity; titled?: boolean }) {
   const { lines, older, readOlder, busy, error } = activity;
+  const count = (
+    <span className="activity-log-count" data-testid="activity-count">
+      {older ? `latest ${lines.length}` : lines.length}
+    </span>
+  );
   return (
-    <div className="activity-log" data-testid="activity-log">
-      <h3 className="activity-log-head">
-        {orchestrator.name} · Activity{' '}
-        <span className="activity-log-count" data-testid="activity-count">
-          {older ? `latest ${lines.length}` : lines.length}
-        </span>
-      </h3>
+    <div className="activity-log" data-testid="activity-log" data-titled={titled}>
+      {/* A view in a pop-up has no title row: its tab names it, and its count floats at the top right. */}
+      {titled ? (
+        <h3 className="activity-log-head">
+          {orchestrator.name} · Activity {count}
+        </h3>
+      ) : (
+        <div className="activity-log-float">{count}</div>
+      )}
       {error !== undefined && <ErrorText>{error}</ErrorText>}
       {lines.length === 0 ? (
         <p className="activity-log-empty">Nothing yet. The agents it starts, messages, interrupts and closes show here, with the edges it makes and the hand-offs it sends, and anything it tries and is refused.</p>

@@ -313,7 +313,8 @@ export function TicketOpenReadGallery() {
 }
 
 const ROW = TICKETS['needs-you']!;
-const ROW_TABS = popUpRow(ROW.chat, ROW.helpers);
+const ROW_VIEWS = [{ key: 'board', label: 'Board' }] as const;
+const ROW_TABS = popUpRow(ROW.chat, ROW.helpers, ROW_VIEWS);
 const REVIEWER = ROW.helpers[2]!.sessionId;
 /** Wide enough for the whole row; and narrow enough that it folds, but holds the Board, the amber tab and the one on. */
 const ROW_WIDE = { width: 960 };
@@ -332,7 +333,9 @@ export function TicketPopupRowGallery() {
         active={REVIEWER}
         from={ROW.chat.sessionId}
         nodeId={`agent:${ROW.chat.sessionId}`}
-        closed={[]}
+        views={ROW_VIEWS}
+        open={['board']}
+        label="The ticket's views, chat and helpers"
         onSelect={nothing}
         onClose={nothing}
         onMove={nothing}

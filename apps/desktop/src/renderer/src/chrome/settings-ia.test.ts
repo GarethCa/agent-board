@@ -31,6 +31,7 @@ describe('the Settings window’s groups', () => {
       'theme',
       'boardBackground',
       'popupFrost',
+      'popupFill',
       'keepWebLogins',
       'clearBrowsingData',
       'clickOpens',

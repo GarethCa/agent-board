@@ -1,6 +1,8 @@
 // The size and place of the session window shown on the board: one global "last frame", kept in the view
 // state, resized from any edge or corner and maximised or restored. Pure, so the geometry is unit-tested.
 
+import { POPUP_CAP } from '../board/popup-size';
+
 /** The window's place and size in the board's pixels, from the board's top-left. */
 export interface Frame {
   x: number;
@@ -99,15 +101,46 @@ export function clampFrame(frame: Frame, bounds: Bounds): Frame {
   };
 }
 
-/** The frame with an edge or corner dragged by `dx`, `dy`: the opposite edges stay put, within the least size and the board. */
-export function resizeFrame(frame: Frame, edge: Edge, dx: number, dy: number, bounds: Bounds): Frame {
+/** The board's margin round a capped window, in px: the cap bites only on a board wider than it plus this each side. */
+const CAP_MARGIN = 16;
+
+/** Whether a board `width` px wide is a wide screen, where a window not set to fill stops at the cap's width. */
+function capBitesOn(width: number, fill: boolean): boolean {
+  return !fill && width - 2 * CAP_MARGIN > POPUP_CAP;
+}
+
+/**
+ * Where a maximised window sits across a board `width` px wide: on a wide screen not set to fill, the cap's width,
+ * centred, its height still the stylesheet's; else undefined, filling the board as its stylesheet says.
+ */
+export function maximisedAcross(width: number, fill: boolean): { left: number; width: number } | undefined {
+  if (!capBitesOn(width, fill)) return undefined;
+  return { left: Math.round((width - POPUP_CAP) / 2), width: POPUP_CAP };
+}
+
+/** The widest a window may be on a board of `bounds`: the cap on a wide screen not set to fill, else the board. */
+export function widestFrame(bounds: Bounds, fill: boolean): number {
+  return capBitesOn(bounds.width, fill) ? POPUP_CAP : bounds.width;
+}
+
+/** A placed frame no wider than the cap on a wide screen not set to fill, narrowed about its own centre. */
+export function capFrame(frame: Frame, bounds: Bounds, fill: boolean): Frame {
+  if (!capBitesOn(bounds.width, fill) || frame.width <= POPUP_CAP) return frame;
+  return { ...frame, x: Math.round(frame.x + (frame.width - POPUP_CAP) / 2), width: POPUP_CAP };
+}
+
+/**
+ * The frame with an edge or corner dragged by `dx`, `dy`: the opposite edges stay put, within the least size, the board
+ * and `widest` px across.
+ */
+export function resizeFrame(frame: Frame, edge: Edge, dx: number, dy: number, bounds: Bounds, widest = bounds.width): Frame {
   let { x, y, width, height } = frame;
   const right = x + width;
   const bottom = y + height;
-  if (edge.includes('e')) width = Math.min(Math.max(width + dx, MIN_WIDTH), bounds.width - x);
+  if (edge.includes('e')) width = Math.min(Math.max(width + dx, MIN_WIDTH), bounds.width - x, widest);
   if (edge.includes('s')) height = Math.min(Math.max(height + dy, MIN_HEIGHT), bounds.height - y);
   if (edge.includes('w')) {
-    x = Math.min(Math.max(x + dx, 0), right - MIN_WIDTH);
+    x = Math.min(Math.max(x + dx, 0, right - widest), right - MIN_WIDTH);
     width = right - x;
   }
   if (edge.includes('n')) {

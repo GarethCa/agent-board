@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { foldRow, keptOrders, movedTab, popUpRowKey, rowOrder, steppedTab, withKeptOrder } from './popup-tab-row';
+import { afterClose, closedView, foldRow, keptOrders, movedTab, openedView, popUpRowKey, rowOrder, soloRow, steppedTab, viewRow, withKeptOrder } from './popup-tab-row';
 
 const tab = (key: string, kind: 'view' | 'agent' | 'shell' = 'agent') => ({ key, kind });
 const keys = (tabs: readonly { key: string }[]) => tabs.map(({ key }) => key);
@@ -125,5 +125,55 @@ describe('kept orders', () => {
     const orders = { 'ticket:a': ['x'], 'ticket:b': ['y'], 'ticket:c': ['z'] };
     expect(Object.keys(withKeptOrder(orders, 'ticket:a', ['w'], 3))).toEqual(['ticket:b', 'ticket:c', 'ticket:a']);
     expect(withKeptOrder(orders, 'ticket:d', ['v'], 3)).toEqual({ 'ticket:b': ['y'], 'ticket:c': ['z'], 'ticket:d': ['v'] });
+  });
+});
+
+describe('a view opened from the sidebar', () => {
+  it('opens as a tab at the end of the views open', () => {
+    expect(openedView([], 'activity')).toEqual(['activity']);
+    expect(openedView(['board'], 'review')).toEqual(['board', 'review']);
+  });
+
+  it('goes to its tab when it is open already, never a second one', () => {
+    const open = ['board', 'review'];
+    expect(openedView(open, 'board')).toEqual(['board', 'review']);
+    expect(openedView(openedView(open, 'review'), 'review')).toEqual(['board', 'review']);
+  });
+
+  it('closes by its ×, and the others stay as they were', () => {
+    expect(closedView(['board', 'review', 'activity'], 'review')).toEqual(['board', 'activity']);
+    expect(closedView(['board'], 'review')).toEqual(['board']);
+  });
+
+  it('closing the tab on goes back to the one it came from, else to the agent shown under the views, not the chat', () => {
+    const order = ['board', 'activity', 'chat', 'builder'];
+    expect(afterClose('activity', { active: 'activity', from: 'board', order, under: 'builder' })).toBe('board');
+    // Came from nothing still in the row: back to the builder's terminal, as it was.
+    expect(afterClose('board', { active: 'board', from: undefined, order, under: 'builder' })).toBe('builder');
+    expect(afterClose('board', { active: 'board', from: 'gone', order, under: 'builder' })).toBe('builder');
+    // A tab not on closes with the one on staying.
+    expect(afterClose('activity', { active: 'chat', from: 'board', order, under: 'chat' })).toBe('chat');
+  });
+
+  it("reads on in the sidebar when its tab is on, open (the dot) when it is a tab not on, else closed", () => {
+    expect(viewRow('review', ['board', 'review'], 'review')).toBe('on');
+    expect(viewRow('board', ['board', 'review'], 'review')).toBe('open');
+    expect(viewRow('activity', ['board', 'review'], 'review')).toBe('closed');
+  });
+});
+
+describe("one agent's row", () => {
+  it('has no row while its own tab is the only one, its tab named by the header', () => {
+    expect(soloRow([tab('a1')])).toEqual({ shows: false, ownLabel: undefined });
+  });
+
+  it('shows the row once a second tab opens, a view or a shell, its own tab then named for the view it shows', () => {
+    expect(soloRow([tab('a1'), tab('activity', 'view')])).toEqual({ shows: true, ownLabel: 'Terminal' });
+    expect(soloRow([tab('a1'), tab('zsh', 'shell')], 'chat')).toEqual({ shows: true, ownLabel: 'Chat' });
+  });
+
+  it('goes back to no row once the last other tab closes', () => {
+    const open = closedView(openedView([], 'activity'), 'activity');
+    expect(soloRow([tab('a1'), ...open.map((key) => tab(key, 'view'))]).shows).toBe(false);
   });
 });

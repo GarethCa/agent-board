@@ -102,6 +102,22 @@ interface ShelvesProps extends ShelvesData {
   initialShelf?: ShelfId;
   /** On the rail, a peek open as the window is drawn (the gallery's). */
   initialPeek?: ShelfId;
+  /** The views a pop-up opens as tabs, listed first, above the shelves; none outside a pop-up. */
+  views?: ShelfViews | undefined;
+}
+
+/** A view a pop-up can open as a tab, as its sidebar lists it: on (its tab is on), open (a tab, not on) or closed. */
+export interface ShelfView {
+  key: string;
+  label: string;
+  icon: ReactNode;
+  state: 'on' | 'open' | 'closed';
+}
+
+/** The views a pop-up's sidebar lists, and what a click on one does: opens its tab, or goes to it. */
+export interface ShelfViews {
+  views: readonly ShelfView[];
+  onOpen(key: string): void;
 }
 
 /**
@@ -109,7 +125,7 @@ interface ShelvesProps extends ShelvesData {
  * with Made, Crew and Setup a tab away and a two-line workspace footer. A shelf with nothing in it has no tab. The page's
  * tab has the name and icon the agent picked; until it writes a page, the tab is the board's Now.
  */
-export function AgentShelves({ width, collapsed, onCollapsed, initialShelf = 'page', initialPeek, ...data }: ShelvesProps) {
+export function AgentShelves({ width, collapsed, onCollapsed, initialShelf = 'page', initialPeek, views, ...data }: ShelvesProps) {
   const { agent, agents, shows, technical, records } = data;
   const tabs = shelfTabs(agent, agents, shows, { technical, fading: records.fading });
   const [asked, setAsked] = useState<ShelfId>(initialShelf);
@@ -121,9 +137,10 @@ export function AgentShelves({ width, collapsed, onCollapsed, initialShelf = 'pa
   const iconsOnly = width < ICON_TABS_BELOW;
   const ids = useId();
   const tabId = (shelf: ShelfId) => `${ids}-tab-${shelf}`;
-  if (collapsed) return <ShelvesRail {...data} tabs={tabs} initialPeek={initialPeek} onShowShelves={() => onCollapsed(false)} onOpen={(shelf) => (setAsked(shelf), onCollapsed(false))} />;
+  if (collapsed) return <ShelvesRail {...data} tabs={tabs} views={views} initialPeek={initialPeek} onShowShelves={() => onCollapsed(false)} onOpen={(shelf) => (setAsked(shelf), onCollapsed(false))} />;
   return (
     <aside className="agent-shelves" aria-label="Agent sidebar" data-testid="agent-shelves" style={{ width }} data-icons-only={iconsOnly || undefined}>
+      {views !== undefined && views.views.length > 0 && <ViewsGroup {...views} />}
       {/* A row of one tab has no choice to offer: the page shows under no tabs until a second shelf has something, its
           name and icon then a header of their own. */}
       {tabs.length > 1 ? (
@@ -136,6 +153,36 @@ export function AgentShelves({ width, collapsed, onCollapsed, initialShelf = 'pa
       </div>
       <WorkspaceFooter {...data} onCollapse={() => onCollapsed(true)} />
     </aside>
+  );
+}
+
+/**
+ * A pop-up's views, first in its sidebar: each row opens its view as a tab, or goes to its tab. The one on is
+ * highlighted; one open as a tab but not on has a small accent dot.
+ */
+function ViewsGroup({ views, onOpen }: ShelfViews) {
+  return (
+    <nav className="agent-shelves-views" aria-label="Views" data-testid="agent-shelves-views">
+      <h5 className="agent-shelves-views-head">Views</h5>
+      {views.map((view) => (
+        <button
+          key={view.key}
+          type="button"
+          className="agent-shelves-view"
+          data-testid="agent-shelves-view"
+          data-view={view.key}
+          data-state={view.state}
+          aria-current={view.state === 'on' || undefined}
+          aria-label={view.state === 'open' ? `${view.label}, open` : undefined}
+          title={view.state === 'closed' ? `Open ${view.label} as a tab` : view.state === 'open' ? 'Go to its tab' : undefined}
+          onClick={() => onOpen(view.key)}
+        >
+          {view.icon}
+          <span className="agent-shelves-view-label">{view.label}</span>
+          {view.state === 'open' && <i className="agent-shelves-view-dot" data-testid="agent-shelves-view-dot" aria-hidden />}
+        </button>
+      ))}
+    </nav>
   );
 }
 
@@ -935,7 +982,7 @@ const PEEK_MARGIN = 8;
  * counts. Clicking one opens that shelf as a peek over the terminal, which Esc, a click outside or another icon closes;
  * the peek's first button opens the shelves on it.
  */
-function ShelvesRail({ tabs, initialPeek, onShowShelves, onOpen, ...data }: ShelvesData & { tabs: ShelfTab[]; initialPeek?: ShelfId; onShowShelves(): void; onOpen(shelf: ShelfId): void }) {
+function ShelvesRail({ tabs, views, initialPeek, onShowShelves, onOpen, ...data }: ShelvesData & { tabs: ShelfTab[]; views: ShelfViews | undefined; initialPeek?: ShelfId; onShowShelves(): void; onOpen(shelf: ShelfId): void }) {
   const { agent, agents, shows, records } = data;
   const [peek, setPeek] = useState<{ shelf: ShelfId; top: number } | undefined>(initialPeek && { shelf: initialPeek, top: 8 });
   const root = useRef<HTMLDivElement>(null);
@@ -1027,6 +1074,24 @@ function ShelvesRail({ tabs, initialPeek, onShowShelves, onOpen, ...data }: Shel
   return (
     <div ref={root} className="agent-shelves-rail-wrap">
       <nav className="agent-shelves-rail" aria-label="Agent sidebar" data-testid="agent-shelves-rail">
+        {/* A pop-up's views first, one icon each, then the shelves'. */}
+        {views?.views.map((view) => (
+          <button
+            key={view.key}
+            type="button"
+            className="agent-shelves-rail-item agent-shelves-rail-view"
+            data-view={view.key}
+            data-state={view.state}
+            aria-current={view.state === 'on' || undefined}
+            aria-label={view.state === 'open' ? `${view.label}, open` : view.label}
+            title={view.label}
+            onClick={() => views.onOpen(view.key)}
+          >
+            <span className="agent-shelves-face">{view.icon}</span>
+            {view.state === 'open' && <i className="agent-shelves-view-dot" aria-hidden />}
+          </button>
+        ))}
+        {views !== undefined && views.views.length > 0 && <hr className="agent-shelves-rail-rule" />}
         {tabs.filter((tab) => tab.id !== 'setup').map(item)}
         <span className="agent-shelves-rail-fill" />
         {tabs.filter((tab) => tab.id === 'setup').map(item)}

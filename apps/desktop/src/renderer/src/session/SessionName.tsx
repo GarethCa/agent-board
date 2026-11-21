@@ -1,4 +1,4 @@
-import { useContext } from 'react';
+import { useContext, useEffect, useRef } from 'react';
 import type { Agent, Shell } from '@agent-board/daemon/protocol';
 import { nameTarget, useRenameRequest } from '../board/rename';
 import { tileHistory } from '../board/tile-shows';
@@ -11,7 +11,7 @@ import { EditableName, RenameButton, useRenaming } from '../ui';
  * started (an external one) just shows its name. Its tooltip carries the tile's history too (`tileHistory`), as the hover
  * card does on the board.
  */
-export function SessionName({ agent, shell, name, title, nodeId }: { agent?: Agent; shell?: Shell; name: string; title: string; nodeId?: string }) {
+export function SessionName({ agent, shell, name, title, nodeId, ask = 0 }: { agent?: Agent; shell?: Shell; name: string; title: string; nodeId?: string; ask?: number }) {
   const { rename } = useContext(TileActionsContext);
   const target = nameTarget({ agent, shell });
   const renaming = useRenaming(name, async (next) => {
@@ -19,6 +19,15 @@ export function SessionName({ agent, shell, name, title, nodeId }: { agent?: Age
   });
   // Asked for by the board (F2, the menu) while the tile is open this way; an unplaced header never is.
   useRenameRequest(nodeId ?? '', renaming);
+  // Asked for by a menu of the header's own (a pop-up's ⋯ → Rename), each time `ask` goes up.
+  // Only a new ask starts it: the one seen is kept, so a header drawn again after a rename doesn't open the field.
+  const askSeen = useRef(ask);
+  useEffect(() => {
+    if (ask === askSeen.current) return;
+    askSeen.current = ask;
+    renaming.startSoon();
+    // `renaming` is rebuilt every render; only a new ask should start it.
+  }, [ask]);
   const tip = agent === undefined ? title : [title, ...tileHistory(agent, Date.now())].join('\n');
   if (target === undefined) {
     return (

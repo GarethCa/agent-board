@@ -5,7 +5,7 @@ import { dropZoneAt, type Divider, type DropZone, type Rect } from './pane-geome
 import { dividerStops, nextStop, snapRatio, type SplitSides } from './split-room';
 import { chosenFontSize, DEFAULT_FONT_SIZE } from './terminal-size';
 import { dropTaken, tabDrag, useTabDrag } from './shell-moves';
-import { TabStrip, type StripTab } from './TabStrip';
+import { TabStrip, type StripTab, type TabAdds } from './TabStrip';
 import type { WindowSurface } from './tabs';
 import { Dividers, useDividerDrag } from './use-divider-drag';
 import type { PaneView, WindowPanesControl } from './use-window-panes';
@@ -117,6 +117,24 @@ export function WindowPanes({ panes, stripTab, renderSurface, here, panelId, inl
   );
 }
 
+/** What a pane's + offers, acting on that pane: `here` says where a new shell starts. */
+export function paneAdds(panes: WindowPanesControl, pane: PaneView, here: string): TabAdds {
+  return {
+    here,
+    onNewShell: () => panes.newTab(pane.id),
+    onNewShellAt: () => panes.newTabAt(pane.id),
+    onRunScript: (script) => panes.newTab(pane.id, { script }),
+    scripts: panes.scripts,
+    sessions: panes.sessionChoices.map((choice) => ({ label: choice.label, onSelect: () => panes.showSession(pane.id, choice.surface) })),
+    pullRequests: panes.pullRequestChoices.map((choice) => ({ label: choice.label, onSelect: () => panes.open(choice.surface, pane.id) })),
+    onOpenTodo: panes.todoChoice && (() => panes.todoChoice && panes.open(panes.todoChoice, pane.id)),
+    onOpenWeb: (options) => panes.openBlankWeb(pane.id, options),
+    named: panes.surfaces.length === 1,
+    shells: panes.holdsShells,
+    onSplit: () => panes.split('horizontal', pane.id),
+  };
+}
+
 /** One pane's strip: its tabs, + and Split acting on it. */
 export function PaneStrip({
   panes,
@@ -143,20 +161,7 @@ export function PaneStrip({
       panelId={panelId}
       onSelect={panes.select}
       onClose={panes.close}
-      adds={{
-        here,
-        onNewShell: () => panes.newTab(pane.id),
-        onNewShellAt: () => panes.newTabAt(pane.id),
-        onRunScript: (script) => panes.newTab(pane.id, { script }),
-        scripts: panes.scripts,
-        sessions: panes.sessionChoices.map((choice) => ({ label: choice.label, onSelect: () => panes.showSession(pane.id, choice.surface) })),
-        pullRequests: panes.pullRequestChoices.map((choice) => ({ label: choice.label, onSelect: () => panes.open(choice.surface, pane.id) })),
-        onOpenTodo: panes.todoChoice && (() => panes.todoChoice && panes.open(panes.todoChoice, pane.id)),
-        onOpenWeb: (options) => panes.openBlankWeb(pane.id, options),
-        named: panes.surfaces.length === 1,
-        shells: panes.holdsShells,
-        onSplit: () => panes.split('horizontal', pane.id),
-      }}
+      adds={paneAdds(panes, pane, here)}
       dragOf={(key) => {
         const surface = pane.surfaces.find((each) => each.key === key);
         return surface === undefined ? undefined : panes.dragOf(surface);

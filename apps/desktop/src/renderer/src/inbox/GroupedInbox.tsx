@@ -17,6 +17,7 @@ import { usePullRequest } from '../session/use-pull-request';
 import { useGateRun } from '../gate/GatesProvider';
 import { keptCleanup } from '../gate/GateControls';
 import { setChosenView } from '../session/session-view';
+import { viewKeyOf } from '../board/agent-popup';
 import { mergedText, mergePlanText } from '../gate/gate-view';
 import { useNeedsYouShows } from '../needs-you-setting';
 import { useNow } from './use-now';
@@ -79,7 +80,7 @@ export function GroupedInbox({ agents, zones, onOpen, onSettings, heading = true
             </h3>
             <ul className="inbox-items">
               {section.rows.map((row) => (
-                <Row key={row.agent.sessionId} row={row} zone={zones.find((zone) => zone.id === row.agent.zoneId)} now={now} onOpen={onOpen} onDismiss={dismiss} />
+                <Row key={row.agent.sessionId} row={row} zone={zones.find((zone) => zone.id === row.agent.zoneId)} now={now} viewKey={viewKeyOf(row.agent, agents)} onOpen={onOpen} onDismiss={dismiss} />
               ))}
             </ul>
           </section>
@@ -129,12 +130,15 @@ function Row({
   row: { agent, kind, since },
   zone,
   now,
+  viewKey,
   onOpen,
   onDismiss,
 }: {
   row: NeedsYouRow;
   zone: Zone | undefined;
   now: number;
+  /** Where its pop-up keeps its Chat | Terminal pick: a ticket's, for a ticket's agent. */
+  viewKey: string;
   onOpen(agent: Agent): void;
   onDismiss(key: string): void;
 }) {
@@ -177,7 +181,7 @@ function Row({
         ) : kind === 'problem' ? (
           <ProblemBody agent={agent} onOpen={open} onDismiss={onDismiss} />
         ) : (
-          <RequestBody agent={agent} kind={kind} flag={flag} now={now} open={open} rowKeys={askKeys} />
+          <RequestBody agent={agent} kind={kind} flag={flag} now={now} viewKey={viewKey} open={open} rowKeys={askKeys} />
         )}
       </div>
     </li>
@@ -185,10 +189,12 @@ function Row({
 }
 
 /** What a request asks, and its answers: a flag, a permission prompt, a question, a plan or a finished turn. */
-function RequestBody({ agent, kind, flag, now, open, rowKeys }: { agent: Agent; kind: NeedsYouRowKind; flag: AgentFlag | null; now: number; open(): void; rowKeys: RowKeys }) {
-  // Review… lets the harness ask in its terminal, so the window opens on the terminal, not on a chat view the user picked.
+function RequestBody({ agent, kind, flag, now, viewKey, open, rowKeys }: { agent: Agent; kind: NeedsYouRowKind; flag: AgentFlag | null; now: number; viewKey: string; open(): void; rowKeys: RowKeys }) {
+  // Review… lets the harness ask in its terminal, so the window opens on the terminal, not on a chat view the user picked:
+  // its own window's, and its pop-up's, a ticket's for every agent in it.
   const reviewInTerminal = () => {
     setChosenView(agent.sessionId, 'terminal');
+    setChosenView(viewKey, 'terminal');
     open();
   };
   return (

@@ -4,6 +4,7 @@ import type { Agent } from '@agent-board/daemon/protocol';
 import type { SessionWindows } from '../windows/session-windows';
 import type { RowTab } from './popup-tab-row';
 import { drawnIn, drawsAsTicket, heldInCard, tileNodeId } from './tiles';
+import { popUpViewKey } from '../session/session-view';
 
 /**
  * What popping the agent up does first: an agent popped out into a window of its own is only brought forward there,
@@ -55,20 +56,60 @@ export function popUpHelpers(agent: Agent, agents: readonly Agent[]): Agent[] | 
   return agents.filter((each) => each.ticket === agent.sessionId && heldInCard(each, agents));
 }
 
+/**
+ * Where an agent's pop-up keeps its one Chat | Terminal pick (`popUpViewKey`): its ticket's, for a ticket's chat and the
+ * helpers its pop-up has a tab for; its own session's for any other agent.
+ */
+export function viewKeyOf(agent: Agent, agents: readonly Agent[]): string {
+  const chat = agent.ticketChat ? agent : agents.find((each) => each.sessionId === agent.ticket);
+  const helpers = chat === undefined ? undefined : popUpHelpers(chat, agents);
+  if (chat === undefined || helpers === undefined) return agent.sessionId;
+  return chat === agent || helpers.some((each) => each.sessionId === agent.sessionId) ? popUpViewKey(chat, true) : agent.sessionId;
+}
+
 /** The key of a ticket's pop-up's Board tab, its overview, in its row and its kept order. */
 export const BOARD_TAB = 'board';
+/** The key of a pop-up's Activity tab: what an orchestrating agent did. */
+export const ACTIVITY_TAB = 'activity';
+/** The key of a pop-up's Review tab: the latest round of the review of its work. */
+export const REVIEW_TAB = 'review';
 
-/** One tab of a ticket's pop-up: its Board, or an agent and whether it is the ticket's chat. */
+/** A view a pop-up can open as a tab, from its sidebar: its key and its name. */
+export interface PopUpView {
+  key: typeof BOARD_TAB | typeof ACTIVITY_TAB | typeof REVIEW_TAB;
+  label: string;
+}
+
+/**
+ * The views a pop-up's sidebar lists, in their order: a ticket's Board first, its overview; Activity for an agent with
+ * an activity log; then "Review · round n" once a review of its work has begun.
+ */
+export function popUpViews({ board, activity, reviewRound }: { board: boolean; activity: boolean; reviewRound: number | undefined }): PopUpView[] {
+  return [
+    ...(board ? [{ key: BOARD_TAB, label: 'Board' } as const] : []),
+    ...(activity ? [{ key: ACTIVITY_TAB, label: 'Activity' } as const] : []),
+    ...(reviewRound === undefined ? [] : [{ key: REVIEW_TAB, label: `Review · round ${reviewRound}` } as const]),
+  ];
+}
+
+/** The views open as a pop-up opens: its overview, a ticket's Board; the others open from the sidebar. */
+export const viewsOpenAtFirst = (views: readonly PopUpView[]): string[] => views.filter((view) => view.key === BOARD_TAB).map((view) => view.key);
+
+/** One tab of a pop-up: a view, or an agent and whether it is a ticket's chat. */
 export interface PopUpRowTab extends RowTab {
   agent?: Agent;
+  view?: PopUpView;
   chat: boolean;
 }
 
-/** A ticket's pop-up's row of tabs, before any is dragged: its Board, its chat, then each helper. */
-export function popUpRow(chat: Agent, helpers: readonly Agent[]): PopUpRowTab[] {
+/**
+ * A pop-up's row of tabs, before any is dragged: the views open (`views`), then its own agent (a ticket's chat, or one
+ * agent alone, with `ticket` false), then each helper.
+ */
+export function popUpRow(own: Agent, helpers: readonly Agent[], views: readonly PopUpView[], { ticket = true }: { ticket?: boolean } = {}): PopUpRowTab[] {
   return [
-    { key: BOARD_TAB, kind: 'view', chat: false },
-    { key: chat.sessionId, kind: 'agent', agent: chat, chat: true },
+    ...views.map((view) => ({ key: view.key, kind: 'view' as const, view, chat: false })),
+    { key: own.sessionId, kind: 'agent', agent: own, chat: ticket },
     ...helpers.map((agent) => ({ key: agent.sessionId, kind: 'agent' as const, agent, chat: false })),
   ];
 }
@@ -76,9 +117,20 @@ export function popUpRow(chat: Agent, helpers: readonly Agent[]): PopUpRowTab[] 
 /** Whose kept order a ticket's pop-up's row is: its chat's. */
 export const popUpRowOwner = (chat: Agent) => `ticket:${chat.sessionId}`;
 
-/** What a ticket's pop-up shows for the tab `tab` names: its Board, else the agent `popUpTabShown` gives. */
-export function popUpTabOn(tab: string | undefined, chat: Agent, helpers: readonly Agent[], popped: readonly string[] = []): typeof BOARD_TAB | Agent {
-  return tab === BOARD_TAB ? BOARD_TAB : popUpTabShown(tab, chat, helpers, popped);
+// A Record, so a new view's key can't be left out.
+const VIEW_KEY: Record<PopUpView['key'], true> = { [BOARD_TAB]: true, [ACTIVITY_TAB]: true, [REVIEW_TAB]: true };
+const VIEW_KEYS_ALL: readonly string[] = Object.keys(VIEW_KEY);
+
+/** Whether a tab's key names a view rather than an agent. */
+export const isViewKey = (key: string | undefined): key is PopUpView['key'] => key !== undefined && VIEW_KEYS_ALL.includes(key);
+
+/**
+ * What a pop-up shows for the tab `tab` names: a view while its tab is open (`open`); else the agent `popUpTabShown`
+ * gives for it, or, for a view no longer open (a review dismissed elsewhere), for `under`, the agent shown under it.
+ */
+export function popUpTabOn(tab: string | undefined, under: string | undefined, chat: Agent, helpers: readonly Agent[], popped: readonly string[], open: readonly PopUpView['key'][]): PopUpView['key'] | Agent {
+  if (!isViewKey(tab)) return popUpTabShown(tab, chat, helpers, popped);
+  return open.includes(tab) ? tab : popUpTabShown(under, chat, helpers, popped);
 }
 
 /**

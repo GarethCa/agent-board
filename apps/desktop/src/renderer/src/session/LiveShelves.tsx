@@ -10,7 +10,7 @@ import { useTechnicalDetails } from '../technical';
 import { useAction } from '../use-action';
 import { Button, IconButton, Menu, type MenuEntry } from '../ui';
 import { errorMessage } from '../../../shared/errors';
-import { AgentShelves } from './AgentShelves';
+import { AgentShelves, type ShelfViews } from './AgentShelves';
 import { closePane } from './close-pane';
 import { leadControl, sessionControls, type ControlId } from './controls';
 import { CONTROL_ICONS, PANE_ICONS } from './details-icons';
@@ -35,6 +35,8 @@ interface LiveShelvesProps {
   onOpenPullRequest(pr: Pick<PullRequest, 'url'>): void;
   onOpenSurface?(surface: Surface): void;
   onOpenWeb(url: string): void;
+  /** A pop-up's views, listed first in its sidebar. */
+  views?: ShelfViews | undefined;
 }
 
 /**
@@ -42,7 +44,7 @@ interface LiveShelvesProps {
  * Its shelves (AgentShelves.tsx), kept current from the board: its crew (and who started it, read through
  * `useShelvesAgents`, so it renders for no other agent's change), its folder now, its gate and its clock.
  */
-export function LiveShelves({ agent, collapsed, onCollapsed, onProblem, onOpenLink, onOpenPullRequest, onOpenSurface, onOpenWeb }: LiveShelvesProps) {
+export function LiveShelves({ agent, collapsed, onCollapsed, onProblem, onOpenLink, onOpenPullRequest, onOpenSurface, onOpenWeb, views }: LiveShelvesProps) {
   const agents = useShelvesAgents(agent) ?? NO_AGENTS;
   const shows = useNeedsYouShows();
   const technical = useTechnicalDetails();
@@ -68,6 +70,7 @@ export function LiveShelves({ agent, collapsed, onCollapsed, onProblem, onOpenLi
       width={width}
       collapsed={collapsed}
       onCollapsed={onCollapsed}
+      views={views}
       actions={{
         openLink: onOpenLink,
         openPullRequest: onOpenPullRequest,

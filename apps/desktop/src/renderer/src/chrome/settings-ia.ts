@@ -107,6 +107,7 @@ export const SETTINGS_CONTROLS: readonly SettingsControl[] = [
   { id: 'theme', label: 'Theme', home: 'general.appearance', also: 'colour color palette pack' },
   { id: 'boardBackground', label: 'Board background', home: 'general.appearance', also: 'desk dots grid lines isometric paper noise vignette plain pattern texture' },
   { id: 'popupFrost', label: 'Frost the board behind a pop-up', home: 'general.appearance', also: 'blur dim frosted glass popup pop-up scrim backdrop transparency' },
+  { id: 'popupFill', label: 'Pop-up fills a wide screen', home: 'general.appearance', also: 'ultrawide ultra-wide wide screen width cap 1600 popup pop-up fill full width' },
   { id: 'extendedShortcuts', label: 'Extended keyboard shortcuts', home: 'general.keyboard', also: 'keys hotkeys' },
   { id: 'clickOpens', label: 'Double-clicking a tile opens', home: 'board.opening', also: 'double-click pop-up popup overlay expand session window maximise maximised maximize full' },
   { id: 'connections', label: 'Show connections', home: 'board.connections', also: 'edges rails lines' },

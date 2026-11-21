@@ -26,12 +26,16 @@ export interface StripTab {
   closeHint: string;
   /** What leads it, before its label, in place of its dot: an agent's character. */
   lead?: ReactNode;
-  /** A word in a pill after its label: a ticket's chat's "chat". */
+  /** A word in a pill after its label: a ticket's chat's "chat", or the side of a split it shows on. */
   pill?: string;
+  /** On as well as the tab that is, in the other pane of a split. */
+  beside?: boolean;
   /** What ends it, after its label: an agent's status dot, with a tooltip of its own. */
   mark?: ReactNode;
   /** Whether its agent asks for the user, which colours it as an ask. */
   ask?: boolean;
+  /** What stands in place of its label while it is renamed in place: its name field. */
+  editing?: ReactNode;
 }
 
 interface TabStripProps {
@@ -65,10 +69,13 @@ interface TabStripProps {
   reorder?(id: string, index: number): void;
   /** The tab the user came from, underlined so one click (or ⌘[) goes back to it. */
   from?: string | undefined;
+  /** What a right-click on a tab opens at the pointer, its menu; undefined for a tab with none, and where tabs have none. */
+  onContextMenu?(id: string, at: { x: number; y: number }): boolean;
 }
 
 /** What a tab dragged along a strip that reorders carries: its own type, so nothing else (the board, a window) takes it. */
-const ROW_TAB_TYPE = 'application/x-agent-board-row-tab';
+/** What a tab of a reorderable row carries as it is dragged: its id. A pop-up's panes take it too, to show it there. */
+export const ROW_TAB_TYPE = 'application/x-agent-board-row-tab';
 
 /** What a session window's strip adds: its + menu, and Split. */
 export interface TabAdds {
@@ -103,7 +110,7 @@ export interface TabAdds {
  * switch. A tab closes by its ×, shown on hover and on the tab showing, or a middle-click. A tab dragged along the
  * strip, from another, or from another window lands where a slot shows.
  */
-export function TabStrip({ tabs, active, focused = false, onSelect, onAltSelect, onClose, label = 'Terminal tabs', adds, panelId, dragOf, drop, trailing, reorder, from }: TabStripProps) {
+export function TabStrip({ tabs, active, focused = false, onSelect, onAltSelect, onClose, label = 'Terminal tabs', adds, panelId, dragOf, drop, trailing, reorder, from, onContextMenu }: TabStripProps) {
   const list = useRef<HTMLDivElement>(null);
   // A tab or pane held over the strip that would land here shows a slot where it would go.
   const dragging = useTabDrag();
@@ -184,6 +191,7 @@ export function TabStrip({ tabs, active, focused = false, onSelect, onAltSelect,
               <span
                 className={drag === undefined && !moves ? 'session-tab' : 'session-tab nodrag'}
                 data-active={tab.id === active || undefined}
+                data-beside={(tab.beside && tab.id !== active) || undefined}
                 data-from={(tab.id === from && tab.id !== active) || undefined}
                 data-ask={tab.ask || undefined}
                 data-testid="session-tab"
@@ -204,6 +212,15 @@ export function TabStrip({ tabs, active, focused = false, onSelect, onAltSelect,
                 onDragEnd={moves ? () => setMoving(undefined) : drag === undefined ? undefined : (event) => endDrag(event, drag)}
                 // A middle-click closes a shell tab, as in a browser; held down, it neither scrolls nor pastes.
                 onMouseDown={tab.closable ? (event) => event.button === 1 && event.preventDefault() : undefined}
+                onContextMenu={
+                  onContextMenu === undefined
+                    ? undefined
+                    : (event) => {
+                        if (!onContextMenu(tab.id, { x: event.clientX, y: event.clientY })) return;
+                        event.preventDefault();
+                        event.stopPropagation();
+                      }
+                }
                 onAuxClick={
                   tab.closable
                     ? (event) => {
@@ -214,6 +231,7 @@ export function TabStrip({ tabs, active, focused = false, onSelect, onAltSelect,
                     : undefined
                 }
               >
+                {tab.editing ?? (
                 <button
                   type="button"
                   role="tab"
@@ -238,6 +256,7 @@ export function TabStrip({ tabs, active, focused = false, onSelect, onAltSelect,
                   <span className="session-tab-label">{tab.label}</span>
                   {tab.pill !== undefined && <span className="session-tab-pill">{tab.pill}</span>}
                 </button>
+                )}
                 {tab.mark}
                 {tab.closable && (
                   <IconButton
@@ -262,8 +281,16 @@ export function TabStrip({ tabs, active, focused = false, onSelect, onAltSelect,
   );
 }
 
-/** A session window's + (⌘T), named Shell while it has no tab but its own, and Split (⌘D). */
-function AddTabs({ onNewShell, here, onNewShellAt, onRunScript, scripts, sessions, pullRequests = [], onOpenTodo, onOpenWeb, named, shells = true, onSplit }: TabAdds) {
+/**
+ * What a + offers for a pane: shells here or at a folder, web pages, the folder's scripts (looked up as the menu opens),
+ * other sessions, the pull requests and the to-do list, and Split under the Simplified design. `onOpenChange` is the
+ * menu's, to start the lookup. With `split` false it leaves Split to whoever offers its own.
+ */
+export function useAddEntries({ onNewShell, here, onNewShellAt, onRunScript, scripts, sessions, pullRequests = [], onOpenTodo, onOpenWeb, shells = true, onSplit }: TabAdds, { split = true } = {}): {
+  entries: MenuEntry[];
+  menuOpen: boolean;
+  onOpenChange(open: boolean): void;
+} {
   const simplified = useSimplified();
   const [menuOpen, setMenuOpen] = useState(false);
   const [found, setFound] = useState<PackageScripts | 'looking' | 'failed'>('looking');
@@ -300,8 +327,16 @@ function AddTabs({ onNewShell, here, onNewShellAt, onRunScript, scripts, session
     ...(pullRequests.length === 0 ? [] : (['separator', { heading: 'Open a pull request' }] as MenuEntry[])),
     ...pullRequests.map((pr): MenuEntry => ({ label: pr.label, icon: <GitPullRequest />, onSelect: pr.onSelect })),
     ...(onOpenTodo === undefined ? [] : (['separator', { label: 'To-do list', icon: <SquareCheckBig />, hint: 'Its reminders for you', onSelect: onOpenTodo }] as MenuEntry[])),
-    ...(simplified && shells ? (['separator', { heading: 'Split' }, { label: 'Split right', icon: <Columns2 />, shortcut: keyText('window.splitBeside'), onSelect: onSplit }] as MenuEntry[]) : []),
+    ...(simplified && shells && split ? (['separator', { heading: 'Split' }, { label: 'Split right', icon: <Columns2 />, shortcut: keyText('window.splitBeside'), onSelect: onSplit }] as MenuEntry[]) : []),
   ];
+  return { entries, menuOpen, onOpenChange: openMenu };
+}
+
+/** A session window's + (⌘T), named Shell while it has no tab but its own, and Split (⌘D). */
+function AddTabs(adds: TabAdds) {
+  const { named, shells = true, onSplit } = adds;
+  const simplified = useSimplified();
+  const { entries, menuOpen, onOpenChange: openMenu } = useAddEntries(adds);
   return (
     <>
       <Menu entries={entries} open={menuOpen} onOpenChange={openMenu}>

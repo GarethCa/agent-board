@@ -973,6 +973,7 @@ export const AGENT_IPC = {
   subagentTranscript: 'agent:subagentTranscript',
   interrupt: 'agent:interrupt',
   continueOnCredits: 'agent:continueOnCredits',
+  carryOn: 'agent:carryOn',
   sendUnsent: 'agent:sendUnsent',
   clearUnsent: 'agent:clearUnsent',
   typeFirstPrompt: 'agent:typeFirstPrompt',
@@ -1063,6 +1064,8 @@ export interface AgentsApi {
   interrupt(sessionId: string): Promise<Agent>;
   /** Resumes the rate-limited agent's turn on usage credits, as its harness offers; resolves with it once its turn starts. */
   continueOnCredits(sessionId: string): Promise<Agent>;
+  /** Tells an agent a restart cut off mid-turn, back at its prompt, to carry on from where it was; resolves with it told. */
+  carryOn(sessionId: string): Promise<Agent>;
   /**
    * Presses Enter on the message typed at the agent's prompt and never sent (`Agent.unsent`); resolves with the agent
    * once its turn starts or no Enter starts one.

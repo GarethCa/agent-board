@@ -3,7 +3,7 @@ import { Check } from 'lucide-react';
 import { ZONE_COLORS, type Agent, type ExternalSession, type GateRun, type LibraryPrefab, type ReviewRound, type Shell, type Zone } from '@agent-board/daemon/protocol';
 import { keyText } from '../keys/registry';
 import { runGateShortcut } from '../session/window-keys';
-import { agentMenu, agentTileMenu, menuBarAgentEntries, stateTileMenu, bindEntries, chipMenu, externalMenu, menuIds, newAgentMenu, projectContextMenu, projectMenu, pullRequestEntries, shellMenu, tidyMenu, zoneMenu, zoneTabEntries, type ZoneBindingActions, type AgentMenuInput, type AgentTileMenuInput, type ModelEntry, type ProjectContextMenuInput, type ZoneMenuInput, type ShellMenuInput, type TileBoardActions } from './menu-model';
+import { agentMenu, agentTileMenu, popUpAgentMenu, type PopUpAgentMenuInput, menuBarAgentEntries, stateTileMenu, bindEntries, chipMenu, externalMenu, menuIds, newAgentMenu, projectContextMenu, projectMenu, pullRequestEntries, shellMenu, tidyMenu, zoneMenu, zoneTabEntries, type ZoneBindingActions, type AgentMenuInput, type AgentTileMenuInput, type ModelEntry, type ProjectContextMenuInput, type ZoneMenuInput, type ShellMenuInput, type TileBoardActions } from './menu-model';
 import { galleryAgent } from './TileGallery';
 import type { MenuBarRow } from '../../../shared/menu-bar';
 import { menuBarRows, runRow } from '../keys/menu-bar';
@@ -202,6 +202,99 @@ function tileInput(agent: Agent, more: Partial<AgentTileMenuInput> = {}): AgentT
 
 /** The ids of a menu's top level alone. */
 const topIds = (entries: readonly ModelEntry[]) => entries.flatMap((entry) => (entry === 'separator' || 'heading' in entry ? [] : [entry.id]));
+
+describe("an agent's menu in its pop-up: its tab's ⋯, and a lone agent's header ⋯", () => {
+  const popUpInput = (agent: Agent, more: Partial<PopUpAgentMenuInput> = {}): PopUpAgentMenuInput => ({ ...agentInput(agent), actions: spies(), ...more });
+  const labels = (entries: readonly ModelEntry[]) => entries.map((entry) => (entry === 'separator' ? '---' : 'heading' in entry ? `# ${entry.heading}` : entry.label));
+
+  it('names the agent, runs it first, then the session, and Delete agent comes last', () => {
+    const gatedAgent: Agent = { ...galleryAgent('running'), worktree: '/w/builder', name: 'Builder' };
+    expect(labels(popUpAgentMenu(popUpInput(gatedAgent, { rounds: [round('ready')], openBeside: [{ id: 'b2', label: 'Reviewer', onSelect: () => {} }] })))).toEqual([
+      '# Builder',
+      'Pause',
+      'Run gate',
+      'Open beside…',
+      'Open review',
+      'Pop out',
+      '---',
+      'Interrupt',
+      'Rename',
+      'Restart agent',
+      'Stop session',
+      '---',
+      'Schedule…',
+      'Link issue…',
+      'Mute notifications',
+      'Reasoning',
+      'Role',
+      'Start review round 2',
+      '---',
+      'Delete agent',
+    ]);
+  });
+
+  it('has no Open beside where the pop-up cannot split, Fold for a closed one, and Restart for one that restarts in place', () => {
+    // Closed: ended, not by a restart, and no shell's.
+    const closed: Agent = { ...ended, name: 'Done one', state: 'idle', shellSessionId: null, shellHarness: null };
+    const rows = menuIds(popUpAgentMenu(popUpInput(closed)));
+    expect(rows).not.toContain('open-beside');
+    expect(rows).not.toContain('interrupt');
+    expect(rows).not.toContain('stop');
+    expect(rows.indexOf('wake')).toBeLessThan(rows.indexOf('pop-out'));
+    expect(rows).toContain('fold');
+    expect(rows.indexOf('fold')).toBeGreaterThan(rows.indexOf('pop-out'));
+    expect(rows.at(-1)).toBe('delete');
+    // Restarts in place: running, no review's, no shell's.
+    const restarts = menuIds(popUpAgentMenu(popUpInput({ ...running, harness: 'claude', claudeSessionId: 'c1', endedAt: null, reviewOf: null, shellHarness: null } as Agent)));
+    expect(restarts).toContain('restart');
+    expect(restarts.indexOf('restart')).toBe(restarts.indexOf('rename') + 1);
+  });
+
+  it('wires each row, Rename and Open beside to what the pop-up gave it', () => {
+    const actions = spies<PopUpAgentMenuInput['actions']>();
+    const rename = () => void actions.calls.push(['rename', []]);
+    const openBeside = [{ id: 'b2', label: 'Reviewer', onSelect: () => void actions.calls.push(['openBeside', ['b2']]) }];
+    const agent = { ...galleryAgent('running'), sessionId: 'a1', worktree: '/w/a1' };
+    const wired = wiring(popUpAgentMenu(popUpInput(agent, { actions, rename, openBeside })), actions.calls);
+    expect(wired).toContain('open-beside/beside-b2 → openBeside("b2")');
+    expect(wired).toContain('rename → rename()');
+    expect(wired).toContain('interrupt → interruptAgent("a1")');
+    expect(wired).toContain('stop → stopAgent("a1")');
+    expect(wired).toContain('delete → deleteAgent("a1")');
+    const ids = menuIds(popUpAgentMenu(popUpInput(agent, { actions, rename, openBeside })));
+    expect(ids.length).toBe(new Set(ids).size);
+  });
+});
+
+describe("an agent's menu in its pop-up split", () => {
+  const popUpInput = (agent: Agent, more: Partial<PopUpAgentMenuInput> = {}): PopUpAgentMenuInput => ({ ...agentInput(agent), actions: spies(), ...more });
+
+  it('lists the agents Open beside… offers, in the order given', () => {
+    const agent = { ...galleryAgent('running'), sessionId: 'a1', worktree: '/w/a1' };
+    const entries = popUpAgentMenu(popUpInput(agent, { openBeside: [{ id: 'h1', label: 'Reviewer', onSelect: () => {} }, { id: 'z1', label: 'Other', onSelect: () => {} }] }));
+    const beside = entries.find((entry) => entry !== 'separator' && 'id' in entry && entry.id === 'open-beside');
+    expect(beside !== undefined && beside !== 'separator' && 'entries' in beside ? beside.entries.map((each) => (each !== 'separator' && 'label' in each ? each.label : '')) : []).toEqual(['Reviewer', 'Other']);
+  });
+
+  it('has Close this side in place of Open beside… on a side of the split', () => {
+    const actions = spies<PopUpAgentMenuInput['actions']>();
+    const agent = { ...galleryAgent('running'), sessionId: 'a1', worktree: '/w/a1' };
+    const closeSide = () => void actions.calls.push(['closeSide', []]);
+    const entries = popUpAgentMenu(popUpInput(agent, { actions, closeSide, openBeside: [{ id: 'h1', label: 'Reviewer', onSelect: () => {} }] }));
+    expect(menuIds(entries)).not.toContain('open-beside');
+    expect(wiring(entries, actions.calls)).toContain('close-side → closeSide()');
+  });
+
+  it("has Open beside on another agent's tab, opening that one on the right", () => {
+    const actions = spies<PopUpAgentMenuInput['actions']>();
+    const agent = { ...galleryAgent('running'), sessionId: 'h1', worktree: '/w/h1' };
+    const openBesideThis = () => void actions.calls.push(['openBesideThis', []]);
+    const entries = popUpAgentMenu(popUpInput(agent, { actions, openBesideThis }));
+    const row = entries.find((entry) => entry !== 'separator' && 'id' in entry && entry.id === 'open-beside');
+    expect(row !== undefined && row !== 'separator' && 'label' in row ? row.label : '').toBe('Open beside');
+    expect(wiring(entries, actions.calls)).toContain('open-beside → openBesideThis()');
+  });
+});
 
 describe("an agent tile's menu, grouped", () => {
   it("leads with how to open it, then groups its rows: run, settings, review and gate, arrange, ask, copy, delete", () => {
