@@ -37,7 +37,6 @@ import {
   type Effort,
   type Harness,
   type OrchestratorActivity,
-  type RemoveAskResult,
   type AgentNoteData,
   type BoardItem,
   type Connector,
@@ -65,10 +64,13 @@ import {
   type TicketWatchChange,
   type PrefabAssumption,
   type PrefabDraft,
+  prefabDraftLink,
   MAX_PREFAB_FILE_BYTES,
   RPC_ERROR,
   type LaunchSettings,
   launchSettingNames,
+  ALERT_INTERVAL_MS,
+  restsFinished,
 } from './protocol.ts';
 import { ticketWatchOf, watchesSummary } from './ticket-watches.ts';
 import { cutText, plural } from './text-words.ts';
@@ -76,6 +78,7 @@ import { characterReading, type CharacterReading, type CharacterSet } from './ch
 import { WORK_CATEGORY_LABELS, workCategory } from './work-category.ts';
 import { parsePrefab, prefabFile, prefabFileName } from './crew-prefabs.ts';
 import { minutes, planDecisionText } from './plan-told.ts';
+import { removeAskLeftText, removeAskText } from './remove-ask-told.ts';
 
 /** A failure to show the user as it is: a bad ref, no daemon, an unknown token. */
 export class BoardError extends Error {}
@@ -169,8 +172,8 @@ export async function readBoard(client: DaemonClient): Promise<Board> {
 }
 
 /**
- * The board, with the items on the caller's ticket's own board as well: what the card commands (memory, queue, steps,
- * to-do) resolve a ref or title on, so a ticket's agents reach a card on their ticket's board as one on the main board.
+ * The board, with the items on the caller's ticket's own board as well: what the card commands (queue, steps, to-do)
+ * resolve a ref or title on, so a ticket's agents reach a card on their ticket's board as one on the main board.
  */
 export async function readCards(session: Pick<BoardSession, 'client' | 'caller'>): Promise<Board> {
   const board = await readBoard(session.client);
@@ -687,11 +690,7 @@ export function identifyView(refs: BoardRefs, caller: BoardCaller | null, socket
     lines.push(`branch   ${branchWords(agent)} in ${tilde(agent.worktree)}`);
     const role = roleLabel(agent);
     if (role !== null) lines.push(`role     ${role}`);
-    if (caller.orchestrates) {
-      lines.push("you may  start, message and close any agent but yourself; removing one you didn't start asks the user (`agent-board help orchestrate`)");
-    }
   }
-  if (caller.side === 'user') lines.push('you may  act for the user: start, message and close any agent');
   lines.push(`session  ${caller.sessionId}`, `daemon   ${socketPath}`);
   return {
     text: lines.join('\n'),
@@ -712,24 +711,64 @@ export function identifyView(refs: BoardRefs, caller: BoardCaller | null, socket
   };
 }
 
+/** Where a read is printed: the CLI, or an MCP tool's answer, whose hints name the tools instead of the commands. */
+export type ReadFace = 'cli' | 'mcp';
+
+/** How the whole board is asked for, on each face. */
+const WHOLE_BOARD: Record<ReadFace, string> = { cli: '`agent-board tree --zone all`', mcp: '`board` with `zone: "all"`' };
+
 /**
- * `tree`: every zone with its tiles and items, then what is loose on the board, then what is on each ticket's own board
- * it was read with (the caller's, from `readCards`).
+ * Why an agent is folded out of a zone's `tree`: it holds nothing (hibernated, or its session ended: `done`) or it
+ * said its work is finished and came to rest. A failed agent, or one asking for permission, stays listed, for someone
+ * may have to look at it; so does the caller, whom the tree marks.
  */
-export function treeView(refs: BoardRefs, caller: BoardCaller | null): BoardView {
-  const { zones, agents, shells } = refs.board;
+function quietWord(agent: Agent, caller: BoardCaller | null): 'hibernated' | 'ended' | 'finished' | null {
+  if (isCaller(caller, 'agent', agent.sessionId)) return null;
+  if (agent.state === 'hibernated') return 'hibernated';
+  if (agent.state === 'done') return 'ended';
+  return restsFinished(agent) ? 'finished' : null;
+}
+
+/** The line that stands for a zone's folded agents: `+3 more: 2 hibernated, 1 finished. … lists them.` */
+function foldedLine(folded: readonly Agent[], face: ReadFace): string {
+  const count = (word: string) => folded.filter((agent) => quietWord(agent, null) === word).length;
+  const parts = (['hibernated', 'finished', 'ended'] as const).flatMap((word) => (count(word) === 0 ? [] : [`${count(word)} ${word}`]));
+  return `+${folded.length} more: ${parts.join(', ')}. ${WHOLE_BOARD[face]} lists them.`;
+}
+
+/** The zone a `tree` shows: the one `zone` names, else the caller's; null for the whole board (`all`, or no zone of one's own). */
+function treeZone(refs: BoardRefs, caller: BoardCaller | null, zone: string | undefined): string | null {
+  if (zone === 'all') return null;
+  if (zone === undefined) return caller?.zoneId ?? null;
+  const object = refs.resolve(zone, caller);
+  if (object.kind !== 'zone') throw new BoardError(`${zone} is a ${object.kind}, not a zone: give a zone's ref, or all`);
+  return object.zone.id;
+}
+
+/**
+ * `tree`: the caller's zone (or the one `zone` names) with its tiles and items, its hibernated, ended and finished
+ * agents folded into a count line; with `all`, or for a caller in no zone, every zone with everything in it, then what
+ * is loose on the board. Then what is on each ticket's own board it was read with (the caller's, from `readCards`).
+ */
+export function treeView(refs: BoardRefs, caller: BoardCaller | null, options: { zone?: string; face?: ReadFace } = {}): BoardView {
+  const scope = treeZone(refs, caller, options.zone);
+  const face = options.face ?? 'cli';
+  const { agents, shells } = refs.board;
+  const zones = scope === null ? refs.board.zones : refs.board.zones.filter((zone) => zone.id === scope);
   const items = refs.board.items.filter((item) => typeof item.ticket !== 'string');
   const tickets = [...new Set(refs.board.items.flatMap((item) => (typeof item.ticket === 'string' ? [item.ticket] : [])))];
   const onTicket = (ticket: string) => refs.board.items.filter((item) => item.ticket === ticket);
-  const sections = [...zones.map((zone) => zone.id), null].map((zoneId) => {
+  const sections = [...zones.map((zone) => zone.id), ...(scope === null ? [null] : [])].map((zoneId) => {
     const inZone = <T extends { zoneId: string | null }>(list: T[]) => list.filter((each) => each.zoneId === zoneId);
     return { zoneId, agents: inZone(agents), shells: inZone(shells), items: inZone(items), connectors: connectorsIn(refs, zoneId) };
   });
   const lines: string[] = [];
   for (const section of sections) {
     const zone = zones.find((each) => each.id === section.zoneId);
+    const folded = scope === null ? [] : section.agents.filter((agent) => quietWord(agent, caller) !== null);
     const rows = [
-      ...agentLines(refs, section.agents, caller),
+      ...agentLines(refs, section.agents.filter((agent) => !folded.includes(agent)), caller),
+      ...(folded.length === 0 ? [] : [foldedLine(folded, face)]),
       ...section.shells.map((shell) => shellLine(refs, shell, caller)),
       ...section.items.map((item) => itemLine(refs, item)),
       ...section.connectors.map((connector) => connectorLine(refs, connector)),
@@ -743,9 +782,17 @@ export function treeView(refs: BoardRefs, caller: BoardCaller | null): BoardView
     lines.push(...onTicket(ticket).map((item) => `  ${itemLine(refs, item)}`));
     lines.push(...connectorsOnTicket(refs, ticket).map((connector) => `  ${connectorLine(refs, connector)}`));
   }
+  const looseSection = sections.find((section) => section.zoneId === null);
+  const others = refs.board.zones.length - zones.length;
+  const loose = [agents, shells, items].reduce((sum, list) => sum + list.filter((each) => each.zoneId === null).length, 0);
+  if (scope !== null && others + loose > 0) {
+    const what = [...(others === 0 ? [] : [plural(others, 'other zone')]), ...(loose === 0 ? [] : [`${loose} loose on the board`])];
+    lines.push(`${what.join(' and ')}: ${WHOLE_BOARD[face]} shows the whole board.`);
+  }
   return {
     text: lines.length === 0 ? 'The board is empty.' : lines.join('\n'),
     json: {
+      scope: scope === null ? 'all' : refs.of('zone', scope),
       zones: sections
         .filter((section) => section.zoneId !== null)
         .map((section) => ({
@@ -755,12 +802,9 @@ export function treeView(refs: BoardRefs, caller: BoardCaller | null): BoardView
           connectors: section.connectors.map((connector) => connectorJson(refs, connector)),
         })),
       loose: {
-        tiles: [
-          ...sections.at(-1)!.agents.map((agent) => agentJson(refs, agent, caller)),
-          ...sections.at(-1)!.shells.map((shell) => shellJson(refs, shell, caller)),
-        ],
-        items: sections.at(-1)!.items.map((item) => itemJson(refs, item)),
-        connectors: sections.at(-1)!.connectors.map((connector) => connectorJson(refs, connector)),
+        tiles: [...(looseSection?.agents.map((agent) => agentJson(refs, agent, caller)) ?? []), ...(looseSection?.shells.map((shell) => shellJson(refs, shell, caller)) ?? [])],
+        items: looseSection?.items.map((item) => itemJson(refs, item)) ?? [],
+        connectors: looseSection?.connectors.map((connector) => connectorJson(refs, connector)) ?? [],
       },
       ticketBoards: tickets.map((ticket) => ({
         ticket: refs.of('agent', ticket),
@@ -1110,6 +1154,25 @@ export async function flagOwn(session: BoardSession, reason: string | undefined,
 }
 
 /**
+ * `rest`: the caller says it is done for now, waiting on someone else (`line`), and is paused as its turn ends, its
+ * conversation kept; what wakes a paused agent wakes it. The answer says what happens, or why not.
+ */
+export async function restOwn(session: BoardSession, line: string): Promise<BoardView> {
+  if (session.token === undefined || session.caller === null) {
+    throw new BoardError(`Only an agent in an agent-board session can rest: there is no ${BOARD_TOKEN_ENV} here.`);
+  }
+  if (line.trim() === '') throw new BoardError('say what you wait for, in a line: "waiting for the review of PR #12"');
+  const { agent, pauses } = await session.client.call('board.rest', { token: session.token, line });
+  const shown = agent.status === null ? '' : ` Your tile says: "${statusLine(agent.status)}".`;
+  return {
+    text: pauses
+      ? `Resting.${shown} End your turn now: the board pauses you as it ends, keeping your conversation. A message (send), a hand-off, your clock or the user's Wake wakes you.`
+      : `Resting is turned off in Settings, so you stay running.${shown}`,
+    json: { agent, pauses },
+  };
+}
+
+/**
  * What flagging (`flagOwn`) did, in a line: who it reaches, or that it was cleared (`cleared`), and what still waits on
  * the user, which only they move on (a message left unsent or never delivered).
  */
@@ -1120,6 +1183,26 @@ export function flagLine(agent: Agent, cleared = false): string {
   if (flag.to === 'orchestrator') return `Flagged for the agent that started you: "${flag.reason}". It hears it at its prompt, and its reply clears it.`;
   const via = flag.via === null ? '' : ` (passing on ${flag.via})`;
   return `Flagged for the user in Needs you${via}: "${flag.reason}". Opening your session, or \`agent-board needs-you --clear\`, clears it.`;
+}
+
+/**
+ * Tells the user something is done (`board.alert`): `line`, and a `link` to go with it. Throws `BoardError` outside an
+ * agent-board session.
+ */
+export async function alertUser(session: BoardSession, line: string, link?: string): Promise<Agent> {
+  if (session.token === undefined || session.caller === null) {
+    throw new BoardError(`Only an agent in an agent-board session can alert the user: there is no ${BOARD_TOKEN_ENV} here.`);
+  }
+  return session.client.call('board.alert', { token: session.token, line, ...(link === undefined ? {} : { link }) });
+}
+
+/** What alerting (`alertUser`) did, in a line: a banner and the Done list, or the Done list alone within the interval. */
+export function alertLine(agent: Agent): string {
+  const { alert } = agent;
+  if (alert === undefined) return 'Your alert was read already.';
+  if (alert.banner) return `In the user's Done list, with a banner unless they turned banners off or muted you: "${alert.line}".`;
+  const minutes = ALERT_INTERVAL_MS / 60_000;
+  return `In the user's Done list: "${alert.line}". No banner: you sent one less than ${minutes} minutes ago.`;
 }
 
 /** `status set --agent`: the line or pose of an agent in the caller's crew, which its tile says the caller set. */
@@ -1177,10 +1260,9 @@ export function checkStatusSet(set: StatusSet): void {
 
 /**
  * `status set` and `set_status`: the caller's own status, or a crew member's, and the one answer both give: what the
- * tile says now, then its category, description and character as set. A character set also gives `reading`, the line
- * of JSON the MCP adds for a client to read: the CLI has --json for that.
+ * tile says now, then its category, description and character as set.
  */
-export async function setStatus(session: BoardSession, set: StatusSet): Promise<BoardView & { reading?: string }> {
+export async function setStatus(session: BoardSession, set: StatusSet): Promise<BoardView> {
   checkStatusSet(set);
   const { summary, progress, character, category, description } = set;
   if (set.agent !== undefined) return setCrewStatus(session, set.agent, summary, progress, character, category, description);
@@ -1194,9 +1276,7 @@ export async function setStatus(session: BoardSession, set: StatusSet): Promise<
   if (category !== undefined || set.done === true) lines.push(categoryAnswer(agent));
   if (description !== undefined) lines.push(purposeAnswer(agent));
   if (character !== undefined) {
-    const { shown, yours, expires } = characterReading(agent);
     lines.push(characterAnswer(agent));
-    return { text: lines.join('\n'), json: agent, reading: JSON.stringify({ ok: true, shown, yours, expires }) };
   }
   return { text: lines.join('\n'), json: agent };
 }
@@ -1532,7 +1612,8 @@ export async function draftPrefab(session: BoardSession, path: string, assumed: 
   const lines = draft.assumptions.map((each) => `  - ${each.about === null ? '' : `[${each.about}] `}${each.text}`);
   return {
     text:
-      `Drafted ${draft.prefab.name} for the user: they open it on its board, then save it or delete it.` +
+      `Drafted ${draft.prefab.name} for the user: they open it on its board, then start, save or delete it. It waits in their Needs you, the crew library and ⌘K.` +
+      `\nGive them this link in your reply, which opens it: ${prefabDraftLink(draft.id)}` +
       (lines.length === 0 ? '' : `\nWhat you assumed:\n${lines.join('\n')}`),
     json: draft,
   };
@@ -1991,31 +2072,21 @@ export async function closeAgent(session: BoardSession, ref: string, remove: boo
   return { text: agent.ownsWorktree ? `${closed}, with its worktree and branch: nothing in them was unsaved.` : `${closed}.`, json: { kept: null } };
 }
 
-/** `a`, `a and b`, `a, b and c`: names in a sentence. */
-const andList = (names: readonly string[]) => (names.length <= 1 ? (names[0] ?? '') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`);
-
-/** What the orchestrator is told of the user's answer to its remove ask, in words. */
-function removeAskText(result: RemoveAskResult): string {
-  const asked = andList([...result.removed, ...result.kept].map((tile) => tile.name));
-  const kept = result.kept.map((tile) => `${tile.name} stays: ${tile.why}.`).join(' ');
-  if (result.outcome === 'timed-out') return `The user did not answer, so nothing was removed: ask again later, or tell them why.`;
-  if (result.outcome === 'denied') {
-    return result.kept.every((tile) => tile.why === 'the user denied it')
-      ? `The user denied removing ${asked}: nothing was removed.`
-      : `Nothing was removed. ${kept}`;
-  }
-  const removed = result.removed.length === 0 ? 'The user allowed it, but nothing was removed.' : `The user allowed it. Removed ${andList(result.removed.map((tile) => tile.name))}, with their worktrees and branches.`;
-  return kept === '' ? removed : `${removed} ${kept}`;
-}
-
 /**
  * `close <ref…> --remove --ask` and `ask_to_remove`: asks the user, in one Allow/Deny prompt, to remove tiles
- * the orchestrator did not start. Waits for the answer; nothing is removed unless the user presses Allow.
+ * the orchestrator did not start; nothing is removed unless the user presses Allow. Waits for the answer, unless
+ * `detached`; either way the ask outlives the call, and an answer no call waits on comes to the prompt as a message.
  */
-export async function askToRemove(session: BoardSession, agentRefs: readonly string[], timeoutMs?: number): Promise<BoardView> {
+export async function askToRemove(session: BoardSession, agentRefs: readonly string[], timeoutMs?: number, detached = false): Promise<BoardView> {
   const { caller, token, refs } = await orchestratingCaller(session);
   const sessionIds = agentRefs.map((ref) => resolveAgent(refs, ref, caller).sessionId);
-  const result = await session.client.call('orchestrator.askRemove', { token, sessionIds, ...(timeoutMs === undefined ? {} : { timeoutMs }) });
+  const result = await session.client.call('orchestrator.askRemove', {
+    token,
+    sessionIds,
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    ...(detached ? { detached } : {}),
+  });
+  if ('left' in result) return { text: removeAskLeftText(result.left, !detached), json: result };
   return { text: removeAskText(result), json: result };
 }
 
@@ -2335,7 +2406,11 @@ export async function leavePlan(session: BoardSession, plan: PlanSpec & { onBoar
   if ('sentTo' in result) return { text: sentToLead(result, 'plan'), json: result };
   if (!('left' in result)) throw new Error('the daemon waited on a plan to leave');
   const { version } = result.left;
-  const where = plan.onBoard === true ? 'in their Needs you inbox and the Plan tab, and on the board beside your tile' : 'in their Needs you inbox and the Plan tab';
+  const where = result.onBoard
+    ? 'in their Needs you inbox and the Plan tab, and on a plan card beside your tile'
+    : plan.onBoard === true
+      ? 'in their Needs you inbox and the Plan tab (the user keeps docs off the board, so it has no card there)'
+      : 'in their Needs you inbox and the Plan tab';
   return {
     text:
       `Plan v${version} shown to the user, ${where}. Nothing waits here: their decision (approved, changes asked for with their comments, or rejected, ` +
@@ -2361,7 +2436,11 @@ export async function showDoc(session: BoardSession, doc: DocSpec, cwd: string):
     ...(doc.title === undefined ? {} : { title: doc.title }),
     ...(doc.onBoard === true ? { onBoard: true } : {}),
   });
-  const where = doc.onBoard === true ? 'a Document tab in your window and a card beside your tile' : 'a Document tab in your window';
+  const where = shown.onBoard
+    ? 'a Document tab in your window and a card beside your tile'
+    : doc.onBoard === true
+      ? "a Document tab in your window, listed under Made on your sidebar (the user keeps docs off the board, so it has no card there)"
+      : 'a Document tab in your window';
   const editing =
     shown.format === 'markdown'
       ? 'The user may edit it there: their edit is written to the file, and you are told what changed at your prompt.'

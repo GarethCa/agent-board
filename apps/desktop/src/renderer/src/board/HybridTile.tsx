@@ -198,7 +198,7 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
   const about = head === undefined ? tileAbout(agent) : head.about;
   const ticketId = head?.id;
   const nowLine = rolled === undefined ? tileNow(agent, tState, stateNow) : rolled.line;
-  const stateTime = rolled?.dot === true ? tileTime(asker, 'needs-you', askerNow) : tileTime(agent, tState, stateNow);
+  const stateTime = rolled?.dot === true ? tileTime(asker, 'needs-you', shows, askerNow) : tileTime(agent, tState, shows, stateNow);
   const pickedStyle = useCharacterStyle();
   // A row with a button of its own needs the tile's width more than the tile needs its character: its pill still says.
   const rowWithButton = agent.undelivered.length > 0 || agent.trustFolder !== null || agent.untypedPrompt !== null || agent.unsent !== null || agent.hooksSilent;
@@ -685,7 +685,7 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
               data-tile-state={tState}
               data-ask={rolled?.dot === false ? rolled.wordKind : undefined}
               data-warn={pillFace.state === 'rate-limited' || undefined}
-              title={look.statePill || receiving ? undefined : stateTime === undefined ? STATE_LABELS[state] : `${STATE_LABELS[state]} ${sinceLabel(tileSince(agent, tState), stateNow)}`}
+              title={look.statePill || receiving ? undefined : stateTime === undefined ? STATE_LABELS[state] : `${STATE_LABELS[state]} ${sinceLabel(tileSince(agent, tState, shows), stateNow)}`}
             >
               {markCharacter !== 'off' && <TileCharacter harness={agent.harness} {...lookShown(poseOfPill(pillFace.state), agent)} style={markCharacter} height={MARK_CHARACTER_HEIGHT} />}
               {look.statePill || receiving ? (

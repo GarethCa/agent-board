@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { handoffLine } from '../src/handoff-text.ts';
 import { HAND_OFF_HEAD, SEND_TRAILER } from '../src/protocol.ts';
-import { markSender, readSender, sendTrailer } from '../src/sender-marker.ts';
+import { BOARD_LEAD, clockName, markClock, markSender, readSender, sendTrailer } from '../src/sender-marker.ts';
 
 describe('markSender', () => {
   it('heads the message with its kind, sender and ref, on its first line', () => {
@@ -14,7 +14,58 @@ describe('markSender', () => {
   });
 });
 
+describe('markClock', () => {
+  it("heads a clock's prompt with the clock's name and ref, as an agent's mark does", () => {
+    expect(markClock('Master check-in', 'c0ffee12-3456', 'Check the crew')).toBe('⟨clock from Master check-in · item:c0ffee12-3456⟩ Check the crew');
+  });
+
+  it("names a clock by its prompt's first line, cut short, and a clock with no words as a clock", () => {
+    expect(clockName('Master check-in\n\nRead the board')).toBe('Master check-in');
+    expect(clockName('  Look over every open pull request and the queue  ')).toBe('Look over every open pull reque…');
+    expect(clockName('⟨⟩')).toBe('a clock');
+  });
+
+  it('leaves a prompt that is a command unmarked, so it still runs as one', () => {
+    expect(markClock('/compact', 'c0ffee12', '/compact')).toBe('/compact');
+    expect(markClock('!make test', 'c0ffee12', '  !make test')).toBe('  !make test');
+    expect(markClock('Run /compact', 'c0ffee12', 'Run /compact')).toBe('⟨clock from Run /compact · item:c0ffee12⟩ Run /compact');
+  });
+});
+
 describe('readSender', () => {
+  describe('of the messages no agent sent', () => {
+    it("reads a clock's run as the clock's, by its name and ref, not the user's", () => {
+      expect(readSender(markClock('Master check-in', 'c0ffee12', 'Check the crew'))).toEqual({
+        text: 'Check the crew',
+        from: { ref: 'item:c0ffee12', name: 'Master check-in', kind: 'clock' },
+      });
+    });
+
+    it("reads the board's own notice as the board's, without its lead", () => {
+      expect(readSender(`${BOARD_LEAD}The user commented on plan.md (v2):\nLooks good`)).toEqual({
+        text: 'The user commented on plan.md (v2):\nLooks good',
+        from: { ref: 'board', name: 'agent-board', kind: 'board' },
+      });
+    });
+
+    it("keeps as the user's a mark whose kind and ref don't match, and a lead anywhere but the start", () => {
+      expect(readSender('⟨clock from Check-in · agent:944e1234⟩ Hi').from).toBeUndefined();
+      expect(readSender('⟨send from Captain · item:944e1234⟩ Hi').from).toBeUndefined();
+      expect(readSender('See [agent-board] From lead').from).toBeUndefined();
+    });
+  });
+
+  it('tells the user, a clock, an agent send, a hand-off and the board apart', () => {
+    const texts = [
+      'Fix it',
+      markClock('Nightly', 'c1', 'Run the gate'),
+      markSender('send', 'Captain', 'agent:944e1234', 'Ship it'),
+      markSender('hand-off', 'impl', 'agent:ab12cd34', handoffLine('impl', 'plan.md', 'Step one')),
+      `${BOARD_LEAD}A merge into the crew branch waits.`,
+    ];
+    expect(texts.map((text) => readSender(text).from?.kind ?? 'user')).toEqual(['user', 'clock', 'send', 'hand-off', 'board']);
+  });
+
   describe('of a message Claude folded some of', () => {
     const block = (id: string, text: string) => `<pasted_content id="${id}">\n${text}\n</pasted_content id="${id}">`;
     const from = { ref: 'agent:1', name: 'lead', kind: 'send' };

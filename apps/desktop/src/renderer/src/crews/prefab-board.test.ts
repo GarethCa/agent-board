@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { SOURCE_NAMES } from './prefab-flow';
 import { PROMPT_PLACE, type CrewPrefab, type PrefabLine, type PrefabMember } from '@agent-board/daemon/protocol';
 import {
+  sharedEfforts,
   addAgent,
   addGate,
   addInput,
@@ -375,5 +376,13 @@ describe('a prefab as its own board', () => {
     const reviewer = agentPrefab({ ...agent, role: 'reviewer', roleName: null }, { name: 'Second look', icon: 'crew', template: null });
     expect(boardPrefab(boardDraft(reviewer)).problems).toEqual([]);
     expect(boardPrefab(boardDraft(reviewer)).prefab.members).toEqual(reviewer.members);
+  });
+});
+
+describe('the reasoning a selection of agents is offered', () => {
+  it("is their harness's own, and with Claude and Codex together never max", () => {
+    expect(sharedEfforts([{ harness: 'claude' }, { harness: 'claude' }])).toContain('max');
+    expect(sharedEfforts([{ harness: 'codex' }])).not.toContain('max');
+    expect(sharedEfforts([{ harness: 'claude' }, { harness: 'codex' }])).toEqual(['low', 'medium', 'high', 'xhigh']);
   });
 });

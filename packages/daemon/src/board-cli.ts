@@ -59,6 +59,9 @@ import {
   unpinEntry,
   flagLine,
   flagOwn,
+  alertLine,
+  alertUser,
+  restOwn,
   openOwnPullRequest,
   showDoc,
   leavePlan,
@@ -78,7 +81,7 @@ import { DaemonRpcError } from './client.ts';
 import { documentTitle } from './document-names.ts';
 import { addSchedule, checkOwnSchedule, checkSchedule, checkTemplate, listSchedules, listTemplates, removeSchedule, removeTemplate, saveTemplate, setOwnSchedule } from './clock-ops.ts';
 import { listSteps, newSteps, readStepsCard, stepsUpdate, stepWords, updateSteps } from './steps-ops.ts';
-import { listMemories, listQueues, memoryHistory, newMemory, newQueue, queueHistory, memoryUpdate, queueUpdate, readMemory, readQueue, updateMemory, updateQueue, type MemoryUpdateInput, type QueueUpdateInput } from './memory-ops.ts';
+import { listQueues, newQueue, queueHistory, queueUpdate, readQueue, updateQueue, type QueueUpdateInput } from './queue-ops.ts';
 import { changeTodo, readTodos, remind } from './todo-ops.ts';
 import {
   addDiagram,
@@ -106,6 +109,7 @@ import {
   removeConnector,
   removeGroup,
   removeNote,
+  deleteItem,
   passNote,
   removeShape,
   sizeOf,
@@ -129,6 +133,9 @@ import {
   MAX_ASK_WAIT_MS,
   MAX_ORCHESTRATOR_WAIT_MS,
   MAX_FLAG_LENGTH,
+  MAX_ALERT_LENGTH,
+  ALERT_INTERVAL_MS,
+  MAX_REST_LENGTH,
   MAX_FIGURE_VALUE,
   MAX_PAGE_BLOCKS,
   MAX_PAGE_FIGURES,
@@ -192,7 +199,7 @@ REFS
 
 COMMANDS
   identify              Who and where you are: your tile, its zone, your state and status.
-  tree                  Every zone with its tiles and items, then what is loose on the board.
+  tree                  Your zone with its tiles and items (--zone all: the whole board).
   zones                 Every zone.
   agents (or ls)        Every agent: state, status (or task) and zone.
   shells                Every shell tile.
@@ -206,6 +213,9 @@ COMMANDS
   needs-you [--] <reason> [--via <ref>] | --clear
                         Ask for a look: blocked, ready for review, or a decision needed. A
                         turn ending tells no one. See \`needs-you --help\`.
+  alert [--] <line> [--link <url>]
+                        Tell the user something is done: a banner and their inbox's Done
+                        list, asking nothing. See \`alert --help\`.
   open-pr               Open a draft pull request of your branch (agents only).
   doc <path> [--title <text>] [--board] [--plan]
                         Show the user a Markdown or HTML file of yours as a document: a Doc
@@ -216,10 +226,6 @@ COMMANDS
                         user to step through, answered together on Send and typed at your
                         prompt, and to-dos ticked by whoever each names. \`steps ls|read|done|
                         wait|add|answer|close\` work with cards. See \`steps --help\`.
-  memory ls|read|add|edit|rm|history|restore|new ...
-                        Shared context: keyed values, notes and whole files that the agents
-                        of its zone read and write, and people on the board. A zone shares
-                        one memory: add to it. See \`memory --help\`.
   remind "<text>"... | remind ls [--mine] | remind done|undo|rm <n>
                         Add a to-do for the user to your to-do list, under your tile (agents
                         only): something only they can do. A tick tells you nothing; \`remind
@@ -345,6 +351,10 @@ ORCHESTRATING
   note add [--] <text> [--near <ref> [--side <s>]] [--color <c>] [--kind sticky|text]
                         Put a note on the board: --near an agent, in its cluster.
                         \`note edit|remove\` change yours.
+  delete <item ref> [--force] [--ask [--timeout <duration>]]
+                        Delete a board item you made (a queue, to-do list, steps
+                        card, note…) as one step the user can undo; --ask asks the user
+                        for one you didn't make, --force deletes one with open work.
 
   Drawing a diagram, only when asked for one:
   shape add <kind> [--] <text> [--attribute <line>]... [--method <line>]... [--near <ref>]
@@ -419,11 +429,14 @@ Outside an agent-board session it says so: you can read the board, but have no t
 ${READ_FLAGS}`,
   },
   tree: {
-    usage: 'agent-board tree [--json]',
-    text: `Every zone, with the tiles and items in it, then the tiles and items loose on the board. A zone
-line says what it is bound to (repo, folder, or group); an agent line its state in [brackets]
-and its status, or its task until it sets one. ← marks you.
+    usage: 'agent-board tree [--zone <ref>|all] [--json]',
+    text: `Your zone, with the tiles and items in it; its hibernated, finished and ended agents are folded
+into one count line. In no zone (or outside a session), or with --zone all: every zone, nothing
+folded, then the tiles and items loose on the board. A zone line says what it is bound to (repo,
+folder, or group); an agent line its state in [brackets] and its status, or its task until it
+sets one. ← marks you.
 
+  --zone <ref>|all   That zone instead of yours, or all for the whole board.
 ${READ_FLAGS}`,
   },
   zones: {
@@ -471,8 +484,8 @@ commit. Marking it ready, running the gate and merging stay the user's.
   doc: {
     usage: 'agent-board doc <path> [--title <text>] [--board] [--plan]',
     text: `Shows the user a longer Markdown (.md) or HTML (.html) file of yours as a document, nicer to read
-than your terminal: a Document tab in your window, and with --board a card beside your tile too. Nothing
-waits. Showing the same file again shows the same document.
+than your terminal: a Document tab in your window, listed under Made on your sidebar, and with --board
+a card beside your tile too if the user puts docs on the board (off by default). Nothing waits. Showing the same file again shows the same document.
 
 It stays live: write the file again and the user sees the new version. They may edit a Markdown
 document there; their edit is written to the file, and you are told what changed, typed at your
@@ -481,7 +494,8 @@ may send you comments on it.
 
 With --plan the file is a plan for the user to approve, send back with changes, or reject (it may
 be edited first: Markdown only). It waits in their Needs you inbox and the Plan tab, kept as v1, v2…
-as you present each revision, and with --board a plan card goes beside your tile. The command
+as you present each revision, and with --board a plan card goes beside your tile if the user puts
+docs on the board. The command
 returns at once: a shell command can't wait the hour the user may take. Their decision, with their
 comments and any edits of theirs, is typed at your prompt once your turn is over, as a document
 edit is. It waits as long as the user takes, with no timeout. End your turn and wait for it, and
@@ -490,7 +504,7 @@ revised plan and run it again: the new version takes the old one's place. To hol
 decision instead, use the MCP tool \`show_doc\` with plan.
 
   --title <text>   What it is, in a line; else its first heading (or page title).
-  --board          Also put it on the board, beside your tile.
+  --board          Also put it on the board, beside your tile, if the user puts docs there.
   --plan           It is your plan to decide on, not a document: returns at once, the decision
                    arrives at your prompt later.
   --json           Print the document as JSON.`,
@@ -659,6 +673,19 @@ TONES
   --clear               Take your page off.
   --json                Print the page as JSON.`,
   },
+  alert: {
+    usage: 'agent-board alert [--link <url>] [--] <line>',
+    text: `Tells the user something is done: a banner (unless they turned those off) and a row in their
+inbox's Done list, apart from Needs you. It asks nothing of them, and counts toward no badge.
+<line> is one line, at most ${MAX_ALERT_LENGTH} characters: "PR #12 is merged".
+
+Use it when a task the user asked for is done, or for something they would want to know now;
+not for routine progress. It is your choice: the board never alerts for you. One banner every
+${ALERT_INTERVAL_MS / 60_000} minutes: alerts sooner replace your Done row's line, without a banner. Opening your
+session reads it.
+
+  --link <url>     An https link to go with it, such as the pull request.`,
+  },
   'needs-you': {
     usage: "agent-board needs-you [--via <ref>] [--] <reason> | agent-board needs-you --clear",
     text: `Asks for a look, without a question: nothing waits, and your turn goes on. A turn ending tells
@@ -679,6 +706,21 @@ For a question with answers to pick from, use the MCP tool \`ask\`, which waits 
 
   --via <ref>      Orchestrators: the crew member whose flag you pass on.
   --clear          Drop your flag: you no longer need a look.
+  --json           Print the agent as JSON.`,
+  },
+  rest: {
+    usage: 'agent-board rest [--] <line>',
+    text: `Says you are done for now, waiting on someone else for longer than a few minutes with nothing
+to do. <line> is what you wait for, at most ${MAX_REST_LENGTH} characters: "waiting for the Playwright GO".
+
+Your tile says "Resting" with your line, and as your turn ends the board pauses you, as
+\`agent-board pause\` does: your session ends, and your tile, worktree, branch and conversation stay. A
+message (\`agent-board send\`), a hand-off, your clock or the user's Wake wakes you.
+
+Refused, with nothing set, while the user's answer is pending (a permission prompt, a question,
+a plan or your needs-you flag), while a command you started in the background runs, or while a
+message waits at your prompt. With resting off in Settings, it only sets your tile line.
+
   --json           Print the agent as JSON.`,
   },
   mcp: {
@@ -1179,10 +1221,9 @@ an agent, only when you started each helper yourself.
              started still running, stays unless they tick it. Waits for the answer and says
              what was removed and what stayed, and why.
   --timeout  With --ask: how long to wait, such as 30m (30 minutes by default, 4h at most).
-             No answer by then removes nothing. Nor does the command ending first, or your
-             next turn beginning: the ask is withdrawn. So don't run it in the background,
-             where a message to you starts a new turn; if your shell gives up on a long
-             command, use the ask_to_remove tool, which waits as long as the ask does.
+             No answer by then removes nothing. The ask stays up if the command ends first,
+             or your next turn begins: then the user's answer comes to your prompt as a
+             message. The ask_to_remove tool asks the same way without waiting.
   --json     Print what stayed as JSON ({"kept": null} if nothing did), or with --ask, what was
              removed and kept.`,
   },
@@ -1366,8 +1407,8 @@ It places the zone's items too, each kind as the zone says (--place changes it):
   stay      left where it is, in the way of the rest.
 
 The kinds, and where each goes until a zone says otherwise: notes (agent notes) and files
-(documents, plans, images, link and issue cards) cluster; clocks, todos, queues, memory and
-steps top; stickies, shapes and text stay. An item the user dragged or turned stays where it
+(documents, plans, images, link and issue cards) cluster; clocks, todos, queues and steps
+top; stickies, shapes and text stay. An item the user dragged or turned stays where it
 is unless --all; one in the zone's free area (zone layout lanes), or on a stage board, always
 does. Sidebar and top lie in the area arrange lays out, never in the free area.
 --place notes=sidebar,clocks=stay sets kinds for the zone, kept for its next arrange, by
@@ -1472,6 +1513,25 @@ went. Choose shelves when its work is easier to follow by status, the rest when 
   --out <file>     zone screenshot: where to write the PNG (by default a temp file per zone and style).
   --style <s>      zone screenshot: board (as the app draws it) or lofi (a plain drawing).
   --json           Print the zone (or map, or screenshot's details) as JSON.`,
+  },
+  delete: {
+    usage: 'agent-board delete <item ref> [--force] [--ask [--timeout <duration>]] [--json]',
+    text: `Deletes a board item: a queue, to-do list, steps card, note, shape or any other card
+but a running crew's, wherever it is on the board. It goes as the user's own Delete takes it,
+with its connectors, as one step an open board can undo (not on a ticket's board). As an agent,
+delete one you, or an agent you started, made; in a shell, or outside agent-board, any.
+
+A queue with open jobs, a to-do list with open lines, or a steps card with steps still open
+stays, and the command says how many: finish or remove them first, or add --force.
+
+  --force    Delete it even with open jobs, lines or steps.
+  --ask      As an agent: ask the user to delete an item you did not make (theirs, or another
+             agent's). They get an Allow/Deny prompt, and nothing goes unless they press
+             Allow. Waits for the answer and says whether it was deleted.
+  --timeout  With --ask: how long to wait, such as 30m (30 minutes by default, 4h at most).
+             No answer by then deletes nothing. Nor does the command ending first, or your
+             next turn beginning: the ask is withdrawn.
+  --json     Print what happened as JSON: {"outcome", "id", "name", "why"}.`,
   },
   note: {
     usage:
@@ -1653,51 +1713,6 @@ instead, and is told. Naming an agent on a to-do sends it nothing: it finds its 
 
   --json                    Print the card as JSON.`,
   },
-  memory: {
-    usage:
-      'agent-board memory ls | memory read <memory> [<entry>] [--search <text>] | memory add <memory> [--key <key>|--no-key] [--file <path>|--doc <title>] [--] <text>... | ' +
-      'memory edit <memory> <entry> [--key <key>|--no-key] [--pin|--unpin] [--] [<text>...] | memory rm <memory> <entry> | ' +
-      'memory history <memory> <entry> | memory restore <memory> <entry> <version> | memory confirm <memory> <entry> | memory new [--second] <title>...',
-    text: `A memory is shared context on the board: what agents and people want kept, read and changed
-by those it is for. In a zone, it is for that zone's agents; loose on the board, every
-agent's; set to No agents, only the user's. A zone shares one memory: read it at the start of
-work, and add what the next agent needs to it, not to a new memory for each ticket.
-
-It holds facts and documents:
-  key: value       A fact under a key (one word). Setting a key again replaces its value.
-  a note           A fact with no key, kept as written.
-  a document       Text kept whole (up to 1 MB) under its title: listed by its title and size,
-                   read only when named.
-
-  memory ls                     The memories you can read.
-  memory read <memory>          Its facts in full, pinned first, then newest first, then its
-                                documents by title; --search <text> only those holding it. With
-                                <entry> (a key, a document's title, or its #id), that one in full.
-  memory add <memory> <text>    Remember something: "key: value", or a note. --key <key> names it
-                                (spaces and all), --no-key keeps "a: b" as a note. --doc <title>
-                                keeps the text as a document; --file <path> keeps that file as
-                                one, under its name (or --key).
-  memory edit <memory> <entry> [<text>]
-                                Change its text, key (--key, or --no-key), or pin (--pin keeps
-                                it in the top rows, --unpin).
-  memory rm <memory> <entry>    Remove it.
-  memory history <memory> <entry>
-                                Its versions, newest first: every change anyone made, removes too.
-  memory restore <memory> <entry> <version>
-                                Put a version back, undoing the changes after it.
-  memory confirm <memory> <entry>
-                                Say it is still true: it no longer reads as stale.
-  memory new <title>            Put a new memory beside your tile, when your zone has none. With
-                                one there, it is refused, naming it to add to; --second makes
-                                another anyway, for a different subject the whole zone needs.
-
-<memory> is its ref (item:3f2a) or its title. An entry left 30 days reads as stale. Reading a fact,
-or a document by name, counts you among its readers. Anyone it is for
-may change any entry, the user's too: history takes a change back. At most 500 entries and 8 MB a
-memory, and 4,000 characters a value (keep longer text as a document).
-
-  --json                        Print it as JSON.`,
-  },
   remind: {
     usage: 'agent-board remind [add] [--] <text>... | remind ls [--mine] | remind done <n> | remind undo <n> | remind rm <n>',
     text: `A to-do list holds reminders for the user: things only they can do, such as sending a pull
@@ -1725,11 +1740,11 @@ together, use a steps card (\`steps --help\`).
   },
   queue: {
     usage:
-      'agent-board queue ls | queue read <queue> | queue add <queue> [--kind <kind>] [--front] [--link <url>] [--body <text>] [--file <path>|-] [--] <line>... | ' +
+      'agent-board queue ls | queue read <queue> [<job>|--done] | queue add <queue> [--kind <kind>] [--front] [--link <url>] [--body <text>] [--file <path>|-] [--] <line>... | ' +
       'queue take <queue> [<job>] | queue drop <queue> <job> | queue done <queue> <job> [--result <text>] | queue edit <queue> <job> [--link <url>] [--] [<text>...] | ' +
       'queue move <queue> <job> <before>|top|last | queue later <queue> <job> | queue up <queue> <job> | queue drain <queue> on|off [--most 1-3] | queue rm <queue> <job> | queue history <queue> <job> | queue restore <queue> <job> <version> | queue new [--for-user] <title>...',
     text: `A queue holds jobs in order, for agents to take one at a time, and info to read. It is for
-the agents a memory is: where it sits. What goes in and comes out is for them and the user to
+the agents where it sits: its zone's, or every agent's when loose. What goes in and comes out is for them and the user to
 decide. A queue for the user (--for-user) holds what is ready for them to look at: agents add to
 it, and only the user takes from it.
 
@@ -1741,7 +1756,9 @@ hands takes its rows' kinds with it: task and backlog swap, info and read swap, 
 become a request or backlog.
 
   queue ls                      The queues you can read.
-  queue read <queue>            Its rows in order (the next job first), then those done.
+  queue read <queue> [<job>]    Its open rows in order (the next job first), each its headline,
+                                and how many are done. With a job, that one whole; with
+                                --done, the done jobs and their results, newest first.
   queue add <queue> <line>...   Queue a job a line, at the end (--front: at the front, in the
                                 order given). " -> <link>" at a line's end is its link (or
                                 --link for one). --kind sets their kind (above). With
@@ -1777,7 +1794,7 @@ holds is its, or the user's, to change. At most 200 open jobs a queue.
   schedule: {
     usage:
       "agent-board schedule add '<cron>' (--to <ref> | --fresh [--zone <ref>] [--harness claude|codex] [--model <m>] [--role <r>] [--keep] " +
-      '[--result history|note|handoff [--handoff-to <ref>]] | --self [--after hibernate|idle]) [--file <path> | [--] <prompt>] | schedule list | schedule remove <ref> | ' +
+      '[--result history|note|handoff [--handoff-to <ref>]] | --self [--after hibernate|idle]) [--file <path> | [--] <prompt>] | schedule list [--full] | schedule remove <ref> | ' +
       'schedule set [--self | <ref>] --after hibernate|close|idle --why "…" | schedule stop [--self | <ref>] --why "…" | ' +
       "schedule add --template <name> [<cron> [<prompt>]] [--to <ref> | --self | --fresh …] | schedule template save <name> (--from <ref> | '<cron>' [--after <mode>] [--harness, --model, --role, --keep, --result] [--] <prompt>) | " +
       'schedule template list | schedule template remove <name>',
@@ -1804,7 +1821,7 @@ is still going is skipped. --result note also leaves the result as a note where 
 --result handoff hands it to --handoff-to's agent.
 
 \`schedule list\` prints each clock's ref, its schedule, what it does, when it next runs and how
-its last run went: for a run of skips, how many, since when and why. \`schedule remove\` removes only a clock you, or an agent you started, made;
+its last run went: for a run of skips, how many, since when and why. Each prompt is cut to 80 characters; --full prints all of it. \`schedule remove\` removes only a clock you, or an agent you started, made;
 in a shell, or outside agent-board, any.
 
 A template is a clock saved under a name, for any zone, to start new ones from: its schedule,
@@ -2033,6 +2050,7 @@ const OPTIONS = {
   done: { type: 'boolean' },
   remove: { type: 'boolean' },
   ask: { type: 'boolean' },
+  force: { type: 'boolean' },
   fresh: { type: 'boolean' },
   of: { type: 'string' },
   limit: { type: 'string' },
@@ -2068,6 +2086,7 @@ const OPTIONS = {
   clear: { type: 'boolean' },
   submit: { type: 'boolean' },
   keep: { type: 'boolean' },
+  full: { type: 'boolean' },
   result: { type: 'string' },
   'handoff-to': { type: 'string' },
   self: { type: 'boolean' },
@@ -2088,13 +2107,8 @@ const OPTIONS = {
   mine: { type: 'boolean' },
   undo: { type: 'boolean' },
   send: { type: 'boolean' },
-  key: { type: 'string' },
-  'no-key': { type: 'boolean' },
-  doc: { type: 'string' },
-  search: { type: 'string' },
   pin: { type: 'boolean' },
   unpin: { type: 'boolean' },
-  second: { type: 'boolean' },
   link: { type: 'string' },
   front: { type: 'boolean' },
   'for-user': { type: 'boolean' },
@@ -2145,9 +2159,12 @@ export const COMMAND_OPTIONS: Record<string, readonly Option[]> = {
   unpin: ['label', 'for'],
   page: ['file', 'name', 'icon', 'clear'],
   'needs-you': ['via', 'clear'],
+  alert: ['link'],
+  rest: [],
   doc: ['title', 'board', 'plan'],
   new: ['zone', 'name', 'harness', 'model', 'effort', 'role', 'no-template', 'repo', 'branch', 'base', 'edges', 'issue', 'file', 'prefab', 'chat', 'description', 'env', 'settings'],
   roles: ['file', 'zone'],
+  tree: ['zone'],
   prefab: ['out', 'add', 'replace', 'assumed'],
   crew: [],
   send: ['file', 'submit', 'clear'],
@@ -2155,6 +2172,7 @@ export const COMMAND_OPTIONS: Record<string, readonly Option[]> = {
   watch: ['crew', 'only', 'since', 'count', 'timeout'],
   restart: ['fresh', 'file', 'env', 'settings'],
   close: ['remove', 'ask', 'timeout'],
+  delete: ['force', 'ask', 'timeout'],
   orchestrate: [],
   role: ['clear', 'send-template'],
   activity: ['of', 'limit'],
@@ -2168,11 +2186,10 @@ export const COMMAND_OPTIONS: Record<string, readonly Option[]> = {
   connect: ['relation', 'style', 'label', 'from-label', 'to-label'],
   connector: ['relation', 'style', 'label', 'from-label', 'to-label'],
   diagram: ['file', 'to', 'at', 'near', 'side'],
-  schedule: ['to', 'fresh', 'self', 'after', 'why', 'template', 'from', 'zone', 'harness', 'model', 'role', 'keep', 'result', 'handoff-to', 'file'],
+  schedule: ['to', 'fresh', 'self', 'after', 'why', 'template', 'from', 'zone', 'harness', 'model', 'role', 'keep', 'result', 'handoff-to', 'file', 'full'],
   steps: ['title', 'file', 'mine', 'undo', 'send'],
-  memory: ['key', 'no-key', 'file', 'doc', 'search', 'pin', 'unpin', 'second'],
   remind: ['mine'],
-  queue: ['kind', 'front', 'link', 'file', 'for-user', 'most', 'body', 'result'],
+  queue: ['kind', 'front', 'link', 'file', 'for-user', 'most', 'body', 'result', 'done'],
   watches: ['every'],
   rename: ['description'],
 };
@@ -2264,7 +2281,7 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
       return read((refs, session) => identifyView(refs, session.caller, session.socketPath));
     case 'tree':
       noPositionals();
-      return async (session) => print(treeView(new BoardRefs(await readCards(session)), session.caller));
+      return async (session) => print(treeView(new BoardRefs(await readCards(session)), session.caller, { zone: string('zone') }));
     case 'zones':
       return read((refs) => zonesView(refs));
     case 'agents':
@@ -2359,6 +2376,22 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
       if (string('file') === undefined) throw new UsageError('give the page with --file <path|->, or --clear');
       const page = pageOfJson(string('file') === '-' ? readFileSync(0, 'utf8') : text(0), string('name'), string('icon'));
       return async (session) => print(await setOwnPage(session, page, process.cwd()));
+    }
+    case 'alert': {
+      const line = positionals.join(' ');
+      if (line.trim() === '') throw new UsageError('give a line: what is done');
+      return async (session) => {
+        const agent = await alertUser(session, line, string('link'));
+        return values.json ? JSON.stringify(agent, null, 2) : alertLine(agent);
+      };
+    }
+    case 'rest': {
+      const line = positionals.join(' ');
+      if (line.trim() === '') throw new UsageError('say what you wait for: agent-board rest "waiting for the review of PR #12"');
+      return async (session) => {
+        const rested = await restOwn(session, line);
+        return values.json ? JSON.stringify(rested.json, null, 2) : rested.text;
+      };
     }
     case 'needs-you': {
       const reason = positionals.join(' ');
@@ -2562,6 +2595,13 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
       }
       const ref = oneRef(positionals.length > 1 ? 'close takes one agent ref; to ask the user to remove several, add --remove --ask' : undefined);
       return async (session) => print(await closeAgent(session, ref, values.remove === true));
+    }
+    case 'delete': {
+      const ref = oneRef('give one board item ref');
+      if (values.timeout !== undefined && values.ask !== true) throw new UsageError('--timeout is for --ask');
+      const seconds = duration('timeout', MAX_ASK_WAIT_MS / 1000);
+      return async (session) =>
+        print(await deleteItem(session, ref, { force: values.force === true, ask: values.ask === true, ...(seconds === undefined ? {} : { timeoutMs: seconds * 1000 }) }));
     }
     case 'orchestrate': {
       if (positionals[0] === 'handover') {
@@ -2809,6 +2849,7 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
     case 'schedule': {
       const [sub, ...rest] = positionals;
       if (values.from !== undefined && !(sub === 'template' && rest[0] === 'save')) throw new UsageError('--from is only for `schedule template save`');
+      if (values.full !== undefined && sub !== 'list') throw new UsageError('--full is only for `schedule list`');
       if (sub === 'template') {
         const [action, name, ...words] = rest;
         const stray = (['to', 'fresh', 'self', 'why', 'template', 'zone', 'handoff-to'] as const).find((option) => values[option] !== undefined);
@@ -2881,7 +2922,7 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
       if (added !== undefined) throw new UsageError(`--${added} is only for \`schedule add\``);
       if (sub === 'list') {
         if (rest.length > 0) throw new UsageError(`unexpected ${rest.join(' ')}`);
-        return async (session) => print(await listSchedules(session));
+        return async (session) => print(await listSchedules(session, values.full === true));
       }
       if (sub === 'remove') {
         if (rest.length !== 1) throw new UsageError('give one schedule ref');
@@ -2949,83 +2990,6 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
           throw new UsageError('the steps commands are `steps new`, `ls`, `read`, `done`, `wait`, `add`, `answer` and `close`');
       }
     }
-    case 'memory': {
-      const [sub, ref, ...after] = positionals;
-      const allowed: Record<string, readonly Option[]> = { read: ['search'], add: ['key', 'no-key', 'file', 'doc'], edit: ['key', 'no-key', 'pin', 'unpin'], new: ['second'] };
-      for (const option of ['key', 'no-key', 'file', 'doc', 'search', 'pin', 'unpin', 'second'] as const) {
-        if (values[option] !== undefined && !(allowed[sub ?? ''] ?? []).includes(option)) throw new UsageError(`--${option} is not for \`memory ${sub ?? ''}\``);
-      }
-      if (values.pin === true && values.unpin === true) throw new UsageError('give --pin or --unpin, not both');
-      const needRef = () => {
-        if (ref === undefined) throw new UsageError('give the memory: its ref or title (`agent-board memory ls` lists them)');
-        return ref;
-      };
-      const needEntry = () => {
-        if (after[0] === undefined) throw new UsageError('give the entry: its key, or its #id');
-        return after[0];
-      };
-      const cwd = process.cwd();
-      /** The update for the memory `ref` names, read by the parser `memory_update` uses too. */
-      const change = (input: MemoryUpdateInput) => {
-        const memory = needRef();
-        const update = asUsage(() => memoryUpdate(input));
-        return async (session: BoardSession) => print(await updateMemory(session, memory, update, cwd));
-      };
-      const key = string('key') === undefined ? {} : { key: string('key') };
-      switch (sub) {
-        case 'ls':
-          if (positionals.length > 1) throw new UsageError(`unexpected ${positionals.slice(1).join(' ')}`);
-          return async (session) => print(await listMemories(session));
-        case 'read': {
-          if (after.length > 1) throw new UsageError('give the memory, and at most one entry');
-          const memory = needRef();
-          return async (session) => print(await readMemory(session, memory, { ...(after[0] === undefined ? {} : { entry: after[0] }), ...(string('search') === undefined ? {} : { search: string('search') }) }));
-        }
-        case 'add': {
-          const path = string('file');
-          const document = string('doc');
-          const body = after.join(' ');
-          needRef();
-          if (path === undefined && body.trim() === '') throw new UsageError(document === undefined ? 'give the text to remember, after the memory, or --file' : 'give the document its text, after the memory');
-          return change({
-            action: 'add',
-            ...(path === undefined ? { text: body } : { path, ...(body.trim() === '' ? {} : { text: body }) }),
-            ...(document === undefined ? {} : { document }),
-            ...key,
-            note: values['no-key'] === true,
-          });
-        }
-        case 'edit': {
-          needRef();
-          const entry = needEntry();
-          const body = after.slice(1).join(' ');
-          const pinned = values.pin === true ? true : values.unpin === true ? false : undefined;
-          return change({ action: 'edit', entry, ...(body === '' ? {} : { text: body }), ...key, note: values['no-key'] === true, ...(pinned === undefined ? {} : { pinned }) });
-        }
-        case 'rm':
-        case 'remove':
-          if (after.length !== 1) throw new UsageError('give the memory and one entry');
-          return change({ action: 'remove', entry: needEntry() });
-        case 'history': {
-          if (after.length !== 1) throw new UsageError('give the memory and one entry');
-          const memory = needRef();
-          return async (session) => print(await memoryHistory(session, memory, needEntry()));
-        }
-        case 'restore':
-          if (after.length !== 2) throw new UsageError('give the memory, the entry and the version to put back');
-          return change({ action: 'restore', entry: needEntry(), version: after[1] });
-        case 'confirm':
-          if (after.length !== 1) throw new UsageError('give the memory and one entry');
-          return change({ action: 'confirm', entry: needEntry() });
-        case 'new': {
-          const title = positionals.slice(1).join(' ');
-          if (title.trim() === '') throw new UsageError('give the memory a title');
-          return async (session) => print(await newMemory(session, title, values.second === true));
-        }
-        default:
-          throw new UsageError('the memory commands are `memory ls`, `read`, `add`, `edit`, `rm`, `history`, `restore`, `confirm` and `new`');
-      }
-    }
     case 'remind': {
       const [sub, ...rest] = positionals;
       if (values.mine !== undefined && sub !== 'ls' && sub !== 'list') throw new UsageError('--mine is only for `remind ls`');
@@ -3053,8 +3017,8 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
     }
     case 'queue': {
       const [sub, ref, ...after] = positionals;
-      const allowed: Record<string, readonly Option[]> = { add: ['kind', 'front', 'link', 'file', 'body'], done: ['result'], edit: ['link'], new: ['for-user'], drain: ['most'] };
-      for (const option of ['kind', 'front', 'link', 'file', 'for-user', 'most', 'body', 'result'] as const) {
+      const allowed: Record<string, readonly Option[]> = { read: ['done'], add: ['kind', 'front', 'link', 'file', 'body'], done: ['result'], edit: ['link'], new: ['for-user'], drain: ['most'] };
+      for (const option of ['kind', 'front', 'link', 'file', 'for-user', 'most', 'body', 'result', 'done'] as const) {
         if (values[option] !== undefined && !(allowed[sub ?? ''] ?? []).includes(option)) throw new UsageError(`--${option} is not for \`queue ${sub ?? ''}\``);
       }
       const needRef = () => {
@@ -3076,9 +3040,11 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
           if (positionals.length > 1) throw new UsageError(`unexpected ${positionals.slice(1).join(' ')}`);
           return async (session) => print(await listQueues(session));
         case 'read': {
-          if (after.length > 0) throw new UsageError('give one queue');
+          if (after.length > 1) throw new UsageError('give one queue, and at most one job');
+          if (after.length > 0 && values.done === true) throw new UsageError('give a job or --done, not both');
           const queue = needRef();
-          return async (session) => print(await readQueue(session, queue));
+          const of = values.done === true ? { done: true as const } : after[0] === undefined ? undefined : { job: after[0] };
+          return async (session) => print(await readQueue(session, queue, of));
         }
         case 'add': {
           const headed = string('body');

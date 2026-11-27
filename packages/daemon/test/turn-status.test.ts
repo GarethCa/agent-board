@@ -40,6 +40,9 @@ describe('isWorking', () => {
   const live = { endedAt: null, ask: null, removeAsk: null, plan: null };
   it('is true mid-turn and for a call waiting on the user, false at the prompt or once ended', () => {
     expect(isWorking({ ...live, state: 'running' })).toBe(true);
+    // Starting, its first turn is about to run: at work, as the board's one list of working states says.
+    expect(isWorking({ ...live, state: 'starting' })).toBe(true);
+    expect(isWorking({ ...live, state: 'rate-limited' })).toBe(true);
     expect(isWorking({ ...live, state: 'waiting', ask: {} as never })).toBe(true);
     expect(isWorking({ ...live, state: 'waiting', removeAsk: {} as never })).toBe(true);
     expect(isWorking({ ...live, state: 'waiting' })).toBe(false);

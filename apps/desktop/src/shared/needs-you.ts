@@ -1,4 +1,4 @@
-import { needsYouKind, needsYouNow, questionPrompt, type Agent, type AgentAsk, type AgentStepsWait, type NeedsYouKind, type NeedsYouShows, type PermissionPrompt, type PromptQuestion } from '@agent-board/daemon/protocol';
+import { asksToRemove, needsYouKind, needsYouNow, needsYouReading, waitsOnUser, type Agent, type AgentAsk, type AgentStepsWait, type NeedsYouKind, type NeedsYouShows, type PermissionPrompt, type PromptQuestion } from '@agent-board/daemon/protocol';
 import { isOpenPullRequest } from '@agent-board/daemon/gate-rules';
 import { ago } from '@agent-board/daemon/text-words';
 import { planTitle } from './claude-plan';
@@ -14,25 +14,6 @@ export interface NeedsYouEntry {
   since: string;
 }
 
-/** When the agent began asking for what puts it in the inbox. */
-function askedSince(agent: Agent, kind: NeedsYouKind): string {
-  switch (kind) {
-    case 'permission':
-      return agent.permissions.map((prompt) => prompt.requestedAt).sort()[0] ?? agent.finishedAt ?? agent.createdAt;
-    case 'asks':
-      return agent.ask?.askedAt ?? agent.removeAsk?.askedAt ?? questionPrompt(agent)?.requestedAt ?? agent.createdAt;
-    case 'plan':
-      return agent.plan!.presentedAt;
-    case 'steps':
-    case 'todo':
-      return agent.stepsWait!.since;
-    case 'flagged':
-      return agent.flag!.at;
-    case 'turn':
-      return agent.finishedAt ?? agent.createdAt;
-  }
-}
-
 /**
  * The needs-you inbox, oldest first (`needsYouKind`): what agents asked for (permission prompts, questions, plans and
  * flags to the user) and, with `turns`, every live agent waiting at its prompt too.
@@ -40,8 +21,8 @@ function askedSince(agent: Agent, kind: NeedsYouKind): string {
 export function needsYouEntries(agents: readonly Agent[], shows: NeedsYouShows): NeedsYouEntry[] {
   const entries: NeedsYouEntry[] = [];
   for (const agent of agents) {
-    const kind = needsYouKind(agent, shows);
-    if (kind !== null) entries.push({ agent, kind, since: askedSince(agent, kind) });
+    const reading = needsYouReading(agent, shows);
+    if (reading !== null) entries.push({ agent, kind: reading.kind, since: reading.since });
   }
   return entries.sort((a, b) => a.since.localeCompare(b.since));
 }
@@ -49,8 +30,8 @@ export function needsYouEntries(agents: readonly Agent[], shows: NeedsYouShows):
 /** Whether `entry` is something its agent asks of the user: anything but an agent that only ended its turn. */
 export const isAsk = (entry: NeedsYouEntry): boolean => entry.kind !== 'turn';
 
-/** Why a row is in the Simplified design's list: a needs-you request, changes ready to accept, or a problem. */
-export type NeedsYouRowKind = NeedsYouKind | 'accept' | 'problem';
+/** Why a row is in the Simplified design's list: a needs-you request, changes ready to accept, a problem, or an alert that something is done. */
+export type NeedsYouRowKind = NeedsYouKind | 'accept' | 'problem' | 'done';
 
 /** A row of the Simplified design's list: one agent, why it is there, and since when. */
 export interface NeedsYouRow {
@@ -61,7 +42,7 @@ export interface NeedsYouRow {
 
 /** One section of the Simplified design's list, with its rows oldest first. */
 export interface NeedsYouSection {
-  id: 'continues' | 'reaching-out' | 'accept' | 'problems';
+  id: 'continues' | 'reaching-out' | 'accept' | 'problems' | 'done';
   title: string;
   rows: NeedsYouRow[];
 }
@@ -72,6 +53,7 @@ const SECTIONS: readonly (Omit<NeedsYouSection, 'rows'> & { kinds: readonly Need
   { id: 'reaching-out', title: 'Reaching out to you', kinds: ['asks', 'steps', 'flagged', 'turn'] },
   { id: 'accept', title: 'Ready for you to accept', kinds: ['accept'] },
   { id: 'problems', title: 'Problems', kinds: ['problem'] },
+  { id: 'done', title: 'Done', kinds: ['done'] },
 ];
 
 /** A crashed or stuck agent: one that failed, one a restart stopped, or one at its usage limit. */
@@ -110,9 +92,10 @@ export function stillReadyToAccept(clicked: Pick<Agent, 'finishedAt'>, now: Agen
 /**
  * The Simplified design's list: what continues the work (permission prompts and plans), what reaches out (questions,
  * flags and, with `turns`, finished turns), changes ready to accept, and problems, in that order, each oldest first,
- * with no empty section. An agent is listed once, under what it asks for first. A failed agent's problem the user
- * dismissed (`dismissed`, by `problemKey`) isn't listed. The requests are `needsYouEntries`
- * exactly; the changes and problems aren't requests, so they count toward no badge and raise no notification.
+ * then what agents alerted you is done, with no empty section. An agent is listed once, under what it asks for first,
+ * and once more under Done if it alerted you too. A failed agent's problem the user dismissed (`dismissed`, by
+ * `problemKey`) isn't listed. The requests are `needsYouEntries` exactly; the changes, problems and alerts aren't
+ * requests, so they count toward no badge, and only an alert raises a notification (its own, apart from Needs you).
  */
 export function needsYouSections(agents: readonly Agent[], shows: NeedsYouShows, dismissed: ReadonlySet<string> = new Set()): NeedsYouSection[] {
   const rows: NeedsYouRow[] = [...needsYouEntries(agents, shows)];
@@ -120,6 +103,7 @@ export function needsYouSections(agents: readonly Agent[], shows: NeedsYouShows,
     if (readyToAccept(agent, shows)) rows.push({ agent, kind: 'accept', since: agent.workFinishedAt ?? agent.finishedAt ?? agent.createdAt });
     else if (needsYouKind(agent, shows) === null && isProblem(agent) && !dismissed.has(problemKey(agent) ?? '')) rows.push({ agent, kind: 'problem', since: agent.endedAt ?? agent.finishedAt ?? agent.createdAt });
   }
+  for (const agent of agents) if (agent.alert !== undefined) rows.push({ agent, kind: 'done', since: agent.alert.at });
   rows.sort((a, b) => a.since.localeCompare(b.since));
   return SECTIONS.map(({ kinds, ...section }) => ({ ...section, rows: rows.filter((row) => kinds.includes(row.kind)) })).filter((section) => section.rows.length > 0);
 }
@@ -137,6 +121,14 @@ export function unseenCount(agents: readonly Agent[], shows: NeedsYouShows): num
 /** The agent's prompts the inbox can still answer: the daemon holds their hooks. */
 export function heldPrompts(agent: Agent): PermissionPrompt[] {
   return agent.permissions.filter((prompt) => prompt.heldUntil !== null);
+}
+
+/**
+ * Whether the inbox's row for the agent shows a time that moves on: a held prompt's countdown, a wait's "since", a
+ * flag's age, or how long a remove ask still waits (one no call waits on too, though the agent isn't waiting for it).
+ */
+export function rowTicks(agent: Agent): boolean {
+  return heldPrompts(agent).length > 0 || waitsOnUser(agent) || asksToRemove(agent) || agent.flag !== null;
 }
 
 /** Whole seconds, rounded up, until a held prompt's hold lapses to the terminal; 0 once it has. */

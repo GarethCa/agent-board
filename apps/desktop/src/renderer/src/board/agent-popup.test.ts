@@ -73,13 +73,13 @@ describe("a pinned tile's pop-up", () => {
     expect(popUpEnded('a1', [agent], [], open, pinned)).toBe(false);
     // Up: the tile is taken off, the pin doesn't open it again, and the pop-up shows.
     const up = new Set(windowedTiles([], 'a1'));
-    const taken = windowedExpanded(open, [], { open: up, all: up }, present);
+    const taken = windowedExpanded(open, [], { open: up, all: up }, present, pinned);
     expect(taken.expanded).toEqual([]);
-    expect(pinnedToOpen(pinned, taken.expanded, present, new Set([...up, ...taken.hidden.map((entry) => entry.id)]))).toEqual([]);
+    expect(pinnedToOpen(pinned, taken.expanded, present, { open: up, all: up }, taken.hidden)).toEqual([]);
     expect(popUpShown('a1', [agent], [], taken.expanded)).toBe(agent);
     // Closed (–, Esc, the scrim): back at its size, still pinned.
     const none = new Set(windowedTiles([], undefined));
-    const back = windowedExpanded(taken.expanded, taken.hidden, { open: none, all: none }, present);
+    const back = windowedExpanded(taken.expanded, taken.hidden, { open: none, all: none }, present, pinned);
     expect(back.expanded).toEqual(open);
     expect(back.hidden).toEqual([]);
   });

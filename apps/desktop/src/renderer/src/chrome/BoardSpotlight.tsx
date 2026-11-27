@@ -62,7 +62,7 @@ export function BoardSpotlight({ ref, agents, shells, zones }: { ref?: Ref<Spotl
       return true;
     }
     const surface = surfaceOfSubject(subject);
-    if (surface !== undefined && (beside || subject.kind === 'pr' || subject.kind === 'web')) {
+    if (surface !== undefined && (beside || subject.kind === 'pr' || subject.kind === 'web' || subject.kind === 'document')) {
       const host = tabHostOf(context);
       if (host !== undefined) {
         requestTab(host, surface, { beside });

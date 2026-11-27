@@ -8,6 +8,23 @@ const render = (text: string) =>
   renderToStaticMarkup(createElement(Markdown, { text, onOpenLink: () => {} })).replace(/^<div class="chat-md">|<\/div>$/g, '');
 
 describe("an agent's reply as Markdown", () => {
+  test('an https link is a link in any case; any other scheme is text', () => {
+    expect(render('[docs](HTTPS://example.com/a)')).toContain('<a href="HTTPS://example.com/a"');
+    expect(render('[docs](http://example.com/a)')).not.toContain('<a ');
+  });
+
+  test('the link to a drafted crew is a link, written bare or as a link, and nothing like it is', () => {
+    const link = 'agent-board://draft/0f8fad5b-d9cb-469f-a165-70867728950e';
+    for (const text of [`Open it here: ${link}.`, `[Open the draft](${link})`]) {
+      const html = render(text);
+      expect(html).toContain(`<a href="${link}"`);
+      expect(html).toContain('title="Opens the draft on its board"');
+    }
+    expect(render('`' + link + '`')).not.toContain('<a ');
+    expect(render('agent-board://draft/not-a-uuid')).not.toContain('<a ');
+    expect(render('[x](agent-board://settings/a)')).not.toContain('<a ');
+  });
+
   test('a GFM table is a table', () => {
     const html = render('| Tool | Runs |\n| --- | ---: |\n| Read | 3 |\n| Bash | 2 |');
     expect(html).toContain('<table>');

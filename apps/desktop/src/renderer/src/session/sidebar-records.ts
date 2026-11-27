@@ -168,18 +168,46 @@ export function pinSection(agent: Pick<Agent, 'records'>, fading = NONE_FADING):
   );
 }
 
-/** A Documents row: a document the agent showed, or its latest plan (a document with a decision), each opening its tab. */
+/**
+ * A Documents row: a document the agent showed, or its latest plan (a document with a decision), each opening its tab.
+ * On a ticket's chat, a document one of its helpers showed names that helper (`by`).
+ */
 export type DocumentRow = { key: string; name: string; version: number; at: string } & (
-  | { kind: 'document'; document: DocumentSummary }
+  | { kind: 'document'; document: DocumentSummary; by?: string }
   | { kind: 'plan' }
 );
 
-/** The Documents section: every document the agent showed, and its plan, oldest shown first. Not records: none is deleted here. */
-export function documentSection(agent: Pick<Agent, 'docs' | 'plan'>): DocumentRow[] {
+/**
+ * The Documents section: every document the agent showed, and its plan, oldest shown first; on a ticket's chat, the
+ * documents its helpers showed too, as the ticket is where they are listed. Not records: none is deleted here.
+ */
+export function documentSection(agent: Pick<Agent, 'docs' | 'plan'> & Partial<Pick<Agent, 'sessionId' | 'ticketChat'>>, agents: readonly Pick<Agent, 'docs' | 'name' | 'ticket'>[] = []): DocumentRow[] {
   const rows: DocumentRow[] = agent.docs.map((document) => ({ key: document.id, name: document.title, version: document.version, at: document.shownAt, kind: 'document', document }));
+  if (agent.ticketChat === true) {
+    for (const helper of agents) {
+      if (helper.ticket !== agent.sessionId) continue;
+      for (const document of helper.docs) rows.push({ key: document.id, name: document.title, version: document.version, at: document.shownAt, kind: 'document', document, by: helper.name });
+    }
+  }
   const { plan } = agent;
   if (plan !== null) rows.push({ key: `plan:${plan.id}`, name: plan.title, version: plan.version, at: plan.presentedAt, kind: 'plan' });
   return rows.sort((a, b) => a.at.localeCompare(b.at));
+}
+
+/** A hand-off doc a ticket's helper recorded, as the ticket's chat lists it: it opens in that helper's window. */
+export interface HelperDocRow {
+  key: string;
+  path: string;
+  sessionId: string;
+  by: string;
+}
+
+/** On a ticket's chat, the hand-off docs its helpers recorded (and the handovers guessed in their worktrees); none elsewhere. */
+export function helperDocRows(agent: Partial<Pick<Agent, 'sessionId' | 'ticketChat'>>, agents: readonly Pick<Agent, 'sessionId' | 'name' | 'ticket' | 'records' | 'guessedDoc'>[]): HelperDocRow[] {
+  if (agent.ticketChat !== true) return [];
+  return agents
+    .filter((helper) => helper.ticket === agent.sessionId)
+    .flatMap((helper) => docSection(helper).rows.map((row) => ({ key: `${helper.sessionId}:${row.key}`, path: row.item.path, sessionId: helper.sessionId, by: helper.name })));
 }
 
 /** The Subagents section: none is ever recorded, so every one is guessed from hooks. */

@@ -39,9 +39,12 @@ describe('the Settings window’s groups', () => {
       'arrangeSpacing',
       'dock',
       'agentNoteLook',
+      // Added since: whether docs agents show are put on the board.
+      'placeDocTiles',
       'needsYouShows',
       'osNotifications',
       'notifyInFront',
+      'alertBanners',
       'mutedAgents',
       'chatStyle',
       'usageReading',
@@ -75,6 +78,8 @@ describe('the Settings window’s groups', () => {
       'prefabs',
       // Added since: roles whose Claude agents get the board's MCP tools alone.
       'boardToolsOnly',
+      // Added since: whether an agent that rests is paused as its turn ends.
+      'agentsRest',
     ];
     const ids = SETTINGS_CONTROLS.map((control) => control.id);
     expect(new Set(ids).size).toBe(ids.length);

@@ -133,30 +133,9 @@ describe('agent-board mcp over stdio', () => {
 
 describe("the board MCP server's instructions", () => {
   // Claude defers the board's tools, so an agent reads only these instructions before it calls one: they name the moment.
-  it('tell every agent to read the memory before it starts and add to it before it finishes', () => {
-    expect(BOARD_MCP_INSTRUCTIONS).toMatch(/before you start[^.]*`memory_read`/i);
-    expect(BOARD_MCP_INSTRUCTIONS).toMatch(/before you finish or hand off[^.]*`memory_update`/i);
-  });
-
   it('tell an orchestrator to take the next item from its queue when its crew has room, and finish it', () => {
     expect(ORCHESTRATOR_INSTRUCTIONS).toMatch(/when your crew has room[^.]*`queue_update` take/i);
     expect(ORCHESTRATOR_INSTRUCTIONS).toContain('done');
-  });
-
-  it('list the memories with memory_read before reading one, and name the moment in the memory tools too', () => {
-    expect(BOARD_MCP_INSTRUCTIONS).toMatch(/list memories with `memory_read`, then read/);
-    const description = (name: string) => BOARD_MCP_TOOLS.find((tool) => tool.name === name)!.description;
-    expect(description('memory_read')).toMatch(/^Read what other agents left before you start: your zone shares one memory\./);
-    expect(description('memory_update')).toMatch(/^Change a memory:/);
-    expect(description('memory_update')).toContain("Add what the next agent should know to your zone's memory before you finish, rather than a new memory.");
-  });
-
-  it('say a zone shares one memory, added to rather than started again for each ticket', () => {
-    expect(BOARD_MCP_INSTRUCTIONS).toContain('A zone shares one memory: add to it, and never start a memory of your own for a ticket.');
-    const memoryNew = BOARD_MCP_TOOLS.find((tool) => tool.name === 'memory_new')!;
-    expect(memoryNew.description).toContain('never start one for each ticket');
-    expect(memoryNew.description).toContain('make a second only for a different subject the whole zone needs, with second');
-    expect(memoryNew.inputSchema.properties).toHaveProperty('second');
   });
 });
 
@@ -177,7 +156,9 @@ describe('the board MCP tools and the agent-board CLI', () => {
       renamed: { character: 'pose', waiting_on: 'on' },
       options: ['progress', 'done', 'agent', 'pose', 'category', 'label', 'on', 'description'],
     },
+    { tool: 'rest', command: 'rest', positional: ['line'] },
     { tool: 'needs_you', command: 'needs-you', positional: ['reason'] },
+    { tool: 'alert', command: 'alert', positional: ['line'] },
     { tool: 'open_pr', command: 'open-pr' },
     // With plan, it is present_plan, which waits on the user longer than a shell command runs: the tool's alone.
     { tool: 'show_doc', command: 'doc', positional: ['path'], renamed: { on_board: 'board' }, options: ['title', 'board', 'plan', 'timeout_minutes'] },
@@ -228,6 +209,7 @@ describe('the board MCP tools and the agent-board CLI', () => {
     { tool: 'add_note', command: 'note', options: ['text', 'kind', 'color', 'lines', 'to', 'at', 'near', 'side'] },
     { tool: 'edit_note', command: 'note', positional: ['note'], options: ['text', 'color', 'size', 'lines'] },
     { tool: 'remove_note', command: 'note', positional: ['note'], options: [] },
+    { tool: 'delete_item', command: 'delete', positional: ['item'], renamed: { timeout_minutes: 'timeout' }, options: ['force', 'ask', 'timeout'] },
     { tool: 'pass_note', command: 'note', positional: ['note', 'to'], options: [] },
     {
       tool: 'add_shape',
@@ -252,7 +234,7 @@ describe('the board MCP tools and the agent-board CLI', () => {
     { tool: 'add_schedule', command: 'schedule', positional: ['cron'], renamed: { prompt: 'file', handoff_to: 'handoff-to' }, options: ['file', 'fresh', 'handoff-to', 'harness', 'keep', 'model', 'result', 'role', 'template', 'to', 'zone'] },
     // `schedule add --self`: self is the tool, not an option.
     { tool: 'clock_add', command: 'schedule', positional: ['cron'], renamed: { prompt: 'file' }, options: ['after', 'file', 'template'] },
-    { tool: 'list_schedules', command: 'schedule', options: [] },
+    { tool: 'list_schedules', command: 'schedule', options: ['full'] },
     { tool: 'save_clock_template', command: 'schedule', positional: ['name', 'cron'], renamed: { prompt: 'file' }, options: ['after', 'file', 'from', 'harness', 'keep', 'model', 'result', 'role'] },
     { tool: 'list_clock_templates', command: 'schedule', options: [] },
     { tool: 'remove_clock_template', command: 'schedule', positional: ['template'], options: [] },
@@ -262,17 +244,9 @@ describe('the board MCP tools and the agent-board CLI', () => {
     { tool: 'steps_new', command: 'steps', renamed: { steps: 'file' }, options: ['title', 'file'] },
     { tool: 'steps_read', command: 'steps', positional: ['card'], options: ['mine'] },
     { tool: 'steps_update', command: 'steps', positional: ['card', 'action', 'step', 'answer'], renamed: { steps: 'file' }, options: ['file', 'undo', 'send'] },
-    { tool: 'memory_new', command: 'memory', positional: ['title'], options: ['second'] },
-    { tool: 'memory_read', command: 'memory', positional: ['memory', 'entry', 'history'], options: ['search'] },
-    {
-      tool: 'memory_update',
-      command: 'memory',
-      positional: ['memory', 'action', 'entry', 'text', 'version'],
-      renamed: { no_key: 'no-key', pinned: 'pin', document: 'doc' },
-      options: ['key', 'no-key', 'file', 'doc', 'pin'],
-    },
     { tool: 'queue_new', command: 'queue', positional: ['title'], renamed: { for_user: 'for-user' }, options: ['for-user'] },
-    { tool: 'queue_read', command: 'queue', positional: ['queue', 'job'], options: [] },
+    // whole is `queue read` with a job, where the job alone is `queue history`.
+    { tool: 'queue_read', command: 'queue', positional: ['queue', 'job', 'whole'], options: ['done'] },
     // A headline is the CLI's line, given with --body.
     { tool: 'queue_update', command: 'queue', positional: ['queue', 'action', 'job', 'text', 'headline', 'version', 'to', 'on'], options: ['kind', 'front', 'link', 'most', 'body', 'result'] },
     { tool: 'remind', command: 'remind', positional: ['text'], options: [] },

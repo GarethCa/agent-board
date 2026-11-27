@@ -2,13 +2,12 @@ import { expect } from '@playwright/test';
 import { launch, SHELL_ENV } from './agent-helpers.ts';
 import { test, tempDataDir, removeDataDir } from './launch.ts';
 
-// Steps, a memory and a queue can be added three ways, under both designs: the Create toolbar's menu (Classic's
-// "More to add", the Simplified design's Draw), their keys K, M and Q, and the board's right-click menu. One test for
+// Steps and a queue can be added three ways, under both designs: the Create toolbar's menu (Classic's
+// "More to add", the Simplified design's Draw), their keys K and Q, and the board's right-click menu. One test for
 // each design, card and way, so a failure names what broke.
 
 const CARDS = [
   { name: 'Steps', key: 'k', testId: 'steps-card', context: 'New steps' },
-  { name: 'Memory', key: 'm', testId: 'memory-card', context: 'Add a memory' },
   { name: 'Queue', key: 'q', testId: 'queue-card', context: 'Add a queue' },
 ] as const;
 const WAYS = ['the toolbar menu', 'its key', 'the right-click menu'] as const;

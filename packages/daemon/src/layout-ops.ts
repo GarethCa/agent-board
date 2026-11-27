@@ -4,7 +4,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { plural } from './text-words.ts';
-import { BoardError, BoardRefs, callerTicket, connectorLine, connectorsIn, connectorsOnTicket, itemLine, itemPlace, readEveryBoard, ticketBoardName, REF_KINDS, resolveAgent, shapeSectionLines, zoneLine, type BoardSession, type BoardView, type RefKind } from './board-ops.ts';
+import { BoardError, BoardRefs, callerTicket, connectorLine, connectorsIn, connectorsOnTicket, itemLine, itemPlace, readEveryBoard, ticketBoardName, REF_KINDS, resolveAgent, shapeSectionLines, zoneLine, type BoardSession, type BoardView, type ReadFace, type RefKind } from './board-ops.ts';
 import { checkPlacements } from './params.ts';
 import {
   ARRANGE_BYS,
@@ -224,13 +224,10 @@ const DIAGRAM_LINES_WITH_SECTIONS = 200;
 /** The most lines of each section `zone map --sections` prints, and the most characters of each. */
 const SECTION_LIMIT = { lines: 12, width: 80 };
 
-/** Where a read is printed: the CLI, or an MCP tool's answer, whose hints name the tools instead of the commands. */
-export type ReadFace = 'cli' | 'mcp';
-
 /** What a diagram summary points to for more, in the CLI's words or the MCP tools'. */
 const DIAGRAM_HINTS: Record<ReadFace, { members: string; whole: string; all: string }> = {
-  cli: { members: 'members with --sections, or `agent-board show <ref>`', whole: '`agent-board show <ref>` for one whole', all: '`agent-board tree --json` lists them all' },
-  mcp: { members: 'members with sections: true', whole: 'each section cut to its first 12 lines', all: 'the board tool lists them all' },
+  cli: { members: 'members with --sections, or `agent-board show <ref>`', whole: '`agent-board show <ref>` for one whole', all: '`agent-board tree --zone <ref> --json` lists them all' },
+  mcp: { members: 'members with sections: true', whole: 'each section cut to its first 12 lines', all: "the board tool with the zone's ref lists them all" },
 };
 
 /**
@@ -561,6 +558,28 @@ export async function removeNote(session: BoardSession, ref: string): Promise<Bo
   const id = noteId(refs, ref, session.caller);
   await session.client.call('orchestrator.removeNote', { token: session.token, id });
   return { text: `Removed ${refs.of('item', id)}.`, json: null };
+}
+
+/**
+ * `delete`: deletes a board item of any kind (a queue, to-do list, steps card or note) as one step the user
+ * can undo on an open board (not on a ticket's board). One another made only with `ask`, as the user allows; open work on it only with `force`.
+ */
+export async function deleteItem(session: BoardSession, ref: string, options: { force?: boolean; ask?: boolean; timeoutMs?: number }): Promise<BoardView> {
+  const refs = new BoardRefs(await readEveryBoard(session.client));
+  const object = refs.resolve(ref, session.caller);
+  if (object.kind !== 'item') throw new BoardError(`${ref} is a ${object.kind}, not a board item${object.kind === 'agent' ? ': close --remove removes a tile' : ''}`);
+  const result = await session.client.call('orchestrator.deleteItem', {
+    token: session.token,
+    id: object.item.id,
+    ...(options.force === true ? { force: true } : {}),
+    ...(options.ask === true ? { ask: true } : {}),
+    ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+  });
+  const named = `${refs.of('item', result.id)} ${result.name}`;
+  return {
+    text: result.outcome === 'deleted' ? `Deleted ${named}: an open board can undo it, unless it was on a ticket's board.` : `Kept ${named}: ${result.why ?? 'it was not deleted'}.`,
+    json: result,
+  };
 }
 
 /** `note pass`: gives an agent note or document card to the agent `toRef`, which holds it from then on. */

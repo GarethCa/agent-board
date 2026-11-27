@@ -64,6 +64,8 @@ describe('stageOf', () => {
     expect(needsUser(asking, 'explicit')).toBe(false);
     expect(needsUser(asking, 'turns')).toBe(true);
     expect(needsUser(agent('b', { state: 'needs-permission' }), 'explicit')).toBe(true);
+    // A restart that stopped it asks nothing of the user: it waits to be woken.
+    expect(needsUser(agent('c', { state: 'stopped-by-restart', endedAt: at(5) }), 'explicit')).toBe(false);
   });
 
   it('counts a turn ended at the prompt as needing the user only when the inbox shows turns', () => {

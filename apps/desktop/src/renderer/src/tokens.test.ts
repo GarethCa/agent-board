@@ -256,11 +256,6 @@ const LOCAL = [
   '--ghost-y',
   '--chip-x',
   '--chip-y',
-  // Where a memory read's pulse sets out on the board, and how far it goes to its reader.
-  '--pulse-x',
-  '--pulse-y',
-  '--pulse-dx',
-  '--pulse-dy',
   // A theme's colours in its swatch in Settings, from the registry, as its tokens aren't the page's until it shows.
   '--preview-desk',
   '--preview-edge',

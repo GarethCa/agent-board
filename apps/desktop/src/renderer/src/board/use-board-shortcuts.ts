@@ -67,7 +67,7 @@ export function useBoardShortcuts({
   arrangeBoard,
   typeInShape,
 }: BoardShortcutsOptions) {
-  // N adds a note at the pointer (K a steps card, M a memory, Q a queue), or in the middle of the board when the pointer is off it. T, S, Z, A and ` arm the
+  // N adds a note at the pointer (K a steps card, Q a queue), or in the middle of the board when the pointer is off it. T, S, Z, A and ` arm the
   // text, shape, zone, agent and shell tools; Escape puts the armed one down. V selects and moves, B box-selects, H pans.
   // / puts any tool down and opens the shape palette at the pointer. ? opens the cheat sheet. ⇧L arranges the board.
   useEffect(() => {
@@ -82,7 +82,7 @@ export function useBoardShortcuts({
       // F2 has asked a tile to open its name field, which is yet to take the keys: they are the name's, not a shortcut.
       if (renameRequest !== undefined) return;
       event.preventDefault();
-      if (shortcut.kind === 'note' || shortcut.kind === 'steps' || shortcut.kind === 'memory' || shortcut.kind === 'queue') {
+      if (shortcut.kind === 'note' || shortcut.kind === 'steps' || shortcut.kind === 'queue') {
         const kind = shortcut.kind === 'note' ? 'sticky' : shortcut.kind;
         createItem(kind, pointer.current === undefined ? boardCentre() : screenToFlowPosition(pointer.current));
       }

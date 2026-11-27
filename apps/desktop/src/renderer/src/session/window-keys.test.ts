@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isRunGateKey, ownTabNotice, runGateShortcut, windowPaneKey } from './window-keys';
+import { closesShownWindow, isRunGateKey, ownTabNotice, runGateShortcut, windowPaneKey } from './window-keys';
 
 const press = (code: string, keys: Partial<Record<'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey', boolean>> = {}) => ({
   code,
@@ -54,5 +54,28 @@ describe('the close key on a tab that cannot be closed', () => {
   it('says whose it is: an agent\'s own tab, or a shell\'s only one', () => {
     expect(ownTabNotice('agent')).toBe("An agent's own tab can't be closed.");
     expect(ownTabNotice('shell')).toBe("A shell's only tab can't be closed.");
+  });
+});
+
+describe('⌘W with a session window shown on the board', () => {
+  const heard = (code: string, keys: Partial<Record<'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey', boolean>>, more: { defaultPrevented?: boolean; repeat?: boolean } = {}) => ({
+    ...press(code, keys),
+    defaultPrevented: false,
+    repeat: false,
+    ...more,
+  });
+
+  it('closes it when nothing took the press first: the focus on the board, or in its header', () => {
+    expect(closesShownWindow(heard('KeyW', { metaKey: true }), true)).toBe(true);
+    expect(closesShownWindow(heard('KeyW', { ctrlKey: true, shiftKey: true }), false)).toBe(true);
+  });
+
+  it("leaves a press a tab's close took, a held key, and other keys alone", () => {
+    expect(closesShownWindow(heard('KeyW', { metaKey: true }, { defaultPrevented: true }), true)).toBe(false);
+    expect(closesShownWindow(heard('KeyW', { metaKey: true }, { repeat: true }), true)).toBe(false);
+    expect(closesShownWindow(heard('KeyW', { metaKey: true, shiftKey: true }), true)).toBe(false);
+    expect(closesShownWindow(heard('KeyT', { metaKey: true }), true)).toBe(false);
+    // Off macOS Ctrl+W is the terminal's (delete a word).
+    expect(closesShownWindow(heard('KeyW', { ctrlKey: true }), false)).toBe(false);
   });
 });

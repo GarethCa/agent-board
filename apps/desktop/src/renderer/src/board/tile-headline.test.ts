@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Agent, AgentState, NeedsYouShows, PullRequest } from '@agent-board/daemon/protocol';
 import { galleryAgent } from './TileGallery';
 import { whenLabel } from './schedule';
+import { needsYouEntries } from '../../../shared/needs-you';
 import { footerFoldKey, TILE_STATE_WORDS, tileAbout, tileButton, tileMark, tileMarkKey, tileNow, tileSince, tileState, tileTime, tileWord, type TileState } from './tile-headline';
 import { clockTime } from './items/agent-note';
 
@@ -134,7 +135,7 @@ describe('what is true now', () => {
 });
 
 describe('the "some" clock', () => {
-  const at = (minutes: number, state: TileState = 'needs-you') => tileTime(base('waiting', { stateSince: ago(minutes * MIN), hibernated: null, flag: null }), state, NOW);
+  const at = (minutes: number, state: TileState = 'needs-you') => tileTime(base('waiting', { stateSince: ago(minutes * MIN), hibernated: null, flag: null }), state, 'explicit', NOW);
 
   it('shows only on Needs you and Paused', () => {
     for (const state of ['thinking', 'waiting', 'idle', 'done', 'failed'] as const) expect(at(30, state)).toBeUndefined();
@@ -155,19 +156,26 @@ describe('the "some" clock', () => {
 
   it('counts a pause from when it was paused, and a flag from when it was raised', () => {
     const paused = base('hibernated', { stateSince: ago(0), hibernated: { at: ago(3 * 60 * MIN), by: 'user' } as unknown as Agent['hibernated'] });
-    expect(tileTime(paused, 'paused', NOW)).toBe('3 h');
+    expect(tileTime(paused, 'paused', 'explicit', NOW)).toBe('3 h');
     const flagged = base('idle', { stateSince: ago(0), flag: { id: 1, reason: 'Pick', at: ago(20 * MIN), to: 'user', via: null } });
-    expect(tileTime(flagged, 'needs-you', NOW)).toBe('20 min');
+    expect(tileTime(flagged, 'needs-you', 'explicit', NOW)).toBe('20 min');
   });
 
   it('counts from the moment its tooltip names', () => {
     const flagged = base('idle', { stateSince: ago(40 * MIN), flag: { id: 1, reason: 'Pick', at: ago(5 * MIN), to: 'user', via: null } });
-    expect(tileSince(flagged, 'needs-you')).toBe(ago(5 * MIN));
-    expect(tileSince(flagged, 'idle')).toBe(ago(40 * MIN));
+    expect(tileSince(flagged, 'needs-you', 'explicit')).toBe(ago(5 * MIN));
+    expect(tileSince(flagged, 'idle', 'explicit')).toBe(ago(40 * MIN));
+  });
+
+  it('counts a question from when it was asked, the time its Needs you row gives', () => {
+    const ask = { id: 'q', question: 'Which cache?', options: [], freeText: true, askedAt: ago(25 * MIN), expiresAt: '', onBoard: false, questions: [], answers: [], card: null } as unknown as Agent['ask'];
+    const asking = base('waiting', { stateSince: ago(0), flag: null, ask });
+    expect(tileSince(asking, 'needs-you', 'explicit')).toBe(needsYouEntries([asking], 'explicit')[0]!.since);
+    expect(tileTime(asking, 'needs-you', 'explicit', NOW)).toBe('25 min');
   });
 
   it('says nothing for a time that doesn’t parse', () => {
-    expect(tileTime(base('waiting', { stateSince: 'not a time', flag: null }), 'needs-you', NOW)).toBeUndefined();
+    expect(tileTime(base('waiting', { stateSince: 'not a time', flag: null }), 'needs-you', 'explicit', NOW)).toBeUndefined();
   });
 });
 

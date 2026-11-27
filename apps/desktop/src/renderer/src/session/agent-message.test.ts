@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import type { ChatEntry, MessageSender } from '@agent-board/daemon/protocol';
-import { agentMessageParts, CLAMP_LINES, foldAgentMessages, isLong, messageKindLabel } from './agent-message';
+import { agentMessageParts, CLAMP_LINES, foldAgentMessages, fromNoAgent, isLong, messageKindLabel, senderHead } from './agent-message';
 import { chatItems, type ChatItem } from './chat';
 
 const captain: MessageSender = { ref: 'agent:944e1234', name: 'Captain', kind: 'send' };
@@ -55,6 +55,8 @@ describe('the kind a message came as', () => {
     expect(messageKindLabel({ ...captain, kind: 'reply' })).toBe('Reply');
     expect(messageKindLabel({ ...captain, kind: 'hand-off' })).toBe('Hand-off');
     expect(messageKindLabel({ ...captain, kind: 'hand-off', payload: 'plan.md' })).toBe('Hand-off · plan.md');
+    expect(messageKindLabel({ ref: 'item:c0ffee12', name: 'Check-in', kind: 'clock' })).toBe('Scheduled run');
+    expect(messageKindLabel({ ref: 'board', name: 'agent-board', kind: 'board' })).toBe('Notice');
   });
 });
 
@@ -80,5 +82,34 @@ describe('agent messages in a chat the user filtered', () => {
     const folded: ChatItem[] = foldAgentMessages(items, false);
     expect(folded.map((item) => item.kind)).toEqual(['user', 'agents-hidden', 'assistant', 'agents-hidden']);
     expect(folded.filter((item) => item.kind === 'agents-hidden').map((item) => item.count)).toEqual([2, 1]);
+    expect(folded.some((item) => item.kind === 'agents-hidden' && item.notAgents)).toBe(false);
+  });
+
+  test("a run with a clock's run or the board's notice in it says so, as not only agents'", () => {
+    const folded = foldAgentMessages(
+      chatItems([
+        { kind: 'user', text: 'Mine' },
+        { kind: 'user', text: 'Fix it', from: captain },
+        { kind: 'user', text: 'Check the crew', from: { ref: 'item:c0ffee12', name: 'Check-in', kind: 'clock' } },
+      ]),
+      false,
+    );
+    expect(folded.filter((item) => item.kind === 'agents-hidden')).toMatchObject([{ count: 2, notAgents: true }]);
+  });
+});
+
+describe('who a message is from, as its bubble heads it', () => {
+  const clock: MessageSender = { ref: 'item:c0ffee12', name: 'Master check-in', kind: 'clock' };
+  const board: MessageSender = { ref: 'board', name: 'agent-board', kind: 'board' };
+  const agent: MessageSender = { ref: 'agent:944e1234', name: 'Captain', kind: 'send' };
+
+  test('names an agent "From …", a clock by its name, and the board by its own', () => {
+    expect(senderHead(agent)).toBe('From Captain');
+    expect(senderHead(clock)).toBe('Clock · Master check-in');
+    expect(senderHead(board)).toBe('agent-board');
+  });
+
+  test('counts a clock and the board as no agent, and every agent kind as one', () => {
+    expect([agent, { ...agent, kind: 'reply' as const }, { ...agent, kind: 'hand-off' as const }, clock, board].map(fromNoAgent)).toEqual([false, false, false, true, true]);
   });
 });

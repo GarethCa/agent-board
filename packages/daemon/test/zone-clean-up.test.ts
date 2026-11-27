@@ -25,7 +25,7 @@ describe('gatherTo', () => {
     expect(gatherTo(item('document', { title: 'Plan' }), 's3')).toBe('agent:s3');
     expect(gatherTo(item('todo'), 's3')).toBe('agent:s3');
     expect(gatherTo(item('document'), null)).toBeNull();
-    for (const kind of ['sticky', 'shape', 'text', 'memory', 'queue', 'clock'] as const) expect(gatherTo(item(kind), 's3')).toBeNull();
+    for (const kind of ['sticky', 'shape', 'text', 'queue', 'clock'] as const) expect(gatherTo(item(kind), 's3')).toBeNull();
   });
   it('keeps a gathered note with its agent until the user drags it', () => {
     expect(gatheredTo(note({ gatheredTo: 'agent:s1' }))).toBe('agent:s1');

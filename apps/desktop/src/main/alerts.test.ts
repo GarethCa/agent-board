@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { Agent, AgentFlag, AgentState, PermissionPrompt } from '@agent-board/daemon/protocol';
-import { createAgentAlerts, DEFAULT_ALERT_SETTINGS, type AgentAlerts, type AgentNotification, type AlertSettings } from './alerts';
+import { NOTIFICATION_DEFAULTS, type Agent, type AgentFlag, type AgentState, type NotificationSettings, type PermissionPrompt } from '@agent-board/daemon/protocol';
+import { createAgentAlerts, type AgentAlerts, type AgentNotification } from './alerts';
 import type { AppStatus } from './app-state';
 
 const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}): Agent => ({
@@ -98,10 +98,10 @@ const prompt: PermissionPrompt = {
 };
 
 /** As before explicit requests: Needs you lists every finished turn too. */
-const TURNS: AlertSettings = { ...DEFAULT_ALERT_SETTINGS, needsYouShows: 'turns' };
+const TURNS: NotificationSettings = { ...NOTIFICATION_DEFAULTS, needsYouShows: 'turns' };
 
 /** Alerts under `settings` (Needs you listing every finished turn, by default), recording what they notify and every app state they show. */
-function recorded(settings: AlertSettings = TURNS, inFront = false, simplified = false) {
+function recorded(settings: NotificationSettings = TURNS, inFront = false, simplified = false) {
   const notifications: AgentNotification[] = [];
   const states: AppStatus[] = [];
   const created = createAgentAlerts({ notify: (n) => notifications.push(n), showState: (s) => states.push(s), inFront: () => inFront, simplified: () => simplified });
@@ -124,7 +124,7 @@ describe("Claude's question tool", () => {
   };
 
   it('notifies once, as a question with its questions as the body and no answers to pick, never as a permission', () => {
-    const { alerts, notifications } = recorded(DEFAULT_ALERT_SETTINGS);
+    const { alerts, notifications } = recorded(NOTIFICATION_DEFAULTS);
     alerts.reset([agent('a', 'running')]);
 
     alerts.updated(agent('a', 'waiting', { permissions: [questions] }));
@@ -134,7 +134,7 @@ describe("Claude's question tool", () => {
   });
 
   it('lets a permission asked beside it notify as a permission, of that tool', () => {
-    const { alerts, notifications } = recorded(DEFAULT_ALERT_SETTINGS);
+    const { alerts, notifications } = recorded(NOTIFICATION_DEFAULTS);
     alerts.reset([agent('a', 'running')]);
 
     alerts.updated(agent('a', 'needs-permission', { permissions: [questions, prompt] }));
@@ -156,7 +156,7 @@ describe('agent notifications for a steps card an agent waits on', () => {
   });
 
   it('notifies once for a set to answer, not again as its answers come in, and once for each to-do waited on', () => {
-    const { alerts, notifications } = recorded(DEFAULT_ALERT_SETTINGS);
+    const { alerts, notifications } = recorded(NOTIFICATION_DEFAULTS);
     alerts.reset([agent('a', 'running'), agent('b', 'running')]);
 
     alerts.updated(agent('a', 'idle', { stepsWait: wait('steps') }));
@@ -174,7 +174,7 @@ describe('agent notifications for a steps card an agent waits on', () => {
 
 describe('agent notifications for explicit requests only, the default', () => {
   it('stays quiet as a turn ends, and notifies once per flag, with its reason', () => {
-    const { alerts, notifications } = recorded(DEFAULT_ALERT_SETTINGS);
+    const { alerts, notifications } = recorded(NOTIFICATION_DEFAULTS);
     alerts.reset([agent('a', 'running'), agent('b', 'running')]);
 
     alerts.updated(agent('a', 'waiting', { lastMessage: 'Done.' }));
@@ -190,7 +190,7 @@ describe('agent notifications for explicit requests only, the default', () => {
   });
 
   it('notifies of a standing flag once, however many prompts and questions come and go while it stands', () => {
-    const { alerts, notifications } = recorded(DEFAULT_ALERT_SETTINGS);
+    const { alerts, notifications } = recorded(NOTIFICATION_DEFAULTS);
     alerts.reset([agent('a', 'running')]);
     const standing = flag('2026-10-10T10:01:00.000Z');
     const ask = { id: 'q1', question: 'Redis?', options: [], freeText: true, askedAt: '', expiresAt: '', onBoard: false, questions: [{ question: 'Redis?', options: [], freeText: true }], answers: [null], card: null };
@@ -205,7 +205,7 @@ describe('agent notifications for explicit requests only, the default', () => {
   });
 
   it('notifies of a flag raised while a question waits, and of the same reason raised again', () => {
-    const { alerts, notifications } = recorded(DEFAULT_ALERT_SETTINGS);
+    const { alerts, notifications } = recorded(NOTIFICATION_DEFAULTS);
     const ask = { id: 'q1', question: 'Redis?', options: [], freeText: true, askedAt: '', expiresAt: '', onBoard: false, questions: [{ question: 'Redis?', options: [], freeText: true }], answers: [null], card: null };
     alerts.reset([agent('a', 'waiting', { ask })]);
     alerts.updated(agent('a', 'waiting', { ask, flag: flag('2026-10-10T10:01:00.000Z', null, 7) }));
@@ -215,7 +215,7 @@ describe('agent notifications for explicit requests only, the default', () => {
   });
 
   it("never notifies of a crew member's flag to its orchestrator, a failure or an end", () => {
-    const { alerts, notifications } = recorded(DEFAULT_ALERT_SETTINGS);
+    const { alerts, notifications } = recorded(NOTIFICATION_DEFAULTS);
     alerts.reset([agent('a', 'running', { spawnedBy: 'lead' }), agent('b', 'running'), agent('c', 'running')]);
 
     alerts.updated(agent('a', 'idle', { spawnedBy: 'lead', flag: { ...flag('2026-10-10T10:01:00.000Z'), to: 'orchestrator' } }));
@@ -225,8 +225,25 @@ describe('agent notifications for explicit requests only, the default', () => {
     expect(notifications).toEqual([]);
   });
 
+  it("raises a banner for an ended agent's flag, as for any flag, once, and counts it in the badge", () => {
+    const states: AppStatus[] = [];
+    const notifications: AgentNotification[] = [];
+    const alerts = createAgentAlerts({ notify: (n) => notifications.push(n), showState: (s) => states.push(s) });
+    alerts.reset([agent('a', 'running'), agent('b', 'running')]);
+    const ended = { endedAt: '2026-10-10T10:05:00.000Z' };
+    alerts.updated(agent('a', 'done', { ...ended, flag: flag('2026-10-10T10:04:00.000Z') }));
+    alerts.updated(agent('a', 'done', { ...ended, flag: flag('2026-10-10T10:04:00.000Z', null, flagIds) }));
+    expect(notifications).toEqual([{ sessionId: 'a', kind: 'flagged', name: 'Agent a', title: 'Agent a needs you', body: 'PR #241 is ready for review.' }]);
+    expect(states.at(-1)?.waiting).toBe(1);
+    // One raised while it ran, then ended: told of already.
+    const standing = flag('2026-10-10T10:06:00.000Z');
+    alerts.updated(agent('b', 'idle', { flag: standing }));
+    alerts.updated(agent('b', 'done', { ...ended, flag: standing }));
+    expect(notifications).toHaveLength(2);
+  });
+
   it('notifies of a permission prompt or a question, whoever started the agent', () => {
-    const { alerts, notifications } = recorded(DEFAULT_ALERT_SETTINGS);
+    const { alerts, notifications } = recorded(NOTIFICATION_DEFAULTS);
     alerts.reset([agent('a', 'running', { spawnedBy: 'lead' })]);
     alerts.updated(agent('a', 'needs-permission', { spawnedBy: 'lead', permissions: [prompt] }));
     expect(notifications.map((n) => n.title)).toEqual(['Agent a needs your permission']);
@@ -234,9 +251,9 @@ describe('agent notifications for explicit requests only, the default', () => {
 
   it('raises none with notifications off, and none while the app is in front unless asked', () => {
     for (const [settings, inFront, expected] of [
-      [{ ...DEFAULT_ALERT_SETTINGS, notifications: false }, false, 0],
-      [DEFAULT_ALERT_SETTINGS, true, 0],
-      [{ ...DEFAULT_ALERT_SETTINGS, notifyInFront: true }, true, 1],
+      [{ ...NOTIFICATION_DEFAULTS, notifications: false }, false, 0],
+      [NOTIFICATION_DEFAULTS, true, 0],
+      [{ ...NOTIFICATION_DEFAULTS, notifyInFront: true }, true, 1],
     ] as const) {
       const { alerts, notifications, states } = recorded(settings, inFront);
       alerts.reset([agent('a', 'running')]);
@@ -248,7 +265,7 @@ describe('agent notifications for explicit requests only, the default', () => {
   });
 
   it('under the Simplified design, which has no switch for it, ignores a notifications switch left off in Classic', () => {
-    const { alerts, notifications } = recorded({ ...DEFAULT_ALERT_SETTINGS, notifications: false }, false, true);
+    const { alerts, notifications } = recorded({ ...NOTIFICATION_DEFAULTS, notifications: false }, false, true);
     alerts.reset([agent('a', 'running')]);
 
     alerts.updated(agent('a', 'idle', { flag: flag('2026-10-10T10:01:00.000Z') }));
@@ -257,7 +274,7 @@ describe('agent notifications for explicit requests only, the default', () => {
   });
 
   it('recounts the badge when the setting changes what Needs you lists', () => {
-    const { alerts, states } = recorded(DEFAULT_ALERT_SETTINGS);
+    const { alerts, states } = recorded(NOTIFICATION_DEFAULTS);
     alerts.reset([agent('a', 'waiting')]);
     alerts.settingsChanged(TURNS);
     expect(states).toEqual([
@@ -359,7 +376,7 @@ describe('agent notifications for every finished turn too', () => {
     const { alerts, notifications } = recorded();
     alerts.reset([agent('m', 'running')]);
     const tiles = ['docs', 'api', 'web', 'cli', 'ops'].map((name) => ({ sessionId: name, name, held: name === 'ops' ? 'still running' : null }));
-    const removeAsk = { id: 'r1', askedAt: '', expiresAt: '', tiles };
+    const removeAsk = { id: 'r1', askedAt: '', expiresAt: '', tiles, left: false };
 
     alerts.updated(agent('m', 'waiting', { removeAsk }));
     alerts.updated(agent('m', 'waiting', { removeAsk }));
@@ -369,6 +386,16 @@ describe('agent notifications for every finished turn too', () => {
     expect(notifications).toEqual([
       { sessionId: 'm', kind: 'asks', name: 'Agent m', title: 'Agent m asks to remove 5 tiles', body: 'docs, api, web and 2 more. Open it to allow or deny.' },
       { sessionId: 'm', kind: 'asks', name: 'Agent m', title: 'Agent m asks to remove 1 tile', body: 'docs. Open it to allow or deny.' },
+    ]);
+  });
+
+  it("names a board item in an agent's ask to delete one it didn't make", () => {
+    const { alerts, notifications } = recorded();
+    alerts.reset([agent('m', 'running')]);
+    const removeAsk = { id: 'r1', askedAt: '', expiresAt: '', left: false, items: true as const, tiles: [{ sessionId: 'q', name: 'queue “Stray”', held: null }] };
+    alerts.updated(agent('m', 'waiting', { removeAsk }));
+    expect(notifications).toEqual([
+      { sessionId: 'm', kind: 'asks', name: 'Agent m', title: 'Agent m asks to delete 1 board item', body: 'queue “Stray”. Open it to allow or deny.' },
     ]);
   });
 
@@ -463,5 +490,62 @@ describe('the app state', () => {
     alerts.updated(agent('a', 'waiting'));
 
     expect(notifications).toEqual([]);
+  });
+});
+
+describe("an agent's alert that something is done", () => {
+  const alert = (id: number, fields: Partial<NonNullable<Agent['alert']>> = {}): NonNullable<Agent['alert']> => ({
+    id,
+    line: 'PR #12 is merged.',
+    link: null,
+    at: '2026-10-10T10:01:00.000Z',
+    banner: true,
+    folded: 0,
+    ...fields,
+  });
+
+  it('raises a Done banner once per alert, and leaves the badge and app state alone', () => {
+    const { alerts, notifications, states } = recorded(NOTIFICATION_DEFAULTS);
+    alerts.reset([agent('a', 'running')]);
+
+    alerts.updated(agent('a', 'running', { alert: alert(1) }));
+    alerts.updated(agent('a', 'running', { alert: alert(1) }));
+    alerts.updated(agent('a', 'running', { alert: alert(2, { line: 'Docs are written.' }) }));
+
+    expect(notifications).toEqual([
+      { sessionId: 'a', kind: 'done', name: 'Agent a', title: 'Agent a is done', body: 'PR #12 is merged.' },
+      { sessionId: 'a', kind: 'done', name: 'Agent a', title: 'Agent a is done', body: 'Docs are written.' },
+    ]);
+    expect(states.every((state) => state.waiting === 0)).toBe(true);
+  });
+
+  it('raises none for an alert the daemon folded, nor one standing when first heard of', () => {
+    const { alerts, notifications } = recorded(NOTIFICATION_DEFAULTS);
+    alerts.reset([agent('a', 'running', { alert: alert(1) })]);
+    alerts.updated(agent('a', 'running', { alert: alert(1) }));
+    alerts.updated(agent('a', 'running', { alert: alert(2, { banner: false, folded: 1 }) }));
+    expect(notifications).toEqual([]);
+  });
+
+  it('raises none with alert banners off, while muted, or with notifications off; and none in front unless asked', () => {
+    for (const [settings, inFront, fields, expected] of [
+      [{ ...NOTIFICATION_DEFAULTS, alertBanners: false }, false, {}, 0],
+      [NOTIFICATION_DEFAULTS, false, { muted: true }, 0],
+      [{ ...NOTIFICATION_DEFAULTS, notifications: false }, false, {}, 0],
+      [NOTIFICATION_DEFAULTS, true, {}, 0],
+      [{ ...NOTIFICATION_DEFAULTS, notifyInFront: true }, true, {}, 1],
+    ] as const) {
+      const { alerts, notifications } = recorded(settings, inFront);
+      alerts.reset([agent('a', 'running', fields)]);
+      alerts.updated(agent('a', 'running', { ...fields, alert: alert(1) }));
+      expect(notifications).toHaveLength(expected);
+    }
+  });
+
+  it('raises one beside a request it makes at the same time', () => {
+    const { alerts, notifications } = recorded(NOTIFICATION_DEFAULTS);
+    alerts.reset([agent('a', 'running')]);
+    alerts.updated(agent('a', 'idle', { alert: alert(1), flag: flag('2026-10-10T10:01:00.000Z') }));
+    expect(notifications.map((n) => n.kind)).toEqual(['flagged', 'done']);
   });
 });

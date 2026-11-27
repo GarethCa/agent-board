@@ -2,7 +2,7 @@
 // and checks, in one `gh pr view` through the user's own login. Lean, as it is read every few minutes.
 import { runGh, type GhOptions } from './gh.ts';
 import { listOf, objectOf, parseJson } from './shape.ts';
-import type { PullRequestRef } from './pull-request-ref.ts';
+import { pullRequestUrl, type PullRequestRef } from './pull-request-ref.ts';
 import { checksState, pullRequestState, type ChecksState, type PullRequestState } from './pull-requests.ts';
 
 /**
@@ -96,7 +96,7 @@ export function watchFactsOf(ref: PullRequestRef, view: Record<string, unknown>)
   return {
     repo: ref.repo,
     number: ref.number,
-    url: `https://github.com/${ref.repo}/pull/${ref.number}`,
+    url: pullRequestUrl(ref),
     state: pullRequestState({ state: view.state as 'OPEN' | 'CLOSED' | 'MERGED', isDraft: view.isDraft === true }),
     mergeable: text(view.mergeable) || 'UNKNOWN',
     mergeStateStatus: text(view.mergeStateStatus) || 'UNKNOWN',

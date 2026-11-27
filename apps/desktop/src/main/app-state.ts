@@ -1,4 +1,5 @@
-import type { Agent, AgentState, NeedsYouShows } from '@agent-board/daemon/protocol';
+import type { Agent, NeedsYouShows } from '@agent-board/daemon/protocol';
+import { CARRYING_ON_STATES } from '@agent-board/daemon/human-status';
 import { APP_NAME } from '../shared/brand';
 import { unseenCount } from '../shared/needs-you';
 
@@ -14,12 +15,6 @@ export type Colourway = 'blue' | 'dark';
 /** A dock icon in brand/png/dock-states/, without its `-1024.png`. */
 export type DockIcon = `dock-${Colourway}-${AppState}`;
 
-/**
- * States a live agent counts as working in: mid-turn, a rate-limited one included, as it carries on by itself, or with
- * a command it left running. An idle or scheduled agent sits at its prompt and is quiet.
- */
-const WORKING: ReadonlySet<AgentState> = new Set<AgentState>(['running', 'thinking', 'rate-limited', 'handing-off', 'starting', 'on-command']);
-
 /** The app's state, and how many agents wait for the user (the needs-you inbox's unseen asks). */
 export interface AppStatus {
   state: AppState;
@@ -30,7 +25,8 @@ export interface AppStatus {
 export function appStateOf(agents: readonly Agent[], shows: NeedsYouShows): AppStatus {
   const waiting = unseenCount(agents, shows);
   if (waiting > 0) return { state: 'needs', waiting };
-  const working = agents.some((agent) => agent.endedAt === null && WORKING.has(agent.state));
+  // A rate-limited one counts, as it carries on by itself; an idle or scheduled one sits at its prompt and is quiet.
+  const working = agents.some((agent) => agent.endedAt === null && CARRYING_ON_STATES.has(agent.state));
   return { state: working ? 'working' : 'quiet', waiting };
 }
 

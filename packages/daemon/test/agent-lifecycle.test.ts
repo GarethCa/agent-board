@@ -2,8 +2,10 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { createMemoryCredentialStore } from '@agent-board/tracker/testing';
 import { CONTINUE_LINE, createAgentLifecycle, markTurnsCutOff } from '../src/agent-lifecycle.ts';
 import { CODEX_BYPASS_FLAG, type LaunchSpec } from '../src/agent-spawns.ts';
+import { createLaunchSettingsKeeper } from '../src/launch-settings-keychain.ts';
 import type { AgentRow, ZoneRow } from '../src/agents.ts';
 import { migrate } from '../src/migrate.ts';
 import { invalidParams } from '../src/params.ts';
@@ -94,6 +96,7 @@ function setup(
     db,
     reviewsDir: join(home, 'reviews'),
     launchSettingsDir: join(home, 'launch-settings'),
+    launchSettings: createLaunchSettingsKeeper({ db, credentials: createMemoryCredentialStore(), log: () => {} }),
     harnessPaths: {
       path: (harness) => (options.harnessMissing ? undefined : `/bin/${harness}`),
       refresh: async (harness) => void events.push(`refresh ${harness}`),

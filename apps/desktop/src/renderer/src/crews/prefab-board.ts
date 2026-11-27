@@ -7,6 +7,7 @@ import {
   DEFAULT_GATE_CAP,
   DEFAULT_GATE_TIMEOUT,
   DEFAULT_PREFAB_ROUND_LIMIT,
+  effortsFor,
   isOrchestratorRole,
   MAX_NAME_LENGTH,
   MAX_PREFAB_MEMBERS,
@@ -15,6 +16,7 @@ import {
   REVIEWER_ROLES,
   type Agent,
   type CrewPrefab,
+  type Effort,
   type LibraryPrefab,
   type PrefabGate,
   type PrefabInput,
@@ -36,6 +38,12 @@ export const END_PILL = { width: 160, height: 40 } as const;
 /** A pill's size, by its kind. */
 export const pillSize = (kind: PrefabInputKind): { width: number; height: number } => (kind === 'end' ? END_PILL : PROMPT_PILL);
 export const GATE_SIZE = { width: 62, height: 62 } as const;
+
+/** The reasoning efforts `members` may all be set to together: their harness's, or only the ones every harness takes when they mix harnesses. */
+export function sharedEfforts(members: readonly Pick<PrefabMember, 'harness'>[]): readonly Effort[] {
+  const harnesses = new Set(members.map((member) => member.harness));
+  return effortsFor(harnesses.size === 1 ? members[0]!.harness : null);
+}
 /** How far a paste, or a duplicate, lands from what it copies. */
 const PASTE_OFFSET = 32;
 const COLUMN_GAP = 64;
@@ -507,7 +515,7 @@ export function pasted(draft: BoardDraft, agents: readonly BoardAgent[], lines: 
 }
 
 /** An input's words, as its pill says them. */
-const inputName = (input: PrefabInput): string => (input.kind === 'end' ? (input.as === 'done' ? 'Done' : 'Ready to merge') : input.kind === 'user' ? 'Your OK' : SOURCE_NAMES[input.kind]!);
+export const inputName = (input: PrefabInput): string => (input.kind === 'end' ? (input.as === 'done' ? 'Done' : 'Ready to merge') : input.kind === 'user' ? 'Your OK' : SOURCE_NAMES[input.kind]!);
 
 /** A member, input or loop gate by name, as a sentence says it: an agent's label, a pill's words, or the loop gate. */
 export function nodeName(draft: Pick<BoardDraft, 'agents' | 'inputs'>, id: string): string {
@@ -515,6 +523,24 @@ export function nodeName(draft: Pick<BoardDraft, 'agents' | 'inputs'>, id: strin
   if (member !== undefined) return memberLabel(member);
   const input = draft.inputs.find((each) => each.input.id === id)?.input;
   return input === undefined ? 'the loop gate' : inputName(input);
+}
+
+/** The words for a line, as its panel says them. */
+export function lineWords(draft: BoardDraft, line: PrefabLine): string {
+  const from = nodeName(draft, line.from);
+  const to = nodeName(draft, line.to);
+  const input = (id: string) => draft.inputs.find((each) => each.input.id === id)?.input;
+  const end = input(line.to);
+  if (end?.kind === 'end') return `${from} ends the crew here, ${end.as === 'ready' ? 'ready to merge' : 'done'}.`;
+  const source = input(line.from);
+  if (source?.kind === 'user') return `The crew waits for your OK, then ${to} starts.`;
+  if (source !== undefined) return `${from} starts ${to}.`;
+  if (line.way === 'again') return `The loop gate sends the work back to ${to} for another round.`;
+  if (line.way === 'done') return `When the loop is done, the work goes on to ${to}.`;
+  if (line.lead === true) return `${from} starts ${to} when it needs it.`;
+  if (line.carries === 'review') return `${from}’s review goes to the loop gate, which decides whether to go round again.`;
+  if (line.carries === 'handoff') return `${to} starts when ${from} hands off, on a checkout of its branch.`;
+  return `${to} starts after ${from}.`;
 }
 
 /** Words before which a problem's word is a plain word, not an id: `a lead line`, `the crew branch`, `Your prompt`. */

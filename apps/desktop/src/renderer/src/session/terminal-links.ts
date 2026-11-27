@@ -1,7 +1,11 @@
-import { isLocalUrl, isWebTabUrl, localWebLinks } from '@agent-board/daemon/web-url';
+import { prefabDraftOfLink } from '@agent-board/daemon/protocol';
+import { isLocalUrl, isWebTabUrl, isWebUrl, localWebLinks } from '@agent-board/daemon/web-url';
 
 /** Where a ⌘-click on an address in the output goes. */
-export type LinkTarget = 'web-tab' | 'browser';
+export type LinkTarget = 'web-tab' | 'browser' | typeof DRAFT_LINK;
+
+/** A crew an agent drafted, by the link its reply gives: it opens on its board, in the board's window. */
+export const DRAFT_LINK = 'draft';
 
 /** An address in a run of text, and where it is in it. */
 export interface TextLink {
@@ -11,6 +15,7 @@ export interface TextLink {
 }
 
 const HTTPS_LINK = /\bhttps:\/\/[^\s"'`<>[\]{}]+/g;
+const DRAFT_LINKS = /\bagent-board:\/\/draft\/[0-9a-f-]+/gi;
 
 /** The URL inside `text` without the sentence's punctuation, and a closing bracket only where an opening one is in it. */
 function trimmed(text: string): string {
@@ -19,7 +24,10 @@ function trimmed(text: string): string {
   return url;
 }
 
-/** The addresses in `text` that a ⌘-click can open: https anywhere, and http or https on this machine. Never another scheme. */
+/**
+ * The addresses in `text` that a ⌘-click can open: https anywhere, http or https on this machine, and the link to a
+ * drafted crew. Never another scheme.
+ */
 export function textLinks(text: string): TextLink[] {
   const remote = [...text.matchAll(HTTPS_LINK)].flatMap((match) => {
     const url = trimmed(match[0]);
@@ -32,7 +40,8 @@ export function textLinks(text: string): TextLink[] {
     if (isLocalUrl(parsed.href) || parsed.username !== '' || parsed.password !== '') return [];
     return [{ url: parsed.href, start: match.index, end: match.index + url.length }];
   });
-  return [...localWebLinks(text), ...remote].sort((a, b) => a.start - b.start);
+  const drafts = [...text.matchAll(DRAFT_LINKS)].flatMap((match) => (prefabDraftOfLink(match[0]) === undefined ? [] : [{ url: match[0], start: match.index, end: match.index + match[0].length }]));
+  return [...localWebLinks(text), ...remote, ...drafts].sort((a, b) => a.start - b.start);
 }
 
 /**
@@ -42,6 +51,7 @@ export function textLinks(text: string): TextLink[] {
  */
 export function hyperlinkAddress(target: string): string | undefined {
   if (/[\s\p{Cc}]/u.test(target)) return undefined;
+  if (prefabDraftOfLink(target) !== undefined) return target;
   let parsed: URL;
   try {
     parsed = new URL(target);
@@ -73,7 +83,8 @@ export function hyperlinkHint(target: string, webTabs: boolean, keys: { open: st
  * only: the browser is never sent a local http address). Undefined where it can go nowhere.
  */
 export function linkTarget(url: string, shift: boolean, webTabs: boolean): LinkTarget | undefined {
-  const https = url.startsWith('https://');
+  if (prefabDraftOfLink(url) !== undefined) return shift ? undefined : DRAFT_LINK;
+  const https = isWebUrl(url);
   if (shift) return https ? 'browser' : undefined;
   if (webTabs && isWebTabUrl(url)) return 'web-tab';
   // A window without tabs has no web tab to open: an https address goes to the browser instead.
@@ -146,6 +157,7 @@ export function bufferLinks(rowAt: (y: number) => BufferRow | undefined, y: numb
 export function linkHint(url: string, webTabs: boolean, keys: { open: string; browser: string }): string {
   const plain = linkTarget(url, false, webTabs);
   const browser = linkTarget(url, true, webTabs);
+  if (plain === DRAFT_LINK) return `${keys.open} to open the draft`;
   const parts = [plain === undefined ? undefined : `${keys.open} to open in ${plain === 'web-tab' ? 'a web tab' : 'the browser'}`];
   if (browser !== undefined && plain !== 'browser') parts.push(`${keys.browser} for the browser`);
   return parts.filter((part) => part !== undefined).join(', ');

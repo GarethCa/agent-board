@@ -1,11 +1,11 @@
 import { memo, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { useReactFlow, type NodeProps } from '@xyflow/react';
 import { Bot, Inbox, Ticket } from 'lucide-react';
-import { jobsFrom } from '@agent-board/daemon/memory-lines';
+import { jobsFrom } from '@agent-board/daemon/queue-lines';
 import { QUEUE_CARD_SIZE, LIST_CARD_FOLDED_SIZE, LIST_CARD_MIN_SIZE, type QueueAudience, type QueueChange, type QueueJob, type StepsWho } from '@agent-board/daemon/protocol';
 import { IconButton, useToast } from '../../ui';
 import { ItemActionsContext, useOnlySelected, type ItemNodeType } from './items';
-import { scopeText } from './memory-card';
+import { scopeText } from './list-card-text';
 import { needsYouEntries } from '../../../../shared/needs-you';
 import { useNeedsYouShows } from '../../needs-you-setting';
 import { goThrough, moveGoingThrough, openDrain, openHandOn, QueueBoardContext, stopGoingThrough, useGoingThrough } from './queue-board';

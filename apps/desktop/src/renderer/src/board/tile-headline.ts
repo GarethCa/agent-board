@@ -1,7 +1,8 @@
 // What the Classic agent tile says at rest (tile B): a short line on what the agent is for, a line on what is true
 // now, its state in a word with a time that moves in steps, and at most one button. Pure, so the rules are unit-tested;
 // HybridTile draws them. The Simplified tile (`calm-tile.ts`) keeps its own.
-import { needsYouKind, planPending, statusLine, type Agent, type AgentState, type NeedsYouShows, type WorkCategory } from '@agent-board/daemon/protocol';
+import { needsYouKind, needsYouReading, planPending, statusLine, type Agent, type AgentState, type NeedsYouReadingFacts, type NeedsYouShows, type WorkCategory } from '@agent-board/daemon/protocol';
+import { WORKING_STATES } from '@agent-board/daemon/human-status';
 import { agentPill, TILE_STATE_LABELS } from '../states';
 import { sinceText } from '../../../shared/needs-you';
 import { clockWakes, endedAs, exitedLine, wakeAct } from './paused';
@@ -34,9 +35,6 @@ export function tileWord(agent: Parameters<typeof clockWakes>[0], state: TileSta
 
 /** The states a tile lies flat in, with no shadow: its turn is over and it asks nothing. */
 export const FLAT_STATES: ReadonlySet<TileState> = new Set<TileState>(['idle', 'done', 'paused']);
-
-/** Pill states in which its turn runs, or is about to. */
-const AT_WORK: ReadonlySet<AgentState> = new Set<AgentState>(['running', 'thinking', 'on-command', 'handing-off', 'starting']);
 
 /** The work categories it may set that wait on something other than the user. */
 const WAITS_ON_OTHERS: ReadonlySet<WorkCategory> = new Set<WorkCategory>(['waiting-on-others', 'in-review', 'blocked']);
@@ -79,7 +77,7 @@ export function tileState(agent: Agent, shows: NeedsYouShows, pill: AgentState):
   if (pill === 'hibernated' || agent.state === 'stopped-by-restart') return 'paused';
   if (pill === 'failed' || agent.startup?.failed === true) return 'failed';
   if (pill === 'done' || agent.endedAt !== null) return 'done';
-  if (AT_WORK.has(pill)) return 'thinking';
+  if (WORKING_STATES.has(pill)) return 'thinking';
   if (pill === 'rate-limited' || pill === 'scheduled') return 'waiting';
   if (agent.workFinishedAt !== null) return 'done';
   if (agent.workCategory !== null && WAITS_ON_OTHERS.has(agent.workCategory.category)) return 'waiting';
@@ -149,13 +147,17 @@ function finishedLine(agent: Agent): string {
   return merged === undefined ? finished : `${finished} · PR #${merged.number} merged`;
 }
 
+/** What its tile's time reads. */
+type TileSinceFacts = NeedsYouReadingFacts & Pick<Agent, 'stateSince' | 'hibernated'>;
+
 /**
- * When the state its tile shows began: a pause when it was paused, Needs you when it asked (its flag, else its state), any
- * other when its state did. Its time and the time's tooltip both count from it.
+ * When the state its tile shows began: a pause when it was paused, Needs you when it asked (`needsYouReading`, as the
+ * inbox and the Overview give it, else its state), any other when its state did. Its time and the time's tooltip both
+ * count from it.
  */
-export function tileSince(agent: Pick<Agent, 'stateSince' | 'hibernated' | 'flag'>, state: TileState): string {
+export function tileSince(agent: TileSinceFacts, state: TileState, shows: NeedsYouShows): string {
   if (state === 'paused') return agent.hibernated?.at ?? agent.stateSince;
-  if (state === 'needs-you' && agent.flag?.to === 'user') return agent.flag.at;
+  if (state === 'needs-you') return needsYouReading(agent, shows)?.since ?? agent.stateSince;
   return agent.stateSince;
 }
 
@@ -163,9 +165,9 @@ export function tileSince(agent: Pick<Agent, 'stateSince' | 'hibernated' | 'flag
  * The time on its bottom row, on Needs you and Paused only, in steps so it never changes every minute: "just now" under
  * 5 minutes, then 5-minute steps, whole hours, then days, from `tileSince`.
  */
-export function tileTime(agent: Pick<Agent, 'stateSince' | 'hibernated' | 'flag'>, state: TileState, now: number): string | undefined {
+export function tileTime(agent: TileSinceFacts, state: TileState, shows: NeedsYouShows, now: number): string | undefined {
   if (state !== 'needs-you' && state !== 'paused') return undefined;
-  const since = tileSince(agent, state);
+  const since = tileSince(agent, state, shows);
   const minutes = Math.floor((now - Date.parse(since)) / 60_000);
   if (!Number.isFinite(minutes)) return undefined;
   if (minutes < 5) return 'just now';

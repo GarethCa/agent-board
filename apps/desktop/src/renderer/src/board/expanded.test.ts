@@ -102,8 +102,9 @@ describe('expanded tiles', () => {
   it('opens each tile pinned expanded that is on the board, not open, and not in its session window', () => {
     const pinned = new Set(['open', 'compact', 'windowed', 'gone']);
     const expanded = expandTile(expandTile([], 'open'), 'other');
-    expect(pinnedToOpen(pinned, expanded, new Set(['open', 'compact', 'windowed', 'other']), new Set(['windowed']))).toEqual(['compact']);
-    expect(pinnedToOpen(new Set(), expanded, new Set(['open']), new Set())).toEqual([]);
+    const windowed = { open: new Set(['windowed']), all: new Set(['windowed']) };
+    expect(pinnedToOpen(pinned, expanded, new Set(['open', 'compact', 'windowed', 'other']), windowed, [])).toEqual(['compact']);
+    expect(pinnedToOpen(new Set(), expanded, new Set(['open']), windowed, [])).toEqual([]);
   });
 
   it('keeps a resized tile at least the minimum size', () => {
@@ -227,19 +228,20 @@ describe('expanded tiles', () => {
 });
 
 describe('windowedExpanded', () => {
+  const unpinned = new Set<string>();
   const a = { id: 'a', width: 800, height: 500 };
   const b = { id: 'b', width: 700, height: 400 };
   const sets = (open: string[], docked: string[] = []) => ({ open: new Set(open), all: new Set([...open, ...docked]) });
   const present = new Set(['a', 'b']);
 
   it('takes an expanded tile out while its window is open, and remembers its size', () => {
-    const next = windowedExpanded([a, b], [], sets(['a']), present);
+    const next = windowedExpanded([a, b], [], sets(['a']), present, unpinned);
     expect(ids(next.expanded)).toEqual(['b']);
     expect(next.hidden).toEqual([a]);
   });
 
   it('gives the tile back at its size once the window is closed', () => {
-    const next = windowedExpanded([b], [a], sets([]), present);
+    const next = windowedExpanded([b], [a], sets([]), present, unpinned);
     expect(next.expanded).toEqual([b, a]);
     expect(next.hidden).toEqual([]);
   });
@@ -249,46 +251,61 @@ describe('windowedExpanded', () => {
     // Maximise on a pinned tile asks for its window: no pin keeps it on the board.
     expect(keptOnBoard('a', pinned, [a, b], 'maximise')).toBe(false);
     // The window open: the tile is out of the expanded tiles, and the pin does not open it again beside the window.
-    const open = windowedExpanded([a, b], [], sets(['a']), present);
+    const open = windowedExpanded([a, b], [], sets(['a']), present, unpinned);
     expect(ids(open.expanded)).toEqual(['b']);
     expect(open.hidden).toEqual([a]);
-    const windowed = new Set(['a', ...open.hidden.map((entry) => entry.id)]);
-    expect(pinnedToOpen(pinned, open.expanded, present, windowed)).toEqual([]);
+    expect(pinnedToOpen(pinned, open.expanded, present, sets(['a']), open.hidden)).toEqual([]);
     // Closed: back at its size, still pinned, with nothing left for the pin to open.
-    const closed = windowedExpanded(open.expanded, open.hidden, sets([]), present);
+    const closed = windowedExpanded(open.expanded, open.hidden, sets([]), present, pinned);
     expect(closed.expanded).toEqual([b, a]);
     expect(closed.hidden).toEqual([]);
-    expect(pinnedToOpen(pinned, closed.expanded, present, new Set())).toEqual([]);
+    expect(pinnedToOpen(pinned, closed.expanded, present, sets([]), closed.hidden)).toEqual([]);
     expect(keptOnBoard('a', pinned, closed.expanded, 'openAgent')).toBe(true);
   });
 
+  it('gives a pinned tile back at its size once its window is docked, where an unpinned one stays compact', () => {
+    const pinned = new Set(['a']);
+    const docked = windowedExpanded([b], [a, { ...b, id: 'c' }], sets([], ['a', 'c']), new Set(['a', 'b', 'c']), pinned);
+    expect(docked.expanded).toEqual([b, a]);
+    expect(ids(docked.hidden)).toEqual(['c']);
+    // Shown from the dock again: off the board once more, at the size it came back at.
+    const shown = windowedExpanded(docked.expanded, docked.hidden, sets(['a'], ['c']), new Set(['a', 'b', 'c']), pinned);
+    expect(shown.expanded).toEqual([b]);
+    expect(shown.hidden).toEqual([{ ...b, id: 'c' }, a]);
+  });
+
+  it('keeps a pinned tile open beside its docked window', () => {
+    const expanded = [a];
+    expect(windowedExpanded(expanded, [], sets([], ['a']), present, new Set(['a'])).expanded).toBe(expanded);
+  });
+
   it('leaves a tile whose window was compact, compact', () => {
-    const next = windowedExpanded([], [], sets([]), present);
+    const next = windowedExpanded([], [], sets([]), present, unpinned);
     expect(next.expanded).toEqual([]);
   });
 
   it('keeps it compact while the window is docked, and expanded by hand meanwhile is the state to come back to', () => {
-    const docked = windowedExpanded([], [a], sets([], ['a']), present);
+    const docked = windowedExpanded([], [a], sets([], ['a']), present, unpinned);
     expect(docked.expanded).toEqual([]);
     expect(docked.hidden).toEqual([a]);
     const byHand = { id: 'a', width: 900, height: 600 };
-    const expandedAgain = windowedExpanded([byHand], [a], sets([], ['a']), present);
+    const expandedAgain = windowedExpanded([byHand], [a], sets([], ['a']), present, unpinned);
     expect(expandedAgain.expanded).toEqual([byHand]);
     expect(expandedAgain.hidden).toEqual([]);
     // Reopened from the dock, then closed: it comes back as it was when the window opened.
-    const reopened = windowedExpanded([byHand], [], sets(['a']), present);
+    const reopened = windowedExpanded([byHand], [], sets(['a']), present, unpinned);
     expect(reopened.hidden).toEqual([byHand]);
-    expect(windowedExpanded([], reopened.hidden, sets([]), present).expanded).toEqual([byHand]);
+    expect(windowedExpanded([], reopened.hidden, sets([]), present, unpinned).expanded).toEqual([byHand]);
   });
 
   it('does not duplicate a tile that is already expanded', () => {
-    const next = windowedExpanded([a], [a], sets([]), present);
+    const next = windowedExpanded([a], [a], sets([]), present, unpinned);
     expect(next.expanded).toEqual([a]);
     expect(next.hidden).toEqual([]);
   });
 
   it('forgets a tile whose session is gone instead of bringing it back', () => {
-    const next = windowedExpanded([], [a], sets([]), new Set(['b']));
+    const next = windowedExpanded([], [a], sets([]), new Set(['b']), unpinned);
     expect(next.expanded).toEqual([]);
     expect(next.hidden).toEqual([]);
   });
@@ -296,7 +313,7 @@ describe('windowedExpanded', () => {
   it('returns the same arrays when nothing changes', () => {
     const expanded = [b];
     const hidden = [a];
-    const next = windowedExpanded(expanded, hidden, sets(['a']), present);
+    const next = windowedExpanded(expanded, hidden, sets(['a']), present, unpinned);
     expect(next.expanded).toBe(expanded);
     expect(next.hidden).toBe(hidden);
   });

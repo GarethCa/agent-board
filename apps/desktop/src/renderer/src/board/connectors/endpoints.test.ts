@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_CONNECTOR_LOOK, type Connector } from '@agent-board/daemon/protocol';
-import { autoEnds, autoSides, connectorEdges, createParamsOf, endOfNode, withConnectorParams, nearestSide, newEndAt, nodeIdOf, shapeOf, withConnector, withConnectorChange } from './endpoints';
+import { autoEnds, autoSides, connectorEdges, createParamsOf, endOfNode, withConnectorParams, nearestSide, newEndAt, nodeIdOf, shapeOf, withConnector, withConnectorChange, withoutConnectorsOn } from './endpoints';
 
 const connector = (overrides: Partial<Connector> = {}): Connector => ({
   id: 'c1',
@@ -189,5 +189,19 @@ describe('autoEnds', () => {
     const [a, b] = [tile(0, 0), tile(0, 400)];
     expect(autoEnds('auto', 'auto', a, b)).toEqual({ fromSide: 'bottom', toSide: 'top', source: { x: 128, y: 136 }, target: { x: 128, y: 400 } });
     expect(autoEnds('right', 'auto', a, b)).toEqual({ fromSide: 'right', toSide: 'top', target: { x: 128, y: 400 } });
+  });
+});
+
+describe('withoutConnectorsOn', () => {
+  it('drops the connectors ending on the removed item, at either end, and keeps one whose both ends stay', () => {
+    const fromIt = connector({ id: 'c1', from: { type: 'item', id: 'gone', side: 'right' }, to: { type: 'item', id: 'b', side: 'left' } });
+    const toIt = connector({ id: 'c2', from: { type: 'agent', id: 's1', side: 'right' }, to: { type: 'item', id: 'gone', side: 'left' } });
+    const between = connector({ id: 'c3', from: { type: 'item', id: 'a', side: 'right' }, to: { type: 'item', id: 'b', side: 'left' } });
+    expect(withoutConnectorsOn([fromIt, toIt, between], 'gone')).toEqual([between]);
+  });
+
+  it('gives the same list when no connector ends on the item, and an agent or zone of that id is no item', () => {
+    const list = [connector({ id: 'c1', from: { type: 'zone', id: 'gone', side: 'right' }, to: { type: 'agent', id: 'gone', side: 'left' } })];
+    expect(withoutConnectorsOn(list, 'gone')).toBe(list);
   });
 });

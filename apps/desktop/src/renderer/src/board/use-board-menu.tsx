@@ -34,8 +34,6 @@ interface BoardMenuOptions {
   addClock(at: { x: number; y: number }): void;
   /** Puts a new steps card of the user's at `at`, on the screen, ready to type its steps into. */
   addSteps(at: { x: number; y: number }): void;
-  /** Adds a memory centred at `at`, a point on the screen. */
-  addMemory(at: { x: number; y: number }): void;
   /** Adds a queue centred at `at`, a point on the screen. */
   addQueue(at: { x: number; y: number }): void;
   /** Adds a to-do list of the user's centred at `at`, a point on the screen. */
@@ -94,7 +92,6 @@ export function useBoardMenu({
   nodeOf,
   addClock,
   addSteps,
-  addMemory,
   addQueue,
   addTodo,
   startCrew,
@@ -143,10 +140,6 @@ export function useBoardMenu({
     addSteps: () => {
       const at = contextMenu?.at;
       if (at !== undefined) setTimeout(() => addSteps(at), MENU_FOCUS_RETURN_MS);
-    },
-    addMemory: () => {
-      const at = contextMenu?.at;
-      if (at !== undefined) setTimeout(() => addMemory(at), MENU_FOCUS_RETURN_MS);
     },
     addQueue: () => {
       const at = contextMenu?.at;

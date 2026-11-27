@@ -7,7 +7,7 @@ import type { TodoData, TodoLine } from '@agent-board/daemon/protocol';
 import { Button, IconButton, Kbd } from '../../ui';
 import { isTyping } from '../../keys/typing';
 import { FullScreen, type FullScreenKey } from './FullScreen';
-import { whenText } from './memory-card';
+import { whenText } from './list-card-text';
 import { Box, WriterChip, type TodoCardActions } from './TodoCard';
 import { linesOf, lineStory, moveTo, NO_TODO_FILTER, todoFullKey, todoGroups, writerCounts, type TodoFilter } from './todo-full';
 import { cursorAfterRemove, listOwnerName, moveCursor, todoCounts, writerOf, type TodoLookup } from './todo-view';
@@ -29,7 +29,7 @@ export interface TodoFullProps {
 
 /** Esc in an edit or the add field cancels it, and in a search with text clears it: not the whole view. */
 const escapeStays = (focused: Element | null) =>
-  focused instanceof HTMLElement && (focused.closest('.todo-full-edit, .todo-full-add') !== null || (focused.closest('.memory-full-search') !== null && (focused as HTMLInputElement).value !== ''));
+  focused instanceof HTMLElement && (focused.closest('.todo-full-edit, .todo-full-add') !== null || (focused.closest('.list-full-search') !== null && (focused as HTMLInputElement).value !== ''));
 
 const FOOT_KEYS: FullScreenKey[] = [
   { keys: '↑↓', label: 'move' },
@@ -145,18 +145,18 @@ export function TodoFull({ data, lookup, zoneName, now, actions, onClose, inline
     <li key={line.id}>
       <button
         type="button"
-        className="memory-full-item todo-full-item"
+        className="list-full-item todo-full-item"
         data-row={line.id}
         data-done={line.done !== null || undefined}
         aria-current={line.id === current?.id || undefined}
         tabIndex={line.id === current?.id ? 0 : -1}
         onClick={() => pick(line)}
       >
-        <span className="memory-full-item-name">
+        <span className="list-full-item-name">
           <Box done={line.done !== null} />
           <b>{line.text}</b>
         </span>
-        <span className="memory-full-item-sub">
+        <span className="list-full-item-sub">
           <WriterChip writer={writerOf(line.by, lookup)} />
         </span>
       </button>
@@ -180,7 +180,7 @@ export function TodoFull({ data, lookup, zoneName, now, actions, onClose, inline
       }
       bar={
         <>
-          <label className="listcard-search memory-full-search">
+          <label className="listcard-search list-full-search">
             <Search className="listcard-search-mark" aria-hidden="true" />
             <input
               ref={search}
@@ -193,10 +193,10 @@ export function TodoFull({ data, lookup, zoneName, now, actions, onClose, inline
             />
             <Kbd>/</Kbd>
           </label>
-          <button type="button" className="memory-full-chip" aria-pressed={filter.writers === 'yours'} disabled={writers.yours === 0} onClick={() => set({ writers: filter.writers === 'yours' ? null : 'yours' })}>
+          <button type="button" className="list-full-chip" aria-pressed={filter.writers === 'yours'} disabled={writers.yours === 0} onClick={() => set({ writers: filter.writers === 'yours' ? null : 'yours' })}>
             Yours {writers.yours}
           </button>
-          <button type="button" className="memory-full-chip" aria-pressed={filter.writers === 'agents'} disabled={writers.agents === 0} onClick={() => set({ writers: filter.writers === 'agents' ? null : 'agents' })}>
+          <button type="button" className="list-full-chip" aria-pressed={filter.writers === 'agents'} disabled={writers.agents === 0} onClick={() => set({ writers: filter.writers === 'agents' ? null : 'agents' })}>
             From agents {writers.agents}
           </button>
           <span className="full-screen-bar-end">
@@ -212,24 +212,24 @@ export function TodoFull({ data, lookup, zoneName, now, actions, onClose, inline
         </>
       }
       side={
-        <ul ref={list} className="memory-full-list" aria-label="To-dos in groups">
+        <ul ref={list} className="list-full-list" aria-label="To-dos in groups">
           {groups.map((group) => (
             <li key={group.id} className="queue-full-group">
-              <span className="memory-full-group" aria-hidden="true">
+              <span className="list-full-group" aria-hidden="true">
                 {group.label} · {group.lines.length}
               </span>
               <ul className="queue-full-rows">{group.lines.map(row)}</ul>
             </li>
           ))}
-          {lines.length === 0 && <li className="memory-full-none">{filter.search.trim() !== '' ? `Nothing matches “${filter.search}”` : 'Nothing to do'}</li>}
+          {lines.length === 0 && <li className="list-full-none">{filter.search.trim() !== '' ? `Nothing matches “${filter.search}”` : 'Nothing to do'}</li>}
         </ul>
       }
       detail={
         adding ? (
-          <section className="memory-full-entry todo-full-add" aria-label="Add a to-do" onKeyDown={(event) => event.key === 'Escape' && (event.preventDefault(), event.stopPropagation(), setAdding(false))}>
+          <section className="list-full-entry todo-full-add" aria-label="Add a to-do" onKeyDown={(event) => event.key === 'Escape' && (event.preventDefault(), event.stopPropagation(), setAdding(false))}>
             <h3 className="queue-full-heading">Add a to-do</h3>
             <input
-              className="memory-full-name todo-full-input"
+              className="list-full-name todo-full-input"
               value={draft}
               maxLength={500}
               autoFocus={initial?.adding === undefined}
@@ -241,26 +241,26 @@ export function TodoFull({ data, lookup, zoneName, now, actions, onClose, inline
             <span className="queue-full-hint">↵ adds, then type the next · esc done</span>
           </section>
         ) : current === undefined ? (
-          <div className="memory-full-empty">
+          <div className="list-full-empty">
             <b>Nothing to do</b>
             <span>
               Type one with Add a to-do, or an agent adds one with <code>remind</code>.
             </span>
           </div>
         ) : (
-          <article key={current.id} className="memory-full-entry" aria-label={current.text}>
-            <div className="memory-full-entry-head">
+          <article key={current.id} className="list-full-entry" aria-label={current.text}>
+            <div className="list-full-entry-head">
               <button type="button" className="todo-tick todo-full-tick" role="checkbox" aria-checked={current.done !== null} aria-label={current.done === null ? 'Tick it' : 'Untick it'} onClick={() => tick(current)}>
                 <Box done={current.done !== null} />
                 {current.done === null ? 'Tick' : 'Ticked'}
               </button>
-              <span className="memory-full-entry-tools">
+              <span className="list-full-entry-tools">
                 <IconButton icon={<Trash2 />} size="sm" aria-label="Delete" tooltip="Delete · ⌫" onClick={() => remove(current)} />
               </span>
             </div>
             {editing?.line === current.id ? (
               <textarea
-                className="memory-full-name queue-full-edit todo-full-edit"
+                className="list-full-name queue-full-edit todo-full-edit"
                 value={editing.text}
                 maxLength={500}
                 autoFocus
@@ -284,9 +284,9 @@ export function TodoFull({ data, lookup, zoneName, now, actions, onClose, inline
               </button>
             )}
             <LineAgent line={current} lookup={lookup} showAgent={actions.showAgent} />
-            <section className="memory-full-who" aria-label="Who and when">
+            <section className="list-full-who" aria-label="Who and when">
               <h3>Who and when</h3>
-              <ol className="memory-full-timeline">
+              <ol className="list-full-timeline">
                 {lineStory(current, lookup).map((story) => (
                   <li key={story.what}>
                     <span>
@@ -304,7 +304,7 @@ export function TodoFull({ data, lookup, zoneName, now, actions, onClose, inline
       inline={inline}
       onClose={onClose}
       // The line shown, in the list, so ↑↓ move at once; with none, the search.
-      initialFocus={(root) => root.querySelector<HTMLElement>('.todo-full-item[aria-current="true"]') ?? root.querySelector<HTMLElement>('.memory-full-search input')}
+      initialFocus={(root) => root.querySelector<HTMLElement>('.todo-full-item[aria-current="true"]') ?? root.querySelector<HTMLElement>('.list-full-search input')}
       escapeStays={escapeStays}
       object={object}
       onKeyDown={keys}

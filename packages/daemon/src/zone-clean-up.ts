@@ -8,8 +8,8 @@ import type { Agent, AgentState, BoardItem, BoardItemKind, DoneLineData, DoneTic
 export const DONE_LINE_KIND = 'done-line';
 
 /**
- * What a Clean up gathers to its agent: notes and docs an agent made. Never the user's own items, nor a memory, a queue
- * or a crew card, which are the zone's.
+ * What a Clean up gathers to its agent: notes and docs an agent made. Never the user's own items, nor a queue or a crew
+ * card, which are the zone's.
  */
 const GATHERED: readonly BoardItemKind[] = ['agent-note', 'document', 'plan', 'steps', 'todo'];
 

@@ -83,6 +83,7 @@ function host(agents = new Map<string, Agent>(), stubs: Partial<HostAgents> = {}
       },
       dropNotices: () => 0,
       deliverAfterTurn: () => {},
+      restedWith: () => undefined,
       userTyping: () => false,
       resume: () => Promise.reject(new Error('not here')),
       restartWith: () => Promise.reject(new Error('not here')),

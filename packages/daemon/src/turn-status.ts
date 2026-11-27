@@ -1,15 +1,14 @@
-import { MAX_STATUS_LENGTH, isMidTurn, type Agent, type AgentState, type AgentStatus } from './protocol.ts';
+import { CARRYING_ON_STATES } from './human-status.ts';
+import { MAX_STATUS_LENGTH, isMidTurn, type Agent, type AgentStatus } from './protocol.ts';
 import { oneLine } from './terminal-input.ts';
 
 /**
- * States an agent is mid-turn in, or about to be again, beyond those `isMidTurn` knows, or whose command left running
- * goes on: its progress is of work under way.
+ * Whether the live agent is part-way through a turn, a call that waits on the user (`ask`, `plan`) included, or at work
+ * otherwise (`CARRYING_ON_STATES`: starting, handing off, a command it left running, its usage limit): its progress is
+ * of work under way.
  */
-const ALSO_WORKING: ReadonlySet<AgentState> = new Set<AgentState>(['rate-limited', 'handing-off', 'on-command']);
-
-/** Whether the live agent is part-way through a turn, a call that waits on the user (`ask`, `plan`) included. */
 export function isWorking(agent: Pick<Agent, 'state' | 'ask' | 'removeAsk' | 'plan' | 'endedAt'>): boolean {
-  return agent.endedAt === null && (isMidTurn(agent) || ALSO_WORKING.has(agent.state));
+  return agent.endedAt === null && (isMidTurn(agent) || CARRYING_ON_STATES.has(agent.state));
 }
 
 /**

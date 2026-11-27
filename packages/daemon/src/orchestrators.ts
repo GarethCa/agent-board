@@ -62,6 +62,7 @@ import {
   type Zone,
   startedByHand,
   type TicketChatKind,
+  restsFinished,
 } from './protocol.ts';
 import { watchesSummary, type TicketWatchHost } from './ticket-watches.ts';
 import type { LayoutMethods } from './orchestrator-layout.ts';
@@ -86,6 +87,7 @@ type OrchestratorMethods = Omit<
   | 'orchestrator.removeRole'
   | 'orchestrator.addClock'
   | 'orchestrator.removeClock'
+  | 'orchestrator.deleteItem'
   | 'orchestrator.prefabs'
   | 'orchestrator.savePrefab'
   | 'orchestrator.removePrefab'
@@ -156,6 +158,7 @@ const LOGGED_METHODS: Partial<Record<DaemonMethod, OrchestratorAction>> = {
   'orchestrator.addNote': 'add-note',
   'orchestrator.editNote': 'edit-note',
   'orchestrator.removeNote': 'remove-note',
+  'orchestrator.deleteItem': 'delete-item',
   'orchestrator.passItem': 'pass',
   'orchestrator.addShape': 'add-shape',
   'orchestrator.addDiagram': 'add-diagram',
@@ -219,7 +222,7 @@ export interface OrchestratorHostOptions extends BoardCallerSources {
   db: DatabaseSync;
   agents: Pick<
     AgentHost,
-    'get' | 'list' | 'announce' | 'handCrew' | 'removedOrchestrator' | 'fallbackOwner' | 'spawn' | 'answer' | 'interrupt' | 'setEffort' | 'setPinnedExpanded' | 'setRole' | 'roleTemplate' | 'continueOnCredits' | 'resume' | 'restartWith' | 'stop' | 'pause' | 'finalMessage' | 'waitsAtPrompt' | 'setStatus' | 'setName' | 'setPurpose' | 'clearFlag' | 'sendUnsent' | 'clearUnsent' | 'queueAfterTurn' | 'dropNotices' | 'deliverAfterTurn' | 'userTyping'
+    'get' | 'list' | 'announce' | 'handCrew' | 'removedOrchestrator' | 'fallbackOwner' | 'spawn' | 'answer' | 'interrupt' | 'setEffort' | 'setPinnedExpanded' | 'setRole' | 'roleTemplate' | 'continueOnCredits' | 'resume' | 'restartWith' | 'stop' | 'pause' | 'finalMessage' | 'waitsAtPrompt' | 'setStatus' | 'restedWith' | 'setName' | 'setPurpose' | 'clearFlag' | 'sendUnsent' | 'clearUnsent' | 'queueAfterTurn' | 'dropNotices' | 'deliverAfterTurn' | 'userTyping'
   >;
   zones: () => Zone[];
   flowEdges: Pick<FlowEdgeHost, 'create' | 'get' | 'link' | 'remove'>;
@@ -342,6 +345,7 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
     waitsAtPrompt: (sessionId) => agents.waitsAtPrompt(sessionId),
     agent: (sessionId) => agents.get(sessionId),
     leads: (agent) => chainUp(agent.spawnedBy, (id) => agents.get(id)?.spawnedBy),
+    restedWith: (sessionId) => agents.restedWith(sessionId),
   });
   /** Each wait's check, run on every agent update. */
   const waiters = new Set<{ check(): void; finish(timedOut: boolean): void }>();
@@ -554,7 +558,7 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
   const stillRunning = (agent: Agent): string | null => {
     if (agent.endedAt !== null) return null;
     if (isWorking(agent)) return 'still running: it is mid-turn';
-    if (agent.workFinishedAt === null || !(agent.state === 'idle' || agent.state === 'waiting')) return 'still running: its session is open and it has not said it is finished';
+    if (!restsFinished(agent)) return 'still running: its session is open and it has not said it is finished';
     return null;
   };
 
@@ -602,7 +606,7 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
    * told so), unforced: one with unsaved work keeps them both.
    */
   const removeAllowed = async (requesterId: string, tiles: readonly RemoveAskTile[], end: RemoveAskEnd): Promise<RemoveAskResult> => {
-    if (end === null) return keptAll(tiles, 'denied', 'the ask was withdrawn before the user answered: the call waiting on it ended, or your next turn began');
+    if (end === null) return keptAll(tiles, 'denied', 'the ask ended before the user answered: the board is stopping');
     if (end === 'timed-out') return keptAll(tiles, 'timed-out', 'no answer came');
     if (!end.allow) return keptAll(tiles, 'denied', 'the user denied it');
     // Checked as it is now: its session may have ended while it waited.
@@ -804,6 +808,7 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
       caller: orchestrator,
       logged,
       madeByCrew: (me, madeBy) => me.agent === null || inCrewOf(me.agent, madeBy),
+      mayOrchestrate,
       mayTakeOver(me, madeBy) {
         if (me.agent === null || madeBy === null) return false;
         const maker = agents.get(madeBy);
@@ -900,6 +905,7 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
                 branch: optionalStringParam(p, 'branch'),
                 baseBranch,
                 issueId: optionalStringParam(p, 'issueId'),
+                issueAsTyped: optionalBooleanParam(p, 'issueAsTyped'),
                 purpose: optionalStringParam(p, 'description'),
                 ticketChat: optionalBooleanParam(p, 'ticketChat'),
                 // Checked as the agent starts: implementer or lead, with ticketChat.
@@ -1486,8 +1492,9 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
             const tiles = asked.map((agent) => ({ sessionId: agent.sessionId, name: agent.name, held: heldBack(agent, batch, all) }));
             const requester = me.agent;
             const ms = Math.min(timeoutMs ?? DEFAULT_ASK_WAIT_MS, MAX_ASK_WAIT_MS);
-            const signal = connection.closed ?? new AbortController().signal;
-            return options.removeAsks.ask(requester.sessionId, tiles, ms, signal, (end) => removeAllowed(requester.sessionId, tiles, end));
+            // Without waiting, or once the call stops waiting, the ask stays up and its answer is told as a message.
+            const signal = optionalBooleanParam(p, 'detached') === true ? undefined : (connection.closed ?? new AbortController().signal);
+            return options.removeAsks.ask(requester.sessionId, tiles, ms, (end) => removeAllowed(requester.sessionId, tiles, end), signal);
           });
         },
 

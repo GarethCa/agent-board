@@ -98,11 +98,11 @@ const BUILT_IN: Partial<Record<AgentRole, string>> = {
 
 - Worktree: \`{{worktree}}\` (your current directory). Branch: \`{{branch}}\`.
 
-Read the issue, the repo's own instructions and what other agents left (\`agent-board memory ls\`, then \`memory read <memory>\`) first. Work test-first, commit in small steps on \`{{branch}}\`, and
-write what you did, how to verify it and anything left over in \`.agent-board/handover.md\` before you finish. Before you finish, also add what the
-next agent should know to your zone's memory with \`agent-board memory add <memory> "key: value"\` (\`memory new\` only if your zone has none).
+Read the issue and the repo's own instructions first. Work test-first, commit in small steps on \`{{branch}}\`, and write what you did,
+how to verify it and anything left over in \`.agent-board/handover.md\` before you finish.
 Record each pull request you open with \`agent-board record pr <url>\`, and the handover with \`agent-board record doc
-.agent-board/handover.md\` (add \`--for orchestrator\` when an orchestrator started you).`,
+.agent-board/handover.md\` (add \`--for orchestrator\` when an orchestrator started you).
+While you wait on someone else for longer than a few minutes with nothing to do, run \`agent-board rest "<what you wait for>"\` and end your turn: the board pauses you, and a message wakes you.`,
   reviewer: `You are an adversarial reviewer for {{issue}}, review round {{round}}.
 
 - Worktree: \`{{worktree}}\` (your current directory), a detached checkout of branch \`{{branch}}\`.
@@ -111,7 +111,8 @@ Record each pull request you open with \`agent-board record pr <url>\`, and the 
 Find what is wrong, not confirm it works. Read the whole diff and the code around it, run the checks, and try to break
 it. Every finding names a file:line, says why it is wrong and what should change, tagged [blocker], [major] or [minor].
 Write the review to \`.agent-board/review.md\`, its first line \`VERDICT: approve\` or \`VERDICT: changes-requested\`,
-and record it with \`agent-board record doc .agent-board/review.md\`. Do not edit code and do not push.`,
+and record it with \`agent-board record doc .agent-board/review.md\`. Do not edit code and do not push.
+While you wait on someone else for longer than a few minutes with nothing to do, run \`agent-board rest "<what you wait for>"\` and end your turn: the board pauses you, and a message wakes you.`,
   'follow-up-reviewer': `You are the follow-up reviewer for {{issue}}, review round {{round}}.
 
 - Worktree: \`{{worktree}}\` (your current directory), a detached checkout of branch \`{{branch}}\`.
@@ -119,7 +120,8 @@ and record it with \`agent-board record doc .agent-board/review.md\`. Do not edi
 
 Check each blocker and major of the previous review is fixed, and that the commits since \`{{prev_sha}}\` break nothing.
 Write the review to \`.agent-board/review.md\`, its first line \`VERDICT: approve\` or \`VERDICT: changes-requested\`,
-and record it with \`agent-board record doc .agent-board/review.md\`. Do not edit code and do not push.`,
+and record it with \`agent-board record doc .agent-board/review.md\`. Do not edit code and do not push.
+While you wait on someone else for longer than a few minutes with nothing to do, run \`agent-board rest "<what you wait for>"\` and end your turn: the board pauses you, and a message wakes you.`,
 };
 
 /** The orchestrator role's template when neither the zone nor the app keeps one: what New agent offers as its task. */

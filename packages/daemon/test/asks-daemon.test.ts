@@ -8,9 +8,10 @@ const SIZE = { cols: 120, rows: 40 };
 
 /** A daemon whose agents run the fake harnesses' `ask-plan` scenario, and a zone to start them in. */
 /** A daemon on the fake harness's ask-plan scenario; given `dataDir` and `home` again, the same board after a restart. */
-async function askDaemon({ mcpCancel = true, dataDir = tempDataDir(), home = tempDataDir() } = {}) {
+async function askDaemon({ mcpCancel = true, dataDir = tempDataDir(), home = tempDataDir(), placeDocTiles = false } = {}) {
   const daemon = await startTestDaemon({ dataDir, worktreesDir: tempDataDir(), agentEnv: fakeHarnessEnv({ scenario: 'ask-plan', home, mcpCancel }) });
   const client = await connectTestClient(daemon);
+  if (placeDocTiles) await client.call('settings.set', { placeDocTiles: true });
   const recorder = recordEvents(client);
   const start = async (prompt: string, harness: Harness = 'claude') => {
     const zone = (await client.call('zone.list')).at(0) ?? (await client.call('zone.add', { path: tempRepo(), x: 0, y: 0, name: 'storefront' }));
@@ -115,8 +116,32 @@ describe('an agent asking the user through the board MCP', () => {
     await expect(client.call('plan.decide', { sessionId: agent.sessionId, planId: second.plan!.id, outcome: 'rejected' })).rejects.toThrow(/decided already/);
   });
 
-  it('puts a plan from a file on the board, takes the user’s edit, and approves their version into the file', async () => {
-    const { client, recorder, start, until } = await askDaemon();
+  it('puts no plan card on the board by default: the plan waits in the inbox, listed with its agent', async () => {
+    const { client, start, until } = await askDaemon();
+    const agent = await start('Plan doc on the board: docs/migration.md');
+    const shown = await until(agent.sessionId, (seen) => seen.plan?.decision === null && seen.state === 'waiting');
+    expect(shown.plan).toMatchObject({ version: 1, title: 'Zone id migration' });
+    expect((await client.call('item.list')).filter((item) => item.kind === 'plan')).toEqual([]);
+    await client.call('plan.decide', { sessionId: agent.sessionId, planId: shown.plan!.id, outcome: 'rejected' });
+  });
+
+  it('answers a plan left from a shell with whether its card went on the board, as Settings says', async () => {
+    const { daemon, client, recorder, start, until } = await askDaemon();
+    const agent = await start('Identify, then ask: Ready? | Yes');
+    const { ask } = await until(agent.sessionId, (seen) => seen.ask !== null);
+    const token = /identity:(.*):end\r\n/.exec(recorder.screenText(agent.sessionId))![1]!;
+    await client.call('ask.answer', { sessionId: agent.sessionId, askId: ask!.id, answer: { option: 0 } });
+    const asAgent = await connectTestClient(daemon);
+    await asAgent.call('board.identify', { token });
+    const leave = (title: string) => asAgent.call('board.presentPlan', { token, title, body: `# ${title}`, format: 'markdown', onBoard: true, detached: true });
+    expect(await leave('Off the board')).toMatchObject({ left: { version: 1 }, onBoard: false });
+    await client.call('settings.set', { placeDocTiles: true });
+    expect(await leave('On the board')).toMatchObject({ left: { version: 2 }, onBoard: true });
+    await expect.poll(async () => (await client.call('item.list')).filter((item) => item.kind === 'plan')).toHaveLength(1);
+  });
+
+  it('puts a plan from a file on the board when Settings puts docs there, takes the user’s edit, and approves their version into the file', async () => {
+    const { client, recorder, start, until } = await askDaemon({ placeDocTiles: true });
     const agent = await start('Plan doc on the board: docs/migration.md');
     const shown = await until(agent.sessionId, (seen) => seen.plan?.decision === null);
     expect(shown.plan).toMatchObject({ version: 1, title: 'Zone id migration', author: 'agent' });
@@ -141,7 +166,7 @@ describe('an agent asking the user through the board MCP', () => {
   });
 
   it('leaves a plan from the command line, which outlives the agent’s turn, and types the decision at its prompt', async () => {
-    const { client, recorder, start, until } = await askDaemon();
+    const { client, recorder, start, until } = await askDaemon({ placeDocTiles: true });
     const agent = await start('Plan doc by CLI: docs/migration.md');
     await recorder.waitForText(agent.sessionId, 'Plan v1 shown to the user');
     await recorder.waitForText(agent.sessionId, 'Plan left with the board.');

@@ -4,7 +4,7 @@ Issue trackers (Linear, GitHub) and pull requests, for zones and tiles. `README.
 
 | What | Files |
 |---|---|
-| The shared shape | `tracker.ts` (where issues live), `providers.ts` and `pull-request-ref.ts` (no Node imports, so the renderer can use them), `shape.ts` |
+| The shared shape | `tracker.ts` (where issues live), `providers.ts`, `pull-request-ref.ts` and `web-link.ts` (one rule for a web link; no Node imports, so the renderer can use them), `shape.ts` |
 | Linear | `linear.ts`, `credentials.ts` |
 | GitHub, through the user's `gh` | `github.ts`, `gh.ts`, `pull-requests.ts`, `pull-request-details.ts`, `pull-request-watch.ts` (what a ticket's watches read), `clone.ts` |
 | Fakes for tests (never import them from production code) | `fake.ts`, `fake-gh.ts`, `fake-github.ts` (the fake `bin/gh`), `testing.ts`, `keychain-testing.ts` |

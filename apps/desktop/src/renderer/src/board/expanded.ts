@@ -140,15 +140,17 @@ export function keptOnBoard(id: string, pinned: ReadonlySet<string>, expanded: E
 
 /**
  * The tiles pinned expanded that must open: each on the board and not yet expanded, but for one its session
- * window has (`windowed`), shown, docked or popped out.
+ * window holds (`windowHolds`), and one a window took (`hidden`), which `windowedExpanded` gives back at its size.
  */
 export function pinnedToOpen(
   pinned: ReadonlySet<string>,
   expanded: ExpandedTiles,
   present: ReadonlySet<string>,
-  windowed: ReadonlySet<string>,
+  windowed: WindowedTiles,
+  hidden: ExpandedTiles,
 ): string[] {
-  return [...pinned].filter((id) => present.has(id) && !windowed.has(id) && !expanded.some((entry) => entry.id === id));
+  const taken = (id: string) => expanded.some((entry) => entry.id === id) || hidden.some((entry) => entry.id === id);
+  return [...pinned].filter((id) => present.has(id) && !windowHolds(id, windowed, pinned) && !taken(id));
 }
 
 /** Sets the expanded tile's size, within the least and greatest. */
@@ -184,24 +186,36 @@ export interface WindowedTiles {
 const sameEntries = (a: ExpandedTiles, b: ExpandedTiles) => a.length === b.length && a.every((entry, index) => entry === b[index]);
 
 /**
- * Keeps an expanded tile out of the way while its session window is open, and gives it back, at its size, once the
- * window is closed. `hidden` holds the tiles a window took: a docked window leaves them compact, and one expanded by
- * hand meanwhile is the state to come back to. Tiles no longer `present` are forgotten rather than brought back.
- * Returns the same arrays when nothing changes.
+ * The one rule for when a session's window keeps its tile off the board: while it is shown on the board, popped out
+ * or popped up, one terminal draws the session. Docked, it keeps an expanded tile compact, as the user left it for the
+ * window, but never one pinned expanded: leaving the window by Esc, a click on the board, Minimise, ⌘K to another
+ * session or a pop-up docks it, and a pinned tile is back at its place and size however its window was left.
+ */
+export function windowHolds(id: string, windowed: WindowedTiles, pinned: ReadonlySet<string>): boolean {
+  return windowed.open.has(id) || (windowed.all.has(id) && !pinned.has(id));
+}
+
+/**
+ * Keeps an expanded tile out of the way while its session window holds it (`windowHolds`), and gives it back, at its
+ * size, once the window lets it go. `hidden` holds the tiles a window took: a docked window leaves them compact (not
+ * those `pinned` expanded), and one expanded by hand meanwhile is the state to come back to. Tiles no longer
+ * `present` are forgotten rather than brought back. Returns the same arrays when nothing changes.
  */
 export function windowedExpanded(
   expanded: ExpandedTiles,
   hidden: ExpandedTiles,
   windowed: WindowedTiles,
   present: ReadonlySet<string>,
+  pinned: ReadonlySet<string>,
 ): { expanded: ExpandedTiles; hidden: ExpandedTiles } {
   let held = hidden.filter((entry) => present.has(entry.id));
   for (const entry of expanded) {
     if (windowed.open.has(entry.id)) held = [...held.filter((known) => known.id !== entry.id), entry];
     else if (windowed.all.has(entry.id)) held = held.filter((known) => known.id !== entry.id);
   }
-  const back = held.filter((entry) => !windowed.all.has(entry.id) && !expanded.some((known) => known.id === entry.id));
-  held = held.filter((entry) => windowed.all.has(entry.id));
+  const holds = (id: string) => windowHolds(id, windowed, pinned);
+  const back = held.filter((entry) => !holds(entry.id) && !expanded.some((known) => known.id === entry.id));
+  held = held.filter((entry) => holds(entry.id));
   const kept = expanded.filter((entry) => !windowed.open.has(entry.id));
   const next = back.length === 0 ? kept : [...kept, ...back];
   return {

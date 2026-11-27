@@ -1,4 +1,4 @@
-// The size a memory, queue or steps card takes as it folds and unfolds, and how far its rows are scrolled.
+// The size a queue or steps card takes as it folds and unfolds, and how far its rows are scrolled.
 import { isCardSize, type CardSize } from '@agent-board/daemon/protocol';
 
 /** A card as `foldTo` reads it: its size on the board and its saved data. */

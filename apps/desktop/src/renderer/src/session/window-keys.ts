@@ -41,5 +41,17 @@ export function isRunGateKey(event: KeyPress, isMac = mac): boolean {
 /** Run gate's shortcut as the platform writes it. */
 export const runGateShortcut = (isMac = mac): string => keyText('window.runGate', isMac);
 
+/** A press as the board's window hears it, once whatever has the focus has had it. */
+type HeardPress = KeyPress & Pick<KeyboardEvent, 'defaultPrevented' | 'repeat'>;
+
+/**
+ * Whether ⌘W (Ctrl+Shift+W off macOS) closes the session window shown on the board: a press nothing took first, as a
+ * tab's close in the window's panes takes it when the focus is there. From the board, the window's header or anywhere
+ * else in the board's window, it closes the session window rather than the board's. A held key closes it once.
+ */
+export function closesShownWindow(event: HeardPress, isMac = mac): boolean {
+  return !event.defaultPrevented && !event.repeat && pressed('window.closeTab', event, { isMac });
+}
+
 /** What the window says when the close key meets a tab that can't be closed: the tile's own, which is its agent or its shell's only tab. */
 export const ownTabNotice = (owner: 'agent' | 'shell'): string => (owner === 'agent' ? "An agent's own tab can't be closed." : "A shell's only tab can't be closed.");

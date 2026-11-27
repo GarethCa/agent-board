@@ -5,6 +5,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { invalidParams, paramsObject, stringParam } from './params.ts';
 import { isMidTurn, type Agent, type DaemonMethods, type SpawnAgentParams, type TicketChatKind } from './protocol.ts';
 import type { RpcHandlers } from './rpc.ts';
+import { BOARD_LEAD } from './sender-marker.ts';
 import { builderOf } from './ticket-tiles.ts';
 
 /** What switching a chat reads and does of the agent host. */
@@ -41,12 +42,13 @@ const kindOf = (chat: Agent): TicketChatKind => chat.chatKind ?? 'implementer';
 /** Whether `agent` is at a hand-off: between turns (at its prompt, its work handed on or not yet begun), or ended. */
 const atHandOff = (agent: Agent): boolean => agent.endedAt !== null || !isMidTurn(agent);
 
+// Each led as the board's own notice, so the chat shows it as the board's, not the user's.
 const toLeadText = (builder: Agent) =>
-  `You are now this ticket's lead, no longer its implementer. ${builder.name} builds it, on your branch in your worktree: ` +
+  `${BOARD_LEAD}You are now this ticket's lead, no longer its implementer. ${builder.name} builds it, on your branch in your worktree: ` +
   'send it the work with agent-board send, and leave the files to it. You go on talking to the user.';
 
 const toImplementerText = (builder: Agent | undefined) =>
-  `You are now this ticket's implementer: you build it yourself, on your branch in your worktree.` +
+  `${BOARD_LEAD}You are now this ticket's implementer: you build it yourself, on your branch in your worktree.` +
   (builder === undefined ? '' : ` ${builder.name} handed off and has closed: read its last work in the worktree.`);
 
 export function createTicketChatHost({ db, agents, log }: TicketChatHostOptions): TicketChatHost {

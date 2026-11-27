@@ -7,8 +7,9 @@ import type { StartChange } from './agent-starts.ts';
 import type { AfterTurn, Answered, UnsentSent } from './deliveries.ts';
 import type { SendTrail } from './send-log.ts';
 import type { HarnessPaths } from './harness-path.ts';
+import type { LaunchSettingsKeeper } from './launch-settings-keychain.ts';
 import type { HookReply } from './permissions.ts';
-import type { AgentAsk, PlanSummary, DocumentSummary, Agent, WorkCategorySet, AgentStepsWait, RemoveAsk, AgentStart, AgentRole, DaemonEvent, Effort, EffortApplies, Harness, TicketBoardPlace, TileMove, PermissionDecision, PromptAnswer, LinkedIssue, SessionInfo, SessionState, SpawnAgentParams, TerminalSize, TilePosition, TranscriptChunk } from './protocol.ts';
+import type { AgentAsk, PlanSummary, DocumentSummary, Agent, RestResult, WorkCategorySet, AgentStepsWait, RemoveAsk, AgentStart, AgentRole, DaemonEvent, Effort, EffortApplies, Harness, TicketBoardPlace, TileMove, PermissionDecision, PromptAnswer, LinkedIssue, SessionInfo, SessionState, SpawnAgentParams, TerminalSize, TilePosition, TranscriptChunk } from './protocol.ts';
 import type { RunStart, ScheduleHost } from './schedules.ts';
 import type { SessionHost } from './sessions.ts';
 import type { CharacterSet } from './character.ts';
@@ -31,6 +32,8 @@ export interface AgentHostOptions {
   scratchDir: string;
   /** Where an agent with launch settings of its own has its `claude --settings` written, readable by the user alone. */
   launchSettingsDir: string;
+  /** Agents' launch settings: their values in the keychain, their names in the agents table. */
+  launchSettings: LaunchSettingsKeeper;
   /** Where groups' own folders are (`groupFolder`): an agent in a group with no repo runs in the group's. */
   groupsDir: string;
   /** Remembers a folder an agent was started from, so pickers offer it again. */
@@ -54,6 +57,8 @@ export interface AgentHostOptions {
   boardToolsOnly: (role: string | null) => boolean;
   /** Whether Claude agents get `FORCE_HYPERLINK=1` (`DaemonSettings.clickableLinks`), read as each starts. */
   clickableLinks: () => boolean;
+  /** Whether an agent that rests (`rest`) is paused as its turn ends (`DaemonSettings.agentsRest`); on without. */
+  agentsRest?: () => boolean;
   /** The environment harness sessions start from. */
   env: NodeJS.ProcessEnv;
   /** The user's shell and its arguments. A login shell (`-l`) also launches the harness, so it gets the profile's PATH. */
@@ -79,7 +84,7 @@ export interface AgentHostOptions {
   /** How long after the user's last key in an agent's terminal nothing is typed there for the board: `USER_IDLE_MS`. */
   userIdleMs?: number;
   /** The zones' trackers, where agents started from or linked to an issue get it. */
-  trackers: Pick<TrackerHost, 'issue' | 'issueFrom'>;
+  trackers: Pick<TrackerHost, 'issue' | 'issueFrom' | 'zoneTracker' | 'connected'>;
   /** The pull requests made from the agent's branch, as last seen. */
   pullRequests(sessionId: string): readonly PullRequest[];
   /** The pull requests of branches it pushed to, as last seen: for its tile alone. */
@@ -222,9 +227,10 @@ export interface AgentHost {
   applyEffort(sessionId: string): void;
   /**
    * Marks the agent's current ask seen, if it has one: it stops needing the user until it works and asks again. Its
-   * flag, if it has one, goes: the user has looked.
+   * flag, if it has one, goes: the user has looked. `opened` (the user opened the session, not just touched it): its
+   * alert is read too.
    */
-  markSeen(sessionId: string): Agent;
+  markSeen(sessionId: string, opened?: boolean): Agent;
   /**
    * Flags the live agent for a look (`Agent.flag`), replacing any flag it had: `reason` trimmed to one line, at most
    * `MAX_FLAG_LENGTH`; `via` the crew member an orchestrator passes on, by name.
@@ -232,6 +238,11 @@ export interface AgentHost {
   flag(sessionId: string, reason: string, via: string | null): Agent;
   /** Drops the agent's flag, if it has one. */
   clearFlag(sessionId: string): Agent;
+  /**
+   * Tells the user something is done (`Agent.alert`), replacing any alert it had: `line` trimmed to one line, at most
+   * `MAX_ALERT_LENGTH`; `link` an https URL or null. Within `ALERT_INTERVAL_MS` of its last banner it raises none.
+   */
+  alert(sessionId: string, line: string, link: string | null): Agent;
   /**
    * Renames the agent's tile, keeping who did it (`Agent.renamed`): `by` an agent's or shell's name, `you` (the
    * default) for the user in the app, null for the agent itself. The same name again changes nothing.
@@ -325,6 +336,16 @@ export interface AgentHost {
    * the zone whose fold pauses it (`zone.fold`), remembered while it stays paused.
    */
   pause(sessionId: string, by: string | null, why: string, fold?: string): Promise<Agent>;
+  /**
+   * The live agent says it is done for now (`board.rest`), `line` saying what it waits for: its tile line is set to
+   * `RESTING_PREFIX` and `line`, and as its turn ends it is paused (`pause`, by itself), unless Settings turn resting
+   * off. Refuses, setting nothing, while the user's answer is pending, a background command of its runs, or a message
+   * waits at its prompt; its error's `reason` says which. The same checks run again as its turn ends. Asked at its
+   * prompt, it pauses at once. A turn cut short (interrupted, failed), its session ending, or its next prompt drops the rest.
+   */
+  rest(sessionId: string, line: string): RestResult;
+  /** The line the agent rested with, while its rest has it paused: what its lead hears it waits for. */
+  restedWith(sessionId: string): string | undefined;
   /**
    * Starts an ended agent (stopped by restart, or exited) again in its worktree, carrying on its conversation with no
    * new prompt: Claude with `--resume`, Codex with `codex resume` (or afresh if it can't). Ends the shell its pane
@@ -518,7 +539,10 @@ export interface AgentRow extends PositionColumns {
   owns_worktree: number;
   /** 1 for an agent that may change nothing where it runs (`FolderPlace.readOnly`). */
   read_only: number;
-  /** Its own launch settings (`LaunchSettings` as JSON, migration 0109), or null for none. */
+  /**
+   * Its own launch settings' names (`LaunchSettingKeys` as JSON, migration 0109), or null for none: the keychain keeps
+   * their values (`launch-settings-keychain.ts`). An older build's values, until the daemon's start moves them.
+   */
   launch_settings: string | null;
   /** 1 for the Captain (migration 0060): at most one agent. */
   master: number;

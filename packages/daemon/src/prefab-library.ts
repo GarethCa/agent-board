@@ -258,7 +258,8 @@ export function createPrefabLibrary(db: DatabaseSync): PrefabLibrary {
               ...(token === undefined ? {} : { token }),
               ...(zoneId === undefined ? {} : { zoneId }),
               ...(repo === undefined ? {} : { repo }),
-              ...(issueId === undefined ? {} : { issueId }),
+              // A ticket no linked tracker can read still starts the crew: its agent looks it up itself.
+              ...(issueId === undefined ? {} : { issueId, issueAsTyped: true }),
               ...(description === undefined ? {} : { description }),
               prompt: firstPrompt,
               harness: first.harness,

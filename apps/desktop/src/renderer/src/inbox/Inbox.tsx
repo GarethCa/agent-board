@@ -1,8 +1,8 @@
 import { useState, type FormEvent } from 'react';
-import { planPending, waitsOnUser, type Agent, type AgentAsk, type AgentFlag, type NeedsYouKind, type PlanSummary, type Zone } from '@agent-board/daemon/protocol';
+import { planPending, type Agent, type AgentAsk, type AgentFlag, type NeedsYouKind, type PlanSummary, type Zone } from '@agent-board/daemon/protocol';
 import { InboxQuickAsk } from './InboxQuickAsk';
 import { StepsWaitBody } from './StepsWaitBody';
-import { ClipboardList, FolderCheck, SendHorizontal, SquareArrowOutUpRight, Timer } from 'lucide-react';
+import { CheckCheck, ClipboardList, FolderCheck, SendHorizontal, SquareArrowOutUpRight, Timer } from 'lucide-react';
 import { Button, EmptyState, ErrorText, Input, Kbd, Truncate } from '../ui';
 import { useAction } from '../use-action';
 import { PermissionRow } from './PermissionRow';
@@ -10,7 +10,7 @@ import { RemoveAskRow } from './RemoveAskRow';
 import { KIND_TAGS } from './kind-tags';
 import { HarnessMark } from '../board/HarnessMark';
 import { HARNESSES } from '../harness';
-import { askAnsweredElsewhere, heldPrompts, needsYouEntries, secondsLeft, sinceText, stepsWaitKey, waitLeft } from '../../../shared/needs-you';
+import { askAnsweredElsewhere, heldPrompts, needsYouEntries, rowTicks, secondsLeft, sinceText, stepsWaitKey, waitLeft } from '../../../shared/needs-you';
 import { PlanDecisionBar } from '../plan/PlanTab';
 import { planSurfaceOf } from '../session/tabs';
 import { requestTab } from '../session/tab-request';
@@ -19,6 +19,8 @@ import { useNow } from './use-now';
 import { useAskAnswer } from './use-ask-answer';
 import { useSimplified } from '../design';
 import { GroupedInbox } from './GroupedInbox';
+import { AlertLine, OpenAlertLink, openAlerted } from './alert-parts';
+import { DraftsList, useDraftsToReview } from './DraftsList';
 
 interface InboxProps {
   agents: readonly Agent[];
@@ -30,6 +32,8 @@ interface InboxProps {
   onSettings?(): void;
   /** Whether it names itself; the docked pane's own header does that instead. */
   heading?: boolean;
+  /** A row opened something in another place (a draft on its board), for a popover to close. */
+  onLeave?(): void;
 }
 
 /**
@@ -37,18 +41,21 @@ interface InboxProps {
  * with its reason) and, if the settings say so, every agent whose turn ended, each row tagged with its kind and
  * answerable without opening its shell. It follows the agents live, so an item goes as soon as the agent moves on,
  * however it was answered. An item whose session was opened since it began asking is read: it stays while the agent
- * waits, but no longer counts. A flag goes once its session is opened. The Simplified design groups it by zone instead
- * (`GroupedInbox`), with the same items.
+ * waits, but no longer counts. A flag goes once its session is opened. Below it, apart, a Done list holds what agents
+ * alerted the user is done: no request, so it counts toward no badge, and it goes once the agent's session is opened.
+ * Below that, the crews agents drafted for the user, each opened on its board.
+ * The Simplified design groups it by zone instead (`GroupedInbox`), with the same items.
  */
 export function Inbox({ zones = [], ...props }: InboxProps) {
   return useSimplified() ? <GroupedInbox zones={zones} {...props} /> : <ClassicInbox {...props} />;
 }
 
-function ClassicInbox({ agents, onOpen, onSettings, heading = true }: Omit<InboxProps, 'zones'>) {
+function ClassicInbox({ agents, onOpen, onSettings, onLeave, heading = true }: Omit<InboxProps, 'zones'>) {
   const shows = useNeedsYouShows();
+  const drafts = useDraftsToReview();
   const entries = needsYouEntries(agents, shows);
   const items = entries.map((entry) => entry.agent);
-  const now = useNow(items.some((agent) => heldPrompts(agent).length > 0 || waitsOnUser(agent) || agent.flag !== null));
+  const now = useNow(items.some(rowTicks));
   return (
     <section className="inbox" data-testid="needs-you-inbox" aria-label="Needs you">
       {(heading || items.length > 1) && (
@@ -58,11 +65,14 @@ function ClassicInbox({ agents, onOpen, onSettings, heading = true }: Omit<Inbox
         </header>
       )}
       {items.length === 0 ? (
-        <EmptyState framed={false} title="Nothing needs you.">
-          {shows === 'explicit'
-            ? 'Questions, permission prompts and agents that flag you show here.'
-            : 'Agents waiting for an answer or a permission show here.'}
-        </EmptyState>
+        // Drafts waiting are something to look at, so it never says nothing is.
+        drafts.length === 0 && (
+          <EmptyState framed={false} title="Nothing needs you.">
+            {shows === 'explicit'
+              ? 'Questions, permission prompts and agents that flag you show here.'
+              : 'Agents waiting for an answer or a permission show here.'}
+          </EmptyState>
+        )
       ) : (
         <ul className="inbox-items">
           {entries.map(({ agent, kind }) => (
@@ -70,6 +80,8 @@ function ClassicInbox({ agents, onOpen, onSettings, heading = true }: Omit<Inbox
           ))}
         </ul>
       )}
+      <DoneList agents={agents} onOpen={onOpen} />
+      <DraftsList drafts={drafts} {...(onLeave === undefined ? {} : { onOpened: onLeave })} />
       <footer className="inbox-foot" data-testid="inbox-foot">
         <span>{shows === 'explicit' ? 'Explicit requests only' : 'Explicit requests and finished turns'}</span>
         {onSettings && (
@@ -81,6 +93,48 @@ function ClassicInbox({ agents, onOpen, onSettings, heading = true }: Omit<Inbox
           </>
         )}
       </footer>
+    </section>
+  );
+}
+
+/** What agents alerted the user is done, oldest first: each agent's latest line, its link, and Open. */
+function DoneList({ agents, onOpen }: { agents: readonly Agent[]; onOpen(agent: Agent): void }) {
+  const alerted = agents.filter((agent) => agent.alert !== undefined).sort((a, b) => a.alert!.at.localeCompare(b.alert!.at));
+  if (alerted.length === 0) return null;
+  return (
+    <section className="inbox-group" data-testid="inbox-group" data-section="done" aria-label="Done">
+      <h3 className="inbox-group-head">
+        <span className="inbox-group-name">Done</span>
+        <span className="inbox-group-count" aria-label={`${alerted.length} done`}>
+          {alerted.length}
+        </span>
+      </h3>
+      <ul className="inbox-items">
+        {alerted.map((agent) => {
+          const alert = agent.alert!;
+          return (
+            <li key={agent.sessionId} className="inbox-item" data-testid="inbox-item" data-session-id={agent.sessionId} data-state={agent.state} data-kind="done">
+              <div className="inbox-item-head">
+                <HarnessMark className="inbox-item-mark" harness={agent.harness} />
+                <span className="inbox-item-name" title={agent.name}>{agent.name}</span>
+                <span className="inbox-kind" data-testid="inbox-kind" data-kind="done">
+                  <CheckCheck aria-hidden />
+                  Done
+                </span>
+                <Button size="sm" variant="ghost" className="inbox-item-open" icon={<SquareArrowOutUpRight />} aria-label={`Open ${agent.name}`} onClick={() => openAlerted(agent.sessionId, () => onOpen(agent))}>
+                  Open
+                </Button>
+              </div>
+              <AlertLine alert={alert} className="inbox-item-note" />
+              {alert.link !== null && (
+                <div className="inbox-item-actions">
+                  <OpenAlertLink link={alert.link} />
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ul>
     </section>
   );
 }

@@ -3,7 +3,7 @@
 // one. It takes what to show and what to do as props, so the gallery draws it as the board does.
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { ArrowUpFromLine, ArrowUpToLine, Bot, Check, ClockArrowDown, ExternalLink, Hand, Play, Plus, Search, Trash2, Undo2 } from 'lucide-react';
-import { jobsFrom } from '@agent-board/daemon/memory-lines';
+import { jobsFrom } from '@agent-board/daemon/queue-lines';
 import { isQueueWork, MAX_JOB_TEXT, queueKindOn, type Agent, type HistoryVersion, type QueueAudience, type QueueJob, type StepsWho } from '@agent-board/daemon/protocol';
 import { Button, IconButton, Kbd } from '../../ui';
 import { isTyping } from '../../keys/typing';
@@ -12,7 +12,7 @@ import { FullScreen, type FullScreenKey } from './FullScreen';
 import { editText, QueueAddBox, queueGlyph, rowChip, type JobActions } from './QueueCard';
 import { handable, isLaterRow, jobLine, nextJob, puttable } from './queue-card';
 import { itemKind, lookCount, needsLine } from './to-look-at';
-import { whenText, whoText } from './memory-card';
+import { whenText, whoText } from './list-card-text';
 import { fullAction, fullGroups, fullKey, headCount, lookPlace, nextRow, NO_FILTER, rowBy, rowsOf, shownGroups, standing, whoWhen, type FullAction, type FullFilter, type FullRow } from './queue-full';
 
 export interface QueueFullProps extends JobActions {
@@ -46,7 +46,7 @@ export interface QueueFullProps extends JobActions {
 
 /** Esc in an edit or the add box cancels it, and in a search with text clears it: not the whole view. */
 const escapeStays = (focused: Element | null) =>
-  focused instanceof HTMLElement && (focused.closest('.queue-full-edit, .queue-full-add') !== null || (focused.closest('.memory-full-search') !== null && (focused as HTMLInputElement).value !== ''));
+  focused instanceof HTMLElement && (focused.closest('.queue-full-edit, .queue-full-add') !== null || (focused.closest('.list-full-search') !== null && (focused as HTMLInputElement).value !== ''));
 
 /** A queue full screen, over the board: Esc, the close button or a click outside closes it. */
 export function QueueFull(props: QueueFullProps) {
@@ -142,7 +142,7 @@ export function QueueFull(props: QueueFullProps) {
     <li key={each.key}>
       <button
         type="button"
-        className="memory-full-item queue-full-item"
+        className="list-full-item queue-full-item"
         data-row={each.key}
         data-done={(each.kind === 'job' && each.job.state === 'done') || undefined}
         aria-current={each.key === current?.key || undefined}
@@ -151,17 +151,17 @@ export function QueueFull(props: QueueFullProps) {
       >
         {each.kind === 'needs' ? (
           <>
-            <span className="memory-full-item-name">
+            <span className="list-full-item-name">
               <span className="queue-state" data-tone="needs">
                 {needsLine(each.entry).tag}
               </span>
               <b>{each.entry.agent.name}</b>
             </span>
-            <span className="memory-full-item-sub">{needsLine(each.entry).line}</span>
+            <span className="list-full-item-sub">{needsLine(each.entry).line}</span>
           </>
         ) : (
           <>
-            <span className="memory-full-item-name">
+            <span className="list-full-item-name">
               {each.place === undefined ? (
                 <StateChip {...rowChip(each.job, nextUp, audience)} />
               ) : (
@@ -169,7 +169,7 @@ export function QueueFull(props: QueueFullProps) {
               )}
               <b>{jobLine(each.job)}</b>
             </span>
-            <span className="memory-full-item-sub">{rowSub(each.job, now)}</span>
+            <span className="list-full-item-sub">{rowSub(each.job, now)}</span>
           </>
         )}
       </button>
@@ -215,7 +215,7 @@ export function QueueFull(props: QueueFullProps) {
       }
       bar={
         <>
-          <label className="listcard-search memory-full-search">
+          <label className="listcard-search list-full-search">
             <Search className="listcard-search-mark" aria-hidden="true" />
             <input
               ref={search}
@@ -232,7 +232,7 @@ export function QueueFull(props: QueueFullProps) {
             <button
               key={group.id}
               type="button"
-              className="memory-full-chip"
+              className="list-full-chip"
               data-tone={group.id === 'needs' ? 'warn' : undefined}
               aria-pressed={filter.group === group.id}
               onClick={() => set({ group: filter.group === group.id ? null : group.id })}
@@ -248,22 +248,22 @@ export function QueueFull(props: QueueFullProps) {
         </>
       }
       side={
-        <ul ref={list} className="memory-full-list" aria-label="Jobs in groups">
+        <ul ref={list} className="list-full-list" aria-label="Jobs in groups">
           {shown.map((group) => (
             <li key={group.id} className="queue-full-group">
-              <span className="memory-full-group" aria-hidden="true">
+              <span className="list-full-group" aria-hidden="true">
                 {group.label} · {group.rows.length}
               </span>
               <ul className="queue-full-rows">{group.rows.map(row)}</ul>
             </li>
           ))}
-          {rows.length === 0 && <li className="memory-full-none">{filter.search.trim() !== '' ? `Nothing matches “${filter.search}”` : forYou ? 'All caught up' : 'No jobs yet'}</li>}
+          {rows.length === 0 && <li className="list-full-none">{filter.search.trim() !== '' ? `Nothing matches “${filter.search}”` : forYou ? 'All caught up' : 'No jobs yet'}</li>}
         </ul>
       }
       detail={
         adding ? (
           <section
-            className="memory-full-entry queue-full-add"
+            className="list-full-entry queue-full-add"
             aria-label={forYou ? 'Add something to look at' : 'Add a job'}
             onKeyDown={(event) => event.key === 'Escape' && (event.preventDefault(), setAdding(false))}
           >
@@ -272,13 +272,13 @@ export function QueueFull(props: QueueFullProps) {
             <span className="queue-full-hint">↵ adds · one a line, a link after -&gt; · esc cancels</span>
           </section>
         ) : current === undefined ? (
-          <div className="memory-full-empty">
+          <div className="list-full-empty">
             <b>{forYou ? 'All caught up' : 'No jobs yet'}</b>
             <span>{forYou ? 'Agents put finished work here for you to look at, and so can you.' : 'Add a job for its agents to take in order.'}</span>
           </div>
         ) : current.kind === 'needs' ? (
-          <article className="memory-full-entry" aria-label={current.entry.agent.name}>
-            <div className="memory-full-entry-head">
+          <article className="list-full-entry" aria-label={current.entry.agent.name}>
+            <div className="list-full-entry-head">
               <span className="queue-state" data-tone="needs">
                 {needsLine(current.entry).tag}
               </span>
@@ -326,7 +326,7 @@ export function QueueFull(props: QueueFullProps) {
       inline={inline}
       onClose={onClose}
       // The row shown, in the list, so ↑↓ move at once; with none, the search.
-      initialFocus={(root) => root.querySelector<HTMLElement>('.queue-full-item[aria-current="true"]') ?? root.querySelector<HTMLElement>('.memory-full-search input')}
+      initialFocus={(root) => root.querySelector<HTMLElement>('.queue-full-item[aria-current="true"]') ?? root.querySelector<HTMLElement>('.list-full-search input')}
       escapeStays={escapeStays}
       object={object}
       onKeyDown={keys}
@@ -413,13 +413,13 @@ function JobDetail({ job, place, audience, of, first, now, editing, onEditing, o
     }
   };
   return (
-    <article className="memory-full-entry" aria-label={jobLine(job)}>
-      <div className="memory-full-entry-head">
+    <article className="list-full-entry" aria-label={jobLine(job)}>
+      <div className="list-full-entry-head">
         <span className="queue-state" data-tone={chip.tone}>
           {chip.text}
         </span>
         <span className="queue-full-standing">{of === undefined ? standing(job, place, audience, now) : `${of} · ${standing(job, place, audience, now)}`}</span>
-        <span className="memory-full-entry-tools">
+        <span className="list-full-entry-tools">
           <IconButton icon={<Trash2 />} size="sm" aria-label="Remove" tooltip="Remove; its history keeps it" onClick={() => acts.onRemove(job)} />
         </span>
       </div>
@@ -429,7 +429,7 @@ function JobDetail({ job, place, audience, of, first, now, editing, onEditing, o
         </button>
       ) : (
         <textarea
-          className="memory-full-name queue-full-edit"
+          className="list-full-name queue-full-edit"
           value={editing}
           maxLength={MAX_JOB_TEXT}
           autoFocus
@@ -493,9 +493,9 @@ function JobDetail({ job, place, audience, of, first, now, editing, onEditing, o
           </Button>
         )}
       </div>
-      <section className="memory-full-who" aria-label="Who and when">
+      <section className="list-full-who" aria-label="Who and when">
         <h3>Who and when</h3>
-        <ol className="memory-full-timeline">
+        <ol className="list-full-timeline">
           {whoWhen(job, versions).map((line, index) => (
             <li key={`${line.at}:${index}`}>
               <span>

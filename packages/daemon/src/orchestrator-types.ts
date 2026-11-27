@@ -41,4 +41,6 @@ export interface OrchestratorAccess {
    * ended, or that is gone.
    */
   mayTakeOver(me: Orchestrator, madeBy: string | null): boolean;
+  /** Whether the agent session `sessionId` may act on the board now, as it is checked again when the user allows what it asked. */
+  mayOrchestrate(sessionId: string): boolean;
 }

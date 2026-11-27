@@ -88,6 +88,12 @@ describe('placed', () => {
     expect(copy?.data).toEqual({ owner: { kind: 'user' }, lines });
   });
 
+  it('makes a copy of a queue an agent made the user\'s, so the agent cannot delete the copy as its own', () => {
+    const queue = { id: 'q1', kind: 'queue' as const, x: 0, y: 0, width: 300, height: 200, rotation: 0, data: { title: 'Work', madeBy: { kind: 'agent', sessionId: 's1', name: 'Fixer' } } };
+    const [copy] = placed({ items: [queue], connectors: [] }, { dx: 20, dy: 20 }, () => 'new').items;
+    expect(copy?.data).toEqual({ title: 'Work', madeBy: { kind: 'user' } });
+  });
+
   it('takes a connector copied before lines bent as having no bends', () => {
     const copy = twoNotes();
     const older = JSON.stringify({ ...copy, connectors: copy.connectors.map((connector) => ({ ...connector, points: undefined })) });

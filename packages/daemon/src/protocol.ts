@@ -57,6 +57,7 @@ export interface IssuePick {
 export { isTrackerProvider, shortIssueId, TRACKER_PROVIDERS } from '@agent-board/tracker/providers';
 export { pullRequestKey, pullRequestOfUrl } from '@agent-board/tracker/pull-request-ref';
 import { isTrackerProvider } from '@agent-board/tracker/providers';
+import { isWebUrl } from '@agent-board/tracker/web-link';
 
 /**
  * The daemon speaks JSON-RPC 2.0 over its socket, one JSON message per line. Besides responses it pushes events as
@@ -516,7 +517,7 @@ export function issueCardProblem(data: Record<string, unknown>): string | undefi
     const value = data[key];
     if (typeof value !== 'string' || (key === 'id' && value === '')) return `${owner}'s ${key} must be a string`;
   }
-  if (typeof data.url !== 'string' || !/^https:\/\/[^\s]+$/.test(data.url)) return `${owner}'s url must be an https URL`;
+  if (typeof data.url !== 'string' || !isWebUrl(data.url)) return `${owner}'s url must be an https URL`;
   return undefined;
 }
 
@@ -570,7 +571,7 @@ export interface ZoneLayout {
  * never one of the user's stickies. A `clock` is a schedule (`ClockData`). A `crew` is a running crew's card (`CrewCardData`),
  * which the board keeps.
  */
-export const BOARD_ITEM_KINDS = ['sticky', 'text', 'shape', 'image', 'link', 'issue', 'agent-note', 'clock', 'document', 'plan', 'steps', 'memory', 'queue', 'crew', 'todo', 'stages', 'done-line'] as const;
+export const BOARD_ITEM_KINDS = ['sticky', 'text', 'shape', 'image', 'link', 'issue', 'agent-note', 'clock', 'document', 'plan', 'steps', 'queue', 'crew', 'todo', 'stages', 'done-line'] as const;
 export type BoardItemKind = (typeof BOARD_ITEM_KINDS)[number];
 
 /**
@@ -1538,10 +1539,17 @@ export interface DaemonSettings {
   clickableLinksFromEnvironment: boolean | null;
   /** What the needs-you inbox lists: explicit requests only (the default), or every finished turn too. */
   needsYouShows: NeedsYouShows;
+  /**
+   * Whether an agent that says it is resting (`board.rest`) is paused as its turn ends. On by default. Off, resting
+   * only sets its tile line.
+   */
+  agentsRest: boolean;
   /** Whether the app raises an OS notification for each new request in the needs-you inbox. On by default. */
   notifications: boolean;
   /** Whether it does so while the app is in front, too. Off by default: only the pill changes then. */
   notifyInFront: boolean;
+  /** Whether an agent's alert (`AgentAlert`) raises a banner. On by default; off, it shows only in the inbox's Done list. */
+  alertBanners: boolean;
   /** The spacing a new zone starts with (`Zone.spacing`). Roomy by default. */
   arrangeSpacing: ArrangeSpacing;
   /**
@@ -1550,6 +1558,12 @@ export interface DaemonSettings {
    * in memory, forgotten as it closes.
    */
   keepWebLogins: boolean;
+  /**
+   * Whether a document or plan an agent asks to show on the board (`on_board`) is put there as a card beside its tile.
+   * Off by default: a document is listed with its agent (its window's Made, its ticket, ⌘K), and a plan reaches the
+   * user through the Needs you inbox, so the board never fills with them.
+   */
+  placeDocTiles: boolean;
   /** The reasoning effort a new agent starts at when it is not asked for one; null (the default) for its harness's own. */
   defaultEffort: Effort | null;
   /**
@@ -1563,6 +1577,12 @@ export interface DaemonSettings {
    */
   boardToolsOnly: string[];
 }
+
+/** The settings notifications follow: what Needs you lists, whether and when it notifies, and whether an agent's alert raises a banner. */
+export type NotificationSettings = Pick<DaemonSettings, 'needsYouShows' | 'notifications' | 'notifyInFront' | 'alertBanners'>;
+
+/** The notification settings until they are changed: explicit requests only, notified, but not while the app is in front; alerts with banners. */
+export const NOTIFICATION_DEFAULTS: NotificationSettings = { needsYouShows: 'explicit', notifications: true, notifyInFront: false, alertBanners: true };
 
 /** What an edge would carry if its `from` agent handed off now: its name (`plan.md`) and text, or why it can't. */
 export type FlowPayloadPreview = { name: string; text: string; bytes: number } | { name: string; problem: string };
@@ -1705,6 +1725,14 @@ export function launchSettingNames(keys: LaunchSettingKeys | null): string | und
 /** The reasoning efforts each harness takes. */
 export const HARNESS_EFFORTS: Record<Harness, readonly Effort[]> = { claude: EFFORTS, codex: ['low', 'medium', 'high', 'xhigh'] };
 
+/** The reasoning efforts a `harness` agent takes; with no harness (agents of each), the ones every harness takes. */
+export const effortsFor = (harness: Harness | null): readonly Effort[] =>
+  harness === null ? EFFORTS.filter((effort) => HARNESSES.every((each) => HARNESS_EFFORTS[each].includes(effort))) : HARNESS_EFFORTS[harness];
+
+/** `effort` as a `harness` agent runs it: itself where it takes it, else the highest it takes (Codex reasons at `xhigh` for `max`). */
+export const effortOn = (harness: Harness, effort: Effort | null): Effort | null =>
+  effort === null || HARNESS_EFFORTS[harness].includes(effort) ? effort : HARNESS_EFFORTS[harness].at(-1)!;
+
 /** Why the `harness` agent can't run at `effort`, or undefined when it can. */
 export function effortRefusal(harness: Harness, effort: unknown): string | undefined {
   const takes = HARNESS_EFFORTS[harness];
@@ -1780,13 +1808,21 @@ export function asksToRemove(agent: Pick<Agent, 'removeAsk'>): boolean {
 const PAUSABLE_STATES: ReadonlySet<AgentState> = new Set<AgentState>(['idle', 'waiting', 'failed', 'scheduled']);
 
 /**
+ * Whether an agent said its work is finished and came to rest: `workFinishedAt` lasts until its next prompt, so an agent
+ * that said so and then failed, asked for permission or carried on working is not finished yet.
+ */
+export function restsFinished(agent: Pick<Agent, 'workFinishedAt' | 'state'>): boolean {
+  return agent.workFinishedAt !== null && (agent.state === 'idle' || agent.state === 'waiting');
+}
+
+/**
  * Why the agent can't be paused (hibernated) now, or undefined if it can: only a live agent between turns, asking the
  * user nothing, pauses. The daemon checks its prompt too (the user typing there, a message never sent).
  */
 export function pauseRefusal(agent: Pick<Agent, 'endedAt' | 'state' | 'ask' | 'removeAsk' | 'plan' | 'permissions'>): string | undefined {
   if (agent.state === 'hibernated') return 'it is already paused';
   if (agent.endedAt !== null) return 'it has ended';
-  if (agent.state === 'needs-permission' || agent.permissions.length > 0 || waitsOnUser(agent) || planPending(agent)) return 'it is waiting on you';
+  if (agent.state === 'needs-permission' || agent.permissions.length > 0 || waitsOnUser(agent) || asksToRemove(agent) || planPending(agent)) return 'it is waiting on you';
   if (agent.state === 'rate-limited') return 'it is rate-limited';
   // A pause would end the command with its session.
   if (agent.state === 'on-command') return 'a command it left running still runs';
@@ -1866,6 +1902,62 @@ export function needsYouKind(agent: NeedsYouFacts, shows: NeedsYouShows): NeedsY
   if (agent.flag?.to === 'user') return 'flagged';
   // A crew member's finished turn is its live orchestrator's to handle, not the user's.
   return shows === 'turns' && agent.state === 'waiting' && agent.ledBy === null ? 'turn' : null;
+}
+
+/**
+ * Each request kind in words, the one table every place that names one reads: `tag` names it on its own (a banner's
+ * subtitle, a row's label), `says` is what the agent does, after its name ("asks you"), and `why` is the reason it
+ * waits on the user ("a plan to review").
+ */
+export const REQUEST_WORDS: Record<NeedsYouKind, { tag: string; says: string; why: string }> = {
+  permission: { tag: 'Permission', says: 'needs your permission', why: 'a permission prompt' },
+  asks: { tag: 'Question', says: 'asks you', why: 'a question in Needs you' },
+  plan: { tag: 'Plan to review', says: 'has a plan to review', why: 'a plan to review' },
+  steps: { tag: 'Steps to answer', says: 'asks you', why: 'questions in Needs you' },
+  todo: { tag: 'Your to-do', says: 'waits on your to-do', why: 'a to-do of yours' },
+  flagged: { tag: 'Needs you', says: 'needs you', why: 'it flagged you' },
+  turn: { tag: 'Finished', says: 'is waiting for you', why: 'its turn ended' },
+};
+
+/** The agent fields `needsYouReading` reads: the rule's, and the times a request's age falls back on. */
+export type NeedsYouReadingFacts = NeedsYouFacts & Pick<Agent, 'finishedAt' | 'createdAt'>;
+
+/** Why an agent needs the user, since when, and the words for it: what the badge, the inbox, banners and tiles all read. */
+export interface NeedsYouReading {
+  kind: NeedsYouKind;
+  /** When it began asking: its first permission prompt, its question or plan, its steps card, its flag, or its turn's end. */
+  since: string;
+  words: (typeof REQUEST_WORDS)[NeedsYouKind];
+}
+
+/**
+ * Whether the agent needs the user to act, and how (`needsYouKind`), or null. Only a request counts: a permission
+ * prompt, a question, a plan, a steps card or to-do, a flag, and with `turns` a finished turn. Last words that ask, open
+ * changes at its prompt and a restart that stopped it are not requests: they only mark its tile.
+ */
+export function needsYouReading(agent: NeedsYouReadingFacts, shows: NeedsYouShows): NeedsYouReading | null {
+  const kind = needsYouKind(agent, shows);
+  return kind === null ? null : { kind, since: needsYouSince(agent, kind), words: REQUEST_WORDS[kind] };
+}
+
+/** When the agent began asking for what `kind` says, as far as its record tells; else when its turn ended, or it began. */
+export function needsYouSince(agent: NeedsYouReadingFacts, kind: NeedsYouKind): string {
+  const fallback = agent.finishedAt ?? agent.createdAt;
+  switch (kind) {
+    case 'permission':
+      return agent.permissions.map((prompt) => prompt.requestedAt).sort()[0] ?? fallback;
+    case 'asks':
+      return agent.ask?.askedAt ?? agent.removeAsk?.askedAt ?? questionPrompt(agent)?.requestedAt ?? fallback;
+    case 'plan':
+      return agent.plan?.presentedAt ?? fallback;
+    case 'steps':
+    case 'todo':
+      return agent.stepsWait?.since ?? fallback;
+    case 'flagged':
+      return agent.flag?.at ?? fallback;
+    case 'turn':
+      return fallback;
+  }
 }
 
 /**
@@ -2191,8 +2283,8 @@ export interface Agent {
    */
   stepsWait: AgentStepsWait | null;
   /**
-   * The tiles it asks the user to remove (`orchestrator.askRemove`) and waits on, mid-turn; null while it asks
-   * none. While it asks, it is `waiting`.
+   * The tiles it asks the user to remove (`orchestrator.askRemove`); null while it asks none. While a call of
+   * its waits on it, mid-turn, it is `waiting`; one it left (`left`) waits on the user without it.
    */
   removeAsk: RemoveAsk | null;
   /**
@@ -2266,6 +2358,11 @@ export interface Agent {
   ledBy: string | null;
   /** What it flagged for attention (`board.needsYou`) and hasn't cleared; null for none. */
   flag: AgentFlag | null;
+  /**
+   * What it last told the user is done (`board.alert`), until the user opens its session or it is deleted; absent
+   * for none. Never a request: it counts toward no badge and gives its tile no needs-you look.
+   */
+  alert?: AgentAlert;
   /**
    * What it recorded about its own work (`board.record`), for its sidebar: the pull requests it opened, its hand-off
    * docs (and those its crew recorded for it), and the agents it started; oldest first. Deleted ones stay, with
@@ -2409,6 +2506,32 @@ export interface AgentFlag {
 
 /** Longest reason a flag takes. */
 export const MAX_FLAG_LENGTH = 300;
+
+/**
+ * An agent telling the user something is done (`board.alert`): a line, and a link to go with it. It is the agent's
+ * choice to send one; the board never does. Unlike a flag it asks nothing: it shows in the inbox's Done list, apart
+ * from Needs you, and raises a banner unless Settings turns those off. Kept in memory, through its session's end, until
+ * the user opens the agent's session.
+ */
+export interface AgentAlert {
+  /** Names this alert: each call makes a new one. */
+  id: number;
+  /** What is done, in the agent's words: one line, at most `MAX_ALERT_LENGTH`. */
+  line: string;
+  /** An https link to go with it (a pull request, a page), or null. */
+  link: string | null;
+  at: string;
+  /** Whether it raises a banner: false when it came within `ALERT_INTERVAL_MS` of the agent's last banner. */
+  banner: boolean;
+  /** How many earlier alerts, not yet read, it stands in place of. */
+  folded: number;
+}
+
+/** Longest line an alert takes. */
+export const MAX_ALERT_LENGTH = 300;
+
+/** How long after an agent's alert raised a banner its next ones raise none, folding into its Done row instead. */
+export const ALERT_INTERVAL_MS = 5 * 60_000;
 
 /**
  * What `board.ask` and `board.presentPlan` answer a crew member whose orchestrator is live: its question or plan went to
@@ -2952,8 +3075,9 @@ export interface RemoveAskTile {
 
 /**
  * What an orchestrator asks the user to remove, in one prompt: tiles it reaches that it did not start. It
- * is in the needs-you inbox and on its tile until the user allows or denies it, it times out, or the orchestrator stops
- * waiting. Only the user's press answers it: nothing allows it for them.
+ * is in the needs-you inbox and on its tile until the user allows or denies it, or it times out, whether or not a call
+ * still waits on it; it ends unanswered if the orchestrator's session ends (a pause is refused while it asks), it is
+ * removed, or the daemon stops. Only the user's press answers it: nothing allows it for them.
  */
 export interface RemoveAsk {
   /** Names this ask, so a decision can't land on another one. */
@@ -2963,6 +3087,21 @@ export interface RemoveAsk {
   expiresAt: string;
   /** The tiles, in the order asked. */
   tiles: RemoveAskTile[];
+  /**
+   * No call of the orchestrator's waits on it (it asked without waiting, or the call or turn that waited ended): it
+   * isn't mid-turn for it, and the answer is typed at its prompt as a message.
+   */
+  left: boolean;
+  /**
+   * Set when it asks to delete board items an agent did not make (`orchestrator.deleteItem` with `ask`), not tiles:
+   * each of `tiles` is then an item, its `sessionId` the item's id, and none is held back.
+   */
+  items?: true;
+}
+
+/** What `orchestrator.askRemove` answers when no call waits on the answer (`detached`, or its next turn began first). */
+export interface RemoveAskLeft {
+  left: RemoveAsk;
 }
 
 /**
@@ -2986,6 +3125,19 @@ export interface RemoveAskResult {
 
 /** Most tiles one remove ask names. */
 export const MAX_REMOVE_ASK_TILES = 200;
+
+/**
+ * What `orchestrator.deleteItem` tells the agent: the item deleted, or kept, and why (the user denied the ask, no
+ * answer came, or it was gone already).
+ */
+export interface ItemDeleteResult {
+  outcome: 'deleted' | 'denied' | 'timed-out' | 'kept';
+  id: string;
+  /** What the board calls it: `queue “Releases”`. */
+  name: string;
+  /** Why it stays: null once deleted. */
+  why: string | null;
+}
 
 /** Most options a question offers: one per key 1-9. */
 export const MAX_ASK_OPTIONS = 9;
@@ -3057,6 +3209,8 @@ export interface Plan extends PlanSummary {
 /** What `board.presentPlan` answers at once for a plan the agent left (`detached`): the plan, now waiting for the user. */
 export interface PlanLeft {
   left: PlanSummary;
+  /** Whether its plan card is on the board: asked for, and Settings puts docs there. */
+  onBoard: boolean;
 }
 
 /** How a plan the agent waited on ended: never `edited`, which only a version the user then edited is stamped with. */
@@ -3087,7 +3241,8 @@ export const planPending = <T extends Pick<Agent, 'plan'>>(agent: T): agent is T
   agent.plan !== null && agent.plan.decision === null;
 
 /** Whether the agent's call waits on the user: a question it asks, or its latest plan, unless it left that and went on. */
-export const waitsOnUser = (agent: Pick<Agent, 'ask' | 'removeAsk' | 'plan'>): boolean => agent.ask !== null || asksToRemove(agent) || (planPending(agent) && !agent.plan.left);
+export const waitsOnUser = (agent: Pick<Agent, 'ask' | 'removeAsk' | 'plan'>): boolean =>
+  agent.ask !== null || (asksToRemove(agent) && !agent.removeAsk!.left) || (planPending(agent) && !agent.plan.left);
 
 /** The kinds of file an agent shows as a document, by their extensions. */
 export const DOCUMENT_EXTENSIONS: Record<PlanFormat, readonly string[]> = { markdown: ['.md', '.markdown'], html: ['.html', '.htm'] };
@@ -3281,25 +3436,13 @@ export type StepsChange =
   | { action: 'send' }
   | { action: 'close' };
 
-/** A new memory card's size. */
-export const MEMORY_CARD_SIZE = { width: 340, height: 220 };
-/** A memory or a queue folded to its icon: its glyph on a round face, with its name under it. */
+/** A queue folded to its icon: its glyph on a round face, with its name under it. */
 export const LIST_CARD_FOLDED_SIZE = { width: 128, height: 132 };
 /** A new queue card's size: its head, a line of counts, the first jobs and the add box. */
 export const QUEUE_CARD_SIZE = { width: 340, height: 244 };
-/** The least a memory or a queue card can be resized to: its head, a row and its add box still fit. */
+/** The least a queue card can be resized to: its head, a row and its add box still fit. */
 export const LIST_CARD_MIN_SIZE = { width: 240, height: 168 };
 
-/** The most entries a memory holds. */
-export const MAX_MEMORY_ENTRIES = 500;
-/** The longest a memory's key is. */
-export const MAX_MEMORY_KEY = 120;
-/** The longest an entry's value or note is, in characters. */
-export const MAX_MEMORY_VALUE = 4_000;
-/** The biggest file a memory keeps whole, in bytes of UTF-8. */
-export const MAX_MEMORY_FILE_BYTES = 1024 * 1024;
-/** The most a memory holds in all, its entries' texts in bytes of UTF-8. */
-export const MAX_MEMORY_BYTES = 8 * 1024 * 1024;
 /** The most open jobs (and notes) a queue holds; done ones don't count. */
 export const MAX_QUEUE_OPEN = 200;
 /** The longest a job's brief, or a queue's note, is. */
@@ -3312,8 +3455,6 @@ export const MAX_JOB_HEADLINE = 80;
 export const MAX_JOB_RESULT = 2_000;
 /** How many of a row's past versions are kept: its value after each change, newest first. */
 export const MAX_HISTORY_VERSIONS = 20;
-/** Days an entry goes untouched (neither changed nor confirmed) before it reads as stale. */
-export const MEMORY_OLD_DAYS = 30;
 
 /**
  * Who a queue is for: agents, which take its jobs, or the user, who goes through it one at a time and whose jobs no agent
@@ -3321,23 +3462,6 @@ export const MEMORY_OLD_DAYS = 30;
  */
 export const QUEUE_AUDIENCES = ['agents', 'user'] as const;
 export type QueueAudience = (typeof QUEUE_AUDIENCES)[number];
-
-/**
- * A memory card's `data`: shared context that agents read and write with a tool, and people on the board. Its entries are
- * in their own table (`MemoryEntry`). Who reads it is where it sits, as for a steps card, unless `noAgents`: then only the
- * user reads it. `count` is how many entries it holds, kept for the card to show. `folded`, it is drawn as its icon alone.
- */
-export interface MemoryData {
-  title: string;
-  madeBy: StepsWho;
-  noAgents: boolean;
-  count: number;
-  folded?: boolean;
-  /** The size the user gave it open, kept while it is folded so unfolding gives it back. */
-  openSize?: CardSize;
-  /** The size the user gave its folded icon, kept while it is open so folding gives it back. */
-  foldedSize?: CardSize;
-}
 
 /** How many times a job may be dropped back before a queue's drain leaves it for a person. */
 export const MAX_DRAIN_DROPS = 2;
@@ -3373,26 +3497,6 @@ export interface QueueData {
   /** The size the user gave its folded icon, kept while it is open so folding gives it back. */
   foldedSize?: CardSize;
   drain?: QueueDrain;
-}
-
-/**
- * One entry of a memory: a keyed value (setting a key again replaces it), a keyless note, or a file kept whole under its
- * name as its key.
- */
-export interface MemoryEntry {
-  id: string;
-  memoryId: string;
-  key: string | null;
-  file: boolean;
-  text: string;
-  pinned: boolean;
-  madeBy: StepsWho;
-  /** Who changed it last: anyone in scope may, and its history takes a change back. */
-  changedBy: StepsWho;
-  createdAt: string;
-  updatedAt: string;
-  /** Set on a document an agent's read of its memory lists by its title alone: its size, its `text` then left out (''). */
-  listed?: { bytes: number; lines: number };
 }
 
 /**
@@ -3438,7 +3542,7 @@ export interface QueueJob {
   id: string;
   queueId: string;
   kind: QueueRowKind;
-  /** Its headline is the first line, its body the rest (see `jobParts` in `memory-lines.ts`). */
+  /** Its headline is the first line, its body the rest (see `jobParts` in `queue-lines.ts`). */
   text: string;
   link: string | null;
   state: QueueJobState;
@@ -3475,39 +3579,12 @@ export interface TakenJob {
 /** What last happened to a job or info, as its history records it. */
 export type QueueJobChange = 'add' | 'edit' | 'take' | 'drop' | 'done' | 'restore';
 
-/** How many agents read an entry, or any of a memory's, and who last did. */
-export interface MemoryReaders {
-  count: number;
-  last: { name: string; at: string } | null;
-}
-
-/** An agent that read a memory, by the name it had then, and when it last did. */
-export interface MemoryReader {
-  sessionId: string;
-  name: string;
-  at: string;
-}
-
-/** The most readers a memory's view lists, the latest first. */
-export const MAX_MEMORY_READERS_LISTED = 20;
-
-/** A memory, or a queue, with what it holds. */
-export interface MemoryView {
-  item: BoardItem;
-  entries: MemoryEntry[];
-  /**
-   * Who read them: an agent reads an entry when its whole text comes back to it (a fact or note as a memory is read, a
-   * document only when named). `entries` holds those of the entries given, by id; `list` the memory's readers, the
-   * latest first, at most `MAX_MEMORY_READERS_LISTED`.
-   */
-  readers: { memory: MemoryReaders; entries: Record<string, MemoryReaders>; list: MemoryReader[] };
-}
 export interface QueueView {
   item: BoardItem;
   jobs: QueueJob[];
 }
 
-/** One version of an entry or a job: its value after a change (null once removed, or for a confirm), by whom and when. */
+/** One version of a job: its value after a change (null once removed, or for a confirm), by whom and when. */
 export interface HistoryVersion<Row> {
   /** What a restore names it by; higher is newer. */
   version: number;
@@ -3516,19 +3593,6 @@ export interface HistoryVersion<Row> {
   by: StepsWho;
   at: string;
 }
-
-/**
- * A change to a memory. `entry` names an entry by its key, or by its id or the start of it. `add` with a key that is
- * there already replaces its value; `restore` puts back one of its versions, after a remove too. `confirm` says an entry
- * is still true: it is touched, so it no longer reads as stale, and its history gets a `confirm` row with no value, which
- * no restore takes and no trim counts.
- */
-export type MemoryChange =
-  | { action: 'add'; key?: string | null; text: string; file?: boolean }
-  | { action: 'edit'; entry: string; text?: string; key?: string | null; pinned?: boolean }
-  | { action: 'remove'; entry: string }
-  | { action: 'restore'; entry: string; version: number }
-  | { action: 'confirm'; entry: string };
 
 /**
  * A change to a queue. `job` names a job or info by its id or the start of it. `add` takes the text whole, or a
@@ -3635,8 +3699,15 @@ export interface BackgroundCommand {
   startedAt: string;
 }
 
-/** How a message another agent sent reached its receiver: a `send`, an answer to its message, flag or question, or an edge's hand-off. */
-export type MessageKind = 'send' | 'reply' | 'hand-off';
+/**
+ * How a message the board typed at an agent's prompt reached it. From another agent: a `send`, an answer to its
+ * message, flag or question (`reply`), or an edge's `hand-off`. From no agent: a `clock`'s run, or the board's own
+ * notice (`board`, a line led by `[agent-board]`).
+ */
+export type MessageKind = AgentMessageKind | 'clock' | 'board';
+
+/** The kinds of message one agent sends another, which its sender mark names (ADR-0023). */
+export type AgentMessageKind = 'send' | 'reply' | 'hand-off';
 
 /** The ref of the agent with session id `sessionId`: `agent:` and the start of the id, as a sender mark and a trailer name it. */
 export const agentRefOf = (sessionId: string): string => `agent:${sessionId.slice(0, 8)}`;
@@ -3649,8 +3720,12 @@ export const SEND_TRAILER = /\n\n(\[agent-board\] From [^\n]+)$/;
 
 /** Who sent a message the board typed at an agent's prompt, as its sender mark names them (ADR-0023). */
 export interface MessageSender {
-  /** The sending agent's ref, `agent:` and the start of its session id. */
+  /**
+   * The sender's ref: an agent's, `agent:` and the start of its session id; a clock's, `item:` and its id; or
+   * `board` for the board's own notice.
+   */
   ref: string;
+  /** The agent's name; a clock's, the first words of its prompt; `agent-board` for the board. */
   name: string;
   kind: MessageKind;
   /** For a hand-off, the payload it carried: `final message`, `plan.md`. */
@@ -3662,7 +3737,7 @@ export interface MessageSender {
  * versioned adapter (`transcript-adapters.ts`). A tool's result is its own entry, joined to its call by `id`.
  */
 export type ChatEntry = (
-  /** `from` names the agent a message came from, which the board typed for it; a message without one is the user's. */
+  /** `from` names who a message came from (an agent, a clock, the board), which the board typed; one without it is the user's. */
   | { kind: 'user'; text: string; from?: MessageSender }
   | { kind: 'assistant'; text: string }
   /**
@@ -3788,6 +3863,19 @@ export const MAX_DESCRIPTION_LENGTH = 500;
 
 /** Longest status summary an agent can set: all of it shows on its tile, the text shrinking to fit. */
 export const MAX_STATUS_LENGTH = 120;
+
+/** What a resting agent's tile line starts with (`board.rest`): "Resting · waiting for the review". */
+export const RESTING_PREFIX = 'Resting · ';
+
+/** The longest line `board.rest` takes: what fits a tile after `RESTING_PREFIX`. */
+export const MAX_REST_LENGTH = MAX_STATUS_LENGTH - RESTING_PREFIX.length;
+
+/** What `board.rest` did: whether the agent pauses as its turn ends, and if not, why. */
+export interface RestResult {
+  agent: Agent;
+  /** True when it pauses as its turn ends; false when resting is off in Settings, and only its line is set. */
+  pauses: boolean;
+}
 
 /** Longest purpose an agent can set (`Agent.purpose`): one short line in ⌘K. */
 export const MAX_PURPOSE_LENGTH = 80;
@@ -4122,6 +4210,7 @@ export const ORCHESTRATOR_ACTIONS = [
   'add-note',
   'edit-note',
   'remove-note',
+  'delete-item',
   'pass',
   'add-shape',
   'add-diagram',
@@ -4204,6 +4293,8 @@ export interface OrchestratorSpawnParams {
    */
   edges?: 'auto' | 'manual';
   issueId?: string;
+  /** As `SpawnAgentParams.issueAsTyped`. */
+  issueAsTyped?: boolean;
   prompt?: string;
   /** What it is for (`Agent.purpose`), kept as `board.setStatus` with `description` keeps it, but cut to `MAX_PURPOSE_LENGTH` rather than refused. */
   description?: string;
@@ -4300,10 +4391,10 @@ export type ArrangeLayout = (typeof ARRANGE_LAYOUTS)[number];
 
 /**
  * The kinds of a zone's items an arrange places, each as its zone's placements say (`Zone.placements`): an agent's notes,
- * files (documents, plans, images, link and issue cards), clocks the crew didn't make, to-do lists, queues, memory, step
+ * files (documents, plans, images, link and issue cards), clocks the crew didn't make, to-do lists, queues, step
  * lists, stickies, shapes and text. A crew's own clocks go on the top row, as shells do, whatever their placement.
  */
-export const ARRANGE_ITEM_KINDS = ['notes', 'files', 'clocks', 'todos', 'queues', 'memory', 'steps', 'stickies', 'shapes', 'text'] as const;
+export const ARRANGE_ITEM_KINDS = ['notes', 'files', 'clocks', 'todos', 'queues', 'steps', 'stickies', 'shapes', 'text'] as const;
 export type ArrangeItemKind = (typeof ARRANGE_ITEM_KINDS)[number];
 
 /**
@@ -4323,7 +4414,6 @@ export const DEFAULT_ARRANGE_PLACEMENTS: ArrangePlacements = {
   clocks: 'top',
   todos: 'top',
   queues: 'top',
-  memory: 'top',
   steps: 'top',
   stickies: 'stay',
   shapes: 'stay',
@@ -4340,7 +4430,6 @@ const ITEM_KIND_OF: Partial<Record<BoardItemKind, ArrangeItemKind>> = {
   clock: 'clocks',
   todo: 'todos',
   queue: 'queues',
-  memory: 'memory',
   steps: 'steps',
   sticky: 'stickies',
   shape: 'shapes',
@@ -4595,7 +4684,7 @@ export function isWaitState(value: unknown): value is WaitState {
  * member's own paths or a move of the crew branch the board didn't make (`crew-clash`), and the crew stopped
  * (`crew-stopped`, saying why).
  */
-export const CREW_EVENT_KINDS = ['turn-ended', 'finished', 'needs-you', 'not-sent', 'flagged', 'failed', 'rate-limited', 'paused', 'ended', 'pr-opened', 'round', 'crew-waiting', 'crew-clash', 'crew-stopped'] as const;
+export const CREW_EVENT_KINDS = ['turn-ended', 'finished', 'needs-you', 'not-sent', 'flagged', 'failed', 'rate-limited', 'paused', 'resting', 'ended', 'pr-opened', 'round', 'crew-waiting', 'crew-clash', 'crew-stopped'] as const;
 export type CrewEventKind = (typeof CREW_EVENT_KINDS)[number];
 
 export interface CrewEvent {
@@ -5093,6 +5182,18 @@ export interface PrefabDraft {
   createdAt: string;
 }
 
+/** The scheme and place of a link that opens a prefab draft in the app: `agent-board://draft/<uuid>`. */
+const PREFAB_DRAFT_LINK = 'agent-board://draft/';
+
+/** The link that opens the draft `id` (`draft:<uuid>`) on its prefab's board, for a drafter to give the user. */
+export const prefabDraftLink = (id: string): string => `${PREFAB_DRAFT_LINK}${id.replace(/^draft:/, '')}`;
+
+/** The draft id a link opens, if `url` is one `prefabDraftLink` made (any case of the scheme), else undefined. */
+export function prefabDraftOfLink(url: string): string | undefined {
+  const uuid = /^agent-board:\/\/draft\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(url.trim())?.[1];
+  return uuid === undefined ? undefined : `draft:${uuid.toLowerCase()}`;
+}
+
 /** What starting a prefab did: the agents it started, and the members that start later, with when. */
 export interface PrefabStarted {
   prefab: string;
@@ -5344,6 +5445,12 @@ export type SpawnAgentParams = TerminalSize & {
    * loose on the board, or one picked a repo for. Without, the tracker that would have it (`issueId`).
    */
   issueZoneId?: string;
+  /**
+   * When no linked tracker can read `issueId` (none on the board would have it, or its tracker isn't connected), start
+   * the agent anyway with the issue as typed in its prompt, for it to look up with its own tools. It is linked to no
+   * issue then. Without, such a start fails.
+   */
+  issueAsTyped?: boolean;
   /** Start it as a ticket tile's chat (`Agent.ticketChat`): the agents it starts are its ticket's helpers. Not with `ticket`. */
   ticketChat?: boolean;
   /** With `ticketChat`, which kind of chat it is (`Agent.chatKind`): `DEFAULT_TICKET_CHAT_KIND` without. */
@@ -5967,9 +6074,11 @@ export interface DaemonMethods {
   'ticket.setChat': { params: SessionRef & { kind: TicketChatKind }; result: { agent: Agent } };
   /**
    * Marks the agent's current ask seen, because its session was opened or focused: it stops needing the user until it
-   * asks again. Does nothing unless the agent waits for the user. Fails with `invalidParams` for an unknown agent.
+   * asks again. Does nothing unless the agent waits for the user. `opened`: the user opened the session (expanded it,
+   * opened its window, chose it in the inbox), which reads its alert too; a touch or a focus of a session already shown
+   * reads none, since the alert isn't drawn there. Fails with `invalidParams` for an unknown agent.
    */
-  'agent.markSeen': { params: SessionRef; result: Agent };
+  'agent.markSeen': { params: SessionRef & { opened?: boolean }; result: Agent };
   /**
    * Deletes one of the agent's records (`Agent.records`), or with `deleted` false brings it back. A deleted record also
    * hides what is guessed of the same entry, until the agent records it again. The user's alone. Fails with
@@ -6090,15 +6199,17 @@ export interface DaemonMethods {
   'orchestrator.close': { params: { token?: string; sessionId: string; remove?: boolean }; result: ClosedKept | null };
   /**
    * Asks the user to remove tiles that it did not start, the user's own among them, in one prompt, and waits
-   * for their answer: as long as `timeoutMs` (`DEFAULT_ASK_WAIT_MS` by default, at most `MAX_ASK_WAIT_MS`). It is
-   * withdrawn, removing nothing, once its connection closes or the orchestrator's next turn begins (a prompt typed or
-   * sent to it). Nothing is removed until the user presses Allow, and then each tile goes as the user's own Delete takes
-   * it (its worktree and branch, never forced). A tile still running, with a live agent under it, or whose reviewer would
-   * go with it or is itself held back, is held back unless the user ticks it, and a tile whose reviewer stays always
-   * stays. Refused (`invalidParams`) if a tile is the orchestrator itself, and to the user's side, which removes them
-   * itself.
+   * for their answer: as long as `timeoutMs` (`DEFAULT_ASK_WAIT_MS` by default, at most `MAX_ASK_WAIT_MS`). With
+   * `detached` it answers at once with the ask (`RemoveAskLeft`), and so it does once the orchestrator's next turn
+   * begins (a prompt typed or sent to it). The ask stays up all the same, its connection closing too, until the user
+   * answers, the wait runs out or the orchestrator's session ends; an answer no call waits on is typed at the
+   * orchestrator's prompt as a message. Nothing is removed until the user presses Allow, and then each tile goes as the
+   * user's own Delete takes it (its worktree and branch, never forced). A tile still running, with a live agent under
+   * it, or whose reviewer would go with it or is itself held back, is held back unless the user ticks it, and a tile
+   * whose reviewer stays always stays. Refused (`invalidParams`) if a tile is the orchestrator itself, and to the
+   * user's side, which removes them itself.
    */
-  'orchestrator.askRemove': { params: { token?: string; sessionIds: string[]; timeoutMs?: number }; result: RemoveAskResult };
+  'orchestrator.askRemove': { params: { token?: string; sessionIds: string[]; timeoutMs?: number; detached?: boolean }; result: RemoveAskResult | RemoveAskLeft };
   /**
    * Hands the orchestrator `from`'s crew (the agents it started) and what it made (notes, lane labels, clocks, shapes,
    * connectors, zones and edges) to the orchestrator `to`, as if `to` had started and made them: `to` may then arrange,
@@ -6229,6 +6340,13 @@ export interface DaemonMethods {
   'orchestrator.editNote': { params: { token?: string; id: string; text?: string; color?: string; width?: number; height?: number; lines?: number }; result: BoardItem };
   /** Deletes a note it (or its crew) made; a user-side caller any sticky note or text item. */
   'orchestrator.removeNote': { params: { token?: string; id: string }; result: null };
+  /**
+   * Deletes a board item of any kind but a running crew's card, as one undoable step on the board (`item.removed`
+   * carries its `undo`). An agent deletes one it (or its crew) made; one made by anyone else only with `ask`, which asks
+   * the user in a remove ask (`RemoveAsk` of items) and waits up to `timeoutMs` for their answer. A queue with open
+   * jobs, a to-do list with open lines or a steps card with open steps is refused unless `force`.
+   */
+  'orchestrator.deleteItem': { params: { token?: string; id: string; force?: boolean; ask?: boolean; timeoutMs?: number }; result: ItemDeleteResult };
   /**
    * Passes an agent note or a document card to the agent `to`, which then holds it: it goes off the board with that
    * agent, not with the one that wrote it. A document's file is kept by the board if it was in its old holder's
@@ -6424,6 +6542,18 @@ export interface DaemonMethods {
    * Only a live agent, from its own session. Fails as `board.setStatus` does.
    */
   'board.needsYou': { params: { token: string; reason?: string; via?: string; clear?: boolean }; result: Agent };
+  /** Tells the user something is done (`AgentAlert`): `line` trimmed to one line, `link` an https URL. */
+  'board.alert': { params: { token: string; line: string; link?: string }; result: Agent };
+  /**
+   * The agent holding `token` says it is done for now, waiting on someone else (`line`, at most `MAX_REST_LENGTH`):
+   * its tile line becomes `RESTING_PREFIX` and the line, and as its turn ends it is paused as `agent.pause` pauses it,
+   * by itself, so anything that wakes a paused agent wakes it. With `DaemonSettings.agentsRest` off, only the line is
+   * set (`pauses` false). Refuses, setting nothing, while the user's answer is pending (a permission prompt, a
+   * question, a plan or its needs-you flag), while a command it started in the background runs, or while a message
+   * waits at its prompt; the error's `reason` says which. Fails with `invalidParams` for a caller that isn't a live
+   * agent's own session.
+   */
+  'board.rest': { params: { token: string; line: string }; result: RestResult };
   /**
    * The agent holding `token` hands `payload` over its own outgoing edges, or with `to` over its edge to that
    * agent alone, each as its auto hand-off would go: its conditions checked first, held while any fails, skipped while
@@ -6508,7 +6638,8 @@ export interface DaemonMethods {
    * a Document tab in its window, and with `onBoard` a card beside its tile too. `path` is absolute. Showing the same file
    * again shows the same document, a card added if asked for and none is there. Returns at once: nothing waits.
    */
-  'board.showDoc': { params: { token: string; path: string; title?: string; onBoard?: boolean }; result: DocumentSummary };
+  /** `onBoard` in the result: whether a card was put on the board for it, as asked and as `placeDocTiles` allows. */
+  'board.showDoc': { params: { token: string; path: string; title?: string; onBoard?: boolean }; result: DocumentSummary & { onBoard: boolean } };
   /**
    * The live agent holding `token` puts a steps card beside its tile: `steps` in order, at most `MAX_STEPS`, of which at
    * most `MAX_STEPS_QUESTIONS` are questions. Its questions are the user's to answer, or, for a crew member, its live
@@ -6545,27 +6676,9 @@ export interface DaemonMethods {
    * new to send, for a set the user doesn't answer, and for one the user made.
    */
   'steps.send': { params: { id: string }; result: BoardItem };
-  /** The live agent holding `token` puts a memory card beside its tile. Fails with `invalidParams` for a shell's token or an ended agent. */
-  /**
-   * A zone keeps one shared memory: while the zone the new one would land in has one, it is refused, naming that one,
-   * unless `second` says this is a different subject the whole zone needs.
-   */
-  'board.newMemory': { params: { token: string; title: string; second?: boolean }; result: BoardItem };
-  /** The memories the agent holding `token` reads: in its zone and loose ones; none set to No agents. */
-  'board.listMemories': { params: { token: string }; result: BoardItem[] };
-  /**
-   * The memory `id` with its entries, pinned first, then newest first; with `search`, only those whose key or text holds it
-   * (any case); with `entry` (a key, or an id or its start), only that one. Fails with `outOfScope` for one the agent
-   * doesn't read.
-   */
-  'board.readMemory': { params: { token: string; id: string; search?: string; entry?: string }; result: MemoryView };
-  /** The agent holding `token` changes the memory `id`: any entry, whoever wrote it. Fails with `outOfScope` as `board.readMemory` does. */
-  'board.changeMemory': { params: { token: string; id: string; change: MemoryChange }; result: { item: BoardItem; entry: MemoryEntry | null } };
-  /** The versions of the memory's entry `entry` (a key, or an id or its start), newest first. */
-  'board.memoryHistory': { params: { token: string; id: string; entry: string }; result: HistoryVersion<MemoryEntry>[] };
   /** The live agent holding `token` puts a queue card beside its tile, for agents to take from or, with `audience: 'user'`, for the user. */
   'board.newQueue': { params: { token: string; title: string; audience?: QueueAudience }; result: BoardItem };
-  /** The queues the agent holding `token` reads, as `board.listMemories` has its memories. */
+  /** The queues the agent holding `token` reads: in its zone and loose ones; none set to No agents. */
   'board.listQueues': { params: { token: string }; result: BoardItem[] };
   /** The queue `id` with its jobs and notes, in order: open ones, then done ones, newest done first. */
   'board.readQueue': { params: { token: string; id: string }; result: QueueView };
@@ -6592,12 +6705,6 @@ export interface DaemonMethods {
   'board.readTodos': { params: { token: string; mine?: boolean }; result: BoardItem[] };
   /** The caller ticks, unticks or takes off a line it wrote on its own list. */
   'board.changeTodo': { params: { token: string; change: AgentTodoChange }; result: BoardItem };
-  /** The memory `id` with its entries, for the user, as `board.readMemory` has them. */
-  'memory.read': { params: { id: string; search?: string; entry?: string }; result: MemoryView };
-  /** The user changes the memory `id`, as `board.changeMemory` does. */
-  'memory.change': { params: { id: string; change: MemoryChange }; result: { item: BoardItem; entry: MemoryEntry | null } };
-  /** The versions of an entry, for the user. */
-  'memory.history': { params: { id: string; entry: string }; result: HistoryVersion<MemoryEntry>[] };
   /** The queue `id` with its jobs, for the user. */
   'queue.read': { params: { id: string }; result: QueueView };
   /** The user changes the queue `id`: as an agent does, except that the user takes nothing, and drops or finishes any job. */
@@ -6687,7 +6794,8 @@ export interface DaemonMethods {
   /** Changes an item. Fails with `invalidParams` for an unknown item or zone, or a size under 1. */
   'item.update': { params: UpdateItemParams; result: BoardItem };
   /** Fails with `invalidParams` for an unknown item. */
-  'item.delete': { params: { id: string }; result: null };
+  /** With `undoable`, its `item.removed` carries what an undo puts back (`ItemUndo`): an agent's delete, which the board records. */
+  'item.delete': { params: { id: string; undoable?: boolean }; result: null };
   /** Every clock's status. */
   'clock.list': { params: undefined; result: ClockStatus[] };
   /**
@@ -6994,6 +7102,9 @@ export const BOARD_CALLER_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMet
   'board.unpin',
   'board.setPage',
   'board.needsYou',
+  'board.alert',
+  // Only its own pause, as its own turn ends: the pause path's guards hold.
+  'board.rest',
   'board.handoff',
   'board.ask',
   'board.presentPlan',
@@ -7001,11 +7112,6 @@ export const BOARD_CALLER_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMet
   'board.newSteps',
   'board.readSteps',
   'board.updateSteps',
-  'board.newMemory',
-  'board.listMemories',
-  'board.readMemory',
-  'board.changeMemory',
-  'board.memoryHistory',
   'board.newQueue',
   'board.listQueues',
   'board.readQueue',
@@ -7061,6 +7167,7 @@ export const ORCHESTRATOR_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMet
   'orchestrator.addNote',
   'orchestrator.editNote',
   'orchestrator.removeNote',
+  'orchestrator.deleteItem',
   'orchestrator.passItem',
   'orchestrator.addShape',
   'orchestrator.addDiagram',
@@ -7261,23 +7368,20 @@ export interface ItemUpdatedEvent {
   item: BoardItem;
 }
 
-/**
- * Sent when an agent reads a memory (`board.readMemory`, from its tool or the CLI), at most once a minute for the same
- * agent and memory: the board draws a pulse from the memory to the agent, and reads its readers again. Heard only where
- * the memory is.
- */
-export interface MemoryReadByEvent {
-  type: 'memory.readBy';
-  itemId: string;
-  reader: MemoryReader;
-}
-
 /** Sent to every client when a board item is deleted. */
 export interface ItemRemovedEvent {
   type: 'item.removed';
   id: string;
   /** The level it went from: its ticket chat's session id, or null for the main board. */
   ticket: string | null;
+  /** Set when an agent deleted it: what the board's undo puts back, as it does for the user's own Delete. */
+  undo?: ItemUndo;
+}
+
+/** A deleted item as it was, and the connectors that went with it: what undoing the delete makes again. */
+export interface ItemUndo {
+  item: BoardItem;
+  connectors: Connector[];
 }
 
 /** Sent to every client when a clock is planned again or fires, or a run of it ends. */
@@ -7462,7 +7566,6 @@ export type DaemonEvent =
   | ZoneRemovedEvent
   | ItemUpdatedEvent
   | ItemRemovedEvent
-  | MemoryReadByEvent
   | ClockUpdatedEvent
   | ClockTemplateUpdatedEvent
   | ClockTemplateRemovedEvent

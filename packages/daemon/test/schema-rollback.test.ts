@@ -1,10 +1,10 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import { MIGRATIONS, migrate, schemaVersion, type Migration } from '../src/migrate.ts';
-import { backwardSafety, isBackwardSafe, migrationChecksum } from '../src/schema-rollback.ts';
+import { backwardSafety, isBackwardSafe, migrationChecksum, scrubBackups } from '../src/schema-rollback.ts';
 import frozenChecksums from './migration-checksums.json' with { type: 'json' };
 import { tempDataDir } from './helpers.ts';
 
@@ -39,6 +39,11 @@ function runDaemon<T>(path: string, migrations: readonly Migration[], then: (db:
     db.close();
   }
 }
+
+/** An agents table with launch settings, as an older build kept their values in it. */
+const AGENTS: Migration = { version: 1, name: 'agents', sql: 'CREATE TABLE agents (session_id TEXT PRIMARY KEY, launch_settings TEXT);' };
+const SECRET = 'sk-a-secret-value-of-its-own';
+const HELD = { env: { API_TOKEN: SECRET }, settings: { model: 'opus' } };
 
 const backups = (dir: string) => readdirSync(dir).filter((name) => name.endsWith('.bak')).toSorted();
 
@@ -176,6 +181,41 @@ describe('a backup before migrating', () => {
     expect(runDaemon(path, [edges, V2], (db) => db.prepare("SELECT held_text FROM flow_edges WHERE id = 'held'").get())).toEqual({
       held_text: 'a held file',
     });
+  });
+
+  it("keeps no launch settings' values in the backup, only their names", () => {
+    const dir = tempDataDir();
+    const path = join(dir, 'agent-board.db');
+    runDaemon(path, [AGENTS], (db) => db.prepare("INSERT INTO agents VALUES ('agent-1', ?)").run(JSON.stringify(HELD)));
+    runDaemon(path, [AGENTS, { ...V2, version: 2 }]);
+
+    const backup = join(dir, 'agent-board.db.v1.bak');
+    expect(readFileSync(backup).toString('latin1')).not.toContain(SECRET);
+    const copy = new DatabaseSync(backup);
+    expect(copy.prepare('SELECT launch_settings FROM agents').get()).toEqual({ launch_settings: '{"env":["API_TOKEN"],"settings":["model"]}' });
+    copy.close();
+  });
+
+  it("takes the launch settings' values out of the backups an older build made, keeping each backup's time", () => {
+    const dir = tempDataDir();
+    const path = join(dir, 'agent-board.db');
+    const backup = join(dir, 'agent-board.db.v1.bak');
+    runDaemon(backup, [AGENTS], (db) => db.prepare("INSERT INTO agents VALUES ('agent-1', ?)").run(JSON.stringify(HELD)));
+    const named = join(dir, 'agent-board.db.v2.bak');
+    runDaemon(named, [AGENTS], (db) => db.prepare("INSERT INTO agents VALUES ('agent-1', '{\"env\":[\"A\"]}')").run());
+    writeFileSync(join(dir, 'agent-board.db.v3.bak'), 'not a database');
+    const then = new Date('2026-01-02T03:04:05Z');
+    utimesSync(backup, then, then);
+    utimesSync(named, then, then);
+    expect(readFileSync(backup).toString('latin1')).toContain(SECRET);
+
+    expect(runDaemon(path, [AGENTS], (db) => scrubBackups(db))).toBe(1);
+    expect(readFileSync(backup).toString('latin1')).not.toContain(SECRET);
+    expect(statSync(backup).mtime).toEqual(then);
+    expect(statSync(named).mtime).toEqual(then);
+    expect(readdirSync(dir).filter((name) => name.endsWith('-journal'))).toEqual([]);
+    // Nothing left to take: a second start changes none.
+    expect(runDaemon(path, [AGENTS], (db) => scrubBackups(db))).toBe(0);
   });
 
   it('makes none for a new database, which has nothing in it to lose', () => {

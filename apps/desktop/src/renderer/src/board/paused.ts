@@ -1,7 +1,7 @@
 // Pausing an agent (hibernating it) from its tile and window, and what a paused tile says. Pure, so the rules are
 // unit-tested. Only the user or an orchestrator pauses an agent: nothing here suggests it.
 import { pauseRefusal, type Agent, type NeedsYouShows } from '@agent-board/daemon/protocol';
-import { humanStatus, type HumanStatusFacts } from '@agent-board/daemon/human-status';
+import { humanStatus, standsOut, type HumanStatusFacts } from '@agent-board/daemon/human-status';
 import { sinceText } from '../../../shared/needs-you';
 import { upperFirst } from '../upper-first';
 import { clockTime } from './items/agent-note';
@@ -142,7 +142,8 @@ export type FrostFacts = HumanStatusFacts & Partial<Pick<Agent, 'schedule' | 're
  */
 export function frozenKind(agent: FrostFacts, shows: NeedsYouShows): FrozenKind | undefined {
   if (agent.startup?.failed === true) return undefined;
-  const needsYou = humanStatus(agent, shows).status === 'needs-you';
+  // A cue that asks the user to look keeps it bright, as a need does.
+  const needsYou = standsOut(humanStatus(agent, shows));
   // Its clock first: an agent that comes back by itself reads so, however it was frozen.
   if (clockWakes(agent) && (!needsYou || asleep(agent))) return 'scheduled';
   if (asleep(agent)) return 'paused';

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { MAX_LINK_CHARS, bufferLinks, hyperlinkAddress, hyperlinkHint, linkHint, linkTarget, textLinks, type BufferRow } from './terminal-links';
+import { DRAFT_LINK, MAX_LINK_CHARS, bufferLinks, hyperlinkAddress, hyperlinkHint, linkHint, linkTarget, textLinks, type BufferRow } from './terminal-links';
 
 const urls = (text: string) => textLinks(text).map(({ url }) => url);
 
@@ -195,5 +195,28 @@ describe('what hovering an OSC 8 hyperlink says', () => {
 
   test('a very long target is cut short', () => {
     expect(hyperlinkHint(`https://example.com/${'a'.repeat(500)}`, true, keys).length).toBeLessThan(400);
+  });
+});
+
+describe('a link to a drafted crew', () => {
+  const uuid = '0f8fad5b-d9cb-469f-a165-70867728950e';
+  const link = `agent-board://draft/${uuid}`;
+  const keys = { open: '⌘-click', browser: '⇧⌘-click' };
+
+  test('is found in the output, without the sentence round it, and opens on the board', () => {
+    expect(textLinks(`Give them this link: ${link}.`)).toEqual([{ url: link, start: 21, end: 21 + link.length }]);
+    expect(linkTarget(link, false, true)).toBe(DRAFT_LINK);
+    expect(linkTarget(link, false, false)).toBe(DRAFT_LINK);
+    expect(linkHint(link, true, keys)).toBe('⌘-click to open the draft');
+  });
+
+  test('never goes to the browser, and nothing else of the scheme is a link', () => {
+    expect(linkTarget(link, true, true)).toBeUndefined();
+    expect(urls('agent-board://draft/not-a-uuid agent-board://settings/x')).toEqual([]);
+  });
+
+  test('opens as an OSC 8 hyperlink too', () => {
+    expect(hyperlinkAddress(link)).toBe(link);
+    expect(hyperlinkAddress(`${link}/x`)).toBeUndefined();
   });
 });

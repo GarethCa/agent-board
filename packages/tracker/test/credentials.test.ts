@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, onTestFinished } from 'vitest';
-import { createKeychainStore, KEYCHAIN_SERVICE } from '../src/index.ts';
+import { createKeychainStore, KEYCHAIN_SERVICE, keychainAvailability } from '../src/index.ts';
 import { createTempKeychain } from '../src/testing.ts';
 
 describe.runIf(process.platform === 'darwin')('the macOS keychain store', () => {
@@ -146,6 +146,53 @@ it('checks account names on the Secret Service too, without running its tool', a
   } finally {
     process.env.PATH = path;
   }
+});
+
+/** Runs `test` with a fake `secret-tool` alone on the PATH: a shell script of `body`. */
+async function withSecretTool(body: string, test: () => Promise<void>): Promise<void> {
+  const dir = mkdtempSync(join(tmpdir(), 'secret-tool-'));
+  onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+  writeFileSync(join(dir, 'secret-tool'), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+  const path = process.env.PATH;
+  process.env.PATH = dir;
+  try {
+    await test();
+  } finally {
+    process.env.PATH = path;
+  }
+}
+
+it('reads no secret where the Secret Service says it has none', async () => {
+  // secret-tool lookup exits 1, saying nothing, for an item it doesn't have.
+  await withSecretTool('exit 1', async () => {
+    expect(await createKeychainStore({ platform: 'linux' }).get('linear')).toBeUndefined();
+  });
+});
+
+it("fails a read the Secret Service couldn't answer, rather than saying it has none", async () => {
+  await withSecretTool("echo 'Cannot autolaunch D-Bus without X11 $DISPLAY' >&2; exit 1", async () => {
+    await expect(createKeychainStore({ platform: 'linux' }).get('linear')).rejects.toThrow('could not read the Secret Service: Cannot autolaunch D-Bus');
+  });
+});
+
+describe('keychainAvailability', () => {
+  const tools = mkdtempSync(join(tmpdir(), 'tools-'));
+  writeFileSync(join(tools, 'secret-tool'), '', { mode: 0o755 });
+  afterAll(() => rmSync(tools, { recursive: true, force: true }));
+
+  it("is yes on macOS, and no where there is never one, or for a test's keychain file off macOS", () => {
+    expect(keychainAvailability({ platform: 'darwin', env: {} })).toBe('yes');
+    expect(keychainAvailability({ platform: 'win32', env: {} })).toBe('no');
+    expect(keychainAvailability({ platform: 'linux', keychain: '/tmp/test.keychain-db', env: { PATH: tools, DBUS_SESSION_BUS_ADDRESS: 'unix:path=/x' } })).toBe('no');
+  });
+
+  it('is yes on Linux with secret-tool and a session bus, and not-running without either', () => {
+    expect(keychainAvailability({ platform: 'linux', env: { PATH: tools, DBUS_SESSION_BUS_ADDRESS: 'unix:path=/x' } })).toBe('yes');
+    expect(keychainAvailability({ platform: 'linux', env: { PATH: tools, XDG_RUNTIME_DIR: tools } })).toBe('not-running');
+    writeFileSync(join(tools, 'bus'), '');
+    expect(keychainAvailability({ platform: 'linux', env: { PATH: tools, XDG_RUNTIME_DIR: tools } })).toBe('yes');
+    expect(keychainAvailability({ platform: 'linux', env: { PATH: '/nowhere', DBUS_SESSION_BUS_ADDRESS: 'unix:path=/x' } })).toBe('not-running');
+  });
 });
 
 // As for gh: what fails without the fix is Vitest's check for unhandled errors. A secret fits in a pipe buffer, so

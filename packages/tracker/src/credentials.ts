@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { delimiter, join } from 'node:path';
 
 /** Secrets by account (`linear`), kept outside the database. */
 export interface CredentialStore {
@@ -60,6 +61,22 @@ export function createKeychainStore(options: KeychainOptions = {}): CredentialSt
   return noStore(`storing credentials is not supported on ${platform} yet`);
 }
 
+/**
+ * Whether `createKeychainStore` has a keychain here: `yes` on macOS, and on Linux with the Secret Service's tool
+ * and a session bus to reach it by; `not-running` on a Linux host with neither now (a headless server), whose
+ * keychain may still hold what a desktop session stored; `no` where it never has one (Windows, or a test's keychain
+ * file off macOS).
+ */
+export function keychainAvailability(options: KeychainOptions & { env?: NodeJS.ProcessEnv } = {}): 'yes' | 'not-running' | 'no' {
+  const platform = options.platform ?? process.platform;
+  if (platform === 'darwin') return 'yes';
+  if (options.keychain !== undefined || platform !== 'linux') return 'no';
+  const env = options.env ?? process.env;
+  const bus = (env.DBUS_SESSION_BUS_ADDRESS ?? '') !== '' || (env.XDG_RUNTIME_DIR !== undefined && existsSync(join(env.XDG_RUNTIME_DIR, 'bus')));
+  const tool = (env.PATH ?? '').split(delimiter).some((dir) => dir !== '' && existsSync(join(dir, 'secret-tool')));
+  return bus && tool ? 'yes' : 'not-running';
+}
+
 /** A store that has nothing and refuses to store anything, saying `why`. */
 function noStore(why: string): CredentialStore {
   return {
@@ -114,7 +131,11 @@ function secretService(): CredentialStore {
     async get(account) {
       if (!ACCOUNT_PATTERN.test(account)) return undefined;
       const found = await run('secret-tool', ['lookup', ...attributes(account)]);
-      return found.code === 0 && found.stdout !== '' ? found.stdout : undefined;
+      if (found.code === 0 && found.stdout !== '') return found.stdout;
+      // It exits 1 saying nothing for an item it doesn't have, and says why for a Secret Service it couldn't reach,
+      // or a collection left locked: the item may still be there.
+      if (found.code !== 0 && found.stderr !== '') throw new Error(`could not read the Secret Service: ${found.stderr}`);
+      return undefined;
     },
     async set(account, secret) {
       checkAccount(account);

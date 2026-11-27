@@ -9,7 +9,6 @@ import { guardCodexConfig, type CodexConfigGuard } from './codex-config-guard.ts
 import type { createDeliveries } from './deliveries.ts';
 import { isRunningSomething as defaultIsRunningSomething } from './foreground.ts';
 import type { createHookStates } from './hook-states.ts';
-import { readLaunchSettings } from './launch-settings.ts';
 import { invalidParams } from './params.ts';
 import type { PermissionHolds } from './permissions.ts';
 import { AGENT_ERROR, INTERRUPTIBLE_STATES, type Agent, type Harness, type SessionState, type TerminalSize } from './protocol.ts';
@@ -20,11 +19,14 @@ import type { SessionHost } from './sessions.ts';
 import { RESET_MODES } from './shells.ts';
 import type { SubagentStore } from './subagents.ts';
 import type { TranscriptReader } from './transcripts.ts';
-import { removeLaunchSettingsFile } from './launch-settings.ts';
+import { heldLaunchSettings, removeLaunchSettingsFile } from './launch-settings.ts';
 import { removeWorktree, unsavedWork } from './worktrees.ts';
 
 /** The tile's notice for an agent that had turns, relaunched without the conversation to carry on; cleared once a turn begins. */
 export const NO_CONVERSATION_NOTICE = 'No earlier conversation: started fresh';
+/** Its launch settings' values couldn't be moved out of the database to the keychain (too long, or no keychain). */
+export const LAUNCH_SETTINGS_IN_DATABASE_NOTICE =
+  "Its launch settings couldn't be moved to the keychain, so their values are still in the board's database: Restart with… shorter ones, or none, to take them out";
 
 /**
  * What a resumed agent whose turn its daemon cut off is told, as its next message, by any resume in its conversation
@@ -83,6 +85,7 @@ interface AgentLifecycleOptions
     | 'db'
     | 'reviewsDir'
     | 'launchSettingsDir'
+    | 'launchSettings'
     | 'harnessPaths'
     | 'ensureHookShim'
     | 'env'
@@ -365,7 +368,7 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
         size: RELAUNCH_SIZE,
         ...(row.read_only === 1 ? { readOnly: true } : {}),
         role: launchRole(row),
-        launchSettings: readLaunchSettings(row.launch_settings),
+        launchSettings: options.launchSettings.get(sessionId),
       });
     } catch (error) {
       if (error instanceof RpcMethodError && error.code === AGENT_ERROR.projectCodexConfig) {
@@ -379,7 +382,14 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
     updateHibernated.run(null, null, null, sessionId);
     // A resume after a restart is normal and says nothing. Only a conversation really lost says so: an agent that never
     // had a turn has nothing to lose.
-    updateNotice.run(noConversation && prompt === undefined && !fresh && row.had_turn === 1 ? NO_CONVERSATION_NOTICE : null, sessionId);
+    updateNotice.run(
+      heldLaunchSettings(row.launch_settings) !== undefined
+        ? LAUNCH_SETTINGS_IN_DATABASE_NOTICE
+        : noConversation && prompt === undefined && !fresh && row.had_turn === 1
+          ? NO_CONVERSATION_NOTICE
+          : null,
+      sessionId,
+    );
     // A cut-off turn is kept until a turn begins (`agents.ts`'s `save`), so a restart before the line is typed tells it
     // again; one started on a new conversation, or afresh on its task, has none to carry on.
     if (noConversation || fresh) updateCutOff.run(0, 0, sessionId);
@@ -600,6 +610,7 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
       permissions.drop(sessionId);
       transcripts.forget(sessionId);
       removeLaunchSettingsFile(options.launchSettingsDir, sessionId);
+      void options.launchSettings.forget(sessionId);
       options.log(`deleted agent ${sessionId}${agent.ownsWorktree ? ` and its worktree ${agent.worktree}` : ''} for ${why}`);
       options.broadcast({ type: 'agent.removed', sessionId });
     },

@@ -70,7 +70,7 @@ describe('calmFace', () => {
 
   it('offers its open pull request for review once it has finished', () => {
     const agent = working({ state: 'idle', pullRequests: [{ number: 41, title: 'Add the dock', url: '', state: 'open', checks: 'passing' }] });
-    expect(calmFace(agent, 'explicit')).toEqual({ status: 'needs-you', line: 'Changes ready to review', action: { kind: 'pull-request', label: 'Review changes', prominent: true } });
+    expect(calmFace(agent, 'explicit')).toEqual({ status: 'needs-you', word: 'To review', line: 'Changes ready to review', action: { kind: 'pull-request', label: 'Review changes', prominent: true } });
   });
 
   it('shows a flag’s reason and opens the agent', () => {

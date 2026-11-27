@@ -449,3 +449,70 @@ test('a draft an agent made opens from Settings › Prefabs › Drafts on its bo
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('a draft an agent made is a click away from Needs you, the crew library and ⌘K, and shows what it will start', async () => {
+  const { dir, repo, env } = scratch('orchestrate');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, env);
+  try {
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await spawnAgent(window, 'monorepo', 'Print your board identity');
+    const [drafter] = await agents(window);
+    const token = await withDaemon(dataDir, (client) => tokenOf(client, drafter!.sessionId));
+    const draft = (name: string) =>
+      withDaemon(dataDir, (client) =>
+        client.call('board.draftPrefab', { token, text: JSON.stringify({ agentBoardCrewPrefab: 1, name, members: [{ id: 'writer', role: 'implementer', starts: 'prompt' }] }), assumptions: [] }),
+      );
+    await draft('Drafted review');
+    const board = window.getByTestId('prefab-board');
+    const name = board.getByRole('textbox', { name: 'Prefab name' });
+    const note = board.getByTestId('prefab-draft');
+    const back = async () => {
+      await board.getByTestId('prefab-board-back').click();
+      await window.getByRole('alertdialog', { name: /^Save / }).getByTestId('prefab-draft-keep').click();
+      await expect(board).toBeHidden();
+    };
+
+    // Needs you: who drafted which crew, and Open shows it on its board with what it will start.
+    if (!(await window.getByTestId('needs-you-inbox').isVisible())) await window.getByTestId('inbox-count').dispatchEvent('click');
+    const row = window.getByTestId('needs-you-inbox').getByTestId('inbox-draft');
+    await expect(row).toContainText(`${drafter!.name} drafted a crew: Drafted review`);
+    await row.getByRole('button', { name: 'Open Drafted review' }).click();
+    await expect(name).toHaveValue('Drafted review');
+    await expect(note.getByTestId('prefab-draft-review')).toContainText('Builder');
+    await back();
+
+    // ⌘K, by its name.
+    await window.keyboard.press(windowKey('k'));
+    const spotlight = window.getByTestId('spotlight');
+    await spotlight.getByRole('combobox').fill('Drafted review');
+    await expect(spotlight.getByTestId('spotlight-row').first()).toContainText('Draft by');
+    await window.keyboard.press('Enter');
+    await expect(name).toHaveValue('Drafted review');
+
+    // Start saves it to the library and opens its prompt box.
+    await note.getByTestId('prefab-draft-start').click();
+    await expect(promptBox(window)).toBeVisible();
+    await expect.poll(async () => (await prefabs(window)).some((prefab) => prefab.name === 'Drafted review')).toBe(true);
+    await window.keyboard.press('Escape');
+    await expect(promptBox(window)).toBeHidden();
+
+    // The crew library lists a draft first, to review; Discard asks, then deletes it.
+    await draft('Drafted spare');
+    await openLibrary(window);
+    const drafts = library(window).getByTestId('crew-library-drafts');
+    await expect(drafts.getByTestId('prefab-draft-card')).toContainText('Drafted by');
+    await drafts.getByTestId('prefab-draft-card-review').click();
+    await expect(name).toHaveValue('Drafted spare');
+    await note.getByTestId('prefab-draft-discard').click();
+    await note.getByTestId('prefab-draft-discard-yes').click();
+    await expect(board).toBeHidden();
+    await expect.poll(() => window.evaluate(async () => (await globalThis.window.agentBoard.orchestrators.drafts()).drafts.length)).toBe(0);
+    expect((await prefabs(window)).some((prefab) => prefab.name === 'Drafted spare')).toBe(false);
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

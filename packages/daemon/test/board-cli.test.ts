@@ -733,7 +733,7 @@ describe('drawing a diagram from the command line', () => {
     // Cut short, shapes and connectors share the lines: half the relations still show.
     expect(diagram.match(/^ {2}item:/gm)).toHaveLength(20);
     expect(diagram.match(/^ {2}connector:/gm)).toHaveLength(20);
-    expect(diagram).toContain('… and 40 more shapes and 39 more connectors: `agent-board tree --json` lists them all');
+    expect(diagram).toContain('… and 40 more shapes and 39 more connectors: `agent-board tree --zone <ref> --json` lists them all');
     expect(Math.max(...diagram.split('\n').map((line) => line.length))).toBeLessThan(200);
     const withSections = (await run(env, 'zone', 'map', 'big', '--sections')).out;
     const sections = withSections.slice(withSections.indexOf('\ndiagram'));
@@ -765,6 +765,9 @@ describe('schedules from the command line', () => {
     await usage(['add', '@daily', '--fresh', '--result', 'email', '--', 'Go'], '--result must be history, note, handoff');
     await usage(['add', '@daily', '--fresh', '--result', 'handoff', '--', 'Go'], '--result handoff goes with --handoff-to');
     await usage(['list', '--to', 'a'], '--to is only for `schedule add`');
+    for (const args of [['remove', 'item:1'], ['add', '@daily', '--self', '--full', '--', 'Go'], ['set', '--after', 'idle', '--why', 'x'], ['stop', '--why', 'x'], ['template', 'list']]) {
+      await usage(args.includes('--full') ? args : [...args, '--full'], '--full is only for `schedule list`');
+    }
     await usage(['remove'], 'give one schedule ref');
     await usage(['pause', 'item:1'], 'the schedule commands are');
     await usage(['add', '--template', 'Slack', '--to', 'a', '--self'], 'give --to <agent> to message one, --self to message you, or --fresh');

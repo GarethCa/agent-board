@@ -4,9 +4,11 @@ import { basename, dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it, vi } from 'vitest';
 import { fakeHarnessEnv, type CodexStartScreen, type FakeScenario } from '@agent-board/fake-harness';
+import type { CredentialStore } from '@agent-board/tracker';
+import { createMemoryCredentialStore } from '@agent-board/tracker/testing';
 import { DaemonRpcError, type DaemonClient } from '../src/client.ts';
 import { claudeSettings } from '../src/agent-spawns.ts';
-import { CONTINUE_LINE } from '../src/agent-lifecycle.ts';
+import { CONTINUE_LINE, LAUNCH_SETTINGS_IN_DATABASE_NOTICE } from '../src/agent-lifecycle.ts';
 import { ANSWERS_DROPPED_FLAG } from '../src/agents.ts';
 import { HOOK_TOKEN_ENV, HOOK_URL_ENV } from '../src/hook-forwarder.ts';
 import { daemonPaths } from '../src/paths.ts';
@@ -26,6 +28,7 @@ import {
 } from '../src/protocol.ts';
 import type { Clock } from '../src/clock.ts';
 import { QUIET_TURN_MS, readTranscriptTail, turnEndedInTranscript } from '../src/quiet-turns.ts';
+import { markClock, readSender } from '../src/sender-marker.ts';
 import { createFakeClock } from './fake-clock.ts';
 import { newestPromptRecording, recordingBytes } from './startup-recordings.ts';
 import { connectTestClient, git, recordEvents, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
@@ -84,6 +87,8 @@ async function agentDaemon(
     personOnlyPermissions?: boolean;
     /** How long after answers are sent to Claude's dialog the daemon waits for its call to run. */
     dialogTakeMs?: number;
+    /** The keychain it keeps credentials and launch settings in: an empty one in memory by default. */
+    credentials?: CredentialStore;
   } = {},
 ) {
   const home = options.home ?? tempDataDir();
@@ -121,6 +126,7 @@ async function agentDaemon(
     dialogTakeMs: options.dialogTakeMs,
     clock: options.clock,
     ...(options.log === undefined ? {} : { log: options.log }),
+    ...(options.credentials === undefined ? {} : { credentials: options.credentials }),
   });
   const client = await connectTestClient(daemon);
   return { daemon, client, recorder: recordEvents(client), worktreesDir, dataDir, home };
@@ -400,13 +406,79 @@ describe('Claude agents', () => {
     const kept = await client.call('agent.restartWith', { sessionId: agent.sessionId, launchSettings: { env: { DISABLE_TELEMETRY: '1' } }, keepEnv: ['FAKE_HARNESS_WRITE_ON_STOP'] });
     expect(kept.launchSettings).toEqual({ env: ['FAKE_HARNESS_WRITE_ON_STOP', 'DISABLE_TELEMETRY'], settings: ['outputStyle'] });
     // Never past the size cap, with the ones it keeps: refused before anything is stored.
-    await expect(client.call('agent.restartWith', { sessionId: agent.sessionId, launchSettings: { settings: { outputStyle: 'x'.repeat(16_300) } } })).rejects.toThrow(
+    await expect(client.call('agent.restartWith', { sessionId: agent.sessionId, launchSettings: { settings: { outputStyle: 'x'.repeat(2_000) } } })).rejects.toThrow(
       /with the ones it keeps/,
     );
 
     // An empty part clears it.
     const cleared = await client.call('agent.restartWith', { sessionId: agent.sessionId, launchSettings: { env: {}, settings: {} } });
     expect(cleared.launchSettings).toBeNull();
+  });
+
+  it('keeps launch settings in the keychain, never in the database, through a daemon restart, and deletes them with the agent', async () => {
+    const credentials = createMemoryCredentialStore();
+    const dataDir = tempDataDir();
+    const first = await agentDaemon('output', { dataDir, credentials });
+    const zone = await addZone(first.client, tempRepo());
+    const marker = join(tempDataDir(), 'marker');
+    const agent = await first.client.call('agent.spawn', { zoneId: zone.id, prompt: 'Tidy the docs', launchSettings: { env: { FAKE_HARNESS_WRITE_ON_STOP: marker } }, ...SIZE });
+    await untilState(first.recorder, agent.sessionId, 'idle');
+    expect([...credentials.secrets.keys()]).toEqual([`launch-settings.${agent.sessionId}`]);
+    await first.daemon.stop();
+    await expect.poll(() => existsSync(marker)).toBe(true);
+    rmSync(marker);
+    const database = daemonPaths(dataDir).database;
+    const files = readdirSync(dirname(database)).filter((name) => name.startsWith(basename(database)));
+    expect(files.map((name) => readFileSync(join(dirname(database), name), 'latin1')).join('')).not.toContain(marker);
+
+    // The next daemon reads them from the keychain, and launches it with them.
+    const second = await agentDaemon('output', { dataDir, credentials });
+    expect((await second.client.call('agent.resume', { sessionId: agent.sessionId })).launchSettings).toEqual({ env: ['FAKE_HARNESS_WRITE_ON_STOP'], settings: [] });
+    await untilState(second.recorder, agent.sessionId, 'waiting');
+    await second.client.call('agent.stop', { sessionId: agent.sessionId });
+    await expect.poll(() => existsSync(marker)).toBe(true);
+
+    await second.client.call('agent.delete', { sessionId: agent.sessionId, force: true });
+    await expect.poll(() => credentials.secrets.size).toBe(0);
+  });
+
+  it("replaces or clears launch settings while the keychain can't give the old ones, and keeps them otherwise", async () => {
+    const credentials = createMemoryCredentialStore();
+    const dataDir = tempDataDir();
+    const first = await agentDaemon('output', { dataDir, credentials });
+    const zone = await addZone(first.client, tempRepo());
+    const agent = await first.client.call('agent.spawn', { zoneId: zone.id, prompt: 'Tidy the docs', launchSettings: { env: { DISABLE_TELEMETRY: '1' } }, ...SIZE });
+    await untilState(first.recorder, agent.sessionId, 'idle');
+    await first.daemon.stop();
+
+    const unreadable: CredentialStore = { ...credentials, get: () => Promise.reject(new Error('the keychain is locked')) };
+    const second = await agentDaemon('output', { dataDir, credentials: unreadable });
+    // Its names stay, and what keeps part of the old ones can't go ahead.
+    expect((await second.client.call('agent.list')).find((a) => a.sessionId === agent.sessionId)?.launchSettings).toEqual({ env: ['DISABLE_TELEMETRY'], settings: [] });
+    await expect(second.client.call('agent.restartWith', { sessionId: agent.sessionId, launchSettings: { env: { DISABLE_AUTOUPDATER: '1' } } })).rejects.toThrow(/the keychain is locked\. Try again/);
+    // Replacing both parts needs nothing of the old ones.
+    const cleared = await second.client.call('agent.restartWith', { sessionId: agent.sessionId, launchSettings: { env: {}, settings: {} } });
+    expect(cleared.launchSettings).toBeNull();
+    expect(credentials.secrets.size).toBe(0);
+  });
+
+  it("says so on the tile of an agent whose launch settings' values are still in the database", async () => {
+    const credentials = createMemoryCredentialStore();
+    const dataDir = tempDataDir();
+    const first = await agentDaemon('output', { dataDir, credentials });
+    const zone = await addZone(first.client, tempRepo());
+    const agent = await first.client.call('agent.spawn', { zoneId: zone.id, prompt: 'Tidy the docs', ...SIZE });
+    await untilState(first.recorder, agent.sessionId, 'idle');
+    await first.daemon.stop();
+    // An older build's, too long to move.
+    const db = new DatabaseSync(daemonPaths(dataDir).database);
+    db.prepare('UPDATE agents SET launch_settings = ? WHERE session_id = ?').run(JSON.stringify({ env: { DISABLE_TELEMETRY: 'x'.repeat(3_000) } }), agent.sessionId);
+    db.close();
+
+    const second = await agentDaemon('output', { dataDir, credentials });
+    const resumed = await second.client.call('agent.resume', { sessionId: agent.sessionId });
+    expect(resumed.notice).toBe(LAUNCH_SETTINGS_IN_DATABASE_NOTICE);
+    expect(credentials.secrets.size).toBe(0);
   });
 
   it('restarts a mid-turn agent with new launch settings from the app, and tells it to carry on', async () => {
@@ -1500,7 +1572,7 @@ describe('Claude agents', () => {
       // Back a few minutes later, its next fire an hour off: the run under test is its only one.
       const second = await agentDaemon('output', { dataDir, clock: createFakeClock(new Date(2026, 9, 10, 8, 5)) });
       expect((await second.client.call('agent.list'))[0]).toMatchObject({
-        undelivered: [{ what: 'A scheduled run', text: 'Check Slack', reason: expect.any(String) }],
+        undelivered: [{ what: 'A scheduled run', text: markClock('Check Slack', made.id, 'Check Slack'), reason: expect.any(String) }],
         flag: { to: 'user', reason: expect.stringMatching(/^A scheduled run was not delivered .*Resend/) },
       });
       // Its run is over, not left waiting on a turn that never starts.
@@ -2660,7 +2732,12 @@ describe('long-lived agents', () => {
   const start = new Date(2026, 9, 10, 7, 30, 15);
   const nineOClock = new Date(2026, 9, 10, 9, 0);
   const isRunPrompt = (prompt: string) => (e: DaemonEvent): e is HookEvent =>
-    e.type === 'hook' && e.event === 'UserPromptSubmit' && e.payload.prompt === prompt;
+    e.type === 'hook' && e.event === 'UserPromptSubmit' && isClockRun(String(e.payload.prompt), prompt);
+  /** Whether `typed` is a run of a clock whose prompt is `prompt`: the clock's mark, then the prompt. */
+  const isClockRun = (typed: string, prompt: string) => {
+    const { text, from } = readSender(typed);
+    return from?.kind === 'clock' && text === prompt;
+  };
   /** Waits for the agent's first turn to end. */
   const untilFirstStop = (recorder: ReturnType<typeof recordEvents>, sessionId: string) =>
     recorder.waitFor((e): e is HookEvent => e.type === 'hook' && e.sessionId === sessionId && e.event === 'Stop');
@@ -2689,7 +2766,8 @@ describe('long-lived agents', () => {
     const fired = recorder.events.length;
     clock.advance(1_000);
     await recorder.waitFor(isRunPrompt('Check the nightly build'));
-    await recorder.waitForText(agent.sessionId, 'Done: Check the nightly build.');
+    // The fake answers `Done: <prompt>.`, the clock's mark heading the prompt.
+    await recorder.waitForText(agent.sessionId, ' Check the nightly build.');
     await untilState(recorder, agent.sessionId, 'thinking', fired);
     const after = await untilState(recorder, agent.sessionId, 'scheduled', recorder.events.length);
     expect(statesOf(recorder.events.slice(fired), agent.sessionId)).toEqual(['scheduled', 'thinking', 'scheduled']);
@@ -2887,7 +2965,8 @@ describe('long-lived agents', () => {
     clock.advanceTo(nineOClock);
     const kept = await untilAgent(recorder, agent.sessionId, (a) => a.undelivered.length > 0, fired);
     expect(kept).toMatchObject({ endedAt: expect.any(String), shellSessionId: ended.shellSessionId });
-    expect(kept.undelivered).toEqual([{ what: 'A scheduled run', text: 'Check the nightly build', reason: 'its shell is running something' }]);
+    expect(kept.undelivered).toEqual([{ what: 'A scheduled run', text: expect.any(String), reason: 'its shell is running something' }]);
+    expect(isClockRun(kept.undelivered[0]!.text, 'Check the nightly build')).toBe(true);
     const run = await untilAgent(recorder, agent.sessionId, (a) => a.schedule?.lastRun?.outcome !== 'started' && a.schedule?.lastRun != null, fired);
     expect(run.schedule!.lastRun).toMatchObject({ reason: expect.stringContaining('its shell is running something') });
     expect(recorder.events.some(isRunPrompt('Check the nightly build'))).toBe(false);

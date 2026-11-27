@@ -473,32 +473,6 @@ for (const { theme, suffix } of THEMES) {
   });
 }
 
-/** A memory's looks (board/items/MemoryGallery.tsx): open with entries and empty, folded to its icon, its peek, and full screen. */
-const MEMORY_SHOTS = ['card', 'empty', 'icons', 'peek', 'full-doc', 'full-fact'];
-
-for (const design of ['classic', 'simplified'] as const) {
-  for (const { theme, suffix } of THEMES) {
-    const named = (shot: string) => `memory-${shot}${design === 'simplified' ? '-simplified' : ''}${suffix}`;
-    test(`a memory open as a card, empty, folded to its brain icon, its peek and full screen: the memory gallery, ${design}, ${theme}`, async () => {
-      needsBaselines(...MEMORY_SHOTS.map(named));
-      const dataDir = tempDataDir();
-      const { app, window } = await launchGallery(dataDir, theme, undefined, { design });
-      try {
-        const gallery = window.getByTestId('memory-gallery');
-        await expect(gallery).toBeVisible();
-        await expect(gallery.getByTestId('memory-icon')).toHaveCount(4);
-        await pinFonts(window);
-        await ignorePointer(window);
-        await settle(window);
-        for (const shot of MEMORY_SHOTS) await expect.soft(window.getByTestId(`memory-gallery-${shot}`)).toHaveScreenshot(`${named(shot)}.png`, SHOT);
-      } finally {
-        await app.close();
-        await removeDataDir(dataDir);
-      }
-    });
-  }
-}
-
 /** A queue's looks (board/items/QueueGallery.tsx): open for agents, for the user and empty, folded to its icon, and its peek. */
 const QUEUE_SHOTS = ['card', 'inbox', 'empty', 'icons', 'peek', 'full-agents', 'full-taken', 'full-user'];
 /**

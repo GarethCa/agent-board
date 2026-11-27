@@ -95,6 +95,8 @@ export interface AskHostOptions {
   worktree(sessionId: string): string | undefined;
   /** Puts the agent's plan card beside its tile, if it has none. */
   addCard?(sessionId: string): Promise<void>;
+  /** Whether a plan asked onto the board gets its card there (Settings' `placeDocTiles`); yes when not given. */
+  placesCards?(): boolean;
   /** The user's approved version of the agent's plan was written to its file at `path`. */
   wrote?(sessionId: string, path: string): void;
   /** Types `text` at the agent's prompt once it is ready for its next message, then calls `typed`: the decision on a plan it left. */
@@ -808,8 +810,9 @@ export function createAskHost(options: AskHostOptions): AskHost {
           // Its plan is written where its orchestrator reads it: never into a folder of the user's it was resumed in.
           if (lead === undefined || !sources.agents.get(sessionId)!.ownsWorktree) {
             const detached = optionalBooleanParam(p, 'detached') === true;
-            const waited = detached ? { left: host.leavePlan(sessionId, spec) } : host.presentPlan(sessionId, spec, closed(connection));
-            if (optionalBooleanParam(p, 'onBoard') === true && options.addCard !== undefined) {
+            const onBoard = optionalBooleanParam(p, 'onBoard') === true && options.addCard !== undefined && (options.placesCards?.() ?? true);
+            const waited = detached ? { left: host.leavePlan(sessionId, spec), onBoard } : host.presentPlan(sessionId, spec, closed(connection));
+            if (onBoard && options.addCard !== undefined) {
               options.addCard(sessionId).catch((error: unknown) => options.log?.(`could not put the plan card on the board: ${(error as Error).message}`));
             }
             return waited;

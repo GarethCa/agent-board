@@ -6,7 +6,7 @@ import { gateBadge } from '@agent-board/daemon/gate-rules';
 import { HUMAN_STATUS_BY_STATE, humanStatus, type HumanStatus } from '@agent-board/daemon/human-status';
 import { insideWorktree } from './live-folder';
 import type { ShelfGroupId } from './shelf-folds';
-import { crewSection, docSection, documentSection, pullRequestSection, subagentSection, type Fading, type SidebarRow } from './sidebar-records';
+import { crewSection, docSection, documentSection, helperDocRows, pullRequestSection, subagentSection, type Fading, type SidebarRow } from './sidebar-records';
 
 /** The shelves, in their tabs' order: the agent's page, what it made, its crew, and its setup. */
 export const SHELVES = ['page', 'made', 'crew', 'setup'] as const;
@@ -27,16 +27,16 @@ export interface ShelfTab {
 /** Rows that count: a guess, or a record not just deleted. */
 const live = (rows: readonly SidebarRow<unknown>[]) => rows.filter((row) => row.source === 'guessed' || row.gone !== true).length;
 
-/** How many things Made holds: its pull requests, what it showed you (documents and the plan) and its hand-off docs. */
-export function madeCount(agent: Agent, fading?: Fading): number {
-  return live(pullRequestSection(agent, fading).rows) + documentSection(agent).length + live(docSection(agent, fading).rows);
+/** How many things Made holds: its pull requests, what it showed you (documents and the plan) and its hand-off docs; a ticket's chat, its helpers' documents and hand-off docs too. */
+export function madeCount(agent: Agent, fading?: Fading, agents: readonly Agent[] = []): number {
+  return live(pullRequestSection(agent, fading).rows) + documentSection(agent, agents).length + live(docSection(agent, fading).rows) + helperDocRows(agent, agents).length;
 }
 
 /** Whether Made has anything to show, a record the user deleted included: its "N hidden · Show" is there. */
-function madeHolds(agent: Agent, fading?: Fading): boolean {
+function madeHolds(agent: Agent, agents: readonly Agent[], fading?: Fading): boolean {
   const pulls = pullRequestSection(agent, fading);
   const docs = docSection(agent, fading);
-  return pulls.rows.length + pulls.hidden.length + documentSection(agent).length + docs.rows.length + docs.hidden.length > 0;
+  return pulls.rows.length + pulls.hidden.length + documentSection(agent, agents).length + docs.rows.length + docs.hidden.length + helperDocRows(agent, agents).length > 0;
 }
 
 /** Whether Crew has anything to show: an agent it started (or one deleted from it), or a subagent. */
@@ -51,8 +51,8 @@ function crewCount(agent: Agent, agents: readonly Agent[], fading?: Fading): num
 }
 
 /**
- * A crew member's status, as its own window and tile say it: an ended one too may have failed, be paused, or need the
- * user (a restart stopped it, or its changes wait for review).
+ * A crew member's status, as its own window says it: an ended one too may have failed, be paused, or need the user (its
+ * flag). Its changes waiting for review only mark its tile, and need no one.
  */
 export const crewStatus = (member: Parameters<typeof humanStatus>[0], shows: NeedsYouShows): HumanStatus => humanStatus(member, shows).status;
 
@@ -96,7 +96,7 @@ export function pullRequestsToWatch(agent: Agent, fading?: Fading): PullRequestT
  */
 export function shelfTabs(agent: Agent, agents: readonly Agent[], shows: NeedsYouShows, { technical, fading }: { technical: boolean; fading?: Fading }): ShelfTab[] {
   const tabs: ShelfTab[] = [agent.page === null ? { id: 'page', label: 'Now' } : { id: 'page', label: agent.page.name, icon: agent.page.icon }];
-  if (madeHolds(agent, fading)) tabs.push({ id: 'made', label: 'Made', count: madeCount(agent, fading) });
+  if (madeHolds(agent, agents, fading)) tabs.push({ id: 'made', label: 'Made', count: madeCount(agent, fading, agents) });
   if (crewHolds(agent, agents, fading)) tabs.push({ id: 'crew', label: 'Crew', count: crewCount(agent, agents, fading), ...(crewNeedingYou(agent, agents, shows).length > 0 ? { needsYou: true } : {}) });
   if (technical || agent.issue !== null || agent.schedule !== null) tabs.push({ id: 'setup', label: 'Setup' });
   return tabs;

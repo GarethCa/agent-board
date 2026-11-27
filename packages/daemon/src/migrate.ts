@@ -30,8 +30,15 @@ export const MIGRATIONS: readonly Migration[] = Object.entries(
  * A database newer than `migrations` opens as it is, with `from` past `to`, when every newer migration is recorded as
  * backward-safe; otherwise this throws, naming the backup and the command that restores it. So does a database that
  * ran one of `migrations` as different SQL (one reverted and landed again, changed, under its number).
+ *
+ * `beforeEach` runs before each migration's transaction, after the backup, with the database at the schema just
+ * before it: a migration that drops what can't be kept in SQL saves it there first. If it throws, nothing more runs.
  */
-export function migrate(db: DatabaseSync, migrations: readonly Migration[] = MIGRATIONS): MigrateResult {
+export function migrate(
+  db: DatabaseSync,
+  migrations: readonly Migration[] = MIGRATIONS,
+  beforeEach?: (migration: Migration) => void,
+): MigrateResult {
   migrations.forEach((migration, index) => {
     if (migration.version !== index + 1) {
       throw new Error(`migrations must be numbered 1..n; found ${migration.version} at position ${index + 1}`);
@@ -50,6 +57,7 @@ export function migrate(db: DatabaseSync, migrations: readonly Migration[] = MIG
   db.exec('PRAGMA foreign_keys = OFF');
   try {
     for (const migration of migrations.slice(from)) {
+      beforeEach?.(migration);
       db.exec('BEGIN');
       try {
         db.exec(migration.sql);

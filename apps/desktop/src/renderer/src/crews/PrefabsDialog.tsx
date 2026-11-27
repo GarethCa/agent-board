@@ -1,9 +1,12 @@
 import { MessageSquareText, Plus } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
-import type { LibraryPrefab } from '@agent-board/daemon/protocol';
+import type { CrewPrefab, LibraryPrefab } from '@agent-board/daemon/protocol';
 import { errorMessage } from '../../../shared/errors';
 import { Button, Dialog, ErrorText, Hint, Tag } from '../ui';
 import { useAction } from '../use-action';
+import { useMinute } from '../inbox/use-minute';
+import { draftedBy, draftsToReview } from './draft-review';
+import { usePrefabDrafts } from './prefab-drafts';
 import { RoleIcon } from './icons';
 import { memberLabel, prefabWeight } from './prefab-flow';
 import { refreshPrefabs, yoursFirst } from './prefab-store';
@@ -21,6 +24,8 @@ export interface PrefabsDialogProps {
   onImport(): void;
   /** Opens Describe a crew, for an agent to draft one. */
   onDescribe?(): void;
+  /** Opens a draft an agent made on its board, to review it, by its id. */
+  onReview?(id: string): void;
   /** What it shows in place of reading the library, and a card asking before it removes, for the gallery. */
   library?: Library;
   asking?: string;
@@ -31,11 +36,14 @@ interface Library {
   unreadable: readonly { name: string; reason: string }[];
 }
 
-/** A prefab as a card of the library: its faces, what it is for and how heavy it runs, then what to do with it. */
-function PrefabCard({ prefab, children }: { prefab: LibraryPrefab; children: ReactNode }) {
+/**
+ * A prefab as a card of the library: its faces, what it is for and how heavy it runs, then what to do with it. A
+ * draft's card says who drafted it and when, where a saved one's says whose it is.
+ */
+function PrefabCard({ prefab, drafted, children }: { prefab: CrewPrefab & { builtIn?: boolean }; drafted?: string; children: ReactNode }) {
   const more = prefab.members.length - MAX_FACES;
   return (
-    <li className={`prefab-card${prefab.builtIn ? '' : ' mine'}`} data-testid="prefab-card">
+    <li className={`prefab-card${drafted !== undefined ? ' draft' : prefab.builtIn === true ? '' : ' mine'}`} data-testid={drafted === undefined ? 'prefab-card' : 'prefab-draft-card'}>
       <span className="prefab-card-faces" aria-hidden>
         {prefab.members.slice(0, MAX_FACES).map((member) => (
           <span key={member.id} className="prefab-node-bubble small">
@@ -49,8 +57,8 @@ function PrefabCard({ prefab, children }: { prefab: LibraryPrefab; children: Rea
       </span>
       <span className="prefab-card-purpose">{prefab.purpose || prefab.members.map(memberLabel).join(', ')}</span>
       <span className="prefab-card-foot">
-        <Tag>{prefab.builtIn ? 'Built in' : 'Yours'}</Tag>
-        <span className="prefab-card-weight">{prefabWeight(prefab)}</span>
+        <Tag>{drafted !== undefined ? 'Draft' : prefab.builtIn === true ? 'Built in' : 'Yours'}</Tag>
+        <span className="prefab-card-weight">{drafted ?? prefabWeight(prefab)}</span>
       </span>
       <span className="prefab-card-actions">{children}</span>
     </li>
@@ -60,9 +68,12 @@ function PrefabCard({ prefab, children }: { prefab: LibraryPrefab; children: Rea
 /**
  * The app's crew prefabs, one library for every board, yours first: each a card to start a crew from, to edit (a
  * built-in, as a copy of your own) or remove, with Make a prefab and Import a file. A prefab can't be got back once
- * removed, so Remove asks first, on its card.
+ * removed, so Remove asks first, on its card. Crews agents drafted come first, newest first, under Drafts to review,
+ * each opened on its board to start, change or discard.
  */
-export function PrefabsDialog({ onClose, onStart, onEdit, onImport, onDescribe, library: given, asking }: PrefabsDialogProps) {
+export function PrefabsDialog({ onClose, onStart, onEdit, onImport, onDescribe, onReview, library: given, asking }: PrefabsDialogProps) {
+  const drafts = draftsToReview(usePrefabDrafts().drafts);
+  const now = useMinute().getTime();
   const [library, setLibrary] = useState<Library | undefined>(given);
   const [loadError, setLoadError] = useState<string>();
   const [removing, setRemoving] = useState(asking);
@@ -114,6 +125,21 @@ export function PrefabsDialog({ onClose, onStart, onEdit, onImport, onDescribe, 
       }
       footer={<Button onClick={onClose}>Done</Button>}
     >
+      {drafts.length > 0 && onReview !== undefined && (
+        <section className="prefab-drafts-review" aria-label="Drafts to review" data-testid="crew-library-drafts">
+          <h3 className="prefab-cards-head">Drafts to review</h3>
+          <ul className="prefab-cards">
+            {drafts.map((draft) => (
+              <PrefabCard key={draft.id} prefab={draft.prefab} drafted={draftedBy(draft, now)}>
+                <Button size="sm" variant="primary" data-testid="prefab-draft-card-review" onClick={() => onReview(draft.id)}>
+                  Review
+                </Button>
+              </PrefabCard>
+            ))}
+          </ul>
+          <h3 className="prefab-cards-head">Library</h3>
+        </section>
+      )}
       {library === undefined ? (
         loadError === undefined ? <Hint>Loading…</Hint> : <ErrorText>{loadError}</ErrorText>
       ) : (

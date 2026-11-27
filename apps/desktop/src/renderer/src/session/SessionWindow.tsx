@@ -24,6 +24,7 @@ import { pendingTab, requestTab, useTabRequestCount } from './tab-request';
 import { gateSurfaceOf } from './tabs';
 import { isRunGateKey } from './window-keys';
 import { useLeaveKeys } from '../keys/escape-hatch';
+import { ShownWindowCloseProvider, useCloseKey } from './close-key';
 import { useExtendedShortcuts } from '../keys/extended-shortcuts';
 import { GateControls } from '../gate/GateControls';
 import { gated } from '../gate/gate-view';
@@ -160,6 +161,8 @@ function SessionWindowShown({ content, title, placement, onClose, onDelete, onMi
   useMinimiseOnClickOutside(root, placement === 'board' ? onMinimise : undefined);
   // Esc from its header (⌘J has the focus there), or ⌘Esc from anywhere in it: minimised, the focus on its tile.
   useLeaveKeys(root, onMinimise);
+  // ⌘W: on the board, closes the window, from anywhere in the board's window.
+  const closeOnBoard = useCloseKey(root, placement === 'board' ? onClose : undefined);
 
   // ⌘I shows or hides the details.
   useEffect(() => {
@@ -317,6 +320,7 @@ function SessionWindowShown({ content, title, placement, onClose, onDelete, onMi
         </div>
       )}
       <div className="session-window-view" hidden={showing !== 'terminal'}>
+        <ShownWindowCloseProvider value={closeOnBoard}>
         <SessionBody
           content={content}
           detailsCollapsed={detailsCollapsed}
@@ -330,6 +334,7 @@ function SessionWindowShown({ content, title, placement, onClose, onDelete, onMi
           chatControlsSlot={chatControlsSlot}
           terminalToggle={simplified ? terminalToggle : undefined}
         />
+        </ShownWindowCloseProvider>
       </div>
       {/* A new round is shown as it starts, whichever round was picked. */}
       {showing === 'review' && agent && (

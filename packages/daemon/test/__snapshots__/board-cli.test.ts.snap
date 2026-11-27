@@ -21,6 +21,22 @@ Every agent: its ref, name, [state], status (or task) and zone.
 "
 `;
 
+exports[`agent-board --help > has help for alert 1`] = `
+"usage: agent-board alert [--link <url>] [--] <line>
+
+Tells the user something is done: a banner (unless they turned those off) and a row in their
+inbox's Done list, apart from Needs you. It asks nothing of them, and counts toward no badge.
+<line> is one line, at most 300 characters: "PR #12 is merged".
+
+Use it when a task the user asked for is done, or for something they would want to know now;
+not for routine progress. It is your choice: the board never alerts for you. One banner every
+5 minutes: alerts sooner replace your Done row's line, without a banner. Opening your
+session reads it.
+
+  --link <url>     An https link to go with it, such as the pull request.
+"
+`;
+
 exports[`agent-board --help > has help for arrange 1`] = `
 "usage: agent-board arrange [<zone ref>] [--by issue|role|state] [--layout rows|columns|cards|grid|wrap|masonry|treemap] [--auto on|off] [--place <kind>=<placement>,…] [--once] [--all] [--json] | arrange board [--json] | arrange ticket|<ticket chat ref> [--json]
 
@@ -85,8 +101,8 @@ It places the zone's items too, each kind as the zone says (--place changes it):
   stay      left where it is, in the way of the rest.
 
 The kinds, and where each goes until a zone says otherwise: notes (agent notes) and files
-(documents, plans, images, link and issue cards) cluster; clocks, todos, queues, memory and
-steps top; stickies, shapes and text stay. An item the user dragged or turned stays where it
+(documents, plans, images, link and issue cards) cluster; clocks, todos, queues and steps
+top; stickies, shapes and text stay. An item the user dragged or turned stays where it
 is unless --all; one in the zone's free area (zone layout lanes), or on a stage board, always
 does. Sidebar and top lie in the area arrange lays out, never in the free area.
 --place notes=sidebar,clocks=stay sets kinds for the zone, kept for its next arrange, by
@@ -116,7 +132,7 @@ takes none of a zone's options. After it arranges, it prints the ticket board's 
   --auto on|off    Arrange by itself as the crew changes, or not (off at first).
   --place <k>=<p>  Where to place a kind of item: cluster, sidebar, top, stay. Pairs
                    comma-separated; kept as the zone's. The kinds: notes, files, clocks, todos,
-                   queues, memory, steps, stickies, shapes, text.
+                   queues, steps, stickies, shapes, text.
   --once           The --place given for this arrange only, not kept.
   --all            Tidy the items the user dragged or turned too.
   --json           Print what moved, and the map, as JSON.
@@ -144,10 +160,9 @@ an agent, only when you started each helper yourself.
              started still running, stays unless they tick it. Waits for the answer and says
              what was removed and what stayed, and why.
   --timeout  With --ask: how long to wait, such as 30m (30 minutes by default, 4h at most).
-             No answer by then removes nothing. Nor does the command ending first, or your
-             next turn beginning: the ask is withdrawn. So don't run it in the background,
-             where a message to you starts a new turn; if your shell gives up on a long
-             command, use the ask_to_remove tool, which waits as long as the ask does.
+             No answer by then removes nothing. The ask stays up if the command ends first,
+             or your next turn begins: then the user's answer comes to your prompt as a
+             message. The ask_to_remove tool asks the same way without waiting.
   --json     Print what stayed as JSON ({"kept": null} if nothing did), or with --ask, what was
              removed and kept.
 "
@@ -236,6 +251,28 @@ agents as they are; \`agent-board wait <crew>\` waits until it stops.
 "
 `;
 
+exports[`agent-board --help > has help for delete 1`] = `
+"usage: agent-board delete <item ref> [--force] [--ask [--timeout <duration>]] [--json]
+
+Deletes a board item: a queue, to-do list, steps card, note, shape or any other card
+but a running crew's, wherever it is on the board. It goes as the user's own Delete takes it,
+with its connectors, as one step an open board can undo (not on a ticket's board). As an agent,
+delete one you, or an agent you started, made; in a shell, or outside agent-board, any.
+
+A queue with open jobs, a to-do list with open lines, or a steps card with steps still open
+stays, and the command says how many: finish or remove them first, or add --force.
+
+  --force    Delete it even with open jobs, lines or steps.
+  --ask      As an agent: ask the user to delete an item you did not make (theirs, or another
+             agent's). They get an Allow/Deny prompt, and nothing goes unless they press
+             Allow. Waits for the answer and says whether it was deleted.
+  --timeout  With --ask: how long to wait, such as 30m (30 minutes by default, 4h at most).
+             No answer by then deletes nothing. Nor does the command ending first, or your
+             next turn beginning: the ask is withdrawn.
+  --json     Print what happened as JSON: {"outcome", "id", "name", "why"}.
+"
+`;
+
 exports[`agent-board --help > has help for diagram 1`] = `
 "usage: agent-board diagram add [--file <path> | -] [--to <zone ref>] [--at <x>,<y>] [--near <ref> [--side <s>]] [--] [<mermaid>] | diagram export [<zone or shape ref>...]
 
@@ -268,8 +305,8 @@ exports[`agent-board --help > has help for doc 1`] = `
 "usage: agent-board doc <path> [--title <text>] [--board] [--plan]
 
 Shows the user a longer Markdown (.md) or HTML (.html) file of yours as a document, nicer to read
-than your terminal: a Document tab in your window, and with --board a card beside your tile too. Nothing
-waits. Showing the same file again shows the same document.
+than your terminal: a Document tab in your window, listed under Made on your sidebar, and with --board
+a card beside your tile too if the user puts docs on the board (off by default). Nothing waits. Showing the same file again shows the same document.
 
 It stays live: write the file again and the user sees the new version. They may edit a Markdown
 document there; their edit is written to the file, and you are told what changed, typed at your
@@ -278,7 +315,8 @@ may send you comments on it.
 
 With --plan the file is a plan for the user to approve, send back with changes, or reject (it may
 be edited first: Markdown only). It waits in their Needs you inbox and the Plan tab, kept as v1, v2…
-as you present each revision, and with --board a plan card goes beside your tile. The command
+as you present each revision, and with --board a plan card goes beside your tile if the user puts
+docs on the board. The command
 returns at once: a shell command can't wait the hour the user may take. Their decision, with their
 comments and any edits of theirs, is typed at your prompt once your turn is over, as a document
 edit is. It waits as long as the user takes, with no timeout. End your turn and wait for it, and
@@ -287,7 +325,7 @@ revised plan and run it again: the new version takes the old one's place. To hol
 decision instead, use the MCP tool \`show_doc\` with plan.
 
   --title <text>   What it is, in a line; else its first heading (or page title).
-  --board          Also put it on the board, beside your tile.
+  --board          Also put it on the board, beside your tile, if the user puts docs there.
   --plan           It is your plan to decide on, not a document: returns at once, the decision
                    arrives at your prompt later.
   --json           Print the document as JSON.
@@ -415,51 +453,6 @@ zone_layout, add_note, edit_note, remove_note, pass_note, prefabs, roles, set_ro
 with:
 
   claude mcp add agent-board -- agent-board mcp
-"
-`;
-
-exports[`agent-board --help > has help for memory 1`] = `
-"usage: agent-board memory ls | memory read <memory> [<entry>] [--search <text>] | memory add <memory> [--key <key>|--no-key] [--file <path>|--doc <title>] [--] <text>... | memory edit <memory> <entry> [--key <key>|--no-key] [--pin|--unpin] [--] [<text>...] | memory rm <memory> <entry> | memory history <memory> <entry> | memory restore <memory> <entry> <version> | memory confirm <memory> <entry> | memory new [--second] <title>...
-
-A memory is shared context on the board: what agents and people want kept, read and changed
-by those it is for. In a zone, it is for that zone's agents; loose on the board, every
-agent's; set to No agents, only the user's. A zone shares one memory: read it at the start of
-work, and add what the next agent needs to it, not to a new memory for each ticket.
-
-It holds facts and documents:
-  key: value       A fact under a key (one word). Setting a key again replaces its value.
-  a note           A fact with no key, kept as written.
-  a document       Text kept whole (up to 1 MB) under its title: listed by its title and size,
-                   read only when named.
-
-  memory ls                     The memories you can read.
-  memory read <memory>          Its facts in full, pinned first, then newest first, then its
-                                documents by title; --search <text> only those holding it. With
-                                <entry> (a key, a document's title, or its #id), that one in full.
-  memory add <memory> <text>    Remember something: "key: value", or a note. --key <key> names it
-                                (spaces and all), --no-key keeps "a: b" as a note. --doc <title>
-                                keeps the text as a document; --file <path> keeps that file as
-                                one, under its name (or --key).
-  memory edit <memory> <entry> [<text>]
-                                Change its text, key (--key, or --no-key), or pin (--pin keeps
-                                it in the top rows, --unpin).
-  memory rm <memory> <entry>    Remove it.
-  memory history <memory> <entry>
-                                Its versions, newest first: every change anyone made, removes too.
-  memory restore <memory> <entry> <version>
-                                Put a version back, undoing the changes after it.
-  memory confirm <memory> <entry>
-                                Say it is still true: it no longer reads as stale.
-  memory new <title>            Put a new memory beside your tile, when your zone has none. With
-                                one there, it is refused, naming it to add to; --second makes
-                                another anyway, for a different subject the whole zone needs.
-
-<memory> is its ref (item:3f2a) or its title. An entry left 30 days reads as stale. Reading a fact,
-or a document by name, counts you among its readers. Anyone it is for
-may change any entry, the user's too: history takes a change back. At most 500 entries and 8 MB a
-memory, and 4,000 characters a value (keep longer text as a document).
-
-  --json                        Print it as JSON.
 "
 `;
 
@@ -904,10 +897,10 @@ saved, started or changed until then.
 `;
 
 exports[`agent-board --help > has help for queue 1`] = `
-"usage: agent-board queue ls | queue read <queue> | queue add <queue> [--kind <kind>] [--front] [--link <url>] [--body <text>] [--file <path>|-] [--] <line>... | queue take <queue> [<job>] | queue drop <queue> <job> | queue done <queue> <job> [--result <text>] | queue edit <queue> <job> [--link <url>] [--] [<text>...] | queue move <queue> <job> <before>|top|last | queue later <queue> <job> | queue up <queue> <job> | queue drain <queue> on|off [--most 1-3] | queue rm <queue> <job> | queue history <queue> <job> | queue restore <queue> <job> <version> | queue new [--for-user] <title>...
+"usage: agent-board queue ls | queue read <queue> [<job>|--done] | queue add <queue> [--kind <kind>] [--front] [--link <url>] [--body <text>] [--file <path>|-] [--] <line>... | queue take <queue> [<job>] | queue drop <queue> <job> | queue done <queue> <job> [--result <text>] | queue edit <queue> <job> [--link <url>] [--] [<text>...] | queue move <queue> <job> <before>|top|last | queue later <queue> <job> | queue up <queue> <job> | queue drain <queue> on|off [--most 1-3] | queue rm <queue> <job> | queue history <queue> <job> | queue restore <queue> <job> <version> | queue new [--for-user] <title>...
 
 A queue holds jobs in order, for agents to take one at a time, and info to read. It is for
-the agents a memory is: where it sits. What goes in and comes out is for them and the user to
+the agents where it sits: its zone's, or every agent's when loose. What goes in and comes out is for them and the user to
 decide. A queue for the user (--for-user) holds what is ready for them to look at: agents add to
 it, and only the user takes from it.
 
@@ -919,7 +912,9 @@ hands takes its rows' kinds with it: task and backlog swap, info and read swap, 
 become a request or backlog.
 
   queue ls                      The queues you can read.
-  queue read <queue>            Its rows in order (the next job first), then those done.
+  queue read <queue> [<job>]    Its open rows in order (the next job first), each its headline,
+                                and how many are done. With a job, that one whole; with
+                                --done, the done jobs and their results, newest first.
   queue add <queue> <line>...   Queue a job a line, at the end (--front: at the front, in the
                                 order given). " -> <link>" at a line's end is its link (or
                                 --link for one). --kind sets their kind (above). With
@@ -1030,6 +1025,24 @@ starting with [agent-board] is refused. Each rename is in the activity log.
 "
 `;
 
+exports[`agent-board --help > has help for rest 1`] = `
+"usage: agent-board rest [--] <line>
+
+Says you are done for now, waiting on someone else for longer than a few minutes with nothing
+to do. <line> is what you wait for, at most 110 characters: "waiting for the Playwright GO".
+
+Your tile says "Resting" with your line, and as your turn ends the board pauses you, as
+\`agent-board pause\` does: your session ends, and your tile, worktree, branch and conversation stay. A
+message (\`agent-board send\`), a hand-off, your clock or the user's Wake wakes you.
+
+Refused, with nothing set, while the user's answer is pending (a permission prompt, a question,
+a plan or your needs-you flag), while a command you started in the background runs, or while a
+message waits at your prompt. With resting off in Settings, it only sets your tile line.
+
+  --json           Print the agent as JSON.
+"
+`;
+
 exports[`agent-board --help > has help for restart 1`] = `
 "usage: agent-board restart <ref> [--fresh [--] [<prompt>] | --file <path>] [--env <KEY=VALUE>...] [--settings <json>] [--json]
 
@@ -1129,6 +1142,8 @@ commands do:
   board.unpin
   board.setPage
   board.needsYou
+  board.alert
+  board.rest
   board.handoff
   board.ask
   board.presentPlan
@@ -1136,11 +1151,6 @@ commands do:
   board.newSteps
   board.readSteps
   board.updateSteps
-  board.newMemory
-  board.listMemories
-  board.readMemory
-  board.changeMemory
-  board.memoryHistory
   board.newQueue
   board.listQueues
   board.readQueue
@@ -1190,6 +1200,7 @@ and, for an agent's own live session, the orchestrator commands:
   orchestrator.addNote
   orchestrator.editNote
   orchestrator.removeNote
+  orchestrator.deleteItem
   orchestrator.passItem
   orchestrator.addShape
   orchestrator.addDiagram
@@ -1219,7 +1230,7 @@ refused. Outside a session it reaches every method, as the app does.
 `;
 
 exports[`agent-board --help > has help for schedule 1`] = `
-"usage: agent-board schedule add '<cron>' (--to <ref> | --fresh [--zone <ref>] [--harness claude|codex] [--model <m>] [--role <r>] [--keep] [--result history|note|handoff [--handoff-to <ref>]] | --self [--after hibernate|idle]) [--file <path> | [--] <prompt>] | schedule list | schedule remove <ref> | schedule set [--self | <ref>] --after hibernate|close|idle --why "…" | schedule stop [--self | <ref>] --why "…" | schedule add --template <name> [<cron> [<prompt>]] [--to <ref> | --self | --fresh …] | schedule template save <name> (--from <ref> | '<cron>' [--after <mode>] [--harness, --model, --role, --keep, --result] [--] <prompt>) | schedule template list | schedule template remove <name>
+"usage: agent-board schedule add '<cron>' (--to <ref> | --fresh [--zone <ref>] [--harness claude|codex] [--model <m>] [--role <r>] [--keep] [--result history|note|handoff [--handoff-to <ref>]] | --self [--after hibernate|idle]) [--file <path> | [--] <prompt>] | schedule list [--full] | schedule remove <ref> | schedule set [--self | <ref>] --after hibernate|close|idle --why "…" | schedule stop [--self | <ref>] --why "…" | schedule add --template <name> [<cron> [<prompt>]] [--to <ref> | --self | --fresh …] | schedule template save <name> (--from <ref> | '<cron>' [--after <mode>] [--harness, --model, --role, --keep, --result] [--] <prompt>) | schedule template list | schedule template remove <name>
 
 Schedules, each a clock on the board that fires on a five-field cron expression (minute
 hour day month weekday, or @daily, @hourly…) in the machine's local time. Quote the expression.
@@ -1244,7 +1255,7 @@ is still going is skipped. --result note also leaves the result as a note where 
 --result handoff hands it to --handoff-to's agent.
 
 \`schedule list\` prints each clock's ref, its schedule, what it does, when it next runs and how
-its last run went: for a run of skips, how many, since when and why. \`schedule remove\` removes only a clock you, or an agent you started, made;
+its last run went: for a run of skips, how many, since when and why. Each prompt is cut to 80 characters; --full prints all of it. \`schedule remove\` removes only a clock you, or an agent you started, made;
 in a shell, or outside agent-board, any.
 
 A template is a clock saved under a name, for any zone, to start new ones from: its schedule,
@@ -1464,12 +1475,15 @@ instead, and is told. Naming an agent on a to-do sends it nothing: it finds its 
 `;
 
 exports[`agent-board --help > has help for tree 1`] = `
-"usage: agent-board tree [--json]
+"usage: agent-board tree [--zone <ref>|all] [--json]
 
-Every zone, with the tiles and items in it, then the tiles and items loose on the board. A zone
-line says what it is bound to (repo, folder, or group); an agent line its state in [brackets]
-and its status, or its task until it sets one. ← marks you.
+Your zone, with the tiles and items in it; its hibernated, finished and ended agents are folded
+into one count line. In no zone (or outside a session), or with --zone all: every zone, nothing
+folded, then the tiles and items loose on the board. A zone line says what it is bound to (repo,
+folder, or group); an agent line its state in [brackets] and its status, or its task until it
+sets one. ← marks you.
 
+  --zone <ref>|all   That zone instead of yours, or all for the whole board.
   --json   Print it as JSON instead.
 "
 `;
@@ -1545,7 +1559,7 @@ Prints a line as each thing happens to the agents named, and with --crew (or no 
 crew, the agents you started and theirs, as it grows:
   [mfx3k2a1.12] agent:9c1e impl  finished: PR open
 Each comes once, however often the agent's state flips:
-  turn-ended, finished, needs-you, not-sent, flagged, failed, rate-limited, paused, ended, pr-opened, round, crew-waiting, crew-clash, crew-stopped
+  turn-ended, finished, needs-you, not-sent, flagged, failed, rate-limited, paused, resting, ended, pr-opened, round, crew-waiting, crew-clash, crew-stopped
 turn-ended is a turn ending at its prompt (its idle prompt a minute later is none); finished
 is the agent saying its work is done (\`handoff\`, \`status set --done\`), in place of
 turn-ended for that turn, and for the turns after it until its next prompt; needs-you is a
@@ -1707,7 +1721,7 @@ REFS
 
 COMMANDS
   identify              Who and where you are: your tile, its zone, your state and status.
-  tree                  Every zone with its tiles and items, then what is loose on the board.
+  tree                  Your zone with its tiles and items (--zone all: the whole board).
   zones                 Every zone.
   agents (or ls)        Every agent: state, status (or task) and zone.
   shells                Every shell tile.
@@ -1721,6 +1735,9 @@ COMMANDS
   needs-you [--] <reason> [--via <ref>] | --clear
                         Ask for a look: blocked, ready for review, or a decision needed. A
                         turn ending tells no one. See \`needs-you --help\`.
+  alert [--] <line> [--link <url>]
+                        Tell the user something is done: a banner and their inbox's Done
+                        list, asking nothing. See \`alert --help\`.
   open-pr               Open a draft pull request of your branch (agents only).
   doc <path> [--title <text>] [--board] [--plan]
                         Show the user a Markdown or HTML file of yours as a document: a Doc
@@ -1731,10 +1748,6 @@ COMMANDS
                         user to step through, answered together on Send and typed at your
                         prompt, and to-dos ticked by whoever each names. \`steps ls|read|done|
                         wait|add|answer|close\` work with cards. See \`steps --help\`.
-  memory ls|read|add|edit|rm|history|restore|new ...
-                        Shared context: keyed values, notes and whole files that the agents
-                        of its zone read and write, and people on the board. A zone shares
-                        one memory: add to it. See \`memory --help\`.
   remind "<text>"... | remind ls [--mine] | remind done|undo|rm <n>
                         Add a to-do for the user to your to-do list, under your tile (agents
                         only): something only they can do. A tick tells you nothing; \`remind
@@ -1860,6 +1873,10 @@ ORCHESTRATING
   note add [--] <text> [--near <ref> [--side <s>]] [--color <c>] [--kind sticky|text]
                         Put a note on the board: --near an agent, in its cluster.
                         \`note edit|remove\` change yours.
+  delete <item ref> [--force] [--ask [--timeout <duration>]]
+                        Delete a board item you made (a queue, to-do list, steps
+                        card, note…) as one step the user can undo; --ask asks the user
+                        for one you didn't make, --force deletes one with open work.
 
   Drawing a diagram, only when asked for one:
   shape add <kind> [--] <text> [--attribute <line>]... [--method <line>]... [--near <ref>]

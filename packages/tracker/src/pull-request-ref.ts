@@ -21,6 +21,9 @@ export const isGitHubRepo = (repo: string): boolean => new RegExp(`^${REPO}$`).t
  */
 export const pullRequestKey = (ref: PullRequestRef): string => `${ref.repo.toLowerCase()}#${ref.number}`;
 
+/** A pull request's plain GitHub URL, `https://github.com/owner/repo/pull/n`. */
+export const pullRequestUrl = (ref: PullRequestRef): string => `https://github.com/${ref.repo}/pull/${ref.number}`;
+
 /** The pull request a GitHub pull request URL names, if it names one. */
 export function pullRequestOfUrl(url: string): PullRequestRef | undefined {
   const match = new RegExp(String.raw`^https:\/\/github\.com\/(${REPO})\/pull\/(\d+)(?:[/?#]|$)`).exec(url);

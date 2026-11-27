@@ -84,6 +84,7 @@ export function NeedsYou({ agents, onOpen, onSettings, onMaster, onNeedsYou, pan
                 setOpen(false);
                 onSettings();
               }}
+              onLeave={() => setOpen(false)}
             />
           }
         >

@@ -8,6 +8,8 @@ Before the daemon applies any migration, it copies the database beside it, as `a
 
 A backup holds the board, with one thing taken out: the copies of hand-off files held or queued on an edge. Those copies are meant to last only until the hand-off is delivered or dropped, so a backup doesn't keep them. A board restored from a backup reads each held or queued file again when it delivers it, as the "Path only" setting does. A final message is kept anyway, so its copy stays.
 
+A backup holds no agent's launch-settings values either, only their names: the values live in the keychain. The daemon takes any values an older build left out of the backups beside the database each time it starts, keeping each backup's date. An agent on a restored board starts with the values the keychain still has; a build older than the keychain store reads none, and starts its agents without them.
+
 ## Opening the database with an older build
 
 Each migration says whether it is **backward-safe**: whether an older daemon can open the database after it and carry on. A migration that only adds a table, or a column with a default, is backward-safe. One that drops, renames or rewrites anything an older daemon reads is not. The daemon records each migration it applies, and whether it was backward-safe, in the database's `schema_migrations` table.

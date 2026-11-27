@@ -4,7 +4,7 @@
 // the block's own place and size, and which agents were dragged on or off it: a tile's saved place stays as it was, for
 // when it leaves the block. Pure, so it is unit-tested.
 import { zoneGrid } from '@agent-board/daemon/board-layout';
-import { jobParts } from '@agent-board/daemon/memory-lines';
+import { jobParts } from '@agent-board/daemon/queue-lines';
 import { QUEUE_LATER, type Agent, type BoardItem, type NeedsYouShows, type QueueJob } from '@agent-board/daemon/protocol';
 import { layOutStageBoard, leads, stageBoardData, stageBoardDrop, stageBoardMembers, STAGE_BOARD_KIND, type StageBoardData, type StageBoardLayout, type StageTicket } from '@agent-board/daemon/stage-board';
 import { agentNoteData } from './items/agent-note';

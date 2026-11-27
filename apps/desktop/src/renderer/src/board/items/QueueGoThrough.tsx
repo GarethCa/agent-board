@@ -2,10 +2,10 @@
 // its items in order. Nothing is drawn over the board, so the rest of it stays usable. While the tile is selected,
 // ↵ opens, → goes on, S puts an item last and D takes it off; ← Back returns to the list.
 import { useEffect, useRef, type ReactNode, type RefObject } from 'react';
-import { jobParts } from '@agent-board/daemon/memory-lines';
+import { jobParts } from '@agent-board/daemon/queue-lines';
 import type { QueueJob } from '@agent-board/daemon/protocol';
 import { Button, Kbd } from '../../ui';
-import { whenText, whoText } from './memory-card';
+import { whenText, whoText } from './list-card-text';
 import { goThroughKey, nextPlace, placeAfterDone, placeIn, type GoThroughAct, type GoThroughPlace } from './go-through';
 import { itemKind, needsLine, type LookItem } from './to-look-at';
 

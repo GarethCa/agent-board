@@ -45,8 +45,11 @@ export type ChatItem =
   | { kind: 'compacted'; key: string; at?: string }
   | { kind: 'interrupted'; key: string; stopped?: ToolCall; at?: string }
   | { kind: 'tools'; key: string; rows: (ToolCall | SubagentMessage)[]; at?: string }
-  /** A run of `count` agents' messages the chat leaves out while it shows only the user's own (`foldAgentMessages`). */
-  | { kind: 'agents-hidden'; key: string; count: number };
+  /**
+   * A run of `count` messages not the user's, which the chat leaves out while it shows only the user's own
+   * (`foldAgentMessages`): agents' messages, unless `notAgents`, when a clock's run or the board's notice is among them.
+   */
+  | { kind: 'agents-hidden'; key: string; count: number; notAgents?: true };
 
 /** The notice both harnesses' adapters make of a turn the user interrupted. */
 const INTERRUPTED = 'Interrupted';

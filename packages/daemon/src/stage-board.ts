@@ -9,7 +9,8 @@
 import { lanesOf, LANE_SLOTS, type ArrangeLink } from './board-arrange.ts';
 import { AGENT_TILE_SIZE, isClosed, PERCH_ROOM, tileSizeKey, zoneGrid, type Point, type Size } from './board-layout.ts';
 import { isOrchestratorRole, startedByHand, type Agent, type ArrangeSpacing, type NeedsYouShows } from './protocol.ts';
-import { cardHeight, CARD_GAP, DONE_FOLD_HEIGHT, needsUser, SHELF_STAGES, stageOf, WORKING_STATES, type ShelfStage } from './shelf-layout.ts';
+import { CARRYING_ON_STATES } from './human-status.ts';
+import { cardHeight, CARD_GAP, DONE_FOLD_HEIGHT, needsUser, SHELF_STAGES, stageOf, type ShelfStage } from './shelf-layout.ts';
 import { SPINE_GAPS } from './spine-layout.ts';
 import { heldByTicket } from './ticket-tiles.ts';
 import { workTilesOf } from './work-units.ts';
@@ -125,7 +126,7 @@ export function ticketStage(agents: readonly Agent[], reviewers: ReadonlySet<str
   if (stage !== 'doing' || !agents.some(prOpen)) return stage;
   if (agents.some((agent) => !isClosed(agent) && needsUser(agent, shows))) return 'doing';
   const makers = agents.filter((agent) => !reviewers.has(agent.sessionId));
-  const working = makers.some((agent) => (!isClosed(agent) && WORKING_STATES.has(agent.state)) || agent.state === 'failed');
+  const working = makers.some((agent) => (!isClosed(agent) && CARRYING_ON_STATES.has(agent.state)) || agent.state === 'failed');
   return working ? 'doing' : 'waiting';
 }
 

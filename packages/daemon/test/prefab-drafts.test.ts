@@ -7,7 +7,7 @@ import { fakeHarnessEnv, McpClient } from '@agent-board/fake-harness';
 import { runBoardCommand } from '../src/board-cli.ts';
 import { prefabFile } from '../src/crew-prefabs.ts';
 import { draftingPrompt } from '../src/prefab-drafts.ts';
-import { MAX_DRAFT_ASSUMPTIONS, MAX_PREFAB_DRAFTS, RPC_ERROR, type CrewPrefab, type DaemonEvent, type HookEvent } from '../src/protocol.ts';
+import { MAX_DRAFT_ASSUMPTIONS, MAX_PREFAB_DRAFTS, prefabDraftLink, prefabDraftOfLink, RPC_ERROR, type CrewPrefab, type DaemonEvent, type HookEvent } from '../src/protocol.ts';
 import { connectTestClient, recordEvents, startTestDaemon, TEST_CLI_LAUNCHER, tempDataDir, tempRepo } from './helpers.ts';
 
 const SIZE = { cols: 120, rows: 40 };
@@ -202,10 +202,12 @@ describe('prefab drafts', () => {
     writeFileSync(file, prefabFile(pair()));
 
     // A line that starts with an id in brackets is about that member.
-    expect(await run('draft', file, '--assumed', 'Two rounds at most', '--assumed', '[review] Codex reviews')).toMatchObject({
-      code: 0,
-      out: expect.stringContaining('Drafted Pair for the user'),
-    });
+    const first = await run('draft', file, '--assumed', 'Two rounds at most', '--assumed', '[review] Codex reviews');
+    expect(first).toMatchObject({ code: 0, out: expect.stringContaining('Drafted Pair for the user') });
+    // Its reply carries the link that opens it, for the drafter to give the user.
+    const drafted = (await setup.client.call('prefabDraft.list', {})).drafts.at(-1)!;
+    expect(first.out).toContain(`opens it: agent-board://draft/${drafted.id.slice('draft:'.length)}`);
+    expect(prefabDraftOfLink(prefabDraftLink(drafted.id))).toBe(drafted.id);
     expect((await setup.client.call('prefabDraft.list', {})).drafts.at(-1)?.assumptions).toEqual([
       { text: 'Two rounds at most', about: null },
       { text: 'Codex reviews', about: 'review' },

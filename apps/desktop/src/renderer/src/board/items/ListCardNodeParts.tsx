@@ -1,4 +1,4 @@
-// What a memory's node and a queue's share on the board: their zone, rows read again on each
+// What a queue's node and other list cards share on the board: their zone, rows read again on each
 // write, the add box focused once, the toolbar, and the peek's popover rules.
 import { useEffect, useRef, useState, type ComponentProps, type ReactNode } from 'react';
 import { NodeToolbar, Position, useReactFlow, useStore } from '@xyflow/react';
@@ -107,14 +107,14 @@ interface ListCardToolbarProps {
   onFold(folded: boolean): void;
   /** Its No agents switch, with who may use it otherwise; none for one no agent reads anyway. */
   agents?: { noAgents: boolean; scope: string; toggle(): void };
-  /** "memory" or "queue", for Delete's label. */
+  /** "queue", say, for Delete's label. */
   noun: string;
   onDelete(): void;
   /** Buttons of its own, before Delete. */
   children?: ReactNode;
 }
 
-/** The toolbar over a selected memory or queue: fold or open, keep it from agents, and delete. */
+/** The toolbar over a selected queue: fold or open, keep it from agents, and delete. */
 export function ListCardToolbar({ visible, folded, onFold, agents, noun, onDelete, children }: ListCardToolbarProps) {
   return (
     <NodeToolbar isVisible={visible} position={Position.Top} className="sticky-toolbar">

@@ -859,13 +859,12 @@ test("arrange places a zone's items beside their agent, down the side, or under 
       },
       { zoneId: zone!.id, agent: { sessionId: lead!.sessionId, name: lead!.name, harness: 'claude', role: null } },
     );
-    // The agent makes a queue and a memory, so they cluster beside it; the user's to-do has no agent, so it goes down the side.
+    // The agent makes a queue, so it clusters beside it; the user's to-do has no agent, so it goes down the side.
     await withDaemon(dataDir, async (client) => {
       await client.call('board.newQueue', { token, title: 'Backlog' });
-      await client.call('board.newMemory', { token, title: 'Notes' });
     });
     for (const [at, placement] of (['cluster', 'sidebar', 'top'] as const).entries()) {
-      const placements = Object.fromEntries(['notes', 'todos', 'queues', 'memory'].map((kind) => [kind, placement]));
+      const placements = Object.fromEntries(['notes', 'todos', 'queues'].map((kind) => [kind, placement]));
       await withDaemon(dataDir, (client) => client.call('orchestrator.arrange', { token, placements, once: true }));
       await nodesStill(window);
       await window.getByRole('button', { name: /^Fit view/ }).click();
@@ -891,10 +890,10 @@ test("arrange places a zone's items beside their agent, down the side, or under 
 });
 
 /**
- * Folded board objects beside a note, at the fitted zoom and zoomed far out: a memory (and one made twice its size by
- * hand), a queue, a to-do list and a steps card, each drawn as a picture that scales with the board as the note does.
+ * Folded board objects beside a note, at the fitted zoom and zoomed far out: a queue (and one made twice its size by
+ * hand), a to-do list and a steps card, each drawn as a picture that scales with the board as the note does.
  */
-test('folded memories, a queue, a to-do list and a steps card scale with the board like a note, at two zooms', async () => {
+test('folded queues, a to-do list and a steps card scale with the board like a note, at two zooms', async () => {
   needsBaselines('board-objects', 'board-objects-far');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, RENDER_ENV, RENDER_ARGS);
@@ -907,10 +906,8 @@ test('folded memories, a queue, a to-do list and a steps card scale with the boa
         const { items } = globalThis.window.agentBoard;
         const user = { kind: 'user' as const };
         await items.create({ kind: 'sticky', zoneId: null, x: 0, y: 0, width: 200, height: 140, data: { text: 'Ship Friday', color: '#fff3a3' } });
-        const memory = await items.create({ kind: 'memory', zoneId: null, x: 240, y: 0, ...folded, data: { title: 'Facts', madeBy: user, noAgents: false, count: 0, folded: true } });
-        await items.changeMemory(memory.id, { action: 'add', text: 'Deploys on Tuesdays' });
-        await items.create({ kind: 'memory', zoneId: null, x: 400, y: 0, width: folded.width * 2, height: folded.height * 2, data: { title: 'Big facts', madeBy: user, noAgents: false, count: 0, folded: true } });
-        const queue = await items.create({ kind: 'queue', zoneId: null, x: 700, y: 0, ...folded, data: { title: 'Jobs', madeBy: user, audience: 'agents', noAgents: false, count: 0, folded: true } });
+        await items.create({ kind: 'queue', zoneId: null, x: 400, y: 0, width: folded.width * 2, height: folded.height * 2, data: { title: 'Big jobs', madeBy: user, audience: 'user', noAgents: false, count: 0, folded: true } });
+        const queue = await items.create({ kind: 'queue', zoneId: null, x: 240, y: 0, ...folded, data: { title: 'Jobs', madeBy: user, audience: 'agents', noAgents: false, count: 0, folded: true } });
         await items.changeQueue(queue.id, { action: 'add', text: 'Fix the checkout flake' });
         const at = '2026-10-16T09:00:00.000Z';
         await items.create({ kind: 'todo', zoneId: null, x: 0, y: 300, ...pill, data: { owner: user, folded: true, lines: [{ id: 't1', text: 'Book the room', by: user, at, done: null }] } });
@@ -925,7 +922,7 @@ test('folded memories, a queue, a to-do list and a steps card scale with the boa
       },
       { folded: LIST_CARD_FOLDED_SIZE, pill: TODO_PILL_SIZE, icon: STEPS_ICON_SIZE },
     );
-    await expect(window.locator('.react-flow__node')).toHaveCount(6);
+    await expect(window.locator('.react-flow__node')).toHaveCount(5);
     await window.getByRole('button', { name: /^Fit view/ }).click();
     await viewSettled(window);
     await pinRandomText(window);

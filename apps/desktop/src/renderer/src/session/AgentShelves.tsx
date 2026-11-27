@@ -53,7 +53,7 @@ import { useShelfFold, type ShelfGroupId } from './shelf-folds';
 import { clockMeta, crewNeedingYou, crewStatus, foldCue, type FoldCue, folderMeta, gateWords, ICON_TABS_BELOW, pageProgress, planMeta, pullRequestsToWatch, sentenceCase, startedBy, statusLine, shortFolder, subagentStatus, nowCard, shelfShown, shelfTabs, type ShelfId, type ShelfTab } from './shelves';
 import { tildify } from './live-folder';
 import { pinOpener, recordedWhen, RecordList, type RecordDeletes } from './RecordList';
-import { crewSection, docSection, documentSection, isDocFile, pinSection, pullRequestSection, subagentSection, type PullRequestRow, type SidebarRow } from './sidebar-records';
+import { crewSection, docSection, documentSection, helperDocRows, isDocFile, pinSection, pullRequestSection, subagentSection, type PullRequestRow, type SidebarRow } from './sidebar-records';
 import { docName, docSurfaceOf, documentSurfaceOf, planSurfaceOf } from './tabs';
 
 /** What a shelf's rows do when clicked: where each opens, and the folder's copy and reveal. */
@@ -692,7 +692,8 @@ function MadeShelf({ agent, agents, shows, technical, records, actions, gate }: 
   const cues = { agent, agents, shows, gate: technical ? gate : null };
   const pulls = pullRequestSection(agent, records.fading);
   const docs = docSection(agent, records.fading);
-  const documents = documentSection(agent);
+  const documents = documentSection(agent, agents);
+  const helperDocs = helperDocRows(agent, agents);
   const card = pulls.rows.find((row) => (row.item.pr?.state === 'open' || row.item.pr?.state === 'draft') && !(row.source === 'recorded' && row.gone));
   const rest = { ...pulls, rows: pulls.rows.filter((row) => row !== card) };
   return (
@@ -722,7 +723,7 @@ function MadeShelf({ agent, agents, shows, technical, records, actions, gate }: 
                   icon={row.kind === 'plan' ? ClipboardList : BookOpen}
                   tone={row.kind === 'plan' ? 'open' : undefined}
                   name={row.kind === 'plan' ? `Plan v${row.version}` : row.name}
-                  meta={row.kind === 'plan' && agent.plan !== null ? planMeta(agent.plan, shortWhen) : `v${row.version} · shown ${shortWhen(row.at)}`}
+                  meta={row.kind === 'plan' && agent.plan !== null ? planMeta(agent.plan, shortWhen) : [row.kind === 'document' && row.by !== undefined ? row.by : undefined, `v${row.version} · shown ${shortWhen(row.at)}`].filter(Boolean).join(' · ')}
                   title={row.kind === 'plan' ? `${row.name}: open its Plan tab` : `${row.document.path}: opens in its Document tab`}
                   onClick={actions.openSurface && (() => actions.openSurface!(row.kind === 'plan' ? planSurfaceOf(agent.sessionId) : documentSurfaceOf(row.document)))}
                 />
@@ -731,8 +732,8 @@ function MadeShelf({ agent, agents, shows, technical, records, actions, gate }: 
           </ul>
         </Group>
       )}
-      {(docs.rows.length > 0 || docs.hidden.length > 0) && (
-        <Group id="made-handoff" label="Hand-off" count={docs.rows.length}>
+      {(docs.rows.length > 0 || docs.hidden.length > 0 || helperDocs.length > 0) && (
+        <Group id="made-handoff" label="Hand-off" count={docs.rows.length + helperDocs.length}>
           <RecordList
             section={docs}
               records={records}
@@ -746,6 +747,21 @@ function MadeShelf({ agent, agents, shows, technical, records, actions, gate }: 
               onClick: actions.openSurface && (() => actions.openSurface!(docSurfaceOf(agent.sessionId, each.item.path))),
             })}
           />
+          {helperDocs.length > 0 && (
+            <ul className="agent-shelves-rows">
+              {helperDocs.map((row) => (
+                <li key={row.key} data-testid="details-helper-doc">
+                  <ShelfRow
+                    icon={FileStack}
+                    name={docName(row.path)}
+                    meta={`by ${row.by}`}
+                    title={`${row.path}: opens in a Doc tab of ${row.by}'s window`}
+                    onClick={actions.openSurface && (() => actions.openSurface!(docSurfaceOf(row.sessionId, row.path)))}
+                  />
+                </li>
+              ))}
+            </ul>
+          )}
         </Group>
       )}
     </>

@@ -97,10 +97,10 @@ describe('workCategory: the agent sets its own', () => {
 });
 
 describe('workCategory: the board guesses', () => {
-  it('Needs help for whatever the inbox holds for the user, a question in its last words, or a restart that stopped it', () => {
-    expect(read({ flag: { id: 1, reason: 'Ready', at: '2026-11-11T05:00:00.000Z', to: 'user', via: null } })).toMatchObject({ category: 'needs-help', why: 'it flagged you' });
-    expect(read({ state: 'idle', lastMessage: 'Retry 3× or 5× on a 502?' })).toMatchObject({ category: 'needs-help', why: 'its last message asks you' });
-    expect(read({ state: 'stopped-by-restart' })).toMatchObject({ category: 'needs-help', why: 'the app restarted under it' });
+  it('Needs help for whatever the inbox holds for the user, and not for a question in its last words or a restart that stopped it', () => {
+    expect(read({ flag: { id: 1, reason: 'Ready', at: '2026-11-11T05:00:00.000Z', to: 'user', via: null } })).toMatchObject({ category: 'needs-help', why: 'it flagged you', since: '2026-11-11T05:00:00.000Z' });
+    expect(read({ state: 'idle', lastMessage: 'Retry 3× or 5× on a 502?' })).toMatchObject({ category: 'done' });
+    expect(read({ state: 'stopped-by-restart', endedAt: '2026-11-11T04:00:00.000Z' })).toMatchObject({ category: 'working', why: 'stopped by a restart', since: '2026-11-11T04:00:00.000Z' });
   });
 
   it('not Needs help for a finished turn the inbox lists, nor a crew member asking its orchestrator', () => {

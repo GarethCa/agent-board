@@ -42,6 +42,7 @@ import type { OrchestratorAccess } from './orchestrator-types.ts';
 import { RpcMethodError, type RpcHandlers } from './rpc.ts';
 import { cronWords, looksStuck, sinceWords, stuckFlagReason } from './cron.ts';
 import { createScheduleHost, type FiringClock, type Fired, type OpenRun, type RunPatch, type ScheduleHost } from './schedules.ts';
+import { clockName, markClock } from './sender-marker.ts';
 import { cutText } from './text-words.ts';
 import { isObject } from './json.ts';
 import { asksSomething } from './hook-states.ts';
@@ -234,7 +235,8 @@ export function createClockHost(options: ClockHostOptions): ClockHost {
           log(`clock ${firing.id}: its message wasn't typed (${reason}), and its run wasn't recorded: ${(error as Error).message}`);
         }
       };
-      const started = agents.runScheduled(agent.sessionId, data.prompt, (reason) => {
+      // Under the clock's mark, so the agent's chat shows it as the clock's run, not the user's (ADR-0023).
+      const started = agents.runScheduled(agent.sessionId, markClock(clockName(data.prompt), firing.id, data.prompt), (reason) => {
         if (runId === undefined) notTyped = reason;
         else untyped(runId, reason);
       });
@@ -388,7 +390,8 @@ export function createClockHost(options: ClockHostOptions): ClockHost {
             model: data.fresh.model ?? undefined,
             role: data.fresh.role ?? undefined,
             name,
-            prompt: data.prompt,
+            // Under the clock's mark, as a run of an agent it messages is: the fresh agent's chat shows it as the clock's.
+            prompt: markClock(clockName(data.prompt), firing.id, data.prompt),
             ...FRESH_SIZE,
           },
           spawnedBy,

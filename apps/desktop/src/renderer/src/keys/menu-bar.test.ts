@@ -45,7 +45,7 @@ describe('the keys the menu bar shows', () => {
   });
 
   it('greys a key where it would do nothing, or something else: ⌘D on the board is Duplicate, in a session window Split', () => {
-    const where = (more: Partial<MenuBarWhere>): MenuBarWhere => ({ board: false, selection: false, arrows: false, session: false, ...more });
+    const where = (more: Partial<MenuBarWhere>): MenuBarWhere => ({ board: false, selection: false, arrows: false, session: false, sessionWindow: false, ...more });
     const can = (id: KeyId, at: MenuBarWhere) => keyAvailable(binding(id), at);
     // The board with nothing selected: it makes things, but has nothing to duplicate, order or delete.
     expect(can('make.note', where({ board: true }))).toBe(true);
@@ -58,6 +58,10 @@ describe('the keys the menu bar shows', () => {
       expect(can(id, where({ board: true, selection: true })), id).toBe(false);
       expect(can(id, where({ session: true })), id).toBe(true);
     }
+    // A session window shown on the board, the focus elsewhere: ⌘W closes it, and only ⌘W, as ⌘D is still the board's.
+    expect(can('window.closeTab', where({ board: true, sessionWindow: true }))).toBe(true);
+    for (const id of ['window.splitBeside', 'window.newTab', 'window.previous'] as const) expect(can(id, where({ board: true, sessionWindow: true })), id).toBe(false);
+    expect(can('edit.duplicate', where({ board: true, selection: true, sessionWindow: true }))).toBe(true);
     // No board here (Settings, Overview, a session window of its own): none of its keys.
     expect(can('make.note', where({ session: true }))).toBe(false);
     // The keys for anywhere stay.
@@ -70,7 +74,7 @@ describe('the keys the menu bar shows', () => {
   });
 
   it('greys the keys a kind of window has no handler for: in Settings and the Overview, the switcher, the cheat sheet and the Captain', () => {
-    const at = (handles: MenuBarWhere['handles']): MenuBarWhere => ({ handles, board: false, selection: false, arrows: false, session: false });
+    const at = (handles: MenuBarWhere['handles']): MenuBarWhere => ({ handles, board: false, selection: false, arrows: false, session: false, sessionWindow: false });
     const can = (id: KeyId, where: MenuBarWhere) => keyAvailable(binding(id), where);
     for (const id of ['move.spotlight', 'move.cheatSheetAnywhere', 'move.master'] as const) {
       expect(can(id, at(WINDOW_KEYS.settings)), id).toBe(false);
@@ -99,7 +103,7 @@ describe('the keys the menu bar shows', () => {
   });
 
   it('keeps an item whose key is off clickable when the window can run it, without the key’s accelerator', () => {
-    const board: MenuBarWhere = { board: true, selection: false, arrows: false, session: false };
+    const board: MenuBarWhere = { board: true, selection: false, arrows: false, session: false, sessionWindow: false };
     expect(menuBarKeys(true, false, false, board)['edit.arrangeBoard']!.enabled).toBe(false);
     expect(menuBarKeys(true, false, false, board, new Set(['edit.arrangeBoard']))['edit.arrangeBoard']!.enabled).toBe(true);
     const save = menuBarKeys(true, false, false, { ...board, session: true }, new Set(['window.saveDoc']))['window.saveDoc']!;
@@ -261,14 +265,19 @@ describe("the window's half of the menu bar", () => {
     const { bridge: menuBar } = bridge({ inSession: () => session, keys: (where) => (asked.push(where), {}) });
     const [board, tile] = [Symbol('board'), Symbol('tile')];
     menuBar.report(true);
-    expect(asked.at(-1)).toEqual({ handles: WINDOW_KEYS.board, board: false, selection: false, arrows: false, session: false });
+    expect(asked.at(-1)).toEqual({ handles: WINDOW_KEYS.board, board: false, selection: false, arrows: false, session: false, sessionWindow: false });
     menuBar.setWhen('board', board, true);
     menuBar.setWhen('selection', tile, true);
     session = true;
     menuBar.changed();
-    expect(asked.at(-1)).toEqual({ handles: WINDOW_KEYS.board, board: true, selection: true, arrows: false, session: true });
+    expect(asked.at(-1)).toEqual({ handles: WINDOW_KEYS.board, board: true, selection: true, arrows: false, session: true, sessionWindow: false });
     menuBar.setWhen('selection', tile, false);
     expect(asked.at(-1)).toMatchObject({ selection: false });
+    const shown = Symbol('session window');
+    menuBar.setWhen('sessionWindow', shown, true);
+    expect(asked.at(-1)).toMatchObject({ sessionWindow: true });
+    menuBar.setWhen('sessionWindow', shown, false);
+    expect(asked.at(-1)).toMatchObject({ sessionWindow: false });
   });
 
   it('presses an accelerator the window had another press before', () => {

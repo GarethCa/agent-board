@@ -107,5 +107,7 @@
   "0106_turn_cut_off_asking": "0d7760359997e29a61b3c8cf3a9e1a55b397c36fab3f949655c99f4aba84bff2",
   "0107_zone_placements": "abe9fe0bb6fc6015b16cd5f2f9bdb03abbf5c19b0b5ec08fc9d5e5e0f85ff0b2",
   "0108_resume_at_start": "42161bdac170dd629ec81e1885835c1685fd319b0ebe2096a548ea110f4dba20",
-  "0109_agent_launch_settings": "1102ac922f888f4dffbf7d791ba849300d62fd3f2b2b25912257b537dbef1bf8"
+  "0109_agent_launch_settings": "1102ac922f888f4dffbf7d791ba849300d62fd3f2b2b25912257b537dbef1bf8",
+  "0110_doc_cards_off_board": "dec88189d1ed6d4fa4ba0c71ef93c514ce9c5053acfa43026040c6970f5fde0e",
+  "0111_remove_memories": "fdbda615eae2e589f46d67a1e5f3942070858c5f69732d638cd117fd3fecd498"
 }

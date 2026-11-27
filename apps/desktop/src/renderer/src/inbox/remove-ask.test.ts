@@ -8,7 +8,7 @@ const names = (tiles: RemoveAskTile[]) => tiles.map((t) => t.name);
 describe('removeAskList', () => {
   it('names the first three tiles that go, then how many more, and all of them once opened', () => {
     const ask = { tiles: ['a', 'b', 'c', 'd', 'e', 'f'].map((name) => tile(name)) };
-    expect(removeAskList(ask, false)).toEqual({ heading: "Wants to remove 6 tiles it didn't start", held: [], heldCount: 0, heldMore: 0, shown: ask.tiles.slice(0, 3), more: 3 });
+    expect(removeAskList(ask, false)).toEqual({ heading: "Wants to remove 6 tiles it didn't start", withEach: ', each with its worktree and branch', held: [], heldCount: 0, heldMore: 0, shown: ask.tiles.slice(0, 3), more: 3 });
     expect(names(removeAskList(ask, true).shown)).toEqual(['a', 'b', 'c', 'd', 'e', 'f']);
     expect(removeAskList(ask, true).more).toBe(3);
   });
@@ -46,5 +46,14 @@ describe('allowWords', () => {
     expect(allowWords(ask, new Set())).toBe('Remove 1');
     expect(allowWords(ask, new Set(['id-live']))).toBe('Remove 2');
     expect(allowWords({ tiles: [tile('live', 'still running')] }, new Set())).toBe('Allow');
+  });
+});
+
+describe('a remove ask for board items', () => {
+  it('asks to delete items it did not make, with nothing more going with each, and Delete on its button', () => {
+    const ask = { items: true as const, tiles: [tile('queue “Stray”')] };
+    expect(removeAskList(ask, false)).toMatchObject({ heading: "Wants to delete a board item it didn't make", withEach: '' });
+    expect(removeAskList({ ...ask, tiles: [tile('a'), tile('b')] }, false).heading).toBe("Wants to delete 2 board items it didn't make");
+    expect(allowWords(ask, new Set())).toBe('Delete 1');
   });
 });

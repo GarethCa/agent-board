@@ -2,7 +2,6 @@ import { createElement, type ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { StepsData, TodoData } from '@agent-board/daemon/protocol';
-import { MemoryIconView } from './MemoryCard';
 import { QueueIconView } from './QueueCard';
 import { StepsCard } from './StepsCard';
 import { TodoPillView } from './TodoCard';
@@ -21,10 +20,6 @@ const AT = '2026-01-01T00:00:00.000Z';
 const list = { title: 'Facts', scope: 'Board', count: 2, onOpen: () => {} };
 
 describe('a folded list card has no nodrag over its face', () => {
-  it('a memory folded to its icon: nothing in it is nodrag', () => {
-    expect(noDrag(createElement(MemoryIconView, list))).toEqual([]);
-  });
-
   it('a queue folded to its icon, for the user or an agent: nothing in it is nodrag', () => {
     expect(noDrag(createElement(QueueIconView, { ...list, audience: 'user' }))).toEqual([]);
     expect(noDrag(createElement(QueueIconView, { ...list, audience: 'agents' }))).toEqual([]);

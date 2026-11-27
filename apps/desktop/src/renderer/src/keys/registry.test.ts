@@ -29,7 +29,7 @@ describe('the key registry', () => {
     }
   });
 
-  it('marks only the cheat sheet, master, memory full screen, document editing, find, reading rail, arrow-swapping, zone clean-up, board-arranging, pop-up tab row and way-out keys new so far: the rest were in the app before it', () => {
+  it('marks only the cheat sheet, master, full screen, document editing, find, reading rail, arrow-swapping, zone clean-up, board-arranging, pop-up tab row and way-out keys new so far: the rest were in the app before it', () => {
     expect(KEYS.filter((entry) => entry.status === 'new').map((entry) => entry.id)).toEqual([
       'tile.full',
       'move.cheatSheet',

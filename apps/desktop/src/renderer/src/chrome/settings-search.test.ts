@@ -13,7 +13,7 @@ describe('searchSettings', () => {
   it('finds controls by their labels across groups, in the order the sidebar lists them', () => {
     expect(shown(searchSettings('path', { simplified: false }))).toEqual(['Advanced › Programs: Claude path, Codex path']);
     expect(shown(searchSettings('notif', { simplified: false }))).toEqual([
-      'Alerts › Notifications: Needs you shows, OS notifications, Also while agent-board is in front, Muted agents',
+      'Alerts › Notifications: Needs you shows, OS notifications, Also while agent-board is in front, Banners when an agent is done, Muted agents',
     ]);
   });
 

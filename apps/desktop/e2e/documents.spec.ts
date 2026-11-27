@@ -6,9 +6,10 @@ import { launch, screen, sessionWindow, setClickOpens, spawnAgent, tile, TURN_MS
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test, tabText } from './launch.ts';
 import { scratch } from './scratch.ts';
 import { centreOf, drag, settledBox } from './board-helpers.ts';
-import { showTileParts } from './settings-helpers.ts';
+import { putDocsOnBoard, showTileParts } from './settings-helpers.ts';
 
-// An agent shows the user a document through the board MCP: a Document tab in its window, and a card on the board. The
+// An agent shows the user a document through the board MCP: a Document tab in its window, listed with the agent, and a
+// card on the board when Settings puts docs there (most tests here turn it on). The
 // user edits a Markdown one there, which writes the file and tells the agent what changed. The fake claude's
 // `ask-plan` scenario writes and shows the file; nothing here writes it for the agent.
 
@@ -25,12 +26,13 @@ async function spawn(page: Page, prompt: string): Promise<Agent> {
 /** The agent as the daemon has it now. */
 const latest = (page: Page, agent: Agent) => page.evaluate((sessionId) => window.agentBoard.agents.list().then((all) => all.find((each) => each.sessionId === sessionId)!), agent.sessionId);
 
-async function withApp(body: (window: Page, app: ElectronApplication) => Promise<void>): Promise<void> {
+async function withApp(body: (window: Page, app: ElectronApplication) => Promise<void>, { docsOnBoard = true } = {}): Promise<void> {
   const setup = scratch('ask-plan');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, setup.env);
   try {
     await showTileParts(window, ['chips']);
+    if (docsOnBoard) await putDocsOnBoard(window);
     await pickFolderNext(app, setup.repo);
     await browseForZone(window);
     await body(window, app);
@@ -40,6 +42,23 @@ async function withApp(body: (window: Page, app: ElectronApplication) => Promise
     rmSync(setup.dir, { recursive: true, force: true });
   }
 }
+
+test('by default a document asked for on the board gets no card: it is listed with its agent, and ⌘K opens it', async () => {
+  await withApp(
+    async (window) => {
+      const agent = await spawn(window, 'Doc on the board: docs/release-plan.md');
+      await expect(agentTile(window, agent).getByTestId('tile-docs')).toHaveText('1 doc');
+      await expect(window.getByTestId('doc-card')).toHaveCount(0);
+
+      await window.keyboard.press(windowKey('k'));
+      const switcher = window.getByRole('dialog', { name: 'Jump to a session, zone or setting' });
+      await switcher.getByRole('combobox').fill('Release 1.4');
+      await switcher.locator('[data-testid="spotlight-row"][data-kind="document"]').click();
+      await expect(docView(window).getByTestId('doc-body').getByRole('heading', { name: 'Order' })).toBeVisible();
+    },
+    { docsOnBoard: false },
+  );
+});
 
 test('a document shown on the board is a card beside its agent; its Document tab edits the file and tells the agent the diff', async () => {
   await withApp(async (window) => {

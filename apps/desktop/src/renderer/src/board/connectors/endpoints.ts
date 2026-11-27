@@ -113,6 +113,12 @@ export function withConnectorParams(connector: Connector, params: UpdateConnecto
   };
 }
 
+/** `connectors` without those ending on the item `itemId`; the same list if none does. */
+export function withoutConnectorsOn(connectors: Connector[], itemId: string): Connector[] {
+  const on = (end: ConnectorEnd) => end.type === 'item' && end.id === itemId;
+  return connectors.some((c) => on(c.from) || on(c.to)) ? connectors.filter((c) => !on(c.from) && !on(c.to)) : connectors;
+}
+
 /** `connectors` with a change applied. */
 export const withConnectorChange = (connectors: readonly Connector[], change: ConnectorChange): Connector[] =>
   change.type === 'connector.updated'

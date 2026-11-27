@@ -9,6 +9,7 @@ import { PrefabsDialog } from './PrefabsDialog';
 import { libraryBoard, newPrefab } from './prefab-board';
 import type { PrefabBoardStart } from './PrefabBoard';
 import { currentPrefabs } from './prefab-store';
+import { openDraft } from './prefab-drafts';
 
 /** Where the crew dialogs open: the library, or the prompt box of the prefab named, in a zone if one is meant. */
 export type CrewFlowStart = ({ kind: 'library' } | { kind: 'prompt'; prefab: LibraryPrefab } | { kind: 'ticket' } | { kind: 'describe' }) & {
@@ -89,6 +90,9 @@ export function CrewFlow({ start, zones, agents = [], onStarted, onClose, onAddZ
       onStart={(prefab) => setStep({ kind: 'prompt', prefab })}
       onEdit={(prefab) => onEdit(editStart(prefab))}
       onDescribe={() => setStep({ kind: 'describe' })}
+      onReview={(id) =>
+        void openDraft(id).then(onEdit, (failure: unknown) => toasts.show({ id: 'open a prefab draft', tone: 'error', message: `Could not open the draft: ${errorMessage(failure)}` }))
+      }
       onImport={importFile}
     />
   );

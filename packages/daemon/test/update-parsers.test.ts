@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { checkPrefabStart, checkStatusSet } from '../src/board-ops.ts';
-import { memoryUpdate, queueUpdate, versionNumber } from '../src/memory-ops.ts';
+import { queueUpdate, versionNumber } from '../src/queue-ops.ts';
 import { stepNumber, stepsUpdate, stepWords } from '../src/steps-ops.ts';
 
 // The one parser of each update, which the CLI's words and the MCP's arguments both go through.
@@ -35,27 +35,11 @@ describe('a steps update', () => {
   });
 });
 
-describe('a memory update', () => {
-  it('reads each action, and a version as typed or sent', () => {
-    expect(memoryUpdate({ action: 'add', text: 'a: b', key: 'a' })).toEqual({ action: 'add', text: 'a: b', key: 'a', note: false });
-    expect(memoryUpdate({ action: 'edit', entry: 'a', pinned: true })).toEqual({ action: 'edit', entry: 'a', note: false, pinned: true });
-    expect(memoryUpdate({ action: 'rm', entry: 'a' })).toEqual({ action: 'remove', entry: 'a' });
-    expect(memoryUpdate({ action: 'restore', entry: 'a', version: 'v2' })).toEqual({ action: 'restore', entry: 'a', version: 2 });
-    expect(memoryUpdate({ action: 'restore', entry: 'a', version: 3 })).toEqual({ action: 'restore', entry: 'a', version: 3 });
-    expect(() => versionNumber('latest')).toThrow('give the version to put back, as history lists it');
-  });
-
-  it('refuses a key with no key, and an entry update with no entry', () => {
-    expect(() => memoryUpdate({ action: 'add', text: 'x', key: 'k', note: true })).toThrow('give a key, or no key for a note: not both');
-    expect(() => memoryUpdate({ action: 'confirm' })).toThrow('give the entry: its key, or its #id');
-    expect(() => memoryUpdate({ action: 'forget' })).toThrow('the memory updates are add, edit, remove, restore and confirm');
-  });
-});
-
 describe('a queue update', () => {
   it('reads each action, and drain and restore numbers as typed or sent', () => {
     expect(queueUpdate({ action: 'add', text: 'Ship it', kind: 'task', front: true })).toEqual({ action: 'add', text: 'Ship it', kind: 'task', front: true });
     expect(queueUpdate({ action: 'take' })).toEqual({ action: 'take' });
+    expect(() => versionNumber('latest')).toThrow('give the version to put back, as history lists it');
     expect(queueUpdate({ action: 'edit', job: '#1', text: '' , link: '' })).toEqual({ action: 'edit', job: '#1', link: '' });
     expect(queueUpdate({ action: 'rm', job: '#1' })).toEqual({ action: 'remove', job: '#1' });
     expect(queueUpdate({ action: 'restore', job: '#1', version: '4' })).toEqual({ action: 'restore', job: '#1', version: 4 });

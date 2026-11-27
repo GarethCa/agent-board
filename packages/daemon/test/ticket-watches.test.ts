@@ -176,7 +176,7 @@ describe('what starts a check, and what the chat is told', () => {
   it('names the pull request, and quotes what reviewers wrote apart, as theirs and not the user\'s', () => {
     expect(chatMessage(PULL_REQUEST, [{ kind: 'reviews', text: 'sam requested changes', at: '', by: 'sam', body: 'Rename it.\n\nAnd test it.' }, { kind: 'merge', text: 'Merged', at: '', by: null, body: '' }])).toBe(
       [
-        "Your ticket's watches saw news on pull request acme/app#648 (https://github.com/acme/app/pull/648):",
+        "[agent-board] Your ticket's watches saw news on pull request acme/app#648 (https://github.com/acme/app/pull/648):",
         '- sam requested changes',
         '- Merged',
         '',
@@ -290,7 +290,7 @@ describe('a ticket watching its pull request', () => {
     expect(ticket.told).toHaveLength(1);
     expect(ticket.told[0]).toBe(
       [
-        "chat: Your ticket's watches saw news on pull request acme/app#648 (https://github.com/acme/app/pull/648):",
+        "chat: [agent-board] Your ticket's watches saw news on pull request acme/app#648 (https://github.com/acme/app/pull/648):",
         '- sam requested changes',
         '- sam commented',
         '- Checks failing: 1 of 2 passing',

@@ -46,7 +46,7 @@ export const followDrafts = (listener: () => void): (() => void) => {
 };
 
 /** The drafts waiting for the user, kept current. */
-export const usePrefabDrafts = (): DraftsKnown => useSyncExternalStore(followDrafts, currentDrafts);
+export const usePrefabDrafts = (): DraftsKnown => useSyncExternalStore(followDrafts, currentDrafts, currentDrafts);
 
 /** What the toast says as an agent drafts one. */
 export const draftedMessage = (draft: PrefabDraft): string => `${draft.drafter.name} drafted “${draft.prefab.name}”`;
@@ -55,7 +55,7 @@ export const draftedMessage = (draft: PrefabDraft): string => `${draft.drafter.n
 const draftStart = (draft: PrefabDraft): PrefabBoardStart => ({
   prefab: draft.prefab,
   replaces: null,
-  draft: { id: draft.id, drafter: draft.drafter.name, assumptions: draft.assumptions },
+  draft: { id: draft.id, drafter: draft.drafter.name, drafterSession: draft.drafter.tileId, assumptions: draft.assumptions },
 });
 
 /** Opens a draft by its id (which closes a drafter started only to draft it), as its board's start. */

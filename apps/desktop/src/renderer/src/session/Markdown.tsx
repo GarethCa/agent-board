@@ -1,5 +1,5 @@
 import { createContext, memo, useContext, type ReactNode } from 'react';
-import ReactMarkdown, { type Components } from 'react-markdown';
+import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { createLowlight } from 'lowlight';
 import { toText } from 'hast-util-to-text';
@@ -19,6 +19,9 @@ import swift from 'highlight.js/lib/languages/swift';
 import typescript from 'highlight.js/lib/languages/typescript';
 import xml from 'highlight.js/lib/languages/xml';
 import yaml from 'highlight.js/lib/languages/yaml';
+import { isWebUrl } from '@agent-board/daemon/web-url';
+import { prefabDraftOfLink } from '@agent-board/daemon/protocol';
+import type { Nodes as MdastNodes, PhrasingContent, Root as MdastRoot } from 'mdast';
 import { remarkFindings } from '../doc/remark-findings';
 import { FindingsTools } from '../doc/FindingsTools';
 
@@ -66,7 +69,8 @@ interface MarkdownProps {
 /**
  * An agent's message as Markdown (CommonMark and GFM: tables, task lists, strikethrough, autolinks), with its code
  * blocks highlighted. Its text comes from outside the app, so nothing in it runs or loads: raw HTML is dropped, an
- * image shows only its alt text, and only an https link is a link, opened in the OS browser. Memoised on its text: a
+ * image shows only its alt text, and only an https link is a link, opened in the OS browser, besides the link to a
+ * crew an agent drafted (written bare too), which opens it on its board. Memoised on its text: a
  * long transcript re-renders only what changed.
  */
 export const Markdown = memo(function Markdown({ text, onOpenLink, variant = 'chat' }: MarkdownProps) {
@@ -79,6 +83,7 @@ export const Markdown = memo(function Markdown({ text, onOpenLink, variant = 'ch
           remarkPlugins={variant === 'read' ? READ_PLUGINS : CHAT_PLUGINS}
           rehypePlugins={[rehypeHighlight]}
           skipHtml
+          urlTransform={keepDraftLinks}
           components={variant === 'read' ? READ_COMPONENTS : CHAT_COMPONENTS}
         >
           {text}
@@ -117,12 +122,61 @@ const READ_COMPONENTS: Components = {
   ),
 };
 
-const CHAT_PLUGINS = [remarkGfm];
-const READ_PLUGINS = [remarkGfm, remarkFindings];
+const DRAFT_LINK = /agent-board:\/\/draft\/[0-9a-f-]+/gi;
+
+/**
+ * Makes the link to a drafted crew, written bare in the text, a link: GFM autolinks only the web's schemes. Not in
+ * code, nor inside a link already.
+ */
+function remarkDraftLinks() {
+  return (tree: MdastRoot) => {
+    const visit = (node: MdastNodes) => {
+      if (!('children' in node) || node.type === 'link') return;
+      node.children = (node.children as MdastNodes[]).flatMap((child): MdastNodes[] => {
+        if (child.type !== 'text') {
+          visit(child);
+          return [child];
+        }
+        const parts: PhrasingContent[] = [];
+        let from = 0;
+        for (const match of child.value.matchAll(DRAFT_LINK)) {
+          if (prefabDraftOfLink(match[0]) === undefined) continue;
+          if (match.index > from) parts.push({ type: 'text', value: child.value.slice(from, match.index) });
+          parts.push({ type: 'link', url: match[0], children: [{ type: 'text', value: match[0] }] });
+          from = match.index + match[0].length;
+        }
+        if (parts.length === 0) return [child];
+        if (from < child.value.length) parts.push({ type: 'text', value: child.value.slice(from) });
+        return parts;
+      }) as typeof node.children;
+    };
+    visit(tree);
+  };
+}
+
+/** react-markdown's own rules for a link's address, which drop a scheme of the app's own: the draft link is kept. */
+const keepDraftLinks = (url: string): string => (prefabDraftOfLink(url) === undefined ? defaultUrlTransform(url) : url);
+
+const CHAT_PLUGINS = [remarkGfm, remarkDraftLinks];
+const READ_PLUGINS = [remarkGfm, remarkFindings, remarkDraftLinks];
 
 function Link({ href, children }: { href: string | undefined; children: ReactNode }) {
   const onOpenLink = useContext(OpenLink);
-  if (href === undefined || !href.startsWith('https://')) return <>{children}</>;
+  const draft = href === undefined ? undefined : prefabDraftOfLink(href);
+  if (draft !== undefined)
+    return (
+      <a
+        href={href}
+        title="Opens the draft on its board"
+        onClick={(event) => {
+          event.preventDefault();
+          void window.agentBoard.windows.requestBoard({ kind: 'prefabDraft', id: draft });
+        }}
+      >
+        {children}
+      </a>
+    );
+  if (href === undefined || !isWebUrl(href)) return <>{children}</>;
   return (
     <a
       href={href}

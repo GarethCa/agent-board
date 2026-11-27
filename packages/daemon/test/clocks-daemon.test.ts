@@ -121,6 +121,9 @@ describe('clocks', () => {
     expect(done.runs[0]!.result).toBe('All tests pass.');
     expect((await client.call('agent.list')).map((agent) => agent.name)).toEqual(['Check the deps #1']);
     expect((await client.call('item.list')).filter((item) => item.kind === 'agent-note')).toEqual([]);
+    // Its first prompt is the clock's run, not the user's, in its chat.
+    const { entries } = await client.call('agent.transcript', { sessionId: done.runs[0]!.sessionId! });
+    expect(entries.find((entry) => entry.kind === 'user')).toMatchObject({ text: 'Check the deps', from: { kind: 'clock', name: 'Check the deps', ref: `item:${made.id}` } });
   });
 
   it("hands the fresh agent's final message to another agent", async () => {
@@ -390,6 +393,19 @@ describe('what a clock does with its agent after each run', () => {
     expect((await listed(setup, agent.sessionId))!.hibernated).toBeNull();
   });
 
+  it("types its run under the clock's mark, so the agent's chat reads it as the clock's, not the user's", async () => {
+    const setup = await watchDaemon();
+    const { agent, made } = await watched(setup, { hibernate: false });
+    setup.clock.advanceTo(EIGHT);
+    await untilStatus(setup.recorder, made.id, (status) => status.runs[0]?.finishedAt != null);
+    const { entries } = await setup.client.call('agent.transcript', { sessionId: agent.sessionId });
+    const said = entries.flatMap((entry) => (entry.kind === 'user' ? [{ text: entry.text, from: entry.from }] : []));
+    const clocks = said.filter((each) => each.text === 'Check Slack');
+    expect(clocks.length).toBeGreaterThan(0);
+    for (const each of clocks) expect(each.from).toEqual({ kind: 'clock', name: 'Check Slack', ref: `item:${made.id}` });
+    expect(said.find((each) => each.text === 'Run the tests')?.from).toBeUndefined();
+  });
+
   it('hibernates the agent after each run, and wakes it in its own conversation for the next', async () => {
     const setup = await watchDaemon();
     const { agent, made } = await watched(setup, { hibernate: true });
@@ -408,6 +424,11 @@ describe('what a clock does with its agent after each run', () => {
     const second = await untilStatus(setup.recorder, made.id, (status) => status.runs.length === 2 && status.runs[0]!.outcome === 'done');
     expect(second.runs[0]).toMatchObject({ result: 'All tests pass.', reason: null });
     await untilAgent(setup.recorder, agent.sessionId, (seen) => seen.state === 'hibernated', waking);
+    // The run that woke it is the clock's in its chat, as the first was.
+    const { entries } = await setup.client.call('agent.transcript', { sessionId: agent.sessionId });
+    const runs = entries.flatMap((entry) => (entry.kind === 'user' && entry.text === 'Check Slack' ? [entry.from] : []));
+    expect(runs.length).toBeGreaterThanOrEqual(2);
+    for (const from of runs) expect(from).toEqual({ kind: 'clock', name: 'Check Slack', ref: `item:${made.id}` });
   }, 20_000);
 
   it('hibernates a Codex agent too, and wakes it for the next run', async () => {
@@ -422,6 +443,11 @@ describe('what a clock does with its agent after each run', () => {
     const second = await untilStatus(setup.recorder, made.id, (status) => status.runs.length === 2 && status.runs[0]!.outcome === 'done');
     expect(second.runs[0]).toMatchObject({ result: 'All tests pass.', reason: null });
     await untilAgent(setup.recorder, agent.sessionId, (seen) => seen.state === 'hibernated', waking);
+    // The run that woke it is the clock's in its chat, as the first was.
+    const { entries } = await setup.client.call('agent.transcript', { sessionId: agent.sessionId });
+    const runs = entries.flatMap((entry) => (entry.kind === 'user' && entry.text === 'Check Slack' ? [entry.from] : []));
+    expect(runs.length).toBeGreaterThanOrEqual(2);
+    for (const from of runs) expect(from).toEqual({ kind: 'clock', name: 'Check Slack', ref: `item:${made.id}` });
   }, 20_000);
 
   it('keeps a run whose agent flags you, and leaves that agent up for you, not hibernated', async () => {

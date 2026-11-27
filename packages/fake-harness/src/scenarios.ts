@@ -13,6 +13,9 @@ export function isScenario(name: string): name is FakeScenario {
 
 type Script = (session: FakeSession, prompt: string) => Promise<void>;
 
+/** The sender mark that heads a message the board typed for an agent or a clock (`⟨clock from … · item:…⟩ `). */
+const SENDER_MARK = /^⟨[^⟨⟩\n]+⟩ ?/;
+
 /** Each session's hand-over file, as a prompt of it named it. */
 const handoverFiles = new WeakMap<object, string>();
 /** `text` single-quoted for the shell, a quote in it closed, escaped and opened again. */
@@ -359,20 +362,23 @@ const scripts: Record<FakeScenario, Script> = {
    * presents a Markdown plan and, if changes are asked for, a v2 with the comments in it, until a decision other than
    * changes. `Plan HTML: <url>` presents an HTML plan that tries to reach `<url>` (fetch, an image, a form, a navigation,
    * `window.open`) and the app, and says in its title what it could. `Plan file: <path>` presents the file at `<path>`.
-   * `Flag: <reason>` asks for a look with `needs_you` and ends its turn, nothing waiting. `Doc: <path>` writes a short
+   * `Flag: <reason>` asks for a look with `needs_you` and ends its turn, nothing waiting. `Alert: <line>` (or `Alert:
+   * <line> | <link>`) tells the user something is done with `alert`, and ends its turn. `Doc: <path>` writes a short
    * release plan in Markdown to `<path>` (an `.html` path, a page) and shows it with `show_doc`; `Doc on the board:
    * <path>` shows it as a card on the board too. Nothing waits on either. `Plan doc on the board: <path>` writes a
    * migration plan in Markdown to `<path>` and shows it with `show_doc` as a plan with its card on the board, waiting
    * for the decision. `Plan doc by CLI: <path>` writes the same plan and leaves it with `agent-board doc --plan --board`,
    * which returns at once, then ends its turn; the decision is typed at its prompt later. `Steps, then wait on <n>: …` puts up
    * a steps card of those lines and waits on its step n. `Steps: <line> ;; <line> …`
-   * prints its board token, then puts up a steps card of those lines with `steps_new` and ends its turn. `Memory: <title>` and `Queue: <title>` print its board
-   * token, then put up a memory or a queue of that title with `memory_new` or `queue_new`, and end its turn. `Record PR: <url>` records that pull request on its sidebar with `record_pr`, and ends its turn. `Rename: <ref> | <name>` renames that agent's tile with `rename`, and ends its turn. `Pins: <path>` writes and shows that Markdown file, then pins it as `Report`, a `shot.png` beside
+   * prints its board token, then puts up a steps card of those lines with `steps_new` and ends its turn. `Queue: <title>` prints its board
+   * token, then puts up a queue of that title with `queue_new`, and ends its turn. `Print your board identity` prints its board token and ends its turn. `Record PR: <url>` records that pull request on its sidebar with `record_pr`, and ends its turn. `Rename: <ref> | <name>` renames that agent's tile with `rename`, and ends its turn. `Pins: <path>` writes and shows that Markdown file, then pins it as `Report`, a `shot.png` beside
    * it, a link to `http://localhost:9/preview` and a note labelled `Test logins`. `Clock: <json>` prints its board
-   * token, then changes its own clock with `clock_set` and those arguments, and ends its turn on the reply.
+   * token, then changes its own clock with `clock_set` and those arguments, and ends its turn on the reply. A sender
+   * mark the board heads a message with (a clock's run, an agent's send) is read past, as a model reads past it.
    */
-  async 'ask-plan'(session, prompt) {
-    await session.submit(prompt);
+  async 'ask-plan'(session, typed) {
+    await session.submit(typed);
+    const prompt = typed.replace(SENDER_MARK, '');
     const say = async (result: { text: string } | undefined) => {
       await session.say(result?.text ?? 'There is no agent-board MCP server here.');
       await session.stop();
@@ -398,10 +404,14 @@ const scripts: Record<FakeScenario, Script> = {
       await session.runShell('echo "identity:$AGENT_BOARD_IDENTITY:end"');
       return say(await session.callMcpTool('agent-board', 'remind', { text: reminded.split(' ;; ').join('\n') }));
     }
-    const made = /^(Memory|Queue): (.*)/.exec(prompt);
-    if (made !== null) {
+    const queued = /^Queue: (.*)/.exec(prompt)?.[1];
+    if (queued !== undefined) {
       await session.runShell('echo "identity:$AGENT_BOARD_IDENTITY:end"');
-      return say(await session.callMcpTool('agent-board', made[1] === 'Memory' ? 'memory_new' : 'queue_new', { title: made[2]! }));
+      return say(await session.callMcpTool('agent-board', 'queue_new', { title: queued }));
+    }
+    if (prompt === 'Print your board identity') {
+      await session.runShell('echo "identity:$AGENT_BOARD_IDENTITY:end"');
+      return session.stop();
     }
     const clocked = /^Clock: (.*)/.exec(prompt)?.[1];
     if (clocked !== undefined) {
@@ -434,6 +444,11 @@ const scripts: Record<FakeScenario, Script> = {
     }
     const flag = /^Flag: (.*)/.exec(prompt)?.[1];
     if (flag !== undefined) return say(await session.callMcpTool('agent-board', 'needs_you', { reason: flag }));
+    const alert = /^Alert: (.*)/.exec(prompt)?.[1];
+    if (alert !== undefined) {
+      const [line, link] = alert.split(' | ');
+      return say(await session.callMcpTool('agent-board', 'alert', { line, ...(link === undefined ? {} : { link }) }));
+    }
     const doc = /^(?:Doc|(Pins))( on the board)?: (.*)/.exec(prompt);
     if (doc !== null) {
       const [pins, onBoard, path] = [doc[1], doc[2], doc[3]!];
@@ -479,7 +494,7 @@ const scripts: Record<FakeScenario, Script> = {
     if (html !== undefined) return say(await session.callMcpTool('agent-board', 'present_plan', { title: 'A hostile plan', html: hostilePlan(html) }));
     const file = /^Plan file: (.*)/.exec(prompt)?.[1];
     if (file !== undefined) return say(await session.callMcpTool('agent-board', 'present_plan', { title: 'Plan from a file', path: file }));
-    return scripts.output(session, prompt);
+    return scripts.output(session, typed);
   },
 
   /**
@@ -495,7 +510,9 @@ const scripts: Record<FakeScenario, Script> = {
    * `Arrange a messy crew in columns` the same, with `--layout columns`.
    * `Arrange by itself, then start three` turns auto-arrange on and ends its turn; its next prompt starts workers `one`,
    * `two` and `three` with the CLI, ending on `Started three.`.
-   * `Finish: <summary>` sets that status with `--done` and ends on `Finished.`; `Ask to remove: <a>, <b>` asks the user to remove those agents with `ask_to_remove` and says the answer.
+   * `Rest: <line>` (`Rest by CLI: <line>`) rests with that line by the MCP tool (the CLI) and ends its turn on what it was told;
+   * `Rest, then flag: <line>` rests, then flags its lead or the user, and `Rest, then status: <line>` rests, then sets its status line.
+   * `Finish: <summary>` sets that status with `--done` and ends on `Finished.`; `Ask to remove: <a>, <b>` asks the user to remove those agents with `ask_to_remove`, which returns at once, and says the answer when it comes to its prompt.
    * `Lead a crowded crew: <task>` starts a worker with a long name, a role and a model, sets its status line, and starts a reviewer of it, leaving both running.
    * `Print your board identity`, as the prompt or a line of it, echoes the board token. `Gate in the background` ends two turns, each followed by its
    * idle prompt, as a gate runs in its background, then writes its handover and runs `agent-board handoff`.
@@ -504,17 +521,19 @@ const scripts: Record<FakeScenario, Script> = {
    * `Work slowly` runs `sleep 5`; `Work slowly in two steps` runs `sleep 3`, then `sleep 10`, a step to take up what was
    * typed meanwhile between them (`queueMidTurn`); `Work slowly, then fail` and `Work slowly, then hit the rate limit`
    * run `sleep 5`, then fail the turn (Claude's StopFailure: `server_error`, `rate_limit`);
-   * `Ask permission` plays `permission`; `Run: ‹command› | ‹what it is for›` asks to run that command and says whether it ran; `Think, then send a subagent` thinks a step and plays `subagent`; `Ask: …`, `Plan: …`, `Flag: …`, `Doc: …` and `Pins: …` and `Remind: …` play `ask-plan`; `Hit the rate limit` plays `rate-limit`. Any other prompt is a worker's:
+   * `Ask permission` plays `permission`; `Run: ‹command› | ‹what it is for›` asks to run that command and says whether it ran; `Think, then send a subagent` thinks a step and plays `subagent`; `Ask: …`, `Plan: …`, `Flag: …`, `Alert: …`, `Doc: …` and `Pins: …` and `Remind: …` play `ask-plan`; `Hit the rate limit` plays `rate-limit`. Any other prompt is a worker's:
    * it writes `.agent-board/handover.md` (or the file a prompt of its session's `Hand over in <file>.` last named) in its shell and ends on
    * `STATUS: done`. Before that, a `Commit <file>: <text>` line commits that file, a maker's work; each `Write <file>:
    * <text>` line writes one with the file-writing tool, left uncommitted; and a `Stage everything` line runs `git add -A`.
    * A `Stash everything` line runs `git stash -u` before any of them, taking what the worktree had uncommitted.
    */
-  async orchestrate(session, prompt) {
+  async orchestrate(session, typed) {
+    // Read past a sender mark, as `ask-plan` does: a clock's run of `Work slowly` works slowly.
+    const prompt = typed.replace(SENDER_MARK, '');
     // Prompts that play another scenario, which submits them itself.
-    if (prompt === 'Ask permission') return scripts.permission(session, prompt);
-    if (/^(Ask( only| in words| several| briefly| on the board)?|Plan( doc on the board| doc by CLI)?|Flag|Doc( on the board)?|Pins|Remind): /.test(prompt)) return scripts['ask-plan'](session, prompt);
-    await session.submit(prompt);
+    if (prompt === 'Ask permission') return scripts.permission(session, typed);
+    if (/^(Ask( only| in words| several| briefly| on the board)?|Plan( doc on the board| doc by CLI)?|Flag|Alert|Doc( on the board)?|Pins|Remind): /.test(prompt)) return scripts['ask-plan'](session, typed);
+    await session.submit(typed);
     // A plain command it needs permission for, with what it is for, and what came of the answer.
     const run = /^Run: (.*?) \| (.*)$/.exec(prompt);
     if (run !== null) {
@@ -557,6 +576,19 @@ const scripts: Record<FakeScenario, Script> = {
       await session.say(askBack);
       return session.stop();
     }
+    // An agent that says it is done for now, mid-turn, and maybe does more in that turn after it.
+    const rest = /^Rest( by CLI|, then flag|, then status)?: (.*)$/.exec(prompt);
+    if (rest !== null) {
+      const [, how, line = ''] = rest;
+      const told =
+        how === ' by CLI'
+          ? (await session.runShell(`agent-board rest -- '${line.replaceAll("'", `'\\''`)}'`))
+          : (await session.callMcpTool('agent-board', 'rest', { line }))?.text;
+      if (how === ', then flag') await session.callMcpTool('agent-board', 'needs_you', { reason: 'Decision needed on the cache' });
+      if (how === ', then status') await session.callMcpTool('agent-board', 'set_status', { summary: 'Now fixing lint' });
+      await session.say(told ?? 'There is no agent-board MCP server here.');
+      return session.stop();
+    }
     // A worker that says its work is finished, so a remove ask lists it as one that goes on Allow.
     const finish = /^Finish: (.*)/.exec(prompt)?.[1];
     if (finish !== undefined) {
@@ -570,6 +602,11 @@ const scripts: Record<FakeScenario, Script> = {
       const agents = remove.split(',').map((name) => name.trim());
       const answer = await session.callMcpTool('agent-board', 'ask_to_remove', { agents });
       await session.say(answer?.text ?? 'There is no agent-board MCP server here.');
+      return session.stop();
+    }
+    // The user's answer to that ask, typed at its prompt as a message once it comes: said back, as it was told.
+    if (prompt.startsWith('The answer to your ask to remove ')) {
+      await session.say(prompt);
       return session.stop();
     }
     if (prompt === 'Lead a worker that asks back') {

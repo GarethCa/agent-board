@@ -21,7 +21,7 @@ export function PopOutSpotlight({ target, onSwitched }: { target: WindowTarget; 
       return true;
     }
     const surface = surfaceOfSubject(subject);
-    if (surface !== undefined && (beside || subject.kind === 'pr' || subject.kind === 'web')) {
+    if (surface !== undefined && (beside || subject.kind === 'pr' || subject.kind === 'web' || subject.kind === 'document')) {
       requestTab(from.id, surface, { beside });
       return true;
     }

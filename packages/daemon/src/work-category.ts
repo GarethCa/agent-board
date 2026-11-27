@@ -1,17 +1,13 @@
 // An agent's work category (ADR-0024): what kind of wait its work is in, for the overview's groups. The agent sets its
 // own (`board.setStatus` with `category`); when it hasn't, the board guesses one from what it can see.
 
-import { asksInWords, HUMAN_STATUS_BY_STATE, type HumanStatusFacts } from './human-status.ts';
+import { WORKING_STATES, type HumanStatusFacts } from './human-status.ts';
 import {
   MAX_WAITING_ON_LENGTH,
   MAX_WORK_LABEL_LENGTH,
   WORK_CATEGORIES,
-  needsYouKind,
-  permissionPrompt,
-  questionPrompt,
+  needsYouReading,
   type Agent,
-  type AgentState,
-  type NeedsYouKind,
   type NeedsYouShows,
   type WaitingOn,
   type WorkCategory,
@@ -70,7 +66,7 @@ export interface WorkCategoryReading {
 }
 
 /** The agent fields the reading takes. */
-export type WorkCategoryFacts = HumanStatusFacts & Pick<Agent, 'stepsWait' | 'workFinishedAt' | 'workCategory'>;
+export type WorkCategoryFacts = HumanStatusFacts & Pick<Agent, 'stepsWait' | 'workFinishedAt' | 'workCategory' | 'finishedAt' | 'createdAt'>;
 
 /** What a reviewer of the agent's work is read for: whether it is reviewing now, and its name. */
 export type ReviewerFacts = Pick<Agent, 'name' | 'state' | 'endedAt'>;
@@ -82,23 +78,10 @@ export interface WorkCategoryContext {
   reviewers?: readonly ReviewerFacts[];
 }
 
-const WORKING_STATES: ReadonlySet<AgentState> = new Set(
-  (Object.keys(HUMAN_STATUS_BY_STATE) as AgentState[]).filter((state) => HUMAN_STATUS_BY_STATE[state] === 'working'),
-);
-
-const NEEDS_HELP_WHY: Record<Exclude<NeedsYouKind, 'turn'>, string> = {
-  permission: 'a permission prompt',
-  asks: 'a question in Needs you',
-  plan: 'a plan to review',
-  steps: 'questions in Needs you',
-  todo: 'a to-do of yours',
-  flagged: 'it flagged you',
-};
-
 /**
- * An agent's work category. What waits on the user now is Needs help over anything the agent set: a permission prompt,
- * a question, a plan, steps or a to-do, a flag, a restart that stopped it, or last words that ask. A finished turn the
- * inbox lists is not (every agent at its prompt would be), nor a crew member's question, which its orchestrator takes.
+ * An agent's work category. What needs the user to act is Needs help over anything the agent set (`needsYouReading`): a
+ * permission prompt, a question, a plan, steps or a to-do, or a flag. A finished turn the inbox lists is not (every agent
+ * at its prompt would be), nor last words that ask, nor a restart that stopped it, which reads as paused.
  * An ended session reads by how it ended, which the agent can no longer change. Otherwise the agent's own stands, and
  * without one the board guesses: Working while it runs, paused or is scheduled; Blocked at its usage limit; In review
  * while a reviewer of its work runs; Waiting on others ("CI") while its open PR's checks run; Blocked while they
@@ -108,13 +91,15 @@ const NEEDS_HELP_WHY: Record<Exclude<NeedsYouKind, 'turn'>, string> = {
  * its PR waits on review whoever does it.
  */
 export function workCategory(agent: WorkCategoryFacts, { shows, reviewers = [] }: WorkCategoryContext): WorkCategoryReading {
-  const help = needsHelp(agent, shows);
-  if (help !== null) return help;
+  const help = needsYouReading(agent, shows);
+  if (help !== null && help.kind !== 'turn') return guess('needs-help', help.words.why, help.since);
   const ended = agent.endedAt !== null;
   const own = agent.workCategory;
   if (own !== null && !ended) {
     return { category: own.category, label: own.label, source: 'agent', setBy: own.setBy, why: null, waitingOn: own.waitingOn, since: own.setAt };
   }
+  // It waits to be woken, as a paused one does.
+  if (agent.state === 'stopped-by-restart') return guess('working', 'stopped by a restart', agent.endedAt);
   if (ended && agent.state === 'failed') {
     return guess('blocked', agent.exitCode === null || agent.exitCode === 0 ? 'it failed' : `it failed · exit ${agent.exitCode}`);
   }
@@ -146,34 +131,6 @@ export function workCategory(agent: WorkCategoryFacts, { shows, reviewers = [] }
   // A crew member at its prompt waits on its orchestrator for what comes next: not done.
   if (agent.ledBy !== null) return guess('working', `with ${agent.ledBy}`);
   return guess('done', 'its turn ended');
-}
-
-/** Needs help, when something waits on the user now; null otherwise. */
-function needsHelp(agent: WorkCategoryFacts, shows: NeedsYouShows): WorkCategoryReading | null {
-  const kind = needsYouKind(agent, shows);
-  if (kind !== null && kind !== 'turn') return guess('needs-help', NEEDS_HELP_WHY[kind], askedSince(agent, kind));
-  if (agent.endedAt !== null) return null;
-  if (agent.state === 'stopped-by-restart') return guess('needs-help', 'the app restarted under it');
-  const atPrompt = agent.state === 'idle' || agent.state === 'waiting';
-  if (atPrompt && agent.ledBy === null && agent.lastMessage !== null && asksInWords(agent.lastMessage)) return guess('needs-help', 'its last message asks you');
-  return null;
-}
-
-/** When what it asks of the user began, as far as the agent's record says. */
-function askedSince(agent: WorkCategoryFacts, kind: Exclude<NeedsYouKind, 'turn'>): string | null {
-  switch (kind) {
-    case 'permission':
-      return permissionPrompt(agent)?.requestedAt ?? null;
-    case 'asks':
-      return agent.ask?.askedAt ?? questionPrompt(agent)?.requestedAt ?? null;
-    case 'plan':
-      return agent.plan?.presentedAt ?? null;
-    case 'steps':
-    case 'todo':
-      return agent.stepsWait?.since ?? null;
-    case 'flagged':
-      return agent.flag?.at ?? null;
-  }
 }
 
 function guess(category: WorkCategory, why: string | null, since: string | null = null): WorkCategoryReading {

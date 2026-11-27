@@ -144,16 +144,21 @@ describe('a crew member’s status', () => {
     expect(crewStatus(ended({ state: 'failed', exitCode: 1 }), shows)).toBe('problem');
     expect(crewStatus(ended({ state: 'hibernated' }), shows)).toBe('paused');
     expect(crewStatus(ended({ state: 'stopped-by-restart' }), shows)).toBe('paused');
-    expect(crewStatus(ended({ state: 'done', pullRequests: [pr(1)] }), shows)).toBe('needs-you');
+    // Its changes waiting for review only mark its tile.
+    expect(crewStatus(ended({ state: 'done', pullRequests: [pr(1)] }), shows)).toBe('done');
+    expect(crewStatus(ended({ state: 'done', flag: { id: 1, reason: 'Look', at: '', to: 'user', via: null } }), shows)).toBe('needs-you');
     expect(crewStatus(ended({ state: 'done' }), shows)).toBe('done');
   });
 
-  it('puts one that needs you in Crew’s dot and From the board as its row says, ended or not; one a restart stopped sleeps out of it', () => {
+  it('puts one that needs you in Crew’s dot and From the board as its row says, ended or not; one a restart stopped, one with changes to review and one whose last words ask stay out of it', () => {
     const lead = agent();
-    const flagged = ended({ name: 'Flagged', state: 'done', pullRequests: [pr(1)] });
+    const flagged = ended({ name: 'Flagged', state: 'done', flag: { id: 1, reason: 'Look', at: '', to: 'user', via: null } });
     expect(crewNeedingYou(lead, [lead, flagged], shows).map((each) => each.name)).toEqual(['Flagged']);
     expect(shelfTabs(lead, [lead, flagged], shows, SETUP)).toContainEqual({ id: 'crew', label: 'Crew', count: 1, needsYou: true });
     expect(crewNeedingYou(lead, [lead, ended({ state: 'stopped-by-restart' })], shows)).toEqual([]);
+    expect(crewNeedingYou(lead, [lead, ended({ state: 'done', pullRequests: [pr(1)] })], shows)).toEqual([]);
+    const asking = agent({ sessionId: 'q', spawnedBy: 'a', state: 'waiting', lastMessage: 'Shall I re-run the suite?', ledBy: null });
+    expect(crewNeedingYou(lead, [lead, asking], shows)).toEqual([]);
   });
 });
 

@@ -200,6 +200,64 @@ for (const theme of ['light', 'dark'] as const) {
   });
 }
 
+// A clock's run, as its agent's chat shows it: under the clock's icon and name, in the board's grey, apart from the user's own message.
+for (const theme of ['light', 'dark'] as const) {
+  test(`a clock's run in its agent's chat, apart from the user's message, in the ${theme} theme`, async () => {
+    const shot = `${theme === 'light' ? '' : 'dark-'}chat-clock-message`;
+    needsBaselines(shot);
+    const { dir, repo, env } = scratch('output');
+    const dataDir = tempDataDir();
+    const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, AGENT_BOARD_APPEARANCE: theme, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
+    try {
+      await listFinishedTurns(window);
+      await window.setViewportSize(VIEWPORT);
+      await window.emulateMedia({ colorScheme: theme });
+      await pinFonts(window);
+      await pickFolderNext(app, repo);
+      await browseForZone(window);
+      await spawnAgent(window, 'monorepo', 'Run the tests');
+      const runner = tile(window).filter({ hasText: 'Run the tests' });
+      await expect(runner).toHaveAttribute('data-state', 'waiting');
+      const agent = (await agents(window)).find((each) => each.name === 'Run the tests')!;
+      const clock = await window.evaluate(
+        (sessionId) => globalThis.window.agentBoard.items.addClock({ cron: '0 9 * * *', prompt: 'Master check-in\nLook over the crew and say who is stuck.', hibernate: false }, { beside: sessionId }),
+        agent.sessionId,
+      );
+      await window.evaluate((id) => globalThis.window.agentBoard.items.runClock(id), clock.id);
+      await expect
+        .poll(async () => (await agents(window)).find((each) => each.sessionId === agent.sessionId)?.lastMessage, { timeout: TURN_MS })
+        .toContain('⟨clock from Master check-in');
+      await runner.dblclick();
+      await sessionWindow(window).getByRole('group', { name: 'View' }).getByRole('button', { name: 'Chat' }).click();
+      const chat = sessionWindow(window).getByTestId('chat-frame');
+      await expect(chat.getByTestId('chat-live')).toHaveAttribute('data-live', 'done', { timeout: TURN_MS });
+      await sessionWindow(window).getByRole('group', { name: 'Chat style' }).getByRole('button', { name: 'Cards' }).click();
+      await expect(chat.getByTestId('chat-agent-message')).toContainText('Clock · Master check-in');
+      await expect(sessionWindow(window).getByText(/wakes (tomorrow )?09:00/).first()).toBeVisible();
+      await pinRandomText(window);
+      await pinChatTimes(window);
+      // The header reads "wakes 09:00" before the real 09:00 and "wakes tomorrow 09:00" after it: pinned to the first, whatever the hour.
+      // The fake agent's reply repeats the mark it was typed, the clock's id in it this run's own: pinned, as a branch's hex is.
+      await window.evaluate(() => {
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        while (walker.nextNode()) {
+          const node = walker.currentNode as Text;
+          node.data = node.data.replace(/\bwakes tomorrow (\d\d:\d\d)/, 'wakes $1');
+          node.data = node.data.replace(/item:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, 'item:00000000-0000-0000-0000-000000000000');
+        }
+      });
+      const restorePointer = await ignorePointer(window);
+      await settle(window);
+      await expect.soft(sessionWindow(window)).toHaveScreenshot(`${shot}.png`, SHOT);
+      await restorePointer();
+    } finally {
+      await app.close();
+      await removeDataDir(dataDir);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
+
 test("the dark theme: a review doc in its implementer's session window, then its chat with the chat's controls at the tab row's end, wide and narrow", async () => {
   needsBaselines('dark-review-viewer', 'dark-review-tab-row', 'dark-review-tab-row-narrow');
   const { dir, repo, env } = scratch('review');

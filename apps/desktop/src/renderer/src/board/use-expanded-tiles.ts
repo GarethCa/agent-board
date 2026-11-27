@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Agent, ExternalSession, Shell } from '@agent-board/daemon/protocol';
 import { VIEW_KEYS, viewSaver } from '../../../shared/view-saver';
 import type { SessionWindows } from '../windows/session-windows';
-import { windowedTiles } from './agent-popup';
+import { windowedOf } from './agent-popup';
 import {
   allowingOverlap,
   bringToFront,
@@ -95,6 +95,8 @@ export function useExpandedTiles({ nodes, loaded, agents, shells, externals, win
   const [hidden, setHidden] = useState<ExpandedTiles>([]);
   const hiddenRef = useRef(hidden);
   hiddenRef.current = hidden;
+  /** Where the sessions' windows and the pop-up are: what `windowHolds` reads to keep a tile off the board or give it back. */
+  const windowed = useMemo(() => windowedOf(windows, poppedUp), [windows, poppedUp]);
   /** The expanded tiles a tidy keeps room for: open, hidden by their session window, or pinned (`expandedRoom`). */
   const room = useMemo(() => expandedRoom(expanded, hidden, expandedSizes, pinned), [expanded, hidden, expandedSizes, pinned]);
   const roomRef = useRef(room);
@@ -249,26 +251,25 @@ export function useExpandedTiles({ nodes, loaded, agents, shells, externals, win
     setTicketViews((current) => keepTicketViews(current, present));
   }, [loaded, agents, shells, externals]);
   // A tile pinned expanded is open whenever it is on the board: pinned while compact, or back after a restart of the app
-  // or its agent, a reconnect or its session window closed. Not while its session window has it, nor before the saved
-  // windows are back.
+  // or its agent, a reconnect or its session window left, closed or docked. Not while its session window or pop-up
+  // holds it (`windowHolds`), nor before the saved windows are back.
   useEffect(() => {
     if (!loaded || !windowsRestored || shells === undefined || pinned.size === 0) return;
     const present = presentTiles(agents, shells, externals);
-    const windowed = new Set([...windowedTiles(windows, poppedUp), ...hidden.map((entry) => entry.id)]);
-    const opening = pinnedToOpen(pinned, expanded, present, windowed);
+    const opening = pinnedToOpen(pinned, expanded, present, windowed, hidden);
     if (opening.length === 0) return;
     setExpanded((current) => opening.reduce((open, id) => expandTile(open, id, expandedSizesRef.current), current));
     setOverlapsAllowed((current) => withoutOverlaps(current, opening));
-  }, [loaded, windowsRestored, pinned, agents, shells, externals, windows, poppedUp, hidden, expanded]);
+  }, [loaded, windowsRestored, pinned, agents, shells, externals, windowed, hidden, expanded]);
   // A ticket tile in the terminal view is expanded in place, its terminal drawn by the expanded tile; not while its
   // session window has it, nor before the setting that says which view it opens in is read.
   useEffect(() => {
     if (!loaded || !settingsLoaded || !windowsRestored) return;
     const terminals = tickets.filter((id) => ticketViewOf(ticketViews, id, openAs, over.has(id)) === 'terminal');
-    const windowed = new Set([...windows.map((entry) => tileNodeId(entry.kind === 'shell' ? 'shell' : 'agent', entry.id)), ...hidden.map((entry) => entry.id)]);
-    const opening = terminals.filter((id) => !windowed.has(id) && !expandedRef.current.some((entry) => entry.id === id));
+    const inWindows = new Set([...windows.map((entry) => tileNodeId(entry.kind === 'shell' ? 'shell' : 'agent', entry.id)), ...hidden.map((entry) => entry.id)]);
+    const opening = terminals.filter((id) => !inWindows.has(id) && !expandedRef.current.some((entry) => entry.id === id));
     if (opening.length === 0) return;
-    setExpanded((current) => withTicketTerminals(current, terminals, windowed, expandedSizesRef.current));
+    setExpanded((current) => withTicketTerminals(current, terminals, inWindows, expandedSizesRef.current));
     // Opened as `expand` opens a tile: it makes room for itself again.
     setOverlapsAllowed((current) => withoutOverlaps(current, opening));
   }, [loaded, settingsLoaded, windowsRestored, tickets, over, ticketViews, openAs, windows, hidden]);
@@ -342,22 +343,19 @@ export function useExpandedTiles({ nodes, loaded, agents, shells, externals, win
     forgetTicketsShown(collapsed);
   }, [expanded]);
   // A session shown in its session window, on the board or popped out, or in its pop-up, is not also expanded: one
-  // terminal sizes it. It is expanded again, at that size, once its window or pop-up is closed; docked, it stays compact.
+  // terminal sizes it. It is expanded again, at that size, once its window or pop-up is closed; docked, it stays
+  // compact, unless pinned expanded (`windowHolds`).
   useEffect(() => {
     // Once the saved windows are back, else a tile whose window is still on its way would look closed.
     if (!loaded || !windowsRestored || shells === undefined) return;
     const present = presentTiles(agents, shells, externals);
-    const windowed = {
-      open: new Set(windowedTiles(windows.filter((entry) => entry.placement !== 'docked'), poppedUp)),
-      all: new Set(windowedTiles(windows, poppedUp)),
-    };
-    const next = windowedExpanded(expanded, hidden, windowed, present);
+    const next = windowedExpanded(expanded, hidden, windowed, present, pinned);
     if (next.hidden !== hidden) setHidden(next.hidden);
     if (next.expanded !== expanded) {
       expandedTrace.noteCollapse('windowedExpanded', collapsedBetween(expanded, next.expanded), 'session-window');
       setExpanded(next.expanded);
     }
-  }, [loaded, windowsRestored, windows, poppedUp, expanded, hidden, agents, shells, externals]);
+  }, [loaded, windowsRestored, windowed, pinned, expanded, hidden, agents, shells, externals]);
 
   return { shown, shownRef, expandedRef, roomRef, tileSizesRef, unfoldedRef, pinnedRef, restoreExpanded, ticketViewsShown, ...actions };
 }

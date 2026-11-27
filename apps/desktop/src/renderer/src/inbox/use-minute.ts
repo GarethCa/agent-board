@@ -23,5 +23,5 @@ function subscribe(onTick: () => void): () => void {
 
 /** The time now, to the minute, drawn again as it moves on (unlike `useNow`, which ticks each second for countdowns): a stamp of "Today" turns to "Yesterday" at midnight without a redraw from anything else. */
 export function useMinute(): Date {
-  return new Date(useSyncExternalStore(subscribe, minute));
+  return new Date(useSyncExternalStore(subscribe, minute, minute));
 }

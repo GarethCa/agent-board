@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Agent, AgentAsk, AgentFlag, AgentState, PermissionPrompt, PlanSummary } from '@agent-board/daemon/protocol';
-import { heldPrompts, isProblem, stepsLeftWords, stepsWaitKey, stepsWaitLine, needsYou, needsYouEntries, needsYouSections, permissionWaitLine, problemKey, readyToAccept, stillReadyToAccept, secondsLeft, sinceText, sinceTextChangesIn, startSinceClock, toolSummary, unseenCount, waitLeft } from './needs-you';
+import { heldPrompts, isProblem, rowTicks, stepsLeftWords, stepsWaitKey, stepsWaitLine, needsYou, needsYouEntries, needsYouSections, permissionWaitLine, problemKey, readyToAccept, stillReadyToAccept, secondsLeft, sinceText, sinceTextChangesIn, startSinceClock, toolSummary, unseenCount, waitLeft } from './needs-you';
 
 const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}): Agent => ({
   sessionId,
@@ -224,6 +224,13 @@ describe('the needs-you inbox', () => {
     expect(secondsLeft(prompt, Date.parse('2026-10-09T10:00:05.400Z'))).toBe(15);
     expect(secondsLeft(prompt, Date.parse('2026-10-09T10:00:30.000Z'))).toBe(0);
   });
+
+  it("keeps a remove ask's wait ticking, a left one too, which the agent isn't waiting for", () => {
+    const removeAsk = { id: 'r', askedAt: '2026-10-09T10:00:00.000Z', expiresAt: '2026-10-09T10:30:00.000Z', tiles: [{ sessionId: 'old', name: 'old-a', held: null }] };
+    expect(rowTicks(agent('a', 'idle', { removeAsk: { ...removeAsk, left: true } }))).toBe(true);
+    expect(rowTicks(agent('a', 'waiting', { removeAsk: { ...removeAsk, left: false } }))).toBe(true);
+    expect(rowTicks(agent('a', 'idle'))).toBe(false);
+  });
 });
 
 describe('the needs-you list in its sections', () => {
@@ -297,6 +304,17 @@ describe('the needs-you list in its sections', () => {
     expect(problemKey(agent('c', 'rate-limited'))).toBeUndefined();
   });
 
+  it("lists an agent's alert that something is done last, under Done, beside anything it asks, counting toward no badge", () => {
+    const alert = (minute: number) => ({ id: minute, line: 'PR #12 is merged.', link: null, at: at(minute), banner: true, folded: 0 });
+    const done = [agent('shipped', 'idle', { alert: alert(1) }), asking('db', 3), { ...asking('both', 2), alert: alert(4) }];
+    expect(ids(done)).toEqual([
+      ['Reaching out to you', ['both:asks', 'db:asks']],
+      ['Done', ['shipped:done', 'both:done']],
+    ]);
+    expect(unseenCount(done, 'explicit')).toBe(2);
+    expect(needsYouEntries(done, 'explicit').map((entry) => entry.agent.sessionId)).toEqual(['both', 'db']);
+  });
+
   it('is ready to accept with an open pull request of its own branch, at its prompt or ended, asking nothing', () => {
     expect(readyToAccept(changes('a', 1), 'explicit')).toBe(true);
     expect(readyToAccept(changes('a', 1, { state: 'done', endedAt: at(2) }), 'explicit')).toBe(true);
@@ -319,6 +337,16 @@ describe('the needs-you list in its sections', () => {
     expect(stillReadyToAccept(clicked, changes('a', 1, { finishedAt: at(3) }), 'explicit')).toBe(false);
     expect(stillReadyToAccept(clicked, changes('a', 1, { ask: { ...ask, askedAt: at(2) } }), 'explicit')).toBe(false);
     expect(stillReadyToAccept(clicked, undefined, 'explicit')).toBe(false);
+  });
+
+  it('lists changes to accept and a stopped agent to wake, which count toward no badge', () => {
+    const listed = [changes('docs', 2), agent('stopped', 'stopped-by-restart', { endedAt: at(4) }), changes('asks', 3, { lastMessage: 'Merge it?' })];
+    expect(ids(listed)).toEqual([
+      ['Ready for you to accept', ['docs:accept', 'asks:accept']],
+      ['Problems', ['stopped:problem']],
+    ]);
+    expect(unseenCount(listed, 'explicit')).toBe(0);
+    expect(needsYou(listed, 'explicit')).toEqual([]);
   });
 
   it('lists an agent once, under what it asks for before its changes or its problem', () => {

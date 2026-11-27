@@ -1,7 +1,7 @@
 import { expect, type ElectronApplication, type Page } from '@playwright/test';
 import type { Agent } from '@agent-board/daemon/protocol';
 import { rmSync } from 'node:fs';
-import { launch, listFinishedTurns, screen, sessionWindow, setClickOpens, spawnAgent, tile } from './agent-helpers.ts';
+import { launch, listFinishedTurns, screen, sessionWindow, setClickOpens, spawnAgent, tile, TURN_MS } from './agent-helpers.ts';
 import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone, runDesign } from './launch.ts';
 import { scratch, type Scratch } from './scratch.ts';
 
@@ -112,10 +112,13 @@ test("an orchestrator's ask to remove tiles it didn't start is one prompt: the r
       await expect(tileOf(finished)).toHaveCount(0);
       await expect(tileOf(busy)).toHaveCount(1);
       await expect(ask).toHaveCount(0);
-      await expect.poll(async () => (await agentNow(lead))?.lastMessage ?? '').toContain('The user allowed it. Removed docs worker');
+      // The ask returned at once; the answer comes to the lead's prompt as a message, and the fake says it back in a
+      // turn of its own.
+      await expect.poll(async () => (await agentNow(lead))?.lastMessage ?? '', { timeout: TURN_MS }).toContain('The user allowed it. Removed docs worker');
       await expect.poll(async () => (await agentNow(lead))?.lastMessage ?? '').toContain('busy worker stays');
     },
-    {},
+    // Each prompt plays the scenario, the answer typed at the lead's prompt too.
+    { FAKE_HARNESS_REPEAT: '1' },
     true,
   );
 });

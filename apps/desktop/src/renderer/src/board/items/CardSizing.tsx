@@ -1,4 +1,4 @@
-// What a memory, queue and steps card share to be sized by the user: the handles round it, and a fade on a list that
+// What a queue and a steps card share to be sized by the user: the handles round it, and a fade on a list that
 // scrolls past its edge.
 import { useCallback, useRef, type CSSProperties, type ReactNode } from 'react';
 import { NodeResizer } from '@xyflow/react';

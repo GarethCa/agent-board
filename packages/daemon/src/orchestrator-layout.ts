@@ -5,6 +5,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { agentNoteAuthor, agentNoteData, agentNoteSize } from './agent-notes.ts';
 import { arrangeBoard, zoneRoom } from './arrange-board.ts';
+import { agentOfItem } from './item-makers.ts';
 import { arrangeTiles, CLUSTER_LABEL_SIZE, CLUSTER_NOTE_SIZE, fittedSize, lanesOf, LANE_SLOTS, parkClusters, placedAs, type ArrangeTile, type ArrangedCluster } from './board-arrange.ts';
 import { inFreeArea } from './shelf-layout.ts';
 import { layOutSpine, type SpinePlace, type SpinePlaces, type SpineTail } from './spine-layout.ts';
@@ -199,7 +200,7 @@ export interface LayoutHandlerOptions {
   measures: LayoutMeasures;
   /** The zones' tiles placed by hand (`zones.ts`): putting one back under its zone's rule drops its mark. */
   zones: Pick<ZoneTable, 'dropHandPlaced'>;
-  /** Of `list`, the items `connection` reads: a steps, memory, queue, crew or to-do card only where its audience takes it in. */
+  /** Of `list`, the items `connection` reads: a steps, queue, crew or to-do card only where its audience takes it in. */
   visible: (list: BoardItem[], connection: BoardConnection) => BoardItem[];
   /** Tells every client: an open board hears the overlaps an arrange ends. */
   broadcast: (event: DaemonEvent) => void;
@@ -439,7 +440,6 @@ const outOfScope = (message: string) => new RpcMethodError(BOARD_ERROR.outOfScop
 /** What a refusal calls a card that only its audience reads. */
 const SCOPED_NAMES: Partial<Record<BoardItem['kind'], string>> = {
   steps: 'steps card',
-  memory: 'memory',
   queue: 'queue',
   crew: 'crew card',
   todo: 'to-do list',
@@ -936,23 +936,6 @@ export async function spotBesideAgent(call: DaemonCall, sessionId: string, size:
     zone === undefined ? { left: -Infinity, top: -Infinity, right: Infinity, bottom: Infinity } : { left: paddingOf(zone), top: paddingOf(zone), right: Infinity, bottom: Infinity };
   const spot = nearestFreeSpot(besideSpot(tile.rect, side, size), blocking, region, size)!;
   return { zoneId: tile.zoneId, x: spot.x, y: spot.y };
-}
-
-/** The session in `who` (`{ sessionId }`), if it names one. */
-function sessionIn(who: unknown): string | undefined {
-  return typeof who === 'object' && who !== null && typeof (who as { sessionId?: unknown }).sessionId === 'string' ? (who as { sessionId: string }).sessionId : undefined;
-}
-
-/**
- * The agent an item's own data names as its maker: the agent an agent note is about or was written by, the agent whose
- * document or plan card it is, the agent that made a queue, memory or steps, the agent whose to-do list it is. Undefined
- * when its data names none, and then the item's `made_by` says, if anything does.
- */
-function agentOfItem({ kind, data }: BoardItem): string | undefined {
-  if (kind === 'agent-note' && typeof data.about === 'string') return data.about;
-  if (kind === 'agent-note' || kind === 'document' || kind === 'plan') return sessionIn(data.agent);
-  const who = (kind === 'todo' ? data.owner : data.madeBy) as { kind?: unknown } | undefined;
-  return who?.kind === 'agent' ? sessionIn(who) : undefined;
 }
 
 export function layoutHandlers<Context extends BoardConnection>({

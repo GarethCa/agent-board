@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, isAbsolute, join, relative } from 'node:path';
-import { issuePrompt, shortIssueId } from '@agent-board/tracker';
+import { issuePrompt, shortIssueId, TRACKER_PROVIDERS } from '@agent-board/tracker';
 import type { AgentRecordStore } from './agent-records.ts';
 import { createAgentStarts, type AgentStarts, type NewStart, type StartProgress } from './agent-starts.ts';
 import type { FolderPlace, SpawnUsed, AgentHost, AgentHostOptions, AgentRow, BranchReviewRow, ZoneRow } from './agent-types.ts';
@@ -14,7 +14,7 @@ import { projectCodexConfig } from './codex-config-guard.ts';
 import { runGit } from './git.ts';
 import { CODEX_HOOK_TIMEOUTS, codexHookCommand, HOOK_ENV_PREFIX, HOOK_TOKEN_ENV, HOOK_URL_ENV } from './hook-forwarder.ts';
 import { FORCED_HYPERLINK_ENV, userForcedHyperlink } from './hyperlink-env.ts';
-import { launchSettingsParam, removeLaunchSettingsFile, storedLaunchSettings, withOwnSettings, writeLaunchSettingsFile } from './launch-settings.ts';
+import { isEmptyLaunchSettings, launchSettingNamesColumn, launchSettingsParam, removeLaunchSettingsFile, withOwnSettings, writeLaunchSettingsFile } from './launch-settings.ts';
 import { keyedQueue } from './keyed-queue.ts';
 import { loginShellKind } from './login-path.ts';
 import { invalidParams } from './params.ts';
@@ -34,6 +34,7 @@ import {
   type Harness,
   type LaunchSettings,
   type LinkedIssue,
+  TRACKER_ERROR,
   type SpawnAgentParams,
   type TerminalSize,
 } from './protocol.ts';
@@ -60,6 +61,29 @@ import {
 } from './worktrees.ts';
 import { nameSlug } from './work-units.ts';
 import { groupFolder, initProject, resolveZoneFolder, zoneFolder } from './zones.ts';
+
+/** A tracker call that failed because its tracker has no credential yet. */
+const notConnected = (error: unknown): boolean => error instanceof RpcMethodError && error.code === TRACKER_ERROR.notConnected;
+
+/**
+ * A ticket as typed, short enough to name a tile and branch: a link's issue key (`ABC-12`) or number (`#34`), else the
+ * link without its scheme; anything else as it is.
+ */
+const ticketLabel = (issue: string): string => {
+  const typed = oneLine(issue).trim();
+  const link = /^https?:\/\/[^/]+(\/.*)?$/i.exec(typed);
+  if (link === null) return typed;
+  const path = link[1] ?? '';
+  // A number first: a repo named like a key (`acme/app-2`) is not one.
+  const number = /\/(?:issues|pull)\/(\d+)/.exec(path);
+  if (number !== null) return `#${number[1]}`;
+  const key = /(?:^|\/)([A-Za-z][A-Za-z0-9]*-\d+)(?=\/|$|[?#])/.exec(path);
+  return key === null ? typed.replace(/^https?:\/\//i, '') : key[1]!.toUpperCase();
+};
+
+/** An issue no linked tracker could read, handed to the agent as typed for it to look up with its own tools. */
+const typedIssuePrompt = (issue: string): string =>
+  `Your ticket is ${oneLine(issue)}. The board has no linked tracker that can read it: look it up with your own tools (a Linear or GitHub MCP server, or \`gh\`) before you start.`;
 
 /** Where a new agent's issue is read from: a zone's tracker, by the zone's id, or the tracker its key names. */
 type IssueSource = string | IssueKeyTracker;
@@ -127,6 +151,7 @@ interface AgentSpawnOptions
     | 'scratchDir'
     | 'groupsDir'
     | 'launchSettingsDir'
+    | 'launchSettings'
     | 'rememberFolder'
     | 'harnessPaths'
     | 'hookShimPath'
@@ -564,7 +589,7 @@ export function createAgentSpawns(
    * would have it (`issueZoneOf`), as a zone is only a group: its own, the one that names the issue's team,
    * else the tracker its key names when no zone has that team or repo, else its starter's, one of its repo.
    */
-  const issueZone = (params: SpawnAgentParams & { issueId: string }, zone: ZoneRow | undefined, spawnedBy: string | undefined): IssueSource => {
+  const issueZone = (params: SpawnAgentParams & { issueId: string }, zone: ZoneRow | undefined, spawnedBy: string | undefined): IssueSource | undefined => {
     if (params.issueZoneId !== undefined) {
       const from = getZone(params.issueZoneId);
       if (from === undefined || from.tracker_provider === null) throw invalidParams(`${from?.name ?? `zone ${params.issueZoneId}`} has no tracker to read issues from`);
@@ -580,7 +605,10 @@ export function createAgentSpawns(
     const repo = params.repo !== undefined && 'path' in params.repo ? params.repo.path : (zone?.repo_root ?? zone?.default_repo ?? null);
     const spawnerZoneId = spawnedBy === undefined ? null : (getRow(spawnedBy)?.zone_id ?? null);
     const found = issueZoneOf({ issueId: params.issueId, zoneId: zone?.id ?? null, spawnerZoneId, repo }, zones);
-    if (typeof found === 'string') throw invalidParams(found);
+    if (typeof found === 'string') {
+      if (params.issueAsTyped === true) return undefined;
+      throw invalidParams(found);
+    }
     return 'id' in found ? found.id : found;
   };
 
@@ -678,7 +706,7 @@ export function createAgentSpawns(
     const shownName =
       name?.trim() ||
       (issueId !== undefined
-        ? issueId
+        ? ticketLabel(issueId)
         : params.ticketChat === true
           ? defaultName(params.purpose ?? '') || freeAgentName('ticket')
           : defaultName(prompt) || freeAgentName());
@@ -756,17 +784,40 @@ export function createAgentSpawns(
       stillWanted();
       // Started from an issue: the issue comes first in its prompt, and names its branch.
       if (fromZone !== undefined) progress.step('issue', 'now');
-      const fromIssue = fromZone === undefined || issueId === undefined ? undefined : await within((typeof fromZone === 'string' ? options.trackers.issue(fromZone, issueId) : options.trackers.issueFrom(fromZone, issueId)), 'reading the issue');
+      const read = fromZone === undefined || issueId === undefined ? undefined : within(typeof fromZone === 'string' ? options.trackers.issue(fromZone, issueId) : options.trackers.issueFrom(fromZone, issueId), 'reading the issue');
+      // Asked to, an issue whose tracker isn't connected goes to the agent as typed, as one no tracker would have does.
+      // So does one whose key the credential store can't read: the read failed outside the tracker (no RPC error), and
+      // asking whether it is connected fails too. Any other tracker error still fails the start.
+      const asTyped = async (error: unknown): Promise<undefined> => {
+        if (notConnected(error)) return undefined;
+        const provider = typeof fromZone === 'string' ? options.trackers.zoneTracker(fromZone)?.provider : fromZone?.provider;
+        if (error instanceof RpcMethodError || provider === undefined || TRACKER_PROVIDERS[provider].auth !== 'apiKey') throw error;
+        if (await options.trackers.connected(provider).then(() => true, () => false)) throw error;
+        options.log(`starting on ${issueId} as typed: ${TRACKER_PROVIDERS[provider].name}'s key can't be read: ${error instanceof Error ? error.message : String(error)}`);
+        return undefined;
+      };
+      const fromIssue = params.issueAsTyped === true ? await read?.catch(asTyped) : await read;
       if (fromIssue !== undefined) progress.step('issue', 'done', shortIssueId(fromIssue.issue));
+      else if (fromZone !== undefined && issueId !== undefined) progress.step('issue', 'done', issueId);
       stillWanted();
-      const task = [fromIssue && issuePrompt(fromIssue.issue), prompt.trim()].filter(Boolean).join('\n\n');
+      const typed = issueId !== undefined && fromIssue === undefined && params.issueAsTyped === true ? typedIssuePrompt(issueId) : undefined;
+      const task = [fromIssue && issuePrompt(fromIssue.issue), typed, prompt.trim()].filter(Boolean).join('\n\n');
       // Named after its issue as people write it in its scope (`#34`, not `acme/app#34`), else after its task, else
       // `new-agent-N` when it starts at its prompt; unless the user renamed its tile already.
       const renamed = progress.start.name !== shownName;
       const agentName = renamed
         ? progress.start.name
         : name?.trim() ||
-          (fromIssue ? cutName(`${shortIssueId(fromIssue.issue)}: ${fromIssue.issue.title}`) : task === '' || params.ticketChat === true ? shownName : defaultName(task) || shownName);
+          (fromIssue
+            ? cutName(`${shortIssueId(fromIssue.issue)}: ${fromIssue.issue.title}`)
+            : typed !== undefined
+              ? // Passed on as typed: named after its ticket, and what it was asked, never the line telling it to look it up.
+                params.ticketChat === true || defaultName(prompt) === ''
+                ? shownName
+                : cutName(`${shownName}: ${defaultName(prompt)}`)
+              : task === '' || params.ticketChat === true
+                ? shownName
+                : defaultName(task) || shownName);
       reservedNames.set(id, agentName);
       if (!renamed) progress.rename(agentName);
       if (place === undefined && !mainCheckout) progress.step('worktree', 'now');
@@ -815,6 +866,12 @@ export function createAgentSpawns(
       if (owns) undo.unshift(() => removeWorktree(repoRoot, worktree, branch));
       if (place === undefined && !mainCheckout) progress.step('worktree', 'done', branch || basename(worktree));
       stillWanted();
+      // Their values go to the keychain before it launches with them, never to the database: its row gets the names.
+      if (launchSettings !== undefined && !isEmptyLaunchSettings(launchSettings)) {
+        undo.unshift(() => options.launchSettings.forget(id));
+        await options.launchSettings.put(id, launchSettings);
+        stillWanted();
+      }
       progress.step('launch', 'now');
       // The tile shows the issue already: describe the work by the typed task, else the issue's own description.
       const description =
@@ -896,8 +953,8 @@ export function createAgentSpawns(
       // What it is for, as `setStatus` keeps it: one line, cut to the cap.
       const purpose = cutPurpose(oneLine(params.purpose ?? ''));
       if (purpose !== '') setPurpose.run(purpose, id);
-      const stored = storedLaunchSettings(launchSettings);
-      if (stored !== null) setLaunchSettings.run(stored, id);
+      const names = launchSettingNamesColumn(launchSettings);
+      if (names !== null) setLaunchSettings.run(names, id);
       if (readOnly) setReadOnly.run(id);
       if (plain) setPlainFolder.run(id);
       if (place?.master === true) setMaster.run(id);

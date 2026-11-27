@@ -1,11 +1,14 @@
+import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import {
   checkAgentLaunchSettings,
   launchSettingKeys,
   launchSettingsParam,
   parseEnvPairs,
-  readLaunchSettings,
-  storedLaunchSettings,
+  heldLaunchSettings,
+  keepLaunchSettingNamesOnly,
+  launchSettingNames,
+  launchSettingNamesColumn,
   withOwnSettings,
 } from './launch-settings.ts';
 
@@ -120,19 +123,46 @@ describe('parseEnvPairs', () => {
   });
 });
 
-describe('stored launch settings', () => {
-  it('round-trips through the column, none as null', () => {
-    const settings = { env: { A: '1' }, settings: { model: 'opus' } };
-    expect(readLaunchSettings(storedLaunchSettings(settings))).toEqual(settings);
-    expect(storedLaunchSettings(undefined)).toBeNull();
-    expect(storedLaunchSettings({})).toBeNull();
-    expect(storedLaunchSettings({ env: {} })).toBeNull();
-    expect(readLaunchSettings(null)).toBeUndefined();
+describe('the launch settings column', () => {
+  const settings = { env: { A: 'secret-a' }, settings: { model: 'opus' } };
+
+  it('keeps names only, none as null', () => {
+    const column = launchSettingNamesColumn(settings);
+    expect(column).not.toContain('secret-a');
+    expect(launchSettingNames(column)).toEqual({ env: ['A'], settings: ['model'] });
+    expect(heldLaunchSettings(column)).toBeUndefined();
+    expect(launchSettingNamesColumn(undefined)).toBeNull();
+    expect(launchSettingNamesColumn({})).toBeNull();
+    expect(launchSettingNamesColumn({ env: {} })).toBeNull();
+    expect(launchSettingNames(null)).toBeNull();
+  });
+
+  it("reads an older build's values, and their names", () => {
+    const column = JSON.stringify(settings);
+    expect(heldLaunchSettings(column)).toEqual(settings);
+    expect(launchSettingNames(column)).toEqual({ env: ['A'], settings: ['model'] });
   });
 
   it('reads a damaged column as none', () => {
-    expect(readLaunchSettings('{not json')).toBeUndefined();
-    expect(readLaunchSettings('[1]')).toBeUndefined();
+    for (const column of ['{not json', '[1]', null]) {
+      expect(heldLaunchSettings(column)).toBeUndefined();
+      expect(launchSettingNames(column)).toBeNull();
+    }
+  });
+
+  it('rewrites the values in a database to their names', () => {
+    const db = new DatabaseSync(':memory:');
+    db.exec('CREATE TABLE agents (session_id TEXT, launch_settings TEXT)');
+    const insert = db.prepare('INSERT INTO agents VALUES (?, ?)');
+    insert.run('held', JSON.stringify(settings));
+    insert.run('named', launchSettingNamesColumn(settings));
+    insert.run('none', null);
+    expect(keepLaunchSettingNamesOnly(db)).toBe(1);
+    const rows = db.prepare('SELECT session_id, launch_settings FROM agents ORDER BY session_id').all();
+    expect(JSON.stringify(rows)).not.toContain('secret-a');
+    expect(launchSettingNames((rows[0] as { launch_settings: string }).launch_settings)).toEqual({ env: ['A'], settings: ['model'] });
+    expect(keepLaunchSettingNamesOnly(db)).toBe(0);
+    expect(keepLaunchSettingNamesOnly(new DatabaseSync(':memory:'))).toBe(0);
   });
 });
 

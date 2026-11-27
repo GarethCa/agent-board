@@ -1,11 +1,11 @@
-// What a memory and a queue share: the glyph on a round face with its count, the scope chip, the add box, the folded
+// What a queue's card is made of: the glyph on a round face with its count, the scope chip, the add box, the folded
 // icon and the peek's keys. Props-only, so the gallery draws them as the board does.
 import { useState, type CSSProperties, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { Truncate } from '../../ui';
 import { iconPress } from './full-screen';
 
 /**
- * The glyph on its round face, with the count on it: what tells a memory or a queue apart, open or folded, at any zoom.
+ * The glyph on its round face, with the count on it: what tells a queue at a glance, open or folded, at any zoom.
  * `tab` peeks out above a folded face (a queue's NEXT).
  */
 export function ListCardFace({ glyph, count, big = false, pulse = false, tab }: { glyph: ReactNode; count: number; big?: boolean; pulse?: boolean; tab?: ReactNode }) {
