@@ -7,7 +7,7 @@ import { existsSync } from 'node:fs';
 import { lstat, mkdtemp, readlink, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
-import { runGit, type GitResult } from './git.ts';
+import { checkCheckoutConfig, runGit, type GitResult, type RunGitOptions } from './git.ts';
 
 /** Git with the repo's hooks off: a hooks path that isn't a folder runs none. */
 const NO_HOOKS = ['-c', 'core.hooksPath=/dev/null'];
@@ -50,7 +50,10 @@ export function ownerOf(path: string, sharers: readonly Sharer[]): string | null
   return sharers.find((sharer) => ownsPath(sharer.writes, path))?.member ?? null;
 }
 
-const git = (dir: string, args: string[], env?: Record<string, string>) => runGit(dir, args, GIT_TIMEOUT_MS, env);
+const git = (dir: string, args: string[], env?: Record<string, string>, options?: RunGitOptions) => runGit(dir, args, GIT_TIMEOUT_MS, env, options);
+
+/** For a read that hashes the worktree's files, which would run their clean filter: the repo's own filters off. */
+const FILTERS_OFF: RunGitOptions = { repoFiltersOff: true };
 
 const sleep = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
 
@@ -65,8 +68,8 @@ const chunks = <T>(items: readonly T[]): T[][] => {
 const failed = (what: string, stderr: string) => new Error(`${what} failed${stderr ? `: ${stderr}` : ''}`);
 
 /** Git's answer, or throws saying what failed. */
-async function must(dir: string, args: string[], what: string): Promise<string> {
-  const result = await git(dir, args);
+async function must(dir: string, args: string[], what: string, options?: RunGitOptions): Promise<string> {
+  const result = await git(dir, args, undefined, options);
   if (!result.ok) throw failed(what, result.stderr);
   return result.stdout;
 }
@@ -91,7 +94,7 @@ const notBoards = (paths: Iterable<string>) => [...new Set(paths)].filter((path)
 /** Files changed in the worktree against HEAD: tracked ones modified, added or deleted (staged or not) and untracked ones not ignored, repo-relative, sorted, never under `.agent-board/`. */
 export async function changedFiles(worktree: string): Promise<string[]> {
   const [tracked, untracked] = await Promise.all([
-    must(worktree, ['diff', 'HEAD', '--name-status', '--no-renames', '-z', '--'], 'git diff'),
+    must(worktree, ['diff', 'HEAD', '--name-status', '--no-renames', '-z', '--'], 'git diff', FILTERS_OFF),
     // `-t` puts a tag before each path, for the same reason as nameStatus.
     must(worktree, ['ls-files', '-t', '-z', '--others', '--exclude-standard'], 'git ls-files'),
   ]);
@@ -192,8 +195,9 @@ async function worktreeBlobs(worktree: string, files: readonly string[], scratch
     } else if (stat.isFile()) regular.push({ file, mode: stat.mode & 0o100 ? '100755' : '100644' });
   }
   for (const chunk of chunks(regular)) {
-    // Run from the worktree with its own paths, so its attributes' filters apply as `git add` would apply them.
-    const ids = (await must(worktree, ['hash-object', '-w', '--', ...chunk.map((each) => each.file)], 'git hash-object')).split('\n');
+    // Run from the worktree with its own paths, so its attributes' filters apply as `git add` would apply them: those
+    // the user's own config names, as the repo's own are off.
+    const ids = (await must(worktree, ['hash-object', '-w', '--', ...chunk.map((each) => each.file)], 'git hash-object', FILTERS_OFF)).split('\n');
     if (ids.length !== chunk.length) throw new Error(`git hash-object gave ${ids.length} ids for ${chunk.length} files`);
     chunk.forEach((each, at) => blobs.set(each.file, { mode: each.mode, id: ids[at]! }));
   }
@@ -293,7 +297,8 @@ async function commitNow({ worktree, branch, files: given, author, message }: Pa
   if (!moved.ok) return { error: `couldn't commit: ${branch} moved, or isn't where HEAD is, while the commit was made` };
 
   for (const chunk of chunks(files)) {
-    const reset = await pastTheLock(() => git(worktree, [...NO_HOOKS, 'reset', '-q', commit.stdout, '--', ...chunk.map(literal)]));
+    // The reset hashes each file again to set its index entry: with the repo's filters off, as the commit stored it.
+    const reset = await pastTheLock(() => git(worktree, [...NO_HOOKS, 'reset', '-q', commit.stdout, '--', ...chunk.map(literal)], undefined, FILTERS_OFF));
     if (reset === 'locked' || !reset.ok) {
       const why = reset === 'locked' ? 'index.lock is held' : failed('git reset', reset.stderr).message;
       return { error: `committed ${commit.stdout} on ${branch}, but the shared index is stale: ${why}` };
@@ -345,11 +350,15 @@ export function lostWork(worktree: string, tree: string, base: string): Promise<
 
 /**
  * Puts back, in the worktree only, the recorded version of each file record `tree` (as `recordWork` resolved it, with
- * HEAD at `base`) lost since (`lostWork`). Refuses (rejects, writing nothing) a file through a symbolic link.
- * Resolves the files put back.
+ * HEAD at `base`) lost since (`lostWork`). Refuses (rejects, writing nothing) a file through a symbolic link, and
+ * the whole restore when the repo's own config names a filter (`checkCheckoutConfig`), whose `smudge` writing
+ * the files would run as the daemon; the restore runs with that check's pins, and fails, saying so, when the config named
+ * a program no pin held by the time it was done. Resolves the files put back.
  */
 export function restoreWork(worktree: string, tree: string, base: string): Promise<string[]> {
   return oneAtATime(worktree, async () => {
+    const checked = await checkCheckoutConfig(worktree, 'put the work back', { trees: [tree], worktree: true });
+    if ('refused' in checked) throw new Error(checked.refused);
     const files = await lostNow(worktree, tree, base);
     for (const file of files) {
       const why = await refusal(worktree, file);
@@ -357,10 +366,12 @@ export function restoreWork(worktree: string, tree: string, base: string): Promi
     }
     for (const chunk of chunks(files)) {
       // Writes the worktree alone; git takes the shared index's lock to refresh its file times, never its entries.
-      const restore = await pastTheLock(() => git(worktree, [...NO_HOOKS, 'restore', `--source=${tree}`, '--worktree', '--', ...chunk.map(literal)]));
+      const restore = await pastTheLock(() => git(worktree, [...NO_HOOKS, 'restore', `--source=${tree}`, '--worktree', '--', ...chunk.map(literal)], checked.env));
       if (restore === 'locked') throw new Error("couldn't put the work back: index.lock is held");
       if (!restore.ok) throw failed('git restore', restore.stderr);
     }
+    const changed = await checked.after();
+    if (changed !== undefined) throw new Error(changed);
     return files;
   });
 }

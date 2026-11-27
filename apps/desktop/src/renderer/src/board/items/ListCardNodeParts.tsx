@@ -4,9 +4,24 @@ import { useEffect, useRef, useState, type ComponentProps, type ReactNode } from
 import { NodeToolbar, Position, useReactFlow, useStore } from '@xyflow/react';
 import { ChevronsLeftRight, ChevronsRightLeft, Trash2, UserRoundCheck, UserRoundX } from 'lucide-react';
 import { AnchoredPopover, IconButton, Kbd } from '../../ui';
-import { keyText } from '../../keys/registry';
+import { keyText, pressed } from '../../keys/registry';
+import { isTyping } from '../../keys/typing';
 import { isZone } from '../tiles';
 import { pressClosesPeek } from './peek-press';
+
+/** ⌘↵ on the selected card opens it full screen: not while typing, nor over a dialog, nor once it is open. */
+export function useFullKey(selected: boolean, full: boolean, openFull: () => void): void {
+  useEffect(() => {
+    if (!selected || full) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (!pressed('tile.full', event) || isTyping(event) || document.querySelector('[role="dialog"]') !== null) return;
+      event.preventDefault();
+      openFull();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selected, full, openFull]);
+}
 
 /** The zone with id `zoneId` as the board draws it: its name and colour. */
 export function useZone(zoneId: string | null): { name?: string; color?: string } {

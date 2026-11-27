@@ -70,27 +70,27 @@ test("a shell tab dropped on a shell tile in the Simplified design lights the ti
     const [impl] = await agents(window);
     await window.locator(`[data-testid="agent-tile"][data-session-id="${impl!.sessionId}"]`).dblclick();
     const expanded = window.locator(`[data-testid="expanded-tile"][data-session-id="${impl!.sessionId}"]`);
-    const tabs = expanded.getByTestId('session-tab');
-    const tabNamed = (name: string) => tabs.filter({ has: window.getByRole('tab', { name, exact: true }) });
+    // Its shell tabs, in its tab row: the row shows from a second tab, with the agent's own.
+    const shellTab = expanded.locator('[data-testid="session-tab"][data-tab^="shell:"]');
     await expanded.getByTestId('session-terminal').first().click();
     await window.keyboard.press(windowKey('t'));
-    await expect(tabs).toHaveCount(2);
+    await expect(shellTab).toHaveCount(1);
     for (let step = 0; step < 6 && !(await inView(window, [expanded])); step += 1) await zoomOut(window);
 
     // The first shell tab onto bare board: a shell tile of its own, the calm one.
-    await dragTo(tabNamed('sh'), await bareBoard(window));
+    await dragTo(shellTab, await bareBoard(window));
     const shellTile = window.getByTestId('shell-tile');
     await expect(shellTile).toHaveCount(1);
     await expect(shellTile).toHaveClass(/calm-tile/);
-    await expect(tabs).toHaveCount(1);
+    await expect(shellTab).toHaveCount(0);
 
     // A second tab onto that tile: it is lit while the tab is over it, and the tab joins it.
     await expanded.getByTestId('session-terminal').first().click();
     await window.keyboard.press(windowKey('t'));
-    await expect(tabs).toHaveCount(2);
+    await expect(shellTab).toHaveCount(1);
     for (let step = 0; step < 6 && !(await inView(window, [expanded, shellTile])); step += 1) await zoomOut(window);
-    await dragTo(tabNamed('sh'), await middleOf(shellTile), () => expect(shellTile).toHaveAttribute('data-drop-over', 'true'));
-    await expect(tabs).toHaveCount(1);
+    await dragTo(shellTab, await middleOf(shellTile), () => expect(shellTile).toHaveAttribute('data-drop-over', 'true'));
+    await expect(shellTab).toHaveCount(0);
     await expect(shellTile).not.toHaveAttribute('data-drop-over', 'true');
     await expect(shellTile).toHaveCount(1);
     const tileId = (await shellTile.getAttribute('data-shell-id'))!;

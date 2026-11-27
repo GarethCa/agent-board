@@ -282,7 +282,7 @@ export function createZoneSources(options: ZoneSourceOptions): ZoneSources {
         if (!top.ok) throw invalidParams(`${path} is not inside a git repository`);
         const [head, status, defaultBranch] = await Promise.all([
           runGit(top.stdout, ['symbolic-ref', '--quiet', '--short', 'HEAD'], CHECKOUT_READ_MS),
-          runGit(top.stdout, ['status', '--porcelain'], CHECKOUT_READ_MS),
+          runGit(top.stdout, ['status', '--porcelain'], CHECKOUT_READ_MS, {}, { repoFiltersOff: true }),
           defaultBranchOf(top.stdout),
         ]);
         return { branch: head.ok && head.stdout !== '' ? head.stdout : null, defaultBranch, dirty: status.ok && status.stdout !== '' };

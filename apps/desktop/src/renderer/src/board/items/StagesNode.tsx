@@ -3,6 +3,7 @@
 // behind one line ("N done · Show") until it is shown, and what is put off for later at the foot of To do. A ticket that
 // needs you is told by its tile's own state and Doing's count, never by an outline. Dragged by its header, it moves
 // anywhere in its zone; the tiles on it move with it.
+import { plural } from '@agent-board/daemon/text-words';
 import { memo, useContext, type CSSProperties, type MouseEvent, type PointerEvent } from 'react';
 import { NodeToolbar, Position, type NodeProps } from '@xyflow/react';
 import { GripVertical, StickyNote, Trash2 } from 'lucide-react';
@@ -18,7 +19,6 @@ import { ItemActionsContext, useOnlySelected, type ItemNodeType } from './items'
 /** A press on a card is the card's: it neither drags the block nor selects it. */
 const keep = (event: MouseEvent | PointerEvent) => event.stopPropagation();
 
-const plural = (count: number, one: string) => `${count} ${one}${count === 1 ? '' : 's'}`;
 
 /** A quiet ticket's card: its ticket and title, a line per agent, and its pull request and notes. A click opens its agent. */
 function StageCard({ ticket, onOpen }: { ticket: DrawnStageTicket; onOpen: (sessionId: string) => void }) {

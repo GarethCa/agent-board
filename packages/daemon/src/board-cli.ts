@@ -48,11 +48,11 @@ import {
   sendToAgent,
   setDefaultRole,
   handOver,
-  categoryAnswer,
-  characterAnswer,
-  setCrewStatus,
-  setOwnStatus,
-  purposeAnswer,
+  checkPrefabStart,
+  checkStatusSet,
+  PREFAB_SETS,
+  setStatus,
+  type StatusSet,
   recordEntry,
   pinEntry,
   setOwnPage,
@@ -77,8 +77,8 @@ import { parseWorkCategorySet } from './work-category.ts';
 import { DaemonRpcError } from './client.ts';
 import { documentTitle } from './document-names.ts';
 import { addSchedule, checkOwnSchedule, checkSchedule, checkTemplate, listSchedules, listTemplates, removeSchedule, removeTemplate, saveTemplate, setOwnSchedule } from './clock-ops.ts';
-import { listSteps, newSteps, readStepsCard, updateSteps } from './steps-ops.ts';
-import { listMemories, listQueues, memoryHistory, newMemory, newQueue, queueHistory, readMemory, readQueue, updateMemory, updateQueue, type QueueUpdate } from './memory-ops.ts';
+import { listSteps, newSteps, readStepsCard, stepsUpdate, stepWords, updateSteps } from './steps-ops.ts';
+import { listMemories, listQueues, memoryHistory, newMemory, newQueue, queueHistory, memoryUpdate, queueUpdate, readMemory, readQueue, updateMemory, updateQueue, type MemoryUpdateInput, type QueueUpdateInput } from './memory-ops.ts';
 import { changeTodo, readTodos, remind } from './todo-ops.ts';
 import {
   addDiagram,
@@ -123,7 +123,6 @@ import {
   DEFAULT_ACTIVITY_LIMIT,
   DEFAULT_ORCHESTRATOR_WAIT_MS,
   isCrewSince,
-  isStatusProgress,
   isWaitState,
   MAX_ACTIVITY_LIMIT,
   MAX_CAPTURE_SIDE,
@@ -139,14 +138,10 @@ import {
   MAX_PIN_LABEL,
   MAX_PIN_NOTE,
   MAX_JOB_HEADLINE,
-  QUEUE_ADD_KINDS,
-  QUEUE_ROW_KINDS,
-  type QueueAddKind,
   PAGE_ICONS,
   PAGE_TONES,
   MAX_STATUS_LENGTH,
   ORCHESTRATOR_METHODS,
-  statusLine,
   TICKET_WATCH_EVERY_MINUTES,
   TICKET_WATCH_KINDS,
   TICKET_WATCH_MODES,
@@ -160,7 +155,9 @@ import {
   type RecordParams,
   type WaitState,
   type WorkCategoryParams,
+  type LaunchSettings,
 } from './protocol.ts';
+import { parseEnvPairs } from './launch-settings.ts';
 
 export const BOARD_HELP = `agent-board: the board you are on. agent-board is a desktop app that shows coding agents
 (Claude Code, Codex) and plain shells as tiles on one infinite board. This command reads that
@@ -844,6 +841,18 @@ agent-board: see \`agent-board help orchestrate\`. It prints the new agent's ref
                      from the tracker its key names, yours, or the one on the board.
   --description <text>  What it is for: one line, cut to 80 characters, kept as its description
                      from the start, as \`status set --description\` keeps it.
+  --env <KEY=VALUE>  An env var of its own (repeat for more), kept for its restarts. A Claude agent
+                     gets it in its --settings env block too, which beats your settings files: as
+                     --env CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=0. Only plain knobs: that one,
+                     MAX_THINKING_TOKENS, CLAUDE_CODE_MAX_OUTPUT_TOKENS, the BASH_ and MCP_
+                     timeouts and limits, and the switches DISABLE_TELEMETRY, DISABLE_ERROR_REPORTING, DISABLE_AUTOUPDATER,
+                     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC and
+                     CLAUDE_CODE_DISABLE_TERMINAL_TITLE; the user sets others in the app. Only
+                     the names are shown, never the values.
+  --settings <json>  Claude settings of its own, added to the board's --settings: as
+                     '{"outputStyle":"Explanatory"}'. Only alwaysThinkingEnabled, outputStyle,
+                     includeCoAuthoredBy, includeGitInstructions, spinnerTipsEnabled, language
+                     and env; --model and --effort set those. Claude only.
   --file <path>      Read the prompt from a file.
   --prefab <name>    Start a crew from a crew prefab (\`agent-board prefab ls\`) in place of one
                      agent: its member that starts on the prompt, its builder or its lead, gets
@@ -1107,7 +1116,7 @@ the user.
   --json   Print the agent as JSON.`,
   },
   restart: {
-    usage: 'agent-board restart <ref> [--fresh [--] [<prompt>] | --file <path>] [--json]',
+    usage: 'agent-board restart <ref> [--fresh [--] [<prompt>] | --file <path>] [--env <KEY=VALUE>...] [--settings <json>] [--json]',
     text: `Starts an ended agent again, as its tile's Restart does: in the same tile, worktree and branch,
 carrying on its conversation (Claude with --resume, Codex with codex resume, or a new
 conversation when Codex can't resume it). For an agent that exited, was ended with \`close\`
@@ -1120,6 +1129,11 @@ that is the user's to end.
             (--json: earlierConversations). Text after \`--\` (or --file) is its first message,
             held to the same rules as \`send\` and \`new\`; with none, it starts on its task, if it
             had one. Without --fresh a prompt is refused.
+  --env <KEY=VALUE>  Start it with these env vars of its own in place of the ones it had (repeat
+            for more; --env '' for none), as \`new --env\` gives them. A running agent is
+            stopped first, then carries on its conversation.
+  --settings <json>  The same for its Claude settings ('{}' for none). Each of the two left out
+            stays as it was.
   --json    Print the agent as JSON.`,
   },
   pause: {
@@ -1852,6 +1866,16 @@ export const BOARD_COMMANDS = new Set([...Object.keys(COMMAND_HELP), 'ls', 'help
 /** An exit code with a message for stderr. */
 class UsageError extends Error {}
 
+/** `read`'s result, with a refusal of the shared parsers' (a `BoardError`) given as a usage error, as the CLI's own are. */
+function asUsage<T>(read: () => T): T {
+  try {
+    return read();
+  } catch (error) {
+    if (error instanceof BoardError) throw new UsageError(error.message);
+    throw error;
+  }
+}
+
 /** `words`, a comma-separated list, wrapped to lines of at most 96 characters, each starting with `indent`. */
 function wrapWords(words: string, indent: string): string {
   const lines: string[] = [];
@@ -1990,6 +2014,8 @@ const OPTIONS = {
   every: { type: 'string' },
   role: { type: 'string' },
   'no-template': { type: 'boolean' },
+  env: { type: 'string', multiple: true },
+  settings: { type: 'string' },
   'send-template': { type: 'boolean' },
   repo: { type: 'string' },
   branch: { type: 'string' },
@@ -2086,6 +2112,31 @@ type Option = keyof typeof OPTIONS;
 /** The options only `status set` takes, which other commands refuse by naming it. */
 const STATUS_ONLY: ReadonlySet<Option> = new Set<Option>(['progress', 'done', 'agent', 'pose', 'face', 'prop', 'category', 'on']);
 
+/** `--env` and `--settings` as launch settings: undefined when neither is given; the daemon checks what they hold. */
+function launchSettingsOptions(env: readonly string[] | undefined, settings: string | undefined): LaunchSettings | undefined {
+  if (env === undefined && settings === undefined) return undefined;
+  let parsedEnv: Record<string, string> | undefined;
+  if (env !== undefined) {
+    try {
+      parsedEnv = parseEnvPairs(env);
+    } catch (error) {
+      throw new UsageError((error as Error).message);
+    }
+  }
+  let parsedSettings: Record<string, unknown> | undefined;
+  if (settings !== undefined) {
+    let value: unknown;
+    try {
+      value = JSON.parse(settings);
+    } catch {
+      value = undefined;
+    }
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new UsageError('--settings takes a JSON object, as claude --settings does');
+    parsedSettings = value as Record<string, unknown>;
+  }
+  return { ...(parsedEnv === undefined ? {} : { env: parsedEnv }), ...(parsedSettings === undefined ? {} : { settings: parsedSettings }) };
+}
+
 /** The options each command takes beyond `--json` (which every one but `status`'s set, `rpc` and `mcp` takes too). */
 export const COMMAND_OPTIONS: Record<string, readonly Option[]> = {
   status: ['progress', 'done', 'agent', 'pose', 'face', 'prop', 'category', 'label', 'on', 'description'],
@@ -2095,14 +2146,14 @@ export const COMMAND_OPTIONS: Record<string, readonly Option[]> = {
   page: ['file', 'name', 'icon', 'clear'],
   'needs-you': ['via', 'clear'],
   doc: ['title', 'board', 'plan'],
-  new: ['zone', 'name', 'harness', 'model', 'effort', 'role', 'no-template', 'repo', 'branch', 'base', 'edges', 'issue', 'file', 'prefab', 'chat', 'description'],
+  new: ['zone', 'name', 'harness', 'model', 'effort', 'role', 'no-template', 'repo', 'branch', 'base', 'edges', 'issue', 'file', 'prefab', 'chat', 'description', 'env', 'settings'],
   roles: ['file', 'zone'],
   prefab: ['out', 'add', 'replace', 'assumed'],
   crew: [],
   send: ['file', 'submit', 'clear'],
   wait: ['until', 'any', 'timeout', 'crew'],
   watch: ['crew', 'only', 'since', 'count', 'timeout'],
-  restart: ['fresh', 'file'],
+  restart: ['fresh', 'file', 'env', 'settings'],
   close: ['remove', 'ask', 'timeout'],
   orchestrate: [],
   role: ['clear', 'send-template'],
@@ -2278,12 +2329,7 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
       const kind = string('category');
       if (kind === undefined && (string('label') !== undefined || string('on') !== undefined)) throw new UsageError('--label and --on go with a --category');
       const description = string('description');
-      if (summary === undefined && pose === undefined && kind === undefined && description === undefined) throw new UsageError('give a summary, a --pose, a --category, a --description, or more');
       const progress = string('progress') === undefined ? undefined : Number(string('progress'));
-      if (progress !== undefined && !isStatusProgress(progress)) {
-        throw new UsageError('--progress must be a whole number from 0 to 100');
-      }
-      if (progress !== undefined && summary === undefined) throw new UsageError('--progress goes with a summary');
       let character: CharacterSet | undefined;
       try {
         character = pose === undefined ? undefined : parseCharacter({ pose, face: string('face'), prop: string('prop') });
@@ -2292,20 +2338,17 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
       }
       const category = kind === undefined ? undefined : categoryOption(kind, string('label'), string('on'));
       const crewMember = string('agent');
-      if (crewMember !== undefined && values.done === true) throw new UsageError('--done is for your own status: a crew member says it is finished itself');
-      return async (session) => {
-        if (crewMember !== undefined) {
-          const view = await setCrewStatus(session, crewMember, summary, progress, character, category, description);
-          return values.json ? JSON.stringify(view.json, null, 2) : view.text;
-        }
-        const agent = await setOwnStatus(session, summary, progress, values.done === true, character, category, description);
-        if (values.json) return JSON.stringify(agent, null, 2);
-        const lines = summary === undefined ? [] : [`status set: ${statusLine(agent.status!)}${agent.workFinishedAt === null ? '' : ' (finished)'}`];
-        if (character !== undefined) lines.push(characterAnswer(agent));
-        if (category !== undefined || values.done === true) lines.push(categoryAnswer(agent));
-        if (description !== undefined) lines.push(purposeAnswer(agent));
-        return lines.join('\n');
+      const set: StatusSet = {
+        ...(summary === undefined ? {} : { summary }),
+        ...(progress === undefined ? {} : { progress }),
+        ...(values.done === true ? { done: true } : {}),
+        ...(character === undefined ? {} : { character }),
+        ...(category === undefined ? {} : { category }),
+        ...(description === undefined ? {} : { description }),
+        ...(crewMember === undefined ? {} : { agent: crewMember }),
       };
+      asUsage(() => checkStatusSet(set));
+      return async (session) => print(await setStatus(session, set));
     }
     case 'page': {
       noPositionals();
@@ -2331,12 +2374,14 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
       const prompt = text(0);
       const repo = string('repo');
       const prefab = string('prefab');
-      if (prefab === undefined && values.chat !== undefined) throw new UsageError('--chat picks the kind of ticket chat a ticket prefab starts: give --prefab too');
+      const chat = asUsage(() =>
+        checkPrefabStart(
+          prefab,
+          string('chat'),
+          PREFAB_SETS.find((key) => values[key === 'template' ? 'no-template' : key] !== undefined),
+        ),
+      );
       if (prefab !== undefined) {
-        const set = (['harness', 'model', 'effort', 'role', 'no-template', 'base', 'edges'] as const).find((option) => values[option] !== undefined);
-        if (set !== undefined) throw new UsageError(`--${set} is the prefab's to set: --prefab takes --zone, --repo, --issue, --chat, --name, --branch, --description and --file`);
-        const chat = string('chat');
-        if (chat !== undefined && chat !== 'implementer' && chat !== 'lead') throw new UsageError('--chat is implementer or lead');
         return async (session) =>
           print(
             await startPrefab(session, {
@@ -2369,6 +2414,7 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
             edges: edgesOption(string('edges')),
             issue: string('issue'),
             description: string('description'),
+            launchSettings: launchSettingsOptions(values.env as string[] | undefined, string('settings')),
           }),
         );
     }
@@ -2495,8 +2541,9 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
       if (ref === undefined) throw new UsageError('give one agent ref');
       const prompt = text(1);
       if (prompt.trim() !== '' && values.fresh !== true) throw new UsageError('a prompt needs --fresh: a restart that carries on its conversation takes none');
+      const launchSettings = launchSettingsOptions(values.env as string[] | undefined, string('settings'));
       return async (session) =>
-        print(await restartAgent(session, ref, values.fresh === true ? { prompt: prompt.trim() === '' ? undefined : prompt } : undefined));
+        print(await restartAgent(session, ref, values.fresh === true ? { prompt: prompt.trim() === '' ? undefined : prompt } : undefined, launchSettings));
     }
     case 'pause': {
       const ref = oneRef();
@@ -2855,10 +2902,6 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
         }
         return string('file') === undefined ? rest.slice(from).join('\n') : text(from + 1);
       };
-      const place = (word: string | undefined) => {
-        if (word === undefined || !/^\d+$/.test(word)) throw new UsageError(`give the step's number, from 1${word === undefined ? '' : `, not ${word}`}`);
-        return Number(word);
-      };
       if (sub !== 'new') only('title', '`steps new`');
       if (sub !== 'new' && sub !== 'add') only('file', '`steps new` and `steps add`');
       if (sub !== 'ls') only('mine', '`steps ls`');
@@ -2882,29 +2925,26 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
           if (rest.length !== 1) throw new UsageError('give one steps card’s ref');
           return async (session) => print(await readStepsCard(session, rest[0]!));
         case 'done':
-        case 'tick': {
-          const steps = after.map(place);
-          if (steps.length === 0) throw new UsageError('give the number of each step to tick');
-          return async (session) => print(await updateSteps(session, needCard(), { action: 'done', steps, undo: values.undo === true }));
-        }
-        case 'wait': {
-          if (after.length !== 1) throw new UsageError('give the card and one step number');
-          const step = place(after[0]);
-          return async (session) => print(await updateSteps(session, needCard(), { action: 'wait', step }));
-        }
-        case 'add': {
-          const body = lines(1);
-          if (body.trim() === '') throw new UsageError('give the steps to add, one a line, after --, or --file');
-          return async (session) => print(await updateSteps(session, needCard(), { action: 'add', text: body }));
-        }
-        case 'answer': {
+        case 'tick':
+        case 'wait':
+        case 'add':
+        case 'answer':
+        case 'close': {
+          if (sub === 'close' && rest.length !== 1) throw new UsageError('give one steps card’s ref');
+          const ref = needCard();
           const [step, ...answer] = after;
-          const update = step === undefined ? { action: 'answer' as const } : { action: 'answer' as const, step: place(step), answer: answer.join(' ') };
-          return async (session) => print(await updateSteps(session, needCard(), { ...update, send: values.send === true }));
+          // The CLI's words, read by the same parser as the MCP's arguments.
+          const update = asUsage(() =>
+            stepsUpdate(
+              sub === 'add'
+                ? { action: sub, text: lines(1) }
+                : sub === 'answer'
+                  ? { action: sub, steps: step === undefined ? [] : [step], ...(step === undefined ? {} : { answer: answer.join(' ') }), send: values.send === true }
+                  : { action: sub, steps: stepWords(after.join(' ')), undo: values.undo === true },
+            ),
+          );
+          return async (session) => print(await updateSteps(session, ref, update));
         }
-        case 'close':
-          if (rest.length !== 1) throw new UsageError('give one steps card’s ref');
-          return async (session) => print(await updateSteps(session, rest[0]!, { action: 'close' }));
         default:
           throw new UsageError('the steps commands are `steps new`, `ls`, `read`, `done`, `wait`, `add`, `answer` and `close`');
       }
@@ -2915,7 +2955,6 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
       for (const option of ['key', 'no-key', 'file', 'doc', 'search', 'pin', 'unpin', 'second'] as const) {
         if (values[option] !== undefined && !(allowed[sub ?? ''] ?? []).includes(option)) throw new UsageError(`--${option} is not for \`memory ${sub ?? ''}\``);
       }
-      if (values.key !== undefined && values['no-key'] === true) throw new UsageError('give --key or --no-key, not both');
       if (values.pin === true && values.unpin === true) throw new UsageError('give --pin or --unpin, not both');
       const needRef = () => {
         if (ref === undefined) throw new UsageError('give the memory: its ref or title (`agent-board memory ls` lists them)');
@@ -2925,12 +2964,14 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
         if (after[0] === undefined) throw new UsageError('give the entry: its key, or its #id');
         return after[0];
       };
-      const versionAt = (word: string | undefined) => {
-        const version = /^v?(\d+)$/.exec(word ?? '')?.[1];
-        if (version === undefined) throw new UsageError('give the version to put back, as `memory history` lists it');
-        return Number(version);
-      };
       const cwd = process.cwd();
+      /** The update for the memory `ref` names, read by the parser `memory_update` uses too. */
+      const change = (input: MemoryUpdateInput) => {
+        const memory = needRef();
+        const update = asUsage(() => memoryUpdate(input));
+        return async (session: BoardSession) => print(await updateMemory(session, memory, update, cwd));
+      };
+      const key = string('key') === undefined ? {} : { key: string('key') };
       switch (sub) {
         case 'ls':
           if (positionals.length > 1) throw new UsageError(`unexpected ${positionals.slice(1).join(' ')}`);
@@ -2941,50 +2982,41 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
           return async (session) => print(await readMemory(session, memory, { ...(after[0] === undefined ? {} : { entry: after[0] }), ...(string('search') === undefined ? {} : { search: string('search') }) }));
         }
         case 'add': {
-          const memory = needRef();
           const path = string('file');
           const document = string('doc');
           const body = after.join(' ');
+          needRef();
           if (path === undefined && body.trim() === '') throw new UsageError(document === undefined ? 'give the text to remember, after the memory, or --file' : 'give the document its text, after the memory');
-          const update = {
-            action: 'add' as const,
+          return change({
+            action: 'add',
             ...(path === undefined ? { text: body } : { path, ...(body.trim() === '' ? {} : { text: body }) }),
             ...(document === undefined ? {} : { document }),
-            ...(string('key') === undefined ? {} : { key: string('key') }),
+            ...key,
             note: values['no-key'] === true,
-          };
-          return async (session) => print(await updateMemory(session, memory, update, cwd));
+          });
         }
         case 'edit': {
-          const memory = needRef();
+          needRef();
           const entry = needEntry();
           const body = after.slice(1).join(' ');
           const pinned = values.pin === true ? true : values.unpin === true ? false : undefined;
-          const update = { action: 'edit' as const, entry, ...(body === '' ? {} : { text: body }), ...(string('key') === undefined ? {} : { key: string('key') }), note: values['no-key'] === true, ...(pinned === undefined ? {} : { pinned }) };
-          return async (session) => print(await updateMemory(session, memory, update, cwd));
+          return change({ action: 'edit', entry, ...(body === '' ? {} : { text: body }), ...key, note: values['no-key'] === true, ...(pinned === undefined ? {} : { pinned }) });
         }
         case 'rm':
-        case 'remove': {
+        case 'remove':
           if (after.length !== 1) throw new UsageError('give the memory and one entry');
-          const memory = needRef();
-          return async (session) => print(await updateMemory(session, memory, { action: 'remove', entry: needEntry() }, cwd));
-        }
+          return change({ action: 'remove', entry: needEntry() });
         case 'history': {
           if (after.length !== 1) throw new UsageError('give the memory and one entry');
           const memory = needRef();
           return async (session) => print(await memoryHistory(session, memory, needEntry()));
         }
-        case 'restore': {
+        case 'restore':
           if (after.length !== 2) throw new UsageError('give the memory, the entry and the version to put back');
-          const memory = needRef();
-          const version = versionAt(after[1]);
-          return async (session) => print(await updateMemory(session, memory, { action: 'restore', entry: needEntry(), version }, cwd));
-        }
-        case 'confirm': {
+          return change({ action: 'restore', entry: needEntry(), version: after[1] });
+        case 'confirm':
           if (after.length !== 1) throw new UsageError('give the memory and one entry');
-          const memory = needRef();
-          return async (session) => print(await updateMemory(session, memory, { action: 'confirm', entry: needEntry() }, cwd));
-        }
+          return change({ action: 'confirm', entry: needEntry() });
         case 'new': {
           const title = positionals.slice(1).join(' ');
           if (title.trim() === '') throw new UsageError('give the memory a title');
@@ -3033,8 +3065,10 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
         if (after.length !== 1) throw new UsageError(`give the queue and the job to ${verb}: its #id`);
         return after[0]!;
       };
-      const run = (update: QueueUpdate) => {
+      /** The update for the queue `ref` names, read by the parser `queue_update` uses too. */
+      const run = (input: QueueUpdateInput) => {
         const queue = needRef();
+        const update = asUsage(() => queueUpdate(input));
         return async (session: BoardSession) => print(await updateQueue(session, queue, update));
       };
       switch (sub) {
@@ -3047,21 +3081,17 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
           return async (session) => print(await readQueue(session, queue));
         }
         case 'add': {
-          const kind = string('kind');
-          if (kind !== undefined && !(QUEUE_ADD_KINDS as readonly string[]).includes(kind)) throw new UsageError(`--kind is one of ${QUEUE_ROW_KINDS.join(', ')} (or job, note)`);
           const headed = string('body');
           let body: string;
           if (string('file') === '-') {
             if (after.length > 0) throw new UsageError('give the lines or --file, not both');
             body = readFileSync(0, 'utf8').replace(/\r\n?/g, '\n');
           } else body = string('file') === undefined ? after.join('\n') : text(2);
-          if (body.trim() === '') throw new UsageError('give the jobs to queue, one a line, after the queue, or --file');
-          if (headed !== undefined && body.includes('\n')) throw new UsageError('with --body, give one headline: the body holds the rest');
           return run({
             action: 'add',
             text: body,
             ...(headed === undefined ? {} : { body: headed }),
-            ...(kind === undefined ? {} : { kind: kind as QueueAddKind }),
+            ...(string('kind') === undefined ? {} : { kind: string('kind') }),
             front: values.front === true,
             ...(string('link') === undefined ? {} : { link: string('link') }),
           });
@@ -3083,9 +3113,7 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
         case 'edit': {
           const [job, ...words] = after;
           if (job === undefined) throw new UsageError('give the queue and the job to change: its #id');
-          const body = words.join(' ');
-          if (body === '' && string('link') === undefined) throw new UsageError('give the new text, or --link');
-          return run({ action: 'edit', job, ...(body === '' ? {} : { text: body }), ...(string('link') === undefined ? {} : { link: string('link') }) });
+          return run({ action: 'edit', job, text: words.join(' '), ...(string('link') === undefined ? {} : { link: string('link') }) });
         }
         case 'history': {
           const queue = needRef();
@@ -3094,9 +3122,7 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
         }
         case 'drain': {
           if (after.length !== 1 || (after[0] !== 'on' && after[0] !== 'off')) throw new UsageError('give the queue, then on or off');
-          const most = string('most');
-          if (most !== undefined && !/^[1-3]$/.test(most)) throw new UsageError('--most is 1, 2 or 3');
-          return run({ action: 'drain', on: after[0] === 'on', ...(most === undefined ? {} : { most: Number(most) }) });
+          return run({ action: 'drain', on: after[0] === 'on', ...(string('most') === undefined ? {} : { most: string('most') }) });
         }
         case 'move': {
           if (after.length !== 2) throw new UsageError('give the queue, the job, and where: the #id of the job to put it before, top or last');
@@ -3104,9 +3130,7 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
         }
         case 'restore': {
           if (after.length !== 2) throw new UsageError('give the queue, the job and the version to put back');
-          const version = /^v?(\d+)$/.exec(after[1]!)?.[1];
-          if (version === undefined) throw new UsageError('give the version to put back, as `queue history` lists it');
-          return run({ action: 'restore', job: after[0]!, version: Number(version) });
+          return run({ action: 'restore', job: after[0]!, version: after[1] });
         }
         case 'new': {
           const title = positionals.slice(1).join(' ');

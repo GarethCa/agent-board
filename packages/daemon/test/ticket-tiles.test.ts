@@ -39,8 +39,8 @@ async function untilAgent(setup: Setup, sessionId: string, match: (agent: Agent)
 /** The board token `agent` printed, its first prompt having been `Print your board identity`. */
 async function tokenOf(setup: Setup, sessionId: string): Promise<string> {
   await setup.client.call('session.attach', { sessionId });
-  await setup.recorder.waitForText(sessionId, ':end\r\n');
-  return /identity:(.*):end\r\n/.exec(setup.recorder.screenText(sessionId))![1]!;
+  // Its echo can come in the attach's snapshot, which draws the line break as a cursor move: the token alone is matched.
+  return (await setup.recorder.waitForMatch(sessionId, /identity:([A-Za-z0-9_-]+):end/))[1]!;
 }
 
 /** A ticket tile started from the Ticket prefab, as the user's side starts it: its chat, with its board token. */

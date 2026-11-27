@@ -12,6 +12,7 @@ const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}
   model: null,
   effort: null,
   effortPending: null,
+  launchSettings: null,
   role: null,
   roleName: null,
   reviews: null,

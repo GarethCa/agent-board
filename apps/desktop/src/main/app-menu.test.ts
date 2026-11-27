@@ -2,6 +2,8 @@ import type { MenuItemConstructorOptions } from 'electron';
 import { describe, expect, it, vi } from 'vitest';
 import type { MenuBarKey, MenuBarRow, MenuBarState } from '../shared/menu-bar';
 import { appMenu, menuTemplate, windowMenu } from './app-menu';
+import { acceleratorOf } from '../renderer/src/keys/menu-bar';
+import { binding, chordsOf, type KeyId } from '../renderer/src/keys/registry';
 import type { MenuBar } from './menu-bar-items';
 
 /** Keys as a macOS window reports them: ⌘D, ⌘[ and ⌘] are each two actions' chord. */
@@ -24,7 +26,7 @@ const KEYS: Record<string, MenuBarKey> = {
   'window.terminalView': { accelerator: 'CommandOrControl+Alt+T', text: '⌥⌘T', enabled: false },
   'make.askClaude': { accelerator: 'CommandOrControl+Shift+A', text: '⇧⌘A', enabled: true },
   'move.cheatSheetAnywhere': { accelerator: 'CommandOrControl+/', text: '⌘/', enabled: true },
-  // Overview is main's own item, on main's own chord.
+  // Overview is main's own item, on the key list's chord.
   'window.overview': { accelerator: 'CommandOrControl+Shift+O', text: '⇧⌘O', enabled: true },
 };
 const AGENT: MenuBarRow[] = [
@@ -121,11 +123,12 @@ describe('the Window menu', () => {
     ]);
   });
 
-  it('opens the Overview on ⌘⇧O', () => {
+  it('opens the Overview on ⌘⇧O, the key list’s chord for it', () => {
     const a = actions();
     const windowItem = menuTemplate({ mac: true, packaged: true, name: 'agent-board' }, a, technical()).find((item) => item.role === 'windowMenu')!;
     const overview = (windowItem.submenu as MenuItemConstructorOptions[]).find((item) => item.label === 'Overview')!;
     expect(overview.accelerator).toBe('CommandOrControl+Shift+O');
+    expect(overview.accelerator).toBe(acceleratorOf(chordsOf(binding('window.overview'), true)[0]!, true));
     (overview.click as () => void)();
     expect(a.overview).toHaveBeenCalledOnce();
   });
@@ -184,6 +187,18 @@ describe('the menu bar', () => {
     const window = { close: vi.fn() };
     (close.click as (item: unknown, window: unknown) => void)(undefined, window);
     expect(window.close).toHaveBeenCalledOnce();
+  });
+
+  it('takes every accelerator of its own items from the key list: Settings, the Overview and Close Window', () => {
+    const of = (id: KeyId, at = 0) => acceleratorOf(chordsOf(binding(id), true)[at]!, true)!;
+    expect(items().find((item) => item.label === 'Settings…')?.accelerator).toBe(of('move.settings'));
+    const template = mac();
+    const windowItem = template.find((item) => item.role === 'windowMenu')!;
+    expect((windowItem.submenu as MenuItemConstructorOptions[]).find((item) => item.label === 'Overview')?.accelerator).toBe(of('window.overview'));
+    // macOS only, so Command rather than CommandOrControl.
+    expect(find(template, 'File', 'Close Window').accelerator).toBe(of('move.closeWindow').replace('CommandOrControl', 'Command'));
+    const noTabs = mac(bar({ keys: { ...KEYS, 'window.closeTab': { ...KEYS['window.closeTab']!, enabled: false } } }));
+    expect(find(noTabs, 'File', 'Close Window').accelerator).toBe(of('move.closeWindow', 1).replace('CommandOrControl', 'Command'));
   });
 
   it('closes a window that has no tab to close on ⌘W, as Safari does', () => {

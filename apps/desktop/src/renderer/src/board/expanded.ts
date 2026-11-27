@@ -1,7 +1,7 @@
 // Which session tiles are expanded in place, how big each one is, and which is in front. Pure, so every
 // change is unit-tested. The board holds the set in one state, saved in the daemon's view state so the tiles
 // open again after a restart.
-import { EXPANDED_TILE_SIZE, expandedRoomFrom, PERCH_ROOM, ZONE_PADDING } from '@agent-board/daemon/board-layout';
+import { EXPANDED_TILE_SIZE, expandedRoomFrom, PERCH_ROOM, withoutFreed, ZONE_PADDING } from '@agent-board/daemon/board-layout';
 
 /** An expanded tile: its node id and its size on the board. */
 export interface ExpandedTile {
@@ -227,9 +227,8 @@ export function allowingOverlap(allowed: OverlapsAllowed, id: string, onto: stri
 
 /** `allowed` without the pairs any of the tiles `ids` is in: moved otherwise, collapsed or gone. */
 export function withoutOverlaps(allowed: OverlapsAllowed, ids: Iterable<string>): OverlapsAllowed {
-  const gone = new Set(ids);
-  const kept = [...allowed].filter(([dropped, onto]) => !gone.has(dropped) && !gone.has(onto));
-  return kept.length === allowed.size ? allowed : new Map(kept);
+  const kept = withoutFreed([...allowed], new Set(ids), 'either');
+  return kept === undefined ? allowed : new Map(kept);
 }
 
 /** Only the pairs of tiles both still on the board, by node id. */

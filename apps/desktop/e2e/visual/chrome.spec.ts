@@ -212,8 +212,9 @@ test('a finished agent says it finished, with what it is for under its name', as
     await expect(tile(window)).toHaveAttribute('data-state', 'waiting', { timeout: TURN_MS });
     await tile(window).getByRole('button', { name: 'Expand' }).click();
     const expanded = window.getByTestId('expanded-tile');
-    await expanded.locator('.expanded-tile-head').getByTestId('shelf-controls').getByRole('button', { name: 'More controls' }).click();
+    await expanded.locator('.expanded-tile-head').getByRole('button', { name: 'More', exact: true }).click();
     await window.getByRole('menuitem', { name: /^Stop/ }).click();
+    await window.getByRole('alertdialog', { name: 'Stop agent?' }).getByRole('button', { name: 'Stop agent' }).click();
     await expanded.getByRole('button', { name: 'Collapse', exact: true }).click();
     // What it is for stays under its name; its line says it finished.
     await expect(tile(window).getByTestId('tile-about')).toHaveText('Look around');

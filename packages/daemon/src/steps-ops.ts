@@ -145,6 +145,61 @@ export type StepsUpdate =
   | { action: 'answer'; step?: number; answer?: string; send?: boolean }
   | { action: 'close' };
 
+/** A step's number, from 1: a whole number, or its digits as typed. */
+export function stepNumber(value: unknown): number {
+  const number = typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : value;
+  if (!Number.isInteger(number) || (number as number) < 1) throw new BoardError(`give the step's number, from 1${value === undefined ? '' : `, not ${String(value)}`}`);
+  return number as number;
+}
+
+/** Step numbers as typed in a line: split by spaces or commas, each read by `stepNumber`. */
+export const stepWords = (text: string): string[] => text.split(/[\s,]+/).filter((word) => word !== '');
+
+/** What a steps update is given, by the CLI or the MCP, before it is read: the step numbers as typed or sent. */
+export interface StepsUpdateInput {
+  action: string | undefined;
+  steps?: readonly unknown[];
+  /** For add: the steps, one a line. */
+  text?: string;
+  answer?: string;
+  undo?: boolean;
+  send?: boolean;
+}
+
+/** The one reading of a steps update, the CLI's and the MCP's alike: its action, its step numbers checked. */
+export function stepsUpdate(input: StepsUpdateInput): StepsUpdate {
+  const steps = (input.steps ?? []).map(stepNumber);
+  const none = (what: string) => {
+    if (steps.length > 0) throw new BoardError(`${what} takes no step number`);
+  };
+  switch (input.action) {
+    case 'done':
+    case 'tick':
+      if (steps.length === 0) throw new BoardError('give the number of each step to tick');
+      return { action: 'done', steps, undo: input.undo === true };
+    case 'wait':
+      if (steps.length !== 1) throw new BoardError('give one step number to wait on');
+      return { action: 'wait', step: steps[0]! };
+    case 'add':
+      none('add');
+      if (input.text === undefined || input.text.trim() === '') throw new BoardError('give the steps to add, one a line');
+      return { action: 'add', text: input.text };
+    case 'answer': {
+      if (steps.length > 1) throw new BoardError('answer one step at a time');
+      const [step] = steps;
+      if (step !== undefined && (input.answer === undefined || input.answer.trim() === '')) throw new BoardError('give the answer after the step number');
+      if (step === undefined && input.answer !== undefined) throw new BoardError('give the step number of the answer');
+      if (step === undefined && input.send !== true) throw new BoardError('give the step number and its answer, or send to send the answers');
+      return { action: 'answer', ...(step === undefined ? {} : { step, answer: input.answer! }), send: input.send === true };
+    }
+    case 'close':
+      none('close');
+      return { action: 'close' };
+    default:
+      throw new BoardError('the steps updates are done, wait, add, answer and close');
+  }
+}
+
 /** `steps done|wait|add|answer|close`: changes the card `ref` names, as the caller may, and prints it after. */
 export async function updateSteps(session: BoardSession, ref: string, update: StepsUpdate): Promise<BoardView> {
   const token = agentToken(session, 'change a steps card');
@@ -154,7 +209,6 @@ export async function updateSteps(session: BoardSession, ref: string, update: St
   let said: string;
   switch (update.action) {
     case 'done': {
-      if (update.steps.length === 0) throw new BoardError('give the number of each step to tick');
       for (const step of update.steps) changed = await change({ action: 'done', step, ...(update.undo === true ? { undo: true } : {}) });
       said = `${update.undo === true ? 'Unticked' : 'Ticked'} step${update.steps.length === 1 ? '' : 's'} ${update.steps.join(', ')}.`;
       break;
@@ -173,10 +227,9 @@ export async function updateSteps(session: BoardSession, ref: string, update: St
     case 'answer': {
       const parts: string[] = [];
       if (update.step !== undefined) {
-        if (update.answer === undefined) throw new BoardError('give the answer after the step number');
-        changed = await change({ action: 'answer', step: update.step, answer: answerFrom(stepAt(stepsOf(item), update.step), update.answer) });
+        changed = await change({ action: 'answer', step: update.step, answer: answerFrom(stepAt(stepsOf(item), update.step), update.answer ?? '') });
         parts.push(`Answered step ${update.step}.`);
-      } else if (update.send !== true) throw new BoardError('give the step number and its answer, or --send to send the answers');
+      }
       if (update.send === true) {
         changed = await change({ action: 'send' });
         const maker = stepsOf(changed).madeBy;

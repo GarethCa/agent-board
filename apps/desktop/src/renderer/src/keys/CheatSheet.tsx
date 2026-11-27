@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as RadixDialog from '@radix-ui/react-dialog';
-import { SESSION_SURFACES } from '../board/board-shortcuts';
+import { appKeysReach } from '../board/board-shortcuts';
 import { Kbd } from '../ui';
-import { inOverlay } from '.';
 import { CONTEXT_LABELS, cheatSheet, type SheetContext } from './cheat-sheet';
 import { useExtendedShortcuts } from './extended-shortcuts';
 import { keyText, pressed } from './registry';
@@ -100,8 +99,8 @@ export function useCheatSheet(contextOf: () => SheetContext) {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (!pressed('move.cheatSheetAnywhere', event)) return;
-      // Another dialog or menu keeps its keys; a session window, a dialog too, is where it opens from.
-      if (openRef.current === undefined && inOverlay() && document.activeElement?.closest(SESSION_SURFACES) == null) return;
+      // Another dialog or menu keeps its keys; a view an agent is open in (a pop-up, a session window), a dialog too, is where it opens from.
+      if (openRef.current === undefined && !appKeysReach(document.activeElement)) return;
       event.preventDefault();
       event.stopPropagation();
       setOpen(openRef.current === undefined ? contextRef.current() : undefined);

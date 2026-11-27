@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { PopupViewSwitch } from './AgentPopup';
+import { PopupViewSwitch } from './agent-view/AgentViewHeader';
 
 const css = readFileSync(join(import.meta.dirname, '..', 'app.css'), 'utf8');
 const draw = (agentOn: boolean) => renderToStaticMarkup(createElement(PopupViewSwitch, { viewKey: 'a1', agentOn }));

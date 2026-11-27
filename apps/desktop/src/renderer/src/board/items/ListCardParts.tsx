@@ -2,6 +2,7 @@
 // icon and the peek's keys. Props-only, so the gallery draws them as the board does.
 import { useState, type CSSProperties, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { Truncate } from '../../ui';
+import { iconPress } from './full-screen';
 
 /**
  * The glyph on its round face, with the count on it: what tells a memory or a queue apart, open or folded, at any zoom.
@@ -106,15 +107,18 @@ interface ListCardIconViewProps {
   tab?: ReactNode;
   testId: string;
   onOpen(): void;
+  /** Opens it full screen: the second click of a double-click on the face. */
+  onFull?(): void;
   children?: ReactNode;
 }
 
 /**
- * Folded to its icon: the glyph on a big round face with its count, its name under it. A click opens the peek; a press
- * that moves drags the card, face and all, as the face is most of what is drawn (React Flow eats the click that ends a
- * drag, so the peek stays shut).
+ * Folded to its icon: the glyph on a big round face with its count, its name under it. A click opens the peek, and a
+ * double-click full screen (its first click opens the peek, which the second closes as it opens); a press that moves
+ * drags the card, face and all, as the face is most of what is drawn (React Flow eats the click that ends a drag, so the
+ * peek stays shut).
  */
-export function ListCardIconView({ glyph, title, scope, zoneColor, count, sub, empty, pulse, tab, testId, onOpen, children }: ListCardIconViewProps) {
+export function ListCardIconView({ glyph, title, scope, zoneColor, count, sub, empty, pulse, tab, testId, onOpen, onFull, children }: ListCardIconViewProps) {
   return (
     <div
       className="listcard listcard-icon"
@@ -123,7 +127,7 @@ export function ListCardIconView({ glyph, title, scope, zoneColor, count, sub, e
       data-tab={tab !== undefined || undefined}
     >
       {children}
-      <button type="button" className="listcard-icon-face" aria-label={`${title}: open its peek`} onClick={onOpen}>
+      <button type="button" className="listcard-icon-face" aria-label={onFull === undefined ? `${title}: open its peek` : `${title}: open its peek; double-click for full screen`} onClick={(event) => (iconPress(event.detail, onFull !== undefined) === 'full' ? onFull?.() : onOpen())}>
         <ListCardFace glyph={glyph} count={count} big pulse={pulse} tab={tab} />
       </button>
       <b className="listcard-icon-name" title={title}>{title}</b>

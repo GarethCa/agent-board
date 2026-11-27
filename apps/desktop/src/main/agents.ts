@@ -2,7 +2,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { app, BrowserWindow, ipcMain } from 'electron';
 import { DaemonRpcError, type DaemonLink } from '@agent-board/daemon/client';
-import { AGENT_ERROR, type AgentRecordKind, type Effort, type AskSelectionParams, type PermissionDecision, type PromptAnswer, type ScheduleSpec, type SpawnAgentParams, type StartMasterParams, type TicketBoardPlace, type TicketWatchChange, type TileMove } from '@agent-board/daemon/protocol';
+import { AGENT_ERROR, type AgentRecordKind, type Effort, type AskSelectionParams, type LaunchSettings, type PermissionDecision, type PromptAnswer, type ScheduleSpec, type SpawnAgentParams, type StartMasterParams, type TicketBoardPlace, type TicketWatchChange, type TileMove } from '@agent-board/daemon/protocol';
 import { revealWindow } from './background';
 import { AGENT_IPC, type AgentStartsResetEvent, type DeleteAgentResult, type RestartAgentResult, type SpawnAgentResult } from '../preload/api';
 import { forwardEvents, sendToAllWindows } from './broadcast';
@@ -62,15 +62,17 @@ export function registerAgentIpc(daemon: DaemonLink, dataDir: string): void {
   passthrough(daemon, AGENT_IPC.clearUndelivered, 'agent.clearUndelivered', (sessionId: string) => ({ sessionId }));
   passthrough(daemon, AGENT_IPC.stop, 'agent.stop', (sessionId: string) => ({ sessionId }));
   passthrough(daemon, AGENT_IPC.pause, 'agent.pause', (sessionId: string) => ({ sessionId }));
-  passthrough(daemon, AGENT_IPC.resume, 'agent.resume', (sessionId: string) => ({ sessionId }));
-  ipcMain.handle(AGENT_IPC.restart, async (_event, sessionId: string, force: boolean): Promise<RestartAgentResult> => {
-    try {
-      return { status: 'restarted', agent: await daemon.call('agent.resume', { sessionId, force }) };
-    } catch (error) {
-      if (error instanceof DaemonRpcError && error.code === AGENT_ERROR.shellBusy) return { status: 'busy', message: error.message };
-      throw error;
-    }
+  const wake = wakeOnce(daemon);
+  // Resolves with the agent, as its callers take it; a busy shell is the one failure, in the daemon's words.
+  ipcMain.handle(AGENT_IPC.resume, async (_event, sessionId: string) => {
+    const woke = await wake(sessionId, false);
+    if (woke.status === 'busy') throw new Error(woke.message);
+    return woke.agent;
   });
+  ipcMain.handle(AGENT_IPC.restart, (_event, sessionId: string, force: boolean) => wake(sessionId, force === true));
+  ipcMain.handle(AGENT_IPC.restartWith, (_event, sessionId: string, launchSettings: LaunchSettings, keepEnv?: string[], force?: boolean) =>
+    wake(sessionId, force === true, { launchSettings, ...(keepEnv === undefined ? {} : { keepEnv }) }),
+  );
   passthroughVoid(daemon, AGENT_IPC.decidePermission, 'agent.decidePermission', (sessionId: string, requestId: string, decision: PermissionDecision) => ({ sessionId, requestId, ...decision }));
   passthrough(daemon, AGENT_IPC.decideRemove, 'removeAsk.decide', (sessionId: string, askId: string, allow: boolean, include: string[]) => ({ sessionId, askId, allow, include }));
   passthroughVoid(daemon, AGENT_IPC.releasePermission, 'agent.releasePermission', (sessionId: string, requestId: string) => ({ sessionId, requestId }));
@@ -113,6 +115,52 @@ export function registerAgentIpc(daemon: DaemonLink, dataDir: string): void {
       throw error;
     }
   });
+}
+
+/**
+ * Wakes an agent (`agent.resume`): one paused or stopped by a restart resumes, one done or exited starts again. Without
+ * `force` the daemon refuses while the shell its pane dropped into runs something, which comes back as `busy` for the
+ * caller to ask about, then wake again with `force`. A wake asked for while one is still going for that agent, from any
+ * window, gets that one's answer instead of a second start; a forced one asked for during an unforced one waits for
+ * it, and goes on, forced, only if that one found the shell busy.
+ *
+ * With `relaunch` it restarts the agent with those launch settings (`agent.restartWith`) instead. That one is never
+ * dropped for a wake already going: it waits for it to land, however it lands, then goes on; a wake asked for while it
+ * is going gets its answer, as with any other.
+ */
+export function wakeOnce(daemon: Pick<DaemonLink, 'call'>): (sessionId: string, force: boolean, relaunch?: Relaunch) => Promise<RestartAgentResult> {
+  const going = new Map<string, { force: boolean; woke: Promise<RestartAgentResult> }>();
+  return (sessionId, force, relaunch) => {
+    const now = going.get(sessionId);
+    if (relaunch === undefined && now !== undefined && (now.force || !force)) return now.woke;
+    const start =
+      now === undefined
+        ? wakeAgent(daemon, sessionId, force, relaunch)
+        : relaunch !== undefined
+          ? now.woke.catch(() => undefined).then(() => wakeAgent(daemon, sessionId, force, relaunch))
+          : now.woke.then((answer) => (answer.status === 'busy' ? wakeAgent(daemon, sessionId, true) : answer));
+    const woke = start.finally(() => {
+      if (going.get(sessionId)?.woke === woke) going.delete(sessionId);
+    });
+    going.set(sessionId, { force, woke });
+    return woke;
+  };
+}
+
+/** What a restart with launch settings is given: the settings, and the kept env vars it keeps by name. */
+type Relaunch = { launchSettings: LaunchSettings; keepEnv?: string[] };
+
+async function wakeAgent(daemon: Pick<DaemonLink, 'call'>, sessionId: string, force: boolean, relaunch?: Relaunch): Promise<RestartAgentResult> {
+  try {
+    const agent =
+      relaunch === undefined
+        ? await daemon.call('agent.resume', { sessionId, force })
+        : await daemon.call('agent.restartWith', { sessionId, ...relaunch, ...(force ? { force } : {}) });
+    return { status: 'restarted', agent };
+  } catch (error) {
+    if (error instanceof DaemonRpcError && error.code === AGENT_ERROR.shellBusy) return { status: 'busy', message: error.message };
+    throw error;
+  }
 }
 
 /** The most a selection's picture is drawn wide, px: enough for a 2× drawing of a large diagram. */

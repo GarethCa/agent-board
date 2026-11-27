@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { submittedText } from '../src/terminal-input.ts';
 import { drawRateLimitMenu, rateLimitMenuRows } from '@agent-board/fake-harness';
 import { createDeliveries, USER_IDLE_MS, type DeliveryRow, type KeptWaiting, type PromptNow, type WaitingStore } from '../src/deliveries.ts';
@@ -58,7 +58,9 @@ function setup(
   userQueued?: (sessionId: string) => boolean,
 ) {
   const writes: [string, string][] = [];
-  const relaunches: { sessionId: string; prompt: string | undefined; why: string; codexSessionId: string | null | undefined }[] = [];
+  const wakes: { sessionId: string; prompt: string | undefined; why: string; codexSessionId: string | null | undefined }[] = [];
+  /** What waking an agent answers: started, unless a test says otherwise (a busy shell's refusal, after a look). */
+  const waking: { answer: () => RunStart | Promise<RunStart> } = { answer: () => ({ started: true }) };
   const announced: { sessionId: string; handingOff: boolean }[] = [];
   /** What was handed back, never typed: `sessionId what: text (reason)`, and ` from <sender>` for an agent's. */
   const undelivered: string[] = [];
@@ -105,9 +107,9 @@ function setup(
     },
     whyNotReady: (_row, _evenAsking, lapsedDrafts) => ready.why ?? (lapsedDrafts === false ? undefined : ready.lapsedDraft),
     pausing: () => undefined,
-    relaunch(target, prompt, why, codexSessionId): RunStart {
-      relaunches.push({ sessionId: target.session_id, prompt, why, codexSessionId });
-      return { started: true };
+    wake(target, prompt, why, codexSessionId) {
+      wakes.push({ sessionId: target.session_id, prompt, why, codexSessionId });
+      return waking.answer();
     },
     promptNow() {
       read();
@@ -153,7 +155,7 @@ function setup(
     database.closed = true;
   };
 
-  return { deliveries, writes, relaunches, announced, undelivered, notSent, prompt, shown, ready, failing, database, transcript, clock, advance, land, closeDaemon };
+  return { deliveries, writes, wakes, waking, announced, undelivered, notSent, prompt, shown, ready, failing, database, transcript, clock, advance, land, closeDaemon };
 }
 
 describe('a long message at a Claude prompt', () => {
@@ -535,11 +537,40 @@ describe('deliveries', () => {
     ]);
   });
 
-  it('relaunches an ended agent with the hand-off, carrying on its Codex conversation', async () => {
-    const { deliveries, writes, relaunches } = setup([row('from'), row('to', { ended_at: '2026-10-15T10:00:00Z', harness_session_id: 'conv' })]);
+  it('wakes an ended agent with the hand-off, carrying on its Codex conversation', async () => {
+    const { deliveries, writes, wakes } = setup([row('from'), row('to', { ended_at: '2026-10-15T10:00:00Z', harness_session_id: 'conv' })]);
     expect(await deliveries.deliver('from', 'to', 'plan', 'the plan')).toEqual({ started: true });
     expect(writes).toEqual([]);
-    expect(relaunches).toEqual([{ sessionId: 'to', prompt: expect.stringContaining('the plan'), why: 'for a hand-off from from', codexSessionId: 'conv' }]);
+    expect(wakes).toEqual([{ sessionId: 'to', prompt: expect.stringContaining('the plan'), why: 'for a hand-off from from', codexSessionId: 'conv' }]);
+  });
+
+  it("never wakes an ended agent over a shell that runs something: keeps the hand-off as not delivered, for the user, and skips it", async () => {
+    const { deliveries, wakes, waking, undelivered, writes } = setup([row('from'), row('to', { ended_at: '2026-10-15T10:00:00Z' })]);
+    waking.answer = async () => ({ started: false, reason: 'its shell is running something', askUser: true });
+    expect(await deliveries.deliver('from', 'to', 'plan', 'the plan')).toEqual({
+      started: false,
+      reason: 'its shell is running something: kept as not delivered',
+    });
+    expect(wakes).toHaveLength(1);
+    expect(undelivered).toEqual([expect.stringMatching(/^to Hand-off from from: .*the plan.* \(its shell is running something\)$/s)]);
+    expect(writes).toEqual([]);
+    expect(deliveries.isHandingOff('from')).toBe(false);
+  });
+
+  it('never wakes a paused agent with what the board tells it, busy for its caller to keep, nor an ended one', async () => {
+    const paused = setup([row('a', { ended_at: '2026-10-15T10:00:00Z', harness_session_id: 'conv', hibernated_at: '2026-10-15T09:00:00Z' })]);
+    expect(await paused.deliveries.tell('a', 'Your crew needs you', 'A crew flag')).toEqual({ started: false, reason: 'it is paused', busy: true });
+    expect(paused.wakes).toEqual([]);
+    const ended = setup([row('a', { ended_at: '2026-10-15T10:00:00Z' })]);
+    expect(await ended.deliveries.tell('a', 'Your crew needs you')).toEqual({ started: false, reason: 'a has ended', busy: false });
+    expect(ended.wakes).toEqual([]);
+  });
+
+  it('skips a hand-off to a reviewer whose round is over, keeping nothing', async () => {
+    const { deliveries, waking, undelivered } = setup([row('from'), row('to', { ended_at: '2026-10-15T10:00:00Z' })]);
+    waking.answer = () => ({ started: false, reason: 'it is a reviewer whose round is over' });
+    expect(await deliveries.deliver('from', 'to', 'plan', 'the plan')).toEqual({ started: false, reason: 'it is a reviewer whose round is over' });
+    expect(undelivered).toEqual([]);
   });
 
   it('holds a hand-off back as busy while the live agent is not ready', async () => {
@@ -566,17 +597,27 @@ describe('deliveries', () => {
     expect(writes).toEqual([['a', 'Check the build then the tests'], ['a', '\r']]);
   });
 
-  it('relaunches an ended agent for its scheduled run', () => {
-    const { deliveries, writes, relaunches } = setup([row('a', { ended_at: '2026-10-15T10:00:00Z', harness_session_id: 'conv' })]);
+  it('wakes an ended agent for its scheduled run', () => {
+    const { deliveries, writes, wakes } = setup([row('a', { ended_at: '2026-10-15T10:00:00Z', harness_session_id: 'conv' })]);
     expect(deliveries.runScheduled('a', 'run')).toEqual({ started: true });
-    expect(relaunches).toEqual([{ sessionId: 'a', prompt: 'run', why: 'for its scheduled run', codexSessionId: undefined }]);
+    expect(wakes).toEqual([{ sessionId: 'a', prompt: 'run', why: 'for its scheduled run', codexSessionId: undefined }]);
     expect(writes).toEqual([]);
+  });
+
+  it('tells a scheduled run refused once its shell is looked at that it was not typed, and keeps it for the user', async () => {
+    const { deliveries, waking, undelivered } = setup([row('a', { ended_at: '2026-10-15T10:00:00Z' })]);
+    waking.answer = async () => ({ started: false, reason: 'claude is running in its shell: exit it first', askUser: true });
+    const notTyped = vi.fn();
+    expect(deliveries.runScheduled('a', 'run', notTyped)).toEqual({ started: true });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(notTyped).toHaveBeenCalledWith('claude is running in its shell: exit it first');
+    expect(undelivered).toEqual(['a A scheduled run: run (claude is running in its shell: exit it first)']);
   });
 
   it("wakes a paused agent for its scheduled run in its own conversation, Codex's too, and skips one being paused", () => {
     const paused = setup([row('a', { ended_at: '2026-10-15T10:00:00Z', harness_session_id: 'conv', hibernated_at: '2026-10-15T09:00:00Z' })]);
     expect(paused.deliveries.runScheduled('a', 'run')).toEqual({ started: true });
-    expect(paused.relaunches).toEqual([{ sessionId: 'a', prompt: 'run', why: 'for its scheduled run', codexSessionId: 'conv' }]);
+    expect(paused.wakes).toEqual([{ sessionId: 'a', prompt: 'run', why: 'for its scheduled run', codexSessionId: 'conv' }]);
     const pausing = setup([row('a', { hibernated_at: '2026-10-15T09:00:00Z' })]);
     expect(pausing.deliveries.runScheduled('a', 'run')).toEqual({ started: false, reason: 'it was being paused' });
     expect(pausing.writes).toEqual([]);
@@ -1501,10 +1542,10 @@ describe('messages waiting for a turn to end', () => {
 
   it('hands back, with the agent that sent it, a message that woke a paused agent and was never typed', async () => {
     const a = row('a');
-    const { deliveries, relaunches, shown, undelivered, land } = setup([a]);
+    const { deliveries, wakes, shown, undelivered, land } = setup([a]);
     shown.state = 'hibernated';
     expect(await deliveries.answer('a', 'Morning report', false, undefined, 'lead')).toEqual({ queued: false, woken: true });
-    expect(relaunches.map(({ prompt }) => prompt)).toEqual(['Morning report']);
+    expect(wakes.map(({ prompt }) => prompt)).toEqual(['Morning report']);
     // Its new session ends as it comes up: its first prompt is never typed.
     a.ended_at = '2026-10-22T10:00:01Z';
     deliveries.firstPrompt('a', 'Morning report', Promise.resolve(true));

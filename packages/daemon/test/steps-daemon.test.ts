@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { fakeHarnessEnv } from '@agent-board/fake-harness';
+import { fakeHarnessEnv, McpClient } from '@agent-board/fake-harness';
 import { runBoardCommand } from '../src/board-cli.ts';
 import { BOARD_ERROR, needsYouKind, needsYouNow, type Agent, type AgentUpdatedEvent, type BoardItem, type DaemonEvent, type Step, type StepsData } from '../src/protocol.ts';
 import { answerFrom } from '../src/steps-ops.ts';
-import { connectTestClient, recordEvents, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
+import { connectTestClient, recordEvents, startTestDaemon, tempDataDir, tempRepo, TEST_CLI_LAUNCHER } from './helpers.ts';
 
 const SIZE = { cols: 120, rows: 40 };
 
@@ -477,6 +477,23 @@ describe('agent-board steps', () => {
     expect((await steps(env, 'done', ref, '3')).err).toContain("step 3 is the user's to tick, not yours");
     expect((await steps(env, 'answer', ref, '2', 'Fri')).err).toContain('the user answers “Ship 1.4”, not you');
     expect((await steps(env, 'close', ref)).out).toContain('Closed it');
+  });
+
+  it('ticks several to-dos at once over the MCP too, as `steps done` does', async () => {
+    const { daemon, start, asAgent } = await stepsDaemon();
+    const agent = await start(['# Chores', '- [ ] One', '- [ ] Two', '- [ ] Three']);
+    const { token } = await asAgent(agent.sessionId);
+    const env = { AGENT_BOARD_SOCKET: daemon.socketPath, AGENT_BOARD_IDENTITY: token };
+    const ref = /(item:\w+)/.exec((await steps(env, 'ls')).out)![1]!;
+    const mcp = new McpClient({ command: TEST_CLI_LAUNCHER.command, args: [...TEST_CLI_LAUNCHER.args, 'mcp'], env: { ...process.env, ...env } }, tempDataDir());
+
+    expect(await mcp.callTool('steps_update', { card: ref, action: 'done', steps: '1, 3' })).toMatchObject({ isError: false, text: expect.stringMatching(/^Ticked steps 1, 3\./) });
+    expect((await steps(env, 'done', ref, '1,3', '--undo')).out).toMatch(/^Unticked steps 1, 3\./);
+    expect(await mcp.callTool('steps_update', { card: ref, action: 'done', step: 2 })).toMatchObject({ isError: false, text: expect.stringMatching(/^Ticked step 2\./) });
+    // The same refusals from either side.
+    expect(await mcp.callTool('steps_update', { card: ref, action: 'done', step: 1, steps: '2' })).toMatchObject({ isError: true, text: expect.stringContaining('give step or steps, not both') });
+    expect(await mcp.callTool('steps_update', { card: ref, action: 'done', steps: 'two' })).toMatchObject({ isError: true, text: expect.stringContaining("give the step's number, from 1, not two") });
+    expect((await steps(env, 'done', ref, 'two')).err).toContain("give the step's number, from 1, not two");
   });
 
   it('says what is wrong before it connects', async () => {

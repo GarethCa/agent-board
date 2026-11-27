@@ -6,6 +6,7 @@ import { isHeadless } from './background';
 import { openWebLink, openWebTabLink } from './links';
 import { addressRowHold } from './web-address-hold';
 import { takesKeyboard, webKey } from './web-keys';
+import { windowKeysFor } from '../renderer/src/keys/menu-bar';
 import { passkeyNotice, probePasskeys } from './web-passkeys';
 import { lockDownContents, lockDownSession } from './web-lockdown';
 import { lockDownPlanContents, lockDownPlanSession, PLAN_URL } from './plan-lockdown';
@@ -391,7 +392,10 @@ export function registerWebTabIpc({
       changed();
     });
     contents.on('before-input-event', (input, key) => {
-      const action = webKey(key, undefined, simplified(), extended());
+      // A window gone, or not loaded yet, has no keys to hand over: the page keeps them.
+      if (tab.owner.isDestroyed() || !URL.canParse(tab.owner.getURL())) return;
+      // The keys the tab's window handles, by the query it opened with: a session window of its own has no Captain.
+      const action = webKey(key, undefined, simplified(), extended(), windowKeysFor(new URL(tab.owner.getURL()).searchParams));
       if (action === undefined) {
         if (key.type === 'keyDown' && !tab.owner.isDestroyed()) pageKept(tab.owner, key);
         return;
@@ -404,7 +408,7 @@ export function registerWebTabIpc({
       else if (!tab.owner.isDestroyed()) {
         const pressed: WebTabKey = { key: key.key, code: key.code, metaKey: key.meta, ctrlKey: key.control, shiftKey: key.shift, altKey: key.alt };
         // ⌘K and ⌘⇧P open a field over the window, which takes the keyboard from the page; ⌘J moves it to the header.
-        if (takesKeyboard(key.code)) tab.owner.focus();
+        if (takesKeyboard(action.window)) tab.owner.focus();
         tab.owner.send(WEB_TAB_IPC.key, tabId, pressed);
       }
     });

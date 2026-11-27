@@ -26,6 +26,7 @@
     "./human-status": "./src/human-status.ts",
     "./work-category": "./src/work-category.ts",
     "./memory-lines": "./src/memory-lines.ts",
+    "./text-words": "./src/text-words.ts",
     "./mermaid": "./src/mermaid.ts",
     "./pane-layout": "./src/pane-layout.ts",
     "./window-layout": "./src/window-layout.ts",

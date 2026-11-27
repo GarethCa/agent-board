@@ -1,10 +1,10 @@
 // The board as an MCP server (ADR-0010): a few tools over the same board-ops the CLI uses, and instructions that say
-// once where the agent is and to read `agent-board --help` for the rest. One set of handlers, two transports: stdio
+// once where the agent is and to read `agent-board help <command>` for the rest. One set of handlers, two transports: stdio
 // here (`agent-board mcp`), and Streamable HTTP in the daemon (`board-mcp-http.ts`).
 import { isAbsolute } from 'node:path';
 import { addSchedule, listSchedules, listTemplates, removeSchedule, removeTemplate, saveTemplate, setOwnSchedule } from './clock-ops.ts';
-import { listSteps, newSteps, readStepsCard, updateSteps, type StepsUpdate } from './steps-ops.ts';
-import { listMemories, listQueues, memoryHistory, newMemory, newQueue, queueHistory, readMemory, readQueue, updateMemory, updateQueue, type MemoryUpdate, type QueueUpdate } from './memory-ops.ts';
+import { listSteps, newSteps, readStepsCard, stepsUpdate, stepWords, updateSteps, type StepsUpdate } from './steps-ops.ts';
+import { listMemories, listQueues, memoryHistory, newMemory, newQueue, queueHistory, memoryUpdate, queueUpdate, readMemory, readQueue, updateMemory, updateQueue, type MemoryUpdate, type QueueUpdate } from './memory-ops.ts';
 import { changeTodo, readTodos, remind } from './todo-ops.ts';
 import {
   addEdge,
@@ -47,11 +47,9 @@ import {
   readCards,
   sendToAgent,
   setDefaultRole,
-  categoryAnswer,
-  characterAnswer,
-  setCrewStatus,
-  setOwnStatus,
-  purposeAnswer,
+  checkPrefabStart,
+  PREFAB_SETS,
+  setStatus,
   flagLine,
   flagOwn,
   openOwnPullRequest,
@@ -65,7 +63,7 @@ import {
   watchCrew,
   type BoardSession,
 } from './board-ops.ts';
-import { AGENT_FACES, AGENT_POSES, AGENT_PROPS, characterReading, NO_POSE, parseCharacter, type CharacterSet } from './character.ts';
+import { AGENT_FACES, AGENT_POSES, AGENT_PROPS, NO_POSE, parseCharacter, type CharacterSet } from './character.ts';
 import { DaemonRpcError } from './client.ts';
 import { documentTitle } from './document-names.ts';
 import {
@@ -95,8 +93,6 @@ import {
   MAX_FIGURE_VALUE,
   MAX_JOB_HEADLINE,
   QUEUE_ADD_KINDS,
-  QUEUE_ROW_KINDS,
-  type QueueAddKind,
   MAX_PAGE_BLOCKS,
   MAX_PAGE_FIGURES,
   MAX_PAGE_ITEM,
@@ -158,7 +154,6 @@ import {
   MAX_PURPOSE_LENGTH,
   MAX_STATUS_LENGTH,
   RPC_ERROR,
-  statusLine,
   type BoardCaller,
   type CrewEventKind,
   type WaitState,
@@ -167,6 +162,7 @@ import {
   MAX_WAITING_ON_LENGTH,
   MAX_WORK_LABEL_LENGTH,
   WORK_CATEGORIES,
+  type LaunchSettings,
 } from './protocol.ts';
 import { NO_CATEGORY, parseWorkCategorySet } from './work-category.ts';
 import { handleRpcLine, RpcMethodError, type RpcHandlers } from './rpc.ts';
@@ -177,8 +173,8 @@ const MCP_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 /** What the server tells the model once, as it connects: the "tell it once" rule. */
 export const BOARD_MCP_INSTRUCTIONS =
   'You are running on agent-board, a desktop app that shows coding agents and shells as tiles in zones on one board, ' +
-  'joined by edges that hand work from one agent to the next. Run `agent-board --help` in your shell once to learn the ' +
-  'board and its commands; these tools are the few you need most. A turn ending tells no one: when you are blocked, ' +
+  'joined by edges that hand work from one agent to the next. These tools are the few you need most; for anything else, ' +
+  '`agent-board help <command>` in your shell prints that one command (the whole `agent-board --help` is long: read it only if you must). A turn ending tells no one: when you are blocked, ' +
   'your work is ready for review, or you need a decision, call `needs_you` with the reason in a line. Before you start, ' +
   'list memories with `memory_read`, then read what other agents left; before you finish or hand off, `memory_update` what the next one should know. ' +
   'A zone shares one memory: add to it, and never start a memory of your own for a ticket. ' +
@@ -554,7 +550,7 @@ export const BOARD_MCP_TOOLS: Tool[] = [
         card: { type: 'string', description: 'The card, by ref (item:3f2a).' },
         action: { type: 'string', enum: ['done', 'wait', 'add', 'answer', 'close'], description: 'What to do.' },
         step: { type: 'integer', minimum: 1, description: 'For done, wait and answer: the step, by its number.' },
-        steps: { type: 'string', description: 'For add: the steps, one a line.' },
+        steps: { type: 'string', description: 'For add: the steps, one a line. For done, in place of step: the numbers of several to tick at once, as "2 3 5".' },
         answer: { type: 'string', description: 'For answer: a choice by its number or text, several split by commas, yes or no, or words.' },
         undo: { type: 'boolean', description: 'For done: untick it instead.' },
         send: { type: 'boolean', description: 'For answer: send the answers once this one is in (step and answer may be left out).' },
@@ -893,6 +889,24 @@ export const BOARD_MCP_TOOLS: Tool[] = [
 
 const AGENT_REF = { type: 'string', description: 'The agent, by ref (agent:9c1e) or unique name.' };
 
+/** An agent's env vars of its own, as `--env`. */
+const LAUNCH_ENV_ARG = {
+  type: 'object',
+  additionalProperties: { type: 'string' },
+  description:
+    'Env vars of its own, by name ({"CLAUDE_CODE_EXPERIMENTAL_CODE_MODE": "0"}), kept for its restarts. A Claude agent gets them in ' +
+    'its --settings env block too, which beats the user\'s settings files. Only plain knobs: that one, MAX_THINKING_TOKENS, ' +
+    'CLAUDE_CODE_MAX_OUTPUT_TOKENS, the BASH_ and MCP_ timeouts and limits, and DISABLE_TELEMETRY, DISABLE_ERROR_REPORTING, ' +
+    'DISABLE_AUTOUPDATER, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC and CLAUDE_CODE_DISABLE_TERMINAL_TITLE; the user sets others in the app. ' +
+    'Only the names are shown, never the values. As --env.',
+};
+
+/** An agent's Claude settings of its own, as `--settings`. */
+const LAUNCH_SETTINGS_ARG = {
+  type: 'object',
+  description: "Claude settings of its own, added to the board's --settings ({\"outputStyle\": \"Explanatory\"}). Only alwaysThinkingEnabled, outputStyle, includeCoAuthoredBy, includeGitInstructions, spinnerTipsEnabled, language and env; model and effort are new_agent's own. Claude only. As --settings.",
+};
+
 /** Where the layout tools put something, as `agent-board move` takes it. */
 const PLACE_PROPERTIES = {
   to: { type: 'string', description: "The zone or group to put it in, by ref; `board` for loose on the main board; a ticket's chat, by ref, for that ticket's own board, or `ticket` for yours. Without, its own place: a new note your zone, or your ticket's board if you are a helper beside your ticket." },
@@ -981,6 +995,8 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
             'start on the builder\'s branch each time the builder hands off, and their reviews go back to it, until each approves ' +
             'or the round limit (`agent-board crew`); a lead starts its own crew. Takes zone, repo, issue, description, chat, and name and branch for that member; the prefab sets the rest.',
         },
+        env: LAUNCH_ENV_ARG,
+        settings: LAUNCH_SETTINGS_ARG,
         chat: {
           type: 'string',
           enum: ['implementer', 'lead'],
@@ -1167,6 +1183,8 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
         agent: AGENT_REF,
         fresh: { type: 'boolean', description: 'Start a new conversation instead of carrying on the old one.' },
         prompt: { type: 'string', description: 'With fresh: its first message.' },
+        env: { ...LAUNCH_ENV_ARG, description: "Its env vars of its own in place of the ones it had ({} for none), as new_agent's env. A running agent is stopped first, then carries on its conversation." },
+        settings: { ...LAUNCH_SETTINGS_ARG, description: "Its Claude settings of its own in place of the ones it had ({} for none). Each of env and settings left out stays as it was." },
       },
       required: ['agent'],
       additionalProperties: false,
@@ -1689,6 +1707,15 @@ interface ToolResult {
 /** A tool's answer: its text, its content, or content with fields. */
 type ToolAnswer = string | ToolContent[] | { content: ToolContent[]; structuredContent: Record<string, unknown> };
 
+/** The env and settings args as launch settings, undefined with neither: the daemon checks what they hold. */
+function launchSettingsArgs(args: Record<string, unknown>): LaunchSettings | undefined {
+  if (args.env === undefined && args.settings === undefined) return undefined;
+  return {
+    ...(args.env === undefined ? {} : { env: args.env as Record<string, string> }),
+    ...(args.settings === undefined ? {} : { settings: args.settings as Record<string, unknown> }),
+  };
+}
+
 /** A tool argument that must be a string, or undefined when optional and absent. */
 function stringArg(args: Record<string, unknown>, name: string, optional: true): string | undefined;
 function stringArg(args: Record<string, unknown>, name: string): string;
@@ -1706,124 +1733,66 @@ function linesArgOf(args: Record<string, unknown>): { lines?: number } {
   return { lines: args.lines };
 }
 
-/** A whole version number, from `args.version`. */
-function versionArg(args: Record<string, unknown>): number {
-  if (!Number.isInteger(args.version) || (args.version as number) < 1) throw new BoardError('restore needs version: a version number, as history lists them');
-  return args.version as number;
-}
-
 /** A boolean argument, if given. */
 function booleanArg(args: Record<string, unknown>, name: string): boolean | undefined {
   if (args[name] !== undefined && typeof args[name] !== 'boolean') throw new BoardError(`${name} must be true or false`);
   return args[name] as boolean | undefined;
 }
 
-/** `memory_update`'s arguments as the update `memory add|edit|rm|restore` makes. */
+/** `memory_update`'s arguments, read by the parser `memory add|edit|rm|restore|confirm` uses too. */
 function memoryUpdateArg(args: Record<string, unknown>): MemoryUpdate {
-  const key = stringArg(args, 'key', true);
-  const note = booleanArg(args, 'no_key') === true;
-  if (key !== undefined && note) throw new BoardError('give key or no_key, not both');
-  const text = stringArg(args, 'text', true);
-  const entry = () => stringArg(args, 'entry');
-  switch (args.action) {
-    case 'add': {
-      const path = stringArg(args, 'file', true);
-      const document = stringArg(args, 'document', true);
-      return { action: 'add', ...(text === undefined ? {} : { text }), ...(path === undefined ? {} : { path }), ...(document === undefined ? {} : { document }), ...(key === undefined ? {} : { key }), note };
-    }
-    case 'edit': {
-      const pinned = booleanArg(args, 'pinned');
-      return { action: 'edit', entry: entry(), ...(text === undefined ? {} : { text }), ...(key === undefined ? {} : { key }), note, ...(pinned === undefined ? {} : { pinned }) };
-    }
-    case 'remove':
-      return { action: 'remove', entry: entry() };
-    case 'restore':
-      return { action: 'restore', entry: entry(), version: versionArg(args) };
-    case 'confirm':
-      return { action: 'confirm', entry: entry() };
-    default:
-      throw new BoardError('action must be add, edit, remove, restore or confirm');
-  }
+  const note = booleanArg(args, 'no_key');
+  const pinned = booleanArg(args, 'pinned');
+  const { file: path, ...given } = givenStrings(args, ['entry', 'text', 'key', 'document', 'file'] as const);
+  return memoryUpdate({
+    action: typeof args.action === 'string' ? args.action : undefined,
+    ...given,
+    ...(path === undefined ? {} : { path }),
+    ...(note === undefined ? {} : { note }),
+    ...(pinned === undefined ? {} : { pinned }),
+    ...(args.version === undefined ? {} : { version: args.version }),
+  });
 }
 
-/** `queue_update`'s arguments as the update `queue add|take|…` makes. */
+/** `queue_update`'s arguments, read by the parser `queue add|take|…` uses too. */
 function queueUpdateArg(args: Record<string, unknown>): QueueUpdate {
-  const job = () => stringArg(args, 'job');
-  const text = stringArg(args, 'text', true);
-  const link = stringArg(args, 'link', true);
-  switch (args.action) {
-    case 'add': {
-      if (args.kind !== undefined && !(QUEUE_ADD_KINDS as readonly unknown[]).includes(args.kind)) throw new BoardError(`kind must be one of ${QUEUE_ROW_KINDS.join(', ')} (or job, note)`);
-      const headline = stringArg(args, 'headline', true);
-      const body = stringArg(args, 'body', true);
-      if (headline === undefined && body !== undefined) throw new BoardError('body goes with headline');
-      if (headline !== undefined && text !== undefined) throw new BoardError('give text, or headline and body: not both');
-      return {
-        action: 'add',
-        text: headline ?? stringArg(args, 'text'),
-        ...(headline === undefined ? {} : { body: body ?? '' }),
-        ...(args.kind === undefined ? {} : { kind: args.kind as QueueAddKind }),
-        front: booleanArg(args, 'front') === true,
-        ...(link === undefined ? {} : { link }),
-      };
-    }
-    case 'take': {
-      const which = stringArg(args, 'job', true);
-      return { action: 'take', ...(which === undefined ? {} : { job: which }) };
-    }
-    case 'edit':
-      if (text === undefined && link === undefined) throw new BoardError('edit needs text or link');
-      return { action: 'edit', job: job(), ...(text === undefined ? {} : { text }), ...(link === undefined ? {} : { link }) };
-    case 'done': {
-      const result = stringArg(args, 'result', true);
-      return { action: 'done', job: job(), ...(result === undefined ? {} : { result }) };
-    }
-    case 'drop':
-    case 'remove':
-    case 'later':
-    case 'up':
-      return { action: args.action, job: job() };
-    case 'restore':
-      return { action: 'restore', job: job(), version: versionArg(args) };
-    case 'move':
-      return { action: 'move', job: job(), to: stringArg(args, 'to') };
-    case 'drain': {
-      const on = booleanArg(args, 'on');
-      if (on === undefined) throw new BoardError('drain needs on: true or false');
-      const most = args.most;
-      if (most !== undefined && (!Number.isInteger(most) || (most as number) < 1 || (most as number) > 3)) throw new BoardError('most is 1, 2 or 3');
-      return { action: 'drain', on, ...(most === undefined ? {} : { most: most as number }) };
-    }
-    default:
-      throw new BoardError('action must be add, take, drop, done, edit, move, later, up, remove, restore or drain');
-  }
+  const { headline, text, ...given } = givenStrings(args, ['job', 'text', 'headline', 'body', 'kind', 'link', 'result', 'to'] as const);
+  if (headline === undefined && given.body !== undefined) throw new BoardError('body goes with headline');
+  if (headline !== undefined && text !== undefined) throw new BoardError('give text, or headline and body: not both');
+  const front = booleanArg(args, 'front');
+  const on = booleanArg(args, 'on');
+  const body = headline === undefined ? {} : { body: given.body ?? '' };
+  const line = headline ?? text;
+  return queueUpdate({
+    action: typeof args.action === 'string' ? args.action : undefined,
+    ...given,
+    ...body,
+    ...(line === undefined ? {} : { text: line }),
+    ...(front === undefined ? {} : { front }),
+    ...(on === undefined ? {} : { on }),
+    ...(args.version === undefined ? {} : { version: args.version }),
+    ...(args.most === undefined ? {} : { most: args.most }),
+  });
 }
 
 /** `steps_update`'s arguments as the update `steps done|wait|add|answer|close` makes. */
 function stepsUpdateArg(args: Record<string, unknown>): StepsUpdate {
-  const step = args.step;
-  if (step !== undefined && (!Number.isInteger(step) || (step as number) < 1)) throw new BoardError('step must be a step number, from 1');
-  for (const flag of ['undo', 'send']) {
-    if (args[flag] !== undefined && typeof args[flag] !== 'boolean') throw new BoardError(`${flag} must be true or false`);
-  }
-  const needStep = () => {
-    if (step === undefined) throw new BoardError(`${String(args.action)} needs step`);
-    return step as number;
-  };
-  switch (args.action) {
-    case 'done':
-      return { action: 'done', steps: [needStep()], undo: args.undo === true };
-    case 'wait':
-      return { action: 'wait', step: needStep() };
-    case 'add':
-      return { action: 'add', text: stringArg(args, 'steps') };
-    case 'answer':
-      return { action: 'answer', ...(step === undefined ? {} : { step: step as number, answer: stringArg(args, 'answer') }), send: args.send === true };
-    case 'close':
-      return { action: 'close' };
-    default:
-      throw new BoardError('action must be done, wait, add, answer or close');
-  }
+  const action = typeof args.action === 'string' ? args.action : undefined;
+  const text = stringArg(args, 'steps', true);
+  const answer = stringArg(args, 'answer', true);
+  const undo = booleanArg(args, 'undo');
+  const send = booleanArg(args, 'send');
+  // For done, steps names the steps to tick, as the CLI's words do; for add, it is the steps to add.
+  const listed = action === 'done' && text !== undefined;
+  if (listed && args.step !== undefined) throw new BoardError('give step or steps, not both');
+  return stepsUpdate({
+    action,
+    steps: listed ? stepWords(text) : args.step === undefined ? [] : [args.step],
+    ...(text === undefined || listed ? {} : { text }),
+    ...(answer === undefined ? {} : { answer }),
+    ...(undo === undefined ? {} : { undo }),
+    ...(send === undefined ? {} : { send }),
+  });
 }
 
 /** `new`'s `edges`: auto or manual, or undefined. */
@@ -1938,7 +1907,6 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
   set_status: async (session, { summary, progress, done, agent: crewMember, character: given, category: kind, label, waiting_on: waitingOn, description }) => {
     if (summary !== undefined && typeof summary !== 'string') throw new BoardError('summary must be a string');
     if (description !== undefined && typeof description !== 'string') throw new BoardError('description must be a string');
-    if (summary === undefined && given === undefined && kind === undefined && description === undefined) throw new BoardError('give a summary, a character, a category, a description, or more');
     if (progress !== undefined && typeof progress !== 'number') throw new BoardError('progress must be a number');
     let character: CharacterSet | undefined;
     try {
@@ -1952,32 +1920,27 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
     } catch (error) {
       throw new BoardError((error as Error).message.replace(/\bwaitingOn\b/g, 'waiting_on'));
     }
-    if (crewMember !== undefined) {
-      if (typeof crewMember !== 'string') throw new BoardError('agent must be a ref or name');
-      if (done === true) throw new BoardError('done is for your own status: a crew member says it is finished itself');
-      return (await setCrewStatus(session, crewMember, summary, progress, character, category, description)).text;
-    }
-    const agent = await setOwnStatus(session, summary, progress, done === true, character, category, description);
-    const lines =
-      summary === undefined ? [] : [
-            `Your tile now says: "${statusLine(agent.status!)}" (${agent.status!.summary.length} of ${MAX_STATUS_LENGTH} characters, shown in full)${agent.workFinishedAt === null ? '' : ', and that your work is finished'}.`,
-          ];
-    if (category !== undefined || done === true) lines.push(categoryAnswer(agent));
-    if (description !== undefined) lines.push(purposeAnswer(agent));
-    if (character !== undefined) {
-      const { shown, yours, expires } = characterReading(agent);
-      lines.push(characterAnswer(agent), JSON.stringify({ ok: true, shown, yours, expires }));
-    }
-    return lines.join('\n');
+    if (crewMember !== undefined && typeof crewMember !== 'string') throw new BoardError('agent must be a ref or name');
+    if (done !== undefined && typeof done !== 'boolean') throw new BoardError('done must be true or false');
+    const answer = await setStatus(session, {
+        ...(summary === undefined ? {} : { summary }),
+        ...(progress === undefined ? {} : { progress }),
+        ...(done === undefined ? {} : { done }),
+        ...(character === undefined ? {} : { character }),
+        ...(category === undefined ? {} : { category }),
+        ...(description === undefined ? {} : { description }),
+        ...(crewMember === undefined ? {} : { agent: crewMember }),
+    });
+    return answer.reading === undefined ? answer.text : `${answer.text}\n${answer.reading}`;
   },
   new_agent: async (session, args) => {
     const prefab = stringArg(args, 'prefab', true);
-    const chat = stringArg(args, 'chat', true);
-    if (chat !== undefined && chat !== 'implementer' && chat !== 'lead') throw new BoardError('chat is implementer or lead');
-    if (chat !== undefined && prefab === undefined) throw new BoardError("chat picks the kind of ticket chat a ticket prefab starts: give prefab too");
+    const chat = checkPrefabStart(
+      prefab,
+      stringArg(args, 'chat', true),
+      PREFAB_SETS.find((key) => args[key] !== undefined),
+    );
     if (prefab !== undefined) {
-      const set = ['harness', 'model', 'effort', 'role', 'template', 'base', 'edges'].find((key) => args[key] !== undefined);
-      if (set !== undefined) throw new BoardError(`${set} is the prefab's to set: with prefab, give zone, repo, issue, chat, name, branch and description alone`);
       return (
         await startPrefab(session, {
           name: prefab,
@@ -2008,6 +1971,7 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
         edges: edgesArg(args),
         issue: stringArg(args, 'issue', true),
         description: stringArg(args, 'description', true),
+        launchSettings: launchSettingsArgs(args),
       })
     ).text;
   },
@@ -2077,7 +2041,7 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
     const prompt = stringArg(args, 'prompt', true);
     if (args.fresh !== true && prompt !== undefined && prompt.trim() !== '') throw new BoardError('prompt needs fresh');
     const anew = args.fresh === true ? { prompt: prompt === undefined || prompt.trim() === '' ? undefined : prompt } : undefined;
-    return (await restartAgent(session, stringArg(args, 'agent'), anew)).text;
+    return (await restartAgent(session, stringArg(args, 'agent'), anew, launchSettingsArgs(args))).text;
   },
   pause: async (session, args) => (await pauseAgent(session, stringArg(args, 'agent'))).text,
   wake: async (session, args) => (await wakeAgent(session, stringArg(args, 'agent'))).text,

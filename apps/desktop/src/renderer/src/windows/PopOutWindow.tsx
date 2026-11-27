@@ -4,7 +4,8 @@ import { WINDOW_QUERY, type WindowTarget } from '../../../preload/api';
 import { errorMessage } from '../../../shared/errors';
 import { HeldPromptsNotice } from '../inbox/Inbox';
 import { SquareArrowDownLeft, X } from 'lucide-react';
-import { PopUpSession, TicketPopupBody, type PopUpSplitting, type PopUpWindow } from '../board/AgentPopup';
+import { AgentView, type AgentViewFrame } from '../board/agent-view/AgentView';
+import type { PopUpSplitting } from '../board/agent-view/use-agent-view-row';
 import type { PopupSplit } from '../board/popup-split';
 import { popUpHelpers } from '../board/agent-popup';
 import { tokenNumber } from '../theme';
@@ -150,7 +151,7 @@ function PoppedAgent({ agent, agents, target, notice }: PoppedProps & { agent: A
   const others = usePoppedOut().filter((id) => id !== agent.sessionId);
   const splitting: PopUpSplitting = { split, onSplit: setSplit, agents, popped: others };
   const board = useMemo(() => ({ agents, desk: { gap: tokenNumber('--desk-dot-gap'), size: tokenNumber('--desk-dot-size') }, onError: report }), [agents, report]);
-  const own: PopUpWindow = {
+  const own: AgentViewFrame = {
     buttons: (
       <Button size="sm" icon={<SquareArrowDownLeft />} onClick={popIn(target)}>
         Back to board
@@ -180,11 +181,19 @@ function PoppedAgent({ agent, agents, target, notice }: PoppedProps & { agent: A
       data-split={split !== undefined || undefined}
         aria-label={`${agent.name}, popped out`}
       >
-        {helpers === undefined ? (
-          <PopUpSession agent={agent} nodeId={nodeId} onClose={() => window.close()} root={root} splitting={splitting} window={own} />
-        ) : (
-          <TicketPopupBody chat={agent} helpers={helpers} on={undefined} popped={others} nodeId={nodeId} onClose={() => window.close()} root={root} board={board} splitting={splitting} window={own} />
-        )}
+        {/* A ticket's view is not a lone agent's, even of the same agent: a new one as its helpers come or go. */}
+        <AgentView
+          key={helpers === undefined ? 'agent' : 'ticket'}
+          agent={agent}
+          helpers={helpers}
+          popped={helpers === undefined ? undefined : others}
+          board={helpers === undefined ? undefined : board}
+          nodeId={nodeId}
+          onClose={() => window.close()}
+          root={root}
+          splitting={splitting}
+          frame={own}
+        />
       </section>
     </TileActionsContext>
   );

@@ -1,11 +1,11 @@
-import { useContext, useEffect, useRef, useState, type RefObject } from 'react';
-import { ChevronDown, CircleStop, Maximize2, Minimize2, MoreHorizontal, Play, Power, SquareArrowDownLeft, SquareArrowOutUpRight, SquareTerminal, Square, X } from 'lucide-react';
+import { useContext, useState, type RefObject } from 'react';
+import { ChevronDown, CircleStop, Maximize2, Minimize2, MoreHorizontal, Power, SquareArrowDownLeft, SquareArrowOutUpRight, SquareTerminal, X } from 'lucide-react';
 import type { Agent } from '@agent-board/daemon/protocol';
 import { HUMAN_STATUS_LABELS, humanStatus } from '@agent-board/daemon/human-status';
 import { agentMenu, type ModelEntry } from '../board/menu-model';
 import { ClickOpensContext, TileActionsContext } from '../board/tile';
 import { StatusMark } from '../board/StatusMark';
-import { keyText, pressed } from '../keys/registry';
+import { keyText } from '../keys/registry';
 import { useNeedsYouShows } from '../needs-you-setting';
 import { useReviews } from '../review/ReviewsProvider';
 import { roundsOf } from '../review/reviews';
@@ -18,6 +18,7 @@ import { DetailsToggle } from './DetailsToggle';
 import { SessionName } from './SessionName';
 import type { WindowNav } from './SessionWindow';
 import { FrostMark, FrozenOr } from '../board/FrostMark';
+import { NowAction } from '../board/agent-view/NowAction';
 
 interface SimplifiedHeaderProps {
   sessionId: string;
@@ -70,7 +71,7 @@ export function SimplifiedHeader({ sessionId, agent, name, title, placement, nav
             <GateControls agent={agent} visible />
           </span>
         )}
-        {agent && <StateAction agent={agent} placement={placement} />}
+        {agent && <NowAction agent={agent} placement={placement} />}
         <span className="session-window-view-slot" ref={onViewSlot} />
         <DetailsToggle open={detailsOpen} onOpen={onDetailsOpen} />
         <Menu align="end" entries={windowMenu({ agent, placement, terminalToggle, onPopOut, onPopIn, maximise, onClose, onEnd: () => setEnding(true), board })}>
@@ -150,53 +151,6 @@ export function windowMenu({
 /** Drops the separators at either end and those doubled up, which rows left out of a menu would leave. */
 function tidy(entries: MenuEntry[]): MenuEntry[] {
   return entries.filter((entry, index) => entry !== 'separator' || (index > 0 && index < entries.length - 1 && entries[index - 1] !== 'separator'));
-}
-
-/** The header's one action for what the agent is doing now: Stop (⌘.) while it works, Wake while paused, else none. */
-export function StateAction({ agent, placement }: { agent: Agent; placement: 'board' | 'own-window' }) {
-  const toast = useToast();
-  // On the board, Wake is the board's own, as from the tile, so a second press while one is under way waits on it.
-  const { resumeAgent } = useContext(TileActionsContext);
-  const wake = placement === 'board' ? () => resumeAgent(agent.sessionId) : () => window.agentBoard.agents.resume(agent.sessionId);
-  const [busy, setBusy] = useState(false);
-  const shows = useNeedsYouShows();
-  const working = agent.endedAt === null && humanStatus(agent, shows).status === 'working';
-  const paused = agent.state === 'hibernated';
-  const act = (what: string, call: () => Promise<unknown>) => {
-    setBusy(true);
-    call()
-      .catch((failure: unknown) => toast.show({ tone: 'error', message: `Could not ${what}: ${errorMessage(failure)}` }))
-      .finally(() => setBusy(false));
-  };
-  const stop = useRef(() => {});
-  stop.current = () => act('stop its step', () => window.agentBoard.agents.interrupt(agent.sessionId));
-  // ⌘. while it works, wherever the focus is in the window, before the terminal takes it.
-  useEffect(() => {
-    if (!working) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (!pressed('window.stopStep', event)) return;
-      event.preventDefault();
-      event.stopPropagation();
-      stop.current();
-    };
-    window.addEventListener('keydown', onKeyDown, true);
-    return () => window.removeEventListener('keydown', onKeyDown, true);
-  }, [working]);
-  if (working) {
-    return (
-      <Button size="sm" icon={<Square />} loading={busy} onClick={() => stop.current()} tooltip={`Stop what it is doing now; it keeps its conversation  ${keyText('window.stopStep')}`}>
-        Stop
-      </Button>
-    );
-  }
-  if (paused) {
-    return (
-      <Button size="sm" icon={<Play />} loading={busy} onClick={() => act('wake it', wake)} tooltip="Wake it: it picks up where it was paused">
-        Wake
-      </Button>
-    );
-  }
-  return null;
 }
 
 /** The zone as a pop-up: its agents and shells, each with its status, to show one here, and stepping through them. */

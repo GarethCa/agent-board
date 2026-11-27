@@ -36,6 +36,12 @@ const nowText = (): string => new Date().toISOString();
 /** Whether a row is put off at `now`: marked Later, or put off until a time still ahead. */
 export const isLaterRow = (job: QueueJob, now = nowText()): boolean => isPutOff(job, now);
 
+/** Whether a row can be handed to an agent: a waiting job of a queue for agents, not marked Later. */
+export const handable = (job: QueueJob, audience: QueueAudience) => audience === 'agents' && isQueueWork(job.kind) && job.state === 'queued' && !isLaterRow(job);
+
+/** Whether a row can be marked Later: a waiting job, not yet put off. */
+export const puttable = (job: QueueJob) => isQueueWork(job.kind) && job.state === 'queued' && !isLaterRow(job);
+
 /**
  * The open rows in the order the card lists them: those taken first, then those waiting in their queue's order, then
  * those marked Later (or put off until a time), at its foot.
@@ -45,6 +51,16 @@ export function openInCardOrder(jobs: readonly QueueJob[], now = nowText()): Que
   const later = open.filter((job) => job.state === 'queued' && isPutOff(job, now));
   const waiting = open.filter((job) => job.state === 'queued' && !isPutOff(job, now));
   return [...open.filter((job) => job.state === 'taken'), ...waiting, ...later];
+}
+
+/**
+ * Where ⌥↑ or ⌥↓ puts a waiting row among `open` (the rows in their queue's order): just before the row it passes, or
+ * last (null); undefined when it is at that end already.
+ */
+export function moveTarget(open: readonly QueueJob[], job: QueueJob, by: -1 | 1): { before: QueueJob | null } | undefined {
+  const at = open.findIndex((each) => each.id === job.id);
+  if (at < 0 || at + by < 0 || at + by >= open.length) return undefined;
+  return { before: by < 0 ? open[at - 1]! : (open[at + 2] ?? null) };
 }
 
 /** The done jobs, newest first, as the daemon lists them. */

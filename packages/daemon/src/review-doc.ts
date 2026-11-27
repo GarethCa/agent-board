@@ -1,6 +1,7 @@
 // A review doc: the markdown a reviewer agent leaves as its final message, in the format its prompt asks for.
 // Read by the daemon (a merge waits for no open blockers) and the app's review viewer, which share the rules below for
 // when a round may start or approve a merge.
+import { plural } from './text-words.ts';
 import type { Agent, ReviewRound } from './protocol.ts';
 
 export const SEVERITIES = ['blocker', 'major', 'minor'] as const;
@@ -164,9 +165,6 @@ export function reviewPrompt({ round, implementer, branch, base, wholeBranch = f
   ].join('\n\n');
 }
 
-/** "1 blocker", "2 rounds". */
-const count = (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`;
-
 /**
  * Why the implementer can't start another review round now, or undefined if it can: one round at a time, and at most
  * its cap of rounds that left a review (a failed one doesn't count).
@@ -175,7 +173,7 @@ export function startBlocked(implementer: Pick<Agent, 'reviewCap'>, rounds: read
   const open = rounds.find((round) => round.status === 'reviewing');
   if (open !== undefined) return `Round ${open.round} is still under review.`;
   const reviewed = rounds.filter((round) => round.status === 'ready').length;
-  if (reviewed >= implementer.reviewCap) return `All ${count(implementer.reviewCap, 'review round')} used: raise the cap for another.`;
+  if (reviewed >= implementer.reviewCap) return `All ${plural(implementer.reviewCap, 'review round')} used: raise the cap for another.`;
   return undefined;
 }
 
@@ -193,7 +191,7 @@ export function mergeBlocked(
   if (round.doc === null) return `Round ${round.round} has no review yet.`;
   const doc = parseReviewDoc(round.doc);
   const blockers = openFindings(doc).blocker;
-  if (blockers > 0) return `${count(blockers, 'blocker')} still open.`;
+  if (blockers > 0) return `${plural(blockers, 'blocker')} still open.`;
   if (doc.verdict !== 'approve') return `Round ${round.round} doesn't approve the work.`;
   const pr = implementer.pullRequests.find((known) => known.state === 'open');
   if (pr === undefined) return `${implementer.name} has no open pull request.`;

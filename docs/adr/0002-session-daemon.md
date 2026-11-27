@@ -77,6 +77,15 @@ Nothing brings it back after a restart: the pane shows the agent's saved screen,
 run or a flow hand-off to the ended agent ends its shell without asking: the user set that run up, and it needs the
 pane. Restarting from the board asks first if the shell is running something.
 
+**Update**: every wake as Wake. Superseding the line above, nothing starts an ended agent over its shell without
+the check Wake makes. A scheduled run, a hand-off, a resend and a retried start go through the same check (`wakeRefusal`) as the board's Restart, never forced. None starts it while its shell runs
+something or its own harness runs there, and none starts a reviewer whose round is over (a retried start aside).
+None of these paths can ask the user, so a run or hand-off refused for its shell is kept as not delivered on the
+agent, with the reason, for the user to Resend once the shell is free. A board notice never wakes a paused agent: it
+is busy, and tried again later.
+Each of them, an orchestrator's `send` and the composer's answer decide what becomes of a message (typed now, kept
+until the turn ends or the session is up, a wake, or refused) by one plan (`planMessage`).
+
 **Upgrades**: an app shows nothing of a daemon from another build. The daemon outlives the app, so after
 an upgrade the new app may find the old build's daemon still running, and code from one build can't read another's
 state: the new board read fields the old daemon never sent, threw while rendering, and left its window blank, the offer

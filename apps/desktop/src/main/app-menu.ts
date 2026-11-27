@@ -1,19 +1,28 @@
 import type { MenuItemConstructorOptions } from 'electron';
 import { menuBarItems, NO_MENU_BAR, selectionMenu, type MenuBar } from './menu-bar-items';
 import { viewMenu, type TechnicalItem } from './view-menu';
+import { acceleratorOf } from '../renderer/src/keys/menu-bar';
+import { binding, chordsOf, type KeyId } from '../renderer/src/keys/registry';
 
 type MenuBarKeys = ReturnType<typeof menuBarItems>;
 
 /** Where Check for Updates… goes until the app has an updater of its own. */
 export const RELEASES_URL = 'https://github.com/GarethCa/agent-board/releases';
 
-/** Window › Overview's shortcut: ⌘⇧O, or Ctrl+Shift+O, from any window. */
-const OVERVIEW_ACCELERATOR = 'CommandOrControl+Shift+O';
-const SETTINGS_ACCELERATOR = 'CommandOrControl+,';
-/** File › Close Window, off ⌘W, which Close Tab owns (as in Safari). Off macOS Ctrl+Shift+W is a session window's Close Tab. */
-const CLOSE_WINDOW_ACCELERATOR = 'Command+Shift+W';
+/** The accelerator of the key list's chord `at` for one of the app menu's own items, as macOS presses it. */
+const appMenuAccelerator = (id: KeyId, at = 0) => acceleratorOf(chordsOf(binding(id), true)[at]!, true)!;
+
+/** Window › Overview's shortcut, from any window: ⌘⇧O, or Ctrl+Shift+O. */
+const OVERVIEW_ACCELERATOR = appMenuAccelerator('window.overview');
+/** Settings…: ⌘, or Ctrl+,. */
+const SETTINGS_ACCELERATOR = appMenuAccelerator('move.settings');
+/**
+ * File › Close Window, macOS only (so Command, not CommandOrControl, which off macOS is Ctrl+Shift+W, a session window's
+ * Close Tab): ⌘⇧W, off ⌘W, which Close Tab owns (as in Safari).
+ */
+const CLOSE_WINDOW_ACCELERATOR = appMenuAccelerator('move.closeWindow').replace('CommandOrControl', 'Command');
 /** With no tab to close (the board, Settings, the Overview), ⌘W closes the window, as in Safari. */
-const CLOSE_WINDOW_ACCELERATOR_NO_TABS = 'Command+W';
+const CLOSE_WINDOW_ACCELERATOR_NO_TABS = appMenuAccelerator('move.closeWindow', 1).replace('CommandOrControl', 'Command');
 
 /** The accelerators main's own items hold, which no registry action may take. */
 const MAIN_ACCELERATORS = [SETTINGS_ACCELERATOR, OVERVIEW_ACCELERATOR, CLOSE_WINDOW_ACCELERATOR];

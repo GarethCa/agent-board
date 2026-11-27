@@ -68,9 +68,9 @@ async function twoAgents(app: ElectronApplication, window: Page, repo: string): 
   await expect(tile(window)).toHaveCount(2);
 }
 
-// What ↵ does here. On the board with nothing selected, ⇧↵ has no session to open a row beside, so the pill says only
-// what ↵ does; in a window, a session row can open beside the one shown, and the pill says so short.
-const SHOWS = '↵ show on board';
+// What ↵ does here. On the board, ⇧↵ on a session row opens its view, and the pill says so; in a window, a session
+// row can open beside the one shown, and the pill says so short.
+const SHOWS = '↵ show · ⇧↵ open';
 const SWITCHES = '↵ switch · ⇧↵ beside';
 
 test('⌘K flies to a tile clear of the Captain’s pane where it covers the board, not under it', async () => {
@@ -122,7 +122,7 @@ test('⌘K on the board finds an agent by part of its name and flies to its tile
     await window.getByRole('button', { name: 'Zoom Out' }).click();
     await window.mouse.wheel(0, 600);
 
-    // Before anything is typed it lists the sessions and the zone, and says ↵ shows the tile here (nothing is selected).
+    // Before anything is typed it lists the sessions and the zone, and says ↵ shows the tile here and ⇧↵ opens it.
     const fit = window.getByRole('button', { name: 'Fit View' });
     await fit.focus();
     await window.keyboard.press(windowKey('k'));

@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.7.3 (2026-11-27)
+
+- A repo-config key written after the board's check can't name a program its git runs
+- Agents a clock or queue starts sit clear of their neighbours, and close with their reviewers
+- The cheat sheet lists ⇧↵ in ⌘K on the board, opening the pick's view
+- Agents may set only named DISABLE_ switches in launch settings
+- The CLI and MCP read steps, memory, queue, status and prefab starts with one parser each
+- Reviewers start with their zone's Codex hook-trust setting; one insert helper replaces three positional INSERTs
+- The crew won't put work back through, and the daemon's reads won't run, a filter the repo's own config names
+- Arranging the board from the app or by an agent gives the same layout
+- An agent can start with its own launch settings (env vars, Claude settings), kept through restarts
+- A message never starts an ended agent over a running shell, its own harness or a finished reviewer; one plan for every send
+- The board won't check out or merge with a merge driver or filter the repo's own config names
+- Closing or deleting an agent always ends its helpers, then its reviewers, then itself, and judges unsaved work one way
+- One AgentView for the pop-up, the expanded tile and the pop-out (Part 2, no pixels move)
+- The board won't push, fetch or sign with programs the repo's own config names
+- Shortcuts greyed out in windows without them; web tabs hand over every window key
+- On the board, ⌘K's pill and foot say ⇧↵ opens a tile's view
+- The expanded agent tile uses the pop-up's UI, tile-sized
+- ⌘K, and the app's other keys from anywhere, open from the pop-up; ↵ there opens the pick in its place, ⇧↵ on the board opens a tile's view
+- Waking from the Captain panel, Settings or a pop-out shares one wake in main and asks the board's busy-shell confirm
+- The long-text gallery's clock shows a set time, so its screenshots don't change with the hour
+- A to-do list opens full screen, and one click on its folded pill opens a peek (and fixes main's peek spec and cheat sheet)
+- A guide to the Claude Code settings that get the most out of agent-board
+- Agents spend fewer tokens: leaner setup, board-tools-only roles, clocks that skip when there's nothing to do
+- A queue opens full screen: its jobs in groups on the left, the one you pick on the right
+- Shared text: one plural, one 'how long ago' and one text cut
+- Full screens share one frame; memory moves onto it, and its folded brain opens it on a double-click
+
 ## v0.7.2 (2026-11-21)
 
 - After a restart, the Captain, agents' exit banners and shells all show the board's Wake button

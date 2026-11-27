@@ -72,7 +72,7 @@ describe('the board MCP server in an agent', () => {
     expect(screen.match(/you {6}agent:\w+ {2}Moving session ids to the daemon {2}\(an agent\)\n/g)).toHaveLength(2);
     expect(screen).toContain(`zone     zone:${zone.id.slice(0, 4)}`);
     expect(screen).toContain('Your tile now says: "Moving session ids to the daemon · 10%"');
-    expect(screen).toContain('status set: Moving session ids to the daemon · 20%');
+    expect(screen).toContain('Your tile now says: "Moving session ids to the daemon · 20%"');
   });
 
   it('keeps the hook URL and token out of a Codex agent’s shell commands', async () => {

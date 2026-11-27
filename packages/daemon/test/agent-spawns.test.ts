@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdirSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it, onTestFinished } from 'vitest';
@@ -19,7 +19,7 @@ const HOOK_URL = 'http://127.0.0.1:4242/hook';
 const MCP_URL = 'http://127.0.0.1:4242/mcp';
 
 /** Agent spawns over a fresh database, harnesses in /bin, recording the sessions they start. */
-function setup(zone: Partial<ZoneRow> = {}, compactWindow = 0, { clickableLinks = true, env = {} as NodeJS.ProcessEnv } = {}) {
+function setup(zone: Partial<ZoneRow> = {}, compactWindow = 0, { clickableLinks = true, env = {} as NodeJS.ProcessEnv, boardOnlyRoles = [] as string[] } = {}) {
   const db = new DatabaseSync(':memory:');
   migrate(db);
   onTestFinished(() => db.close());
@@ -28,6 +28,7 @@ function setup(zone: Partial<ZoneRow> = {}, compactWindow = 0, { clickableLinks 
   const unused = (): never => {
     throw new Error('not used by a launch');
   };
+  const launchSettingsDir = join(tempDataDir(), 'launch-settings');
   const spawns = createAgentSpawns({
     db,
     records: { put: unused },
@@ -42,6 +43,7 @@ function setup(zone: Partial<ZoneRow> = {}, compactWindow = 0, { clickableLinks 
     worktreesDir: '/worktrees',
     scratchDir: '/scratch',
     groupsDir: '/groups',
+    launchSettingsDir,
     rememberFolder: unused,
     harnessPaths: {
       path: (harness) => (harness === 'codex' ? '/bin/codex' : '/bin/claude'),
@@ -55,6 +57,7 @@ function setup(zone: Partial<ZoneRow> = {}, compactWindow = 0, { clickableLinks 
     boardCliPath: '/bin/agent-board',
     compactWindow: () => compactWindow,
     defaultEffort: () => null,
+    boardToolsOnly: (role) => role !== null && boardOnlyRoles.includes(role),
     clickableLinks: () => clickableLinks,
     env: { PATH: '/bin', CLAUDECODE: '1', ...env },
     shell: '/bin/zsh',
@@ -76,7 +79,7 @@ function setup(zone: Partial<ZoneRow> = {}, compactWindow = 0, { clickableLinks 
     typeFirstPrompt: (sessionId, prompt) => void typed.push({ sessionId, prompt }),
     watch: unused,
   });
-  return { spawns, started, typed };
+  return { spawns, started, typed, launchSettingsDir };
 }
 
 describe("launching an agent's harness", () => {
@@ -131,6 +134,56 @@ describe("launching an agent's harness", () => {
       { sessionId: 'a', prompt: undefined },
       { sessionId: 'b', prompt: undefined },
     ]);
+  });
+
+  it("adds an agent's own settings to the board's one --settings, its env vars in its env block and its process env", () => {
+    const { spawns, started, launchSettingsDir } = setup({}, 0, { env: { CLAUDE_CODE_EXPERIMENTAL_CODE_MODE: '1' } });
+    spawns.launch(spec({ launchSettings: { env: { CLAUDE_CODE_EXPERIMENTAL_CODE_MODE: '0', SOME_TOKEN: 's3cret' }, settings: { outputStyle: 'Explanatory' } } }));
+    const { args, env } = started[0]!;
+    // One --settings, not a second that would replace the board's hooks.
+    expect(args.filter((arg) => arg === '--settings')).toHaveLength(1);
+    // A file only the user can read, never argv, which `ps` shows anyone: its values may be secrets.
+    const path = args[args.indexOf('--settings') + 1]!;
+    expect(path).toBe(join(launchSettingsDir, 'a.json'));
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+    expect(statSync(launchSettingsDir).mode & 0o777).toBe(0o700);
+    expect(args.join(' ')).not.toContain('s3cret');
+    const settings = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+    expect(settings).toEqual({ ...claudeSettings(HOOK_URL, ASKING_PERMISSION_HOLD_MS), outputStyle: 'Explanatory', env: { CLAUDE_CODE_EXPERIMENTAL_CODE_MODE: '0', SOME_TOKEN: 's3cret' } });
+    // Over the user's own env, which the --settings env block beats in their settings files too.
+    expect(env.CLAUDE_CODE_EXPERIMENTAL_CODE_MODE).toBe('0');
+    // The board's own env still comes last.
+    expect(env[HOOK_URL_ENV]).toBe(HOOK_URL);
+    // Launched again with none, it has its inline settings back, and its file goes.
+    spawns.launch(spec());
+    const again = started[1]!.args;
+    expect(JSON.parse(again[again.indexOf('--settings') + 1]!)).toEqual(claudeSettings(HOOK_URL, ASKING_PERMISSION_HOLD_MS));
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it("gives codex an agent's own env vars, with no settings", () => {
+    const { spawns, started } = setup();
+    spawns.launch(spec({ harness: 'codex', launchSettings: { env: { RUST_LOG: 'warn' } } }));
+    expect(started[0]!.env.RUST_LOG).toBe('warn');
+    expect(started[0]!.args.join(' ')).not.toContain('RUST_LOG');
+  });
+
+  it("keeps a board-tools-only role to the board's tools whatever env the agent was given", () => {
+    const { spawns, started } = setup({}, 0, { boardOnlyRoles: ['reviewer'] });
+    spawns.launch(spec({ role: 'reviewer', launchSettings: { env: { ENABLE_CLAUDEAI_MCP_SERVERS: 'true' } } }));
+    const { args, env } = started[0]!;
+    expect(env.ENABLE_CLAUDEAI_MCP_SERVERS).toBe('false');
+    const settings = JSON.parse(readFileSync(args[args.indexOf('--settings') + 1]!, 'utf8')) as { env: Record<string, string> };
+    expect(settings.env.ENABLE_CLAUDEAI_MCP_SERVERS).toBe('false');
+  });
+
+  it("puts the board's own knobs in the --settings env block too, over the agent's own", () => {
+    const { spawns, started } = setup({}, 400_000);
+    spawns.launch(spec({ launchSettings: { env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1' } } }));
+    const { args, env } = started[0]!;
+    const settings = JSON.parse(readFileSync(args[args.indexOf('--settings') + 1]!, 'utf8')) as { env: Record<string, string> };
+    expect(settings.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe('400000');
+    expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe('400000');
   });
 
   it("passes claude the compact window only when the setting is on, and never changes codex's env", () => {
@@ -212,6 +265,23 @@ describe("launching an agent's harness", () => {
     expect(overrides).toContain('mcp_servers.agent-board.command="/bin/agent-board"');
     expect(overrides).toContain('mcp_servers.agent-board.args=["mcp"]');
     expect(overrides.some((o) => o.includes('.url='))).toBe(false);
+  });
+
+  it("keeps a role's claude agents to the board's tools when Settings say so, and no other agent", () => {
+    const { spawns, started } = setup({}, 0, { boardOnlyRoles: ['reviewer'] });
+    spawns.launch(spec({ id: 'a', role: 'reviewer' }));
+    spawns.launch(spec({ id: 'b', role: 'implementer' }));
+    spawns.launch(spec({ id: 'c' }));
+    spawns.launch(spec({ id: 'd', harness: 'codex', role: 'reviewer' }));
+    const [reviewer, implementer, none, codex] = started;
+    // Only the board's server, passed by --mcp-config: none of the user's, and no claude.ai connectors.
+    expect(reviewer!.args).toContain('--strict-mcp-config');
+    expect(reviewer!.args.indexOf('--strict-mcp-config')).toBe(reviewer!.args.indexOf('--mcp-config') + 2);
+    expect(reviewer!.env.ENABLE_CLAUDEAI_MCP_SERVERS).toBe('false');
+    for (const other of [implementer!, none!, codex!]) {
+      expect(other.args).not.toContain('--strict-mcp-config');
+      expect(other.env.ENABLE_CLAUDEAI_MCP_SERVERS).toBeUndefined();
+    }
   });
 
   it('carries on the conversation when resuming, unless it never had one, and leaves the MCP server out when its zone does', () => {

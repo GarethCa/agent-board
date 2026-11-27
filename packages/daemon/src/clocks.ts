@@ -29,27 +29,34 @@ import {
   type ClockStatus,
   type ClockTemplateData,
   type DaemonCall,
+  type ClockOnlyIf,
+  type FlowCommandPlan,
+  MAX_CLOCK_ONLY_IF,
+  NOTHING_TO_DO,
 } from './protocol.ts';
+import { commandPlan } from './flow-approvals.ts';
+import { commandFailure, createShellRunner, type RunResult } from './flow-conditions.ts';
+import { folderPath } from './repo-zone.ts';
 import { boardCaller, isOwnLiveSession, type BoardCallerSources, type BoardConnection } from './board.ts';
 import type { OrchestratorAccess } from './orchestrator-types.ts';
 import { RpcMethodError, type RpcHandlers } from './rpc.ts';
 import { cronWords, looksStuck, sinceWords, stuckFlagReason } from './cron.ts';
-import { createScheduleHost, type FiringClock, type Fired, type OpenRun, type ScheduleHost } from './schedules.ts';
-import { cutText } from './text-cut.ts';
+import { createScheduleHost, type FiringClock, type Fired, type OpenRun, type RunPatch, type ScheduleHost } from './schedules.ts';
+import { cutText } from './text-words.ts';
 import { isObject } from './json.ts';
 import { asksSomething } from './hook-states.ts';
-import { AGENT_TILE_SIZE, freeSpotFor } from './board-layout.ts';
+import { AGENT_TILE_SIZE } from './board-layout.ts';
 import { spotOnTicketBoard } from './ticket-board.ts';
 import { ownTicketBoard } from './ticket-tiles.ts';
 
-type ClockMethods = Pick<DaemonMethods, 'clock.list' | 'clock.runNow' | 'clock.add' | 'agent.setSchedule'>;
+type ClockMethods = Pick<DaemonMethods, 'clock.list' | 'clock.runNow' | 'clock.add' | 'clock.setOnlyIf' | 'agent.setSchedule'>;
 type OrchestratorClockMethods = Pick<DaemonMethods, 'orchestrator.addClock' | 'orchestrator.removeClock'>;
 type AgentClockMethods = Pick<DaemonMethods, 'clock.self' | 'clock.addSelf'>;
 
 /** Why a fresh agent that flagged you is left on the board when its run ends: closing it would take its flag. */
 const KEPT_FLAGGED = 'kept: it flagged you';
 
-/** The gap between a clock and the tile it is put beside, and between a clock and the fresh agent it starts. */
+/** The gap between a clock and the tile it is put beside, and between a clock and the note of a run whose agent has no tile. */
 const CLOCK_GAP = 60;
 const FRESH_GAP = 24;
 /** The terminal a fresh agent starts with, as an orchestrator's do. */
@@ -60,6 +67,14 @@ const MAX_RESULT = 4_000;
 const MAX_NAME_TASK = 32;
 /** The most agents a clock started that may still be on the board: it starts no more until one goes. */
 const MAX_FRESH_ON_BOARD = 3;
+/** How long a clock's only-if script may run before its run skips. */
+const ONLY_IF_TIMEOUT_MS = 60_000;
+/** The most characters of what an only-if script printed that its run's prompt takes. */
+const MAX_ONLY_IF_SAID = 4_000;
+/** Why a run skips once what its only-if script runs has changed since the user set it. */
+const ONLY_IF_CHANGED = 'its only-if script has changed since you set it: set it again';
+/** Why a run skips once the clock would run its only-if script in another folder than the one the user set it for. */
+const ONLY_IF_MOVED = 'its only-if script would run in another folder than you set it for: set it again';
 
 /** A new clock's data: weekdays at nine, on, messaging and leaving its agent idle, with nothing to say yet. */
 export function newClockData(): ClockData {
@@ -86,13 +101,19 @@ function freshAgentName(prompt: string, count: number): string {
 export interface ClockHostOptions {
   db: DatabaseSync;
   clock: Clock;
-  agents: Pick<AgentHost, 'get' | 'list' | 'runScheduled' | 'spawn' | 'finalMessage' | 'delete' | 'stop' | 'deliver' | 'announce' | 'flag' | 'clearFlag' | 'pause'>;
+  agents: Pick<AgentHost, 'get' | 'list' | 'runScheduled' | 'isWaking' | 'spawn' | 'finalMessage' | 'stop' | 'deliver' | 'announce' | 'flag' | 'clearFlag' | 'pause'>;
   /** The daemon's own methods: clocks, notes and their changes are made as the board makes them. */
   call: DaemonCall;
+  /** Starts a fresh agent with `start` where its tile goes in its clock's zone, as every new agent's goes: one at a time in a zone. */
+  placeAgent<T>(zoneId: string | null, start: (position: { x: number; y: number }) => Promise<T>): Promise<T>;
+  /** Closes a fresh agent as every close goes, its helpers and reviewers first; refused, before any goes, by unsaved work of its own or its helpers'. */
+  close(sessionId: string, why: string): Promise<void>;
   broadcast(event: DaemonEvent): void;
   log(message: string): void;
   /** The saved templates a new clock can start from, by id or name. */
   templates?: { dataOf(ref: string): ClockTemplateData };
+  /** What an only-if script runs (`commandPlan`), and how it runs: a shell of the daemon's own by default. */
+  scripts?: { plan(command: string, cwd: string): Promise<FlowCommandPlan>; run(command: string, cwd: string, timeoutMs: number): Promise<RunResult> };
 }
 
 export interface ClockHost {
@@ -126,8 +147,76 @@ export function createClockHost(options: ClockHostOptions): ClockHost {
   const flagAtFire = new Map<number, number | null>();
   /** Fresh agents' runs being finished, so a second turn end doesn't finish one twice. */
   const finishing = new Set<string>();
+  const shell = options.scripts === undefined ? createShellRunner() : undefined;
+  const scripts = options.scripts ?? { plan: commandPlan, run: shell!.run };
 
+  /**
+   * A clock with an only-if script runs it first, its run going meanwhile (`checkThenFire`). A clock that messages its
+   * agent, or starts its own, settles its run as a message's does.
+   */
   const fire = (firing: FiringClock, count: number): Fired => {
+    const onlyIf = firing.data.onlyIf;
+    if (onlyIf == null) return fireNow(firing, count);
+    return { running: true, joins: firing.data.does === 'message', start: (runId) => void checkThenFire(firing, count, onlyIf, runId) };
+  };
+
+  /** Where the clock runs its only-if script: its agent's folder, else its zone's; undefined for neither. */
+  const whereItRuns = async (data: ClockData, zoneId: string | null): Promise<string | undefined> => {
+    const agent = data.does === 'message' && data.agent !== null ? agents.get(data.agent) : undefined;
+    if (agent !== undefined) return agent.cwd;
+    if (zoneId === null) return undefined;
+    const zone = (await call('zone.list', undefined)).find((each) => each.id === zoneId);
+    if (zone === undefined) return undefined;
+    return zone.repoRoot !== null ? folderPath(zone.repoRoot, zone.folder) : (zone.groupFolder ?? undefined);
+  };
+
+  /**
+   * Runs the clock's only-if script, then fires it as it would have, into the run already going. Exit 0 fires it, with
+   * what the script printed after its prompt. Exit 1 skips the run with nothing to do; any other exit, a timeout, or a
+   * script that changed since the user set it skips it too, saying why. The agent is never woken for a skip.
+   */
+  const checkThenFire = async (firing: FiringClock, count: number, onlyIf: ClockOnlyIf, runId: number) => {
+    const settle = (patch: RunPatch) => {
+      schedules.updateRun(runId, patch);
+      const status = schedules.status(firing.id);
+      if (status !== null) afterFire(firing, status);
+    };
+    const skip = (reason: string, sessionId: string | null = null, agentName: string | null = null) => {
+      settle({ outcome: 'skipped', reason, sessionId, agentName });
+      log(`clock ${firing.id} skipped: ${reason}`);
+    };
+    let printed: string;
+    try {
+      const cwd = await whereItRuns(firing.data, firing.zoneId);
+      if (cwd === undefined) return skip('its only-if script has nowhere to run: no agent or zone folder');
+      if (cwd !== onlyIf.cwd) return skip(ONLY_IF_MOVED);
+      if ((await scripts.plan(onlyIf.command, cwd)).fingerprint !== onlyIf.fingerprint) return skip(ONLY_IF_CHANGED);
+      const ran = await scripts.run(onlyIf.command, cwd, ONLY_IF_TIMEOUT_MS);
+      if (ran.code === 1 && !ran.timedOut) return skip(NOTHING_TO_DO);
+      if (ran.code !== 0) return skip(`its only-if script ${commandFailure(ran)}`);
+      printed = ran.output.trim();
+    } catch (error) {
+      return skip(`its only-if script could not run: ${(error as Error).message}`);
+    }
+    const prompt = printed === '' ? firing.data.prompt : `${firing.data.prompt}\n\nIts only-if script printed:\n${cutText(printed, MAX_ONLY_IF_SAID)}`;
+    let fired: Fired;
+    try {
+      fired = fireNow({ ...firing, data: { ...firing.data, prompt } }, count);
+    } catch (error) {
+      fired = { started: false, reason: (error as Error).message };
+    }
+    if ('running' in fired) {
+      fired.start(runId);
+      log(`clock ${firing.id} fired: starting a fresh agent`);
+      return;
+    }
+    if (!fired.started) return skip(fired.reason, fired.sessionId ?? null, fired.agentName ?? null);
+    settle({ outcome: 'started', reason: null, sessionId: fired.sessionId ?? null, agentName: fired.agentName ?? null, awaitsTurn: fired.awaitsTurn === true });
+    if (fired.awaitsTurn === true) fired.onRun?.(runId);
+    log(`clock ${firing.id} fired: started a run`);
+  };
+
+  const fireNow = (firing: FiringClock, count: number): Fired => {
     const { data } = firing;
     const maker = (selectMadeBy.get(firing.id) as { made_by: string | null } | undefined)?.made_by ?? null;
     if (data.does === 'message' && data.agent !== null) {
@@ -290,22 +379,20 @@ export function createClockHost(options: ClockHostOptions): ClockHost {
     const name = freshAgentName(data.prompt, count);
     schedules.updateRun(runId, { agentName: name });
     try {
-      // Under the clock, stepped clear of the tiles there: a kept agent's included.
-      const tiles = (await call('agent.list', undefined))
-        .filter((each) => each.zoneId === firing.zoneId && each.position !== null)
-        .map((each) => ({ ...each.position!, ...AGENT_TILE_SIZE }));
-      const agent = await agents.spawn(
-        {
-          zoneId: firing.zoneId,
-          position: freeSpotFor({ x: firing.x, y: firing.y + firing.height + FRESH_GAP }, AGENT_TILE_SIZE, tiles),
-          harness: data.fresh.harness,
-          model: data.fresh.model ?? undefined,
-          role: data.fresh.role ?? undefined,
-          name,
-          prompt: data.prompt,
-          ...FRESH_SIZE,
-        },
-        spawnedBy,
+      const agent = await options.placeAgent(firing.zoneId, (position) =>
+        agents.spawn(
+          {
+            zoneId: firing.zoneId,
+            position,
+            harness: data.fresh.harness,
+            model: data.fresh.model ?? undefined,
+            role: data.fresh.role ?? undefined,
+            name,
+            prompt: data.prompt,
+            ...FRESH_SIZE,
+          },
+          spawnedBy,
+        ),
       );
       schedules.updateRun(runId, { sessionId: agent.sessionId, agentName: agent.name });
       log(`clock ${firing.id} started ${agent.name}`);
@@ -406,7 +493,7 @@ export function createClockHost(options: ClockHostOptions): ClockHost {
    */
   const close = async (sessionId: string, why: string): Promise<string | undefined> => {
     try {
-      await agents.delete(sessionId, why, false);
+      await options.close(sessionId, why);
       return undefined;
     } catch (error) {
       await agents.stop(sessionId, why).catch(() => {});
@@ -471,6 +558,8 @@ export function createClockHost(options: ClockHostOptions): ClockHost {
     if (run === undefined || finishing.has(sessionId)) return;
     // The app stopping isn't the agent's doing: `resumeRuns` settles that run.
     if (agent?.state === 'stopped-by-restart') return;
+    // Its run is starting it again, its shell looked at first: ended until then. Refused, the run hears it wasn't typed.
+    if (agent !== undefined && agents.isWaking(sessionId)) return;
     // A messaged agent may still show the failed turn before the one its run started, which a run after a failed turn is.
     const failed = run.fresh && agent?.state === 'failed';
     const why = agent === undefined ? 'its agent was removed' : failed ? `${agent.name} failed` : agent.endedAt !== null ? `${agent.name} ended before it finished` : undefined;
@@ -607,6 +696,21 @@ export function createClockHost(options: ClockHostOptions): ClockHost {
           if (!isObject(data)) throw invalidParams('data must be an object');
           return add(withTemplate(p, data as Partial<ClockData>), placeParam(p));
         },
+        'clock.setOnlyIf': async (params) => {
+          const p = paramsObject(params);
+          const id = stringParam(p, 'id');
+          const item = clockOf(id);
+          if (item === undefined) throw invalidParams(`no clock ${id}`);
+          if (p.command === null) return call('item.update', { id, data: { onlyIf: null } });
+          const command = stringParam(p, 'command').trim();
+          if (command === '') throw invalidParams('give the command to run before each fire, or null for none');
+          if (command.length > MAX_CLOCK_ONLY_IF) throw invalidParams(`the command is over ${MAX_CLOCK_ONLY_IF} characters`);
+          const cwd = await whereItRuns(item.data, item.zoneId);
+          if (cwd === undefined) throw invalidParams('this clock has nowhere to run a script: join it to an agent or put it in a zone');
+          const { fingerprint } = await scripts.plan(command, cwd);
+          log(`clock ${id}: only if ${command}`);
+          return call('item.update', { id, data: { onlyIf: { command, cwd, fingerprint } } });
+        },
         'agent.setSchedule': (params) => {
           const p = paramsObject(params);
           const sessionId = stringParam(p, 'sessionId');
@@ -636,7 +740,9 @@ export function createClockHost(options: ClockHostOptions): ClockHost {
           const entry = { detail: '' };
           return access.logged(me, 'add-clock', entry, async () => {
             if (!isObject(p.data)) throw invalidParams('data must be an object');
-            const data = { ...newClockData(), ...withTemplate(p, p.data as Partial<ClockData>) };
+            // The script runs as the user, outside any agent's permissions: only the user sets one.
+            if (p.data.onlyIf != null) throw outOfScope("only the user sets a clock's only-if script");
+            const data = { ...newClockData(), ...withTemplate(p, p.data as Partial<ClockData>), onlyIf: null };
             if (typeof data.prompt !== 'string' || data.prompt.trim() === '') throw invalidParams('give the clock its prompt');
             if (data.handoffTo !== null && data.result === 'handoff') reachable(data.handoffTo);
             let item: BoardItem;
@@ -760,7 +866,10 @@ export function createClockHost(options: ClockHostOptions): ClockHost {
       }
     },
 
-    close: () => schedules.close(),
+    close: () => {
+      schedules.close();
+      shell?.stop();
+    },
   };
 }
 

@@ -11,6 +11,7 @@ import { HandOnView } from './HandOn';
 import { GoThroughView } from './QueueGoThrough';
 import { TakenJobsContext } from './taken-jobs';
 import { QueueCardView, QueueIconView, QueuePeek } from './QueueCard';
+import { QueueFull } from './QueueFull';
 import { nextJob } from './queue-card';
 
 const at = (hour: number, minute = 0) => new Date(2026, 10, 5, hour, minute).toISOString();
@@ -85,6 +86,11 @@ const narrow = { width: LIST_CARD_MIN_SIZE.width, height: LIST_CARD_MIN_SIZE.hei
 const ZONE = ZONE_COLORS[0];
 const card = { width: QUEUE_CARD_SIZE.width, height: QUEUE_CARD_SIZE.height };
 const folded = { width: LIST_CARD_FOLDED_SIZE.width, height: LIST_CARD_FOLDED_SIZE.height };
+/** A work queue full screen: its done job with what it came to. */
+const FULL_JOBS = JOBS.map((each) => (each.id === 'j7' ? { ...each, result: 'Images cached for a day; the product page loads 40% faster.', takenBy: impl2, takenAt: at(9, 10), link: 'https://example.test/acme/api/pull/212' } : each));
+/** A work queue full screen with a taken job picked, beside a waiting one too long for its row. */
+const FULL_LONG = [...FULL_JOBS.slice(0, 2), job('j9', 'Move every billing webhook onto the new signed endpoint, keep the old one answering for a week, and write down which partners still call it', { link: 'https://example.test/acme/api/issues/102' }), ...FULL_JOBS.slice(2)];
+const FULL_ACTS = { now: NOW, onAdd: noop, onEdit: noop, onMove: noop, onDone: noop, onDrop: noop, onLater: noop, onRemove: noop, openLink: noop, onClose: noop, inline: true };
 const open = (jobs: QueueJob[]) => jobs.filter((each) => each.state !== 'done').length;
 
 /**
@@ -139,6 +145,15 @@ export function QueueGallery() {
             />
           </PopoverPreview>
         </div>
+      </div>
+      <div className="listcard-gallery-full" data-testid="queue-gallery-full-agents">
+        <QueueFull title="api jobs" scope="Zone · api" audience="agents" jobs={FULL_JOBS} drain={{ on: true, most: 2 }} onDrain={noop} onHand={noop} initial={{ picked: 'j7' }} {...FULL_ACTS} />
+      </div>
+      <div className="listcard-gallery-full" data-testid="queue-gallery-full-taken">
+        <QueueFull title="api jobs" scope="Zone · api" audience="agents" jobs={FULL_LONG} drain={{ on: false, most: 2 }} onDrain={noop} onHand={noop} initial={{ picked: 'j1' }} {...FULL_ACTS} />
+      </div>
+      <div className="listcard-gallery-full" data-testid="queue-gallery-full-user">
+        <QueueFull title="To look at" scope="Board" audience="user" jobs={TO_LOOK_AT} needs={NEEDS} onStart={noop} initial={{ picked: 'u1' }} {...FULL_ACTS} />
       </div>
     </section>
   );

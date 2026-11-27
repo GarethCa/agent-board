@@ -1,11 +1,12 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it, vi } from 'vitest';
 import { fakeHarnessEnv, type CodexStartScreen, type FakeScenario } from '@agent-board/fake-harness';
 import { DaemonRpcError, type DaemonClient } from '../src/client.ts';
 import { claudeSettings } from '../src/agent-spawns.ts';
+import { CONTINUE_LINE } from '../src/agent-lifecycle.ts';
 import { ANSWERS_DROPPED_FLAG } from '../src/agents.ts';
 import { HOOK_TOKEN_ENV, HOOK_URL_ENV } from '../src/hook-forwarder.ts';
 import { daemonPaths } from '../src/paths.ts';
@@ -356,6 +357,81 @@ describe('Claude agents', () => {
     const second = await agentDaemon('output', { home, dataDir });
     const resumed = await second.client.call('agent.resume', { sessionId: agent.sessionId });
     expect(resumed).toMatchObject({ endedAt: null, hooksSilent: true });
+  });
+
+  it('starts an agent with launch settings of its own, keeps them through a restart, and shows only their names', async () => {
+    const { client, recorder } = await agentDaemon('output');
+    const zone = await addZone(client, tempRepo());
+    const marks = tempDataDir();
+    const first = join(marks, 'first');
+    const agent = await client.call('agent.spawn', {
+      zoneId: zone.id,
+      prompt: 'Tidy the docs',
+      launchSettings: { env: { FAKE_HARNESS_WRITE_ON_STOP: first }, settings: { outputStyle: 'Explanatory' } },
+      ...SIZE,
+    });
+    const other = await client.call('agent.spawn', { zoneId: zone.id, prompt: 'Tidy the tests', ...SIZE });
+    // Its values may be secrets: the board shows their names alone.
+    expect(agent.launchSettings).toEqual({ env: ['FAKE_HARNESS_WRITE_ON_STOP'], settings: ['outputStyle'] });
+    expect(JSON.stringify(await client.call('agent.list'))).not.toContain(first);
+    expect(other.launchSettings).toBeNull();
+    // A first turn ended, so its harness is up to catch the stop.
+    await untilState(recorder, agent.sessionId, 'idle');
+    await untilState(recorder, other.sessionId, 'idle');
+
+    // New settings on a running agent stop it, its old env still in its process, and resume its conversation.
+    const second = join(marks, 'second');
+    const before = recorder.events.length;
+    const restarted = await client.call('agent.restartWith', { sessionId: agent.sessionId, launchSettings: { env: { FAKE_HARNESS_WRITE_ON_STOP: second } } });
+    expect(readFileSync(first, 'utf8')).toBe('written as it stopped\n');
+    // Back at its prompt, its harness up again to catch the next stop.
+    await untilState(recorder, agent.sessionId, 'waiting', before);
+    expect(restarted).toMatchObject({ sessionId: agent.sessionId, endedAt: null, launchSettings: { env: ['FAKE_HARNESS_WRITE_ON_STOP'], settings: ['outputStyle'] } });
+
+    // A plain restart launches it with the new env again; the other agent never had it.
+    await client.call('agent.stop', { sessionId: agent.sessionId });
+    await client.call('agent.stop', { sessionId: other.sessionId });
+    // The harness writes its marker as it goes down, which can land just after the stop answers.
+    await expect.poll(() => (existsSync(second) ? readFileSync(second, 'utf8') : undefined)).toBe('written as it stopped\n');
+    expect(readdirSync(marks).sort()).toEqual(['first', 'second']);
+    expect((await client.call('agent.resume', { sessionId: agent.sessionId })).launchSettings).toMatchObject({ env: ['FAKE_HARNESS_WRITE_ON_STOP'] });
+
+    // `keepEnv` keeps a kept var the user can't see under a new one.
+    const kept = await client.call('agent.restartWith', { sessionId: agent.sessionId, launchSettings: { env: { DISABLE_TELEMETRY: '1' } }, keepEnv: ['FAKE_HARNESS_WRITE_ON_STOP'] });
+    expect(kept.launchSettings).toEqual({ env: ['FAKE_HARNESS_WRITE_ON_STOP', 'DISABLE_TELEMETRY'], settings: ['outputStyle'] });
+    // Never past the size cap, with the ones it keeps: refused before anything is stored.
+    await expect(client.call('agent.restartWith', { sessionId: agent.sessionId, launchSettings: { settings: { outputStyle: 'x'.repeat(16_300) } } })).rejects.toThrow(
+      /with the ones it keeps/,
+    );
+
+    // An empty part clears it.
+    const cleared = await client.call('agent.restartWith', { sessionId: agent.sessionId, launchSettings: { env: {}, settings: {} } });
+    expect(cleared.launchSettings).toBeNull();
+  });
+
+  it('restarts a mid-turn agent with new launch settings from the app, and tells it to carry on', async () => {
+    const { client, recorder } = await agentDaemon('output', { hangTool: true });
+    const zone = await addZone(client, tempRepo());
+    const agent = await client.call('agent.spawn', { zoneId: zone.id, prompt: 'Tidy the docs', ...SIZE });
+    await untilState(recorder, agent.sessionId, 'running');
+    const before = recorder.events.length;
+    await client.call('agent.restartWith', { sessionId: agent.sessionId, launchSettings: { env: { DISABLE_TELEMETRY: '1' } } });
+    await recorder.waitFor(
+      (e: DaemonEvent): e is HookEvent =>
+        e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'UserPromptSubmit' && (e.payload as { prompt?: string }).prompt === CONTINUE_LINE && recorder.events.indexOf(e) >= before,
+    );
+  });
+
+  it("refuses launch settings that would cut an agent off from the board", async () => {
+    const { client } = await agentDaemon('output');
+    const zone = await addZone(client, tempRepo());
+    await expect(
+      client.call('agent.spawn', { zoneId: zone.id, prompt: 'x', launchSettings: { env: { AGENT_BOARD_SOCKET: '/tmp/s' } }, ...SIZE }),
+    ).rejects.toThrow(/AGENT_BOARD_/);
+    await expect(
+      client.call('agent.spawn', { zoneId: zone.id, prompt: 'x', launchSettings: { settings: { hooks: {} } }, ...SIZE }),
+    ).rejects.toThrow(/hooks/);
+    expect(await client.call('agent.list')).toEqual([]);
   });
 
   it("raises needs-you for a Claude agent's untyped task, and never types it into a prompt the user typed by hand", async () => {
@@ -1315,6 +1391,20 @@ describe('Claude agents', () => {
       expect(existsSync(edited.worktree)).toBe(false);
       expect(existsSync(detached.worktree)).toBe(false);
       expect(git(repo, 'branch', '--list', committed.branch)).toBe('');
+      expect(await client.call('agent.list')).toEqual([]);
+    });
+
+    it("judges unsaved work as a close does: the board's own files lose nothing, and go with it", async () => {
+      const { client, recorder } = await agentDaemon('waiting');
+      const zone = await addZone(client, tempRepo());
+      const agent = await client.call('agent.spawn', { zoneId: zone.id, prompt: 'Go', ...SIZE });
+      await untilState(recorder, agent.sessionId, 'waiting');
+      mkdirSync(join(agent.worktree, '.agent-board'), { recursive: true });
+      writeFileSync(join(agent.worktree, '.agent-board', 'handover.md'), 'done\n');
+
+      await client.call('agent.delete', { sessionId: agent.sessionId });
+
+      expect(existsSync(agent.worktree)).toBe(false);
       expect(await client.call('agent.list')).toEqual([]);
     });
 
@@ -2645,7 +2735,7 @@ describe('long-lived agents', () => {
     // 09:00: the run asks for permission, so it waits for you in the inbox.
     clock.advanceTo(nineOClock);
     await recorder.waitFor(isRunPrompt('Clean up again'));
-    const waiting = await untilAgent(recorder, agent.sessionId, (a) => a.permissions.length > 0, decided);
+    const waiting = await untilAgent(recorder, agent.sessionId, (a) => a.permissions.length > 0 && a.schedule?.lastRun?.outcome === 'started', decided);
     expect(waiting).toMatchObject({
       state: 'needs-permission',
       permissions: [{ toolName: 'Bash' }],
@@ -2777,6 +2867,33 @@ describe('long-lived agents', () => {
     await untilState(recorder, agent.sessionId, 'scheduled', fired);
     // The shell its pane dropped into when it was stopped goes as it relaunches.
     await expect.poll(() => client.call('session.list')).toEqual([expect.objectContaining({ id: agent.sessionId })]);
+  });
+
+  it('starts nothing over the shell its pane dropped into while that shell runs something, keeping the run as not delivered', async () => {
+    const clock = createFakeClock(start);
+    const { client, recorder } = await agentDaemon('output', { clock });
+    const zone = await addZone(client, tempRepo());
+    const agent = await spawnAttached(client, zone.id, 'Fix the tests');
+    await untilFirstStop(recorder, agent.sessionId);
+    await client.call('session.write', { sessionId: agent.sessionId, data: '\x04' });
+    const ended = await untilAgent(recorder, agent.sessionId, (a) => a.shellSessionId !== null);
+    // Its own echo of the line never reads "running": only the command's output does, as it starts its sleep.
+    await client.call('session.attach', { sessionId: ended.shellSessionId! });
+    await client.call('session.write', { sessionId: ended.shellSessionId!, data: 'echo run""ning; sleep 30\r' });
+    await recorder.waitForText(ended.shellSessionId!, '\nrunning');
+    await client.call('agent.setSchedule', { sessionId: agent.sessionId, schedule: { cron: '0 9 * * *', prompt: 'Check the nightly build' } });
+
+    const fired = recorder.events.length;
+    clock.advanceTo(nineOClock);
+    const kept = await untilAgent(recorder, agent.sessionId, (a) => a.undelivered.length > 0, fired);
+    expect(kept).toMatchObject({ endedAt: expect.any(String), shellSessionId: ended.shellSessionId });
+    expect(kept.undelivered).toEqual([{ what: 'A scheduled run', text: 'Check the nightly build', reason: 'its shell is running something' }]);
+    const run = await untilAgent(recorder, agent.sessionId, (a) => a.schedule?.lastRun?.outcome !== 'started' && a.schedule?.lastRun != null, fired);
+    expect(run.schedule!.lastRun).toMatchObject({ reason: expect.stringContaining('its shell is running something') });
+    expect(recorder.events.some(isRunPrompt('Check the nightly build'))).toBe(false);
+    // Resend asks the same: still refused, still kept.
+    await expect(client.call('agent.resendUndelivered', { sessionId: agent.sessionId })).rejects.toThrow('running something');
+    expect((await client.call('agent.list'))[0]!.undelivered).toHaveLength(1);
   });
 
   it("keeps the Codex setting it last started with when its repo's last zone has gone", async () => {

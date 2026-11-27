@@ -156,6 +156,7 @@ const api: AgentBoardApi = {
     clocks: () => invoke(ITEM_IPC.clocks),
     runClock: (id) => invoke(ITEM_IPC.runClock, id),
     addClock: (data, place) => invoke(ITEM_IPC.addClock, data, place),
+    setClockOnlyIf: (id, command) => invoke(ITEM_IPC.setClockOnlyIf, id, command),
     onClockChanged: (listener) => subscribe(ITEM_IPC.clockChanged, listener),
     onMemoryReadBy: (listener) => subscribe(ITEM_IPC.memoryReadBy, listener),
     readMemory: (id, search) => invoke(ITEM_IPC.readMemory, id, search),
@@ -325,6 +326,7 @@ const api: AgentBoardApi = {
     pause: (sessionId) => invoke(AGENT_IPC.pause, sessionId),
     resume: (sessionId) => invoke(AGENT_IPC.resume, sessionId),
     restart: (sessionId, force = false) => invoke(AGENT_IPC.restart, sessionId, force),
+    restartWith: (sessionId, launchSettings, keepEnv, force) => invoke(AGENT_IPC.restartWith, sessionId, launchSettings, keepEnv, force),
     decidePermission: (sessionId, requestId, decision) => invoke(AGENT_IPC.decidePermission, sessionId, requestId, decision),
     decideRemove: (sessionId, askId, allow, include) => invoke(AGENT_IPC.decideRemove, sessionId, askId, allow, include),
     releasePermission: (sessionId, requestId) => invoke(AGENT_IPC.releasePermission, sessionId, requestId),
@@ -412,6 +414,7 @@ const api: AgentBoardApi = {
     get: (key) => invoke(VIEW_IPC.get, key),
     set: (key, value) => invoke(VIEW_IPC.set, key, value),
     onChanged: (listener) => subscribe(VIEW_IPC.changed, (change: { key: string; value: unknown }) => listener(change.key, change.value)),
+    onFreed: (listener) => subscribe(VIEW_IPC.freed, (event: { ids: string[] }) => listener(event.ids)),
     onFlush: (flush) => {
       flushSaves = flush;
       return () => {

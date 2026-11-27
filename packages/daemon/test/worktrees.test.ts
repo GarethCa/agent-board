@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, readdirSync, writeFileSync } from 'no
 import { join } from 'node:path';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { addWorktree, agentWorktreePath, localBaseBranch, removeWorktree, unsavedWork } from '../src/worktrees.ts';
-import { git, tempDataDir, tempRepo } from './helpers.ts';
+import { git, gitWritesBefore, tempDataDir, tempRepo, userGitConfig } from './helpers.ts';
 
 /** A repo and a worktree of it, in the folder an agent's would be in. */
 async function worktreeOf(branch = 'busy'): Promise<{ repo: string; worktree: string }> {
@@ -87,6 +87,23 @@ describe('removeWorktree', () => {
   });
 });
 
+describe("unsavedWork in a repo whose own config names a filter", () => {
+  it('still finds the change, running no clean program the config names', async () => {
+    const repo = tempRepo();
+    writeFileSync(join(repo, '.gitattributes'), 'notes.txt filter=evil\n');
+    writeFileSync(join(repo, 'notes.txt'), 'first\n');
+    git(repo, 'add', '.');
+    git(repo, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '--quiet', '-m', 'filtered');
+    const marker = join(tempDataDir(), 'cleaned');
+    git(repo, 'config', 'filter.evil.clean', `touch '${marker}'; cat`);
+    // The same size, so git must hash it again to tell.
+    writeFileSync(join(repo, 'notes.txt'), 'later\n');
+    const branch = git(repo, 'symbolic-ref', '--short', 'HEAD');
+    expect(await unsavedWork(repo, repo, branch)).toBe('its worktree has uncommitted changes');
+    expect(existsSync(marker)).toBe(false);
+  });
+});
+
 describe('unsavedWork with ignoreBoardFiles', () => {
   it('leaves out the board\u2019s own files, and still finds any other change or a commit no other branch has', async () => {
     const { repo, worktree } = await worktreeOf('crew-build');
@@ -160,6 +177,43 @@ describe('localBaseBranch', () => {
     git(clone, 'remote', 'set-url', 'origin', join(tempDataDir(), 'gone'));
     expect(await localBaseBranch(clone, 'origin/feature')).toBe('feature');
     expect(git(clone, 'rev-parse', 'refs/heads/feature')).toBe(known);
+  });
+
+  it("refuses to fetch, saying why, when the repo's own config names an ssh command, which never runs", async () => {
+    const { clone } = cloned();
+    const marker = join(tempDataDir(), 'ssh-ran');
+    const evil = join(tempDataDir(), 'evil');
+    writeFileSync(evil, `#!/bin/sh\ntouch "${marker}"\nexit 1\n`);
+    chmodSync(evil, 0o755);
+    git(clone, 'remote', 'set-url', 'origin', 'ssh://example.invalid/acme/web.git');
+    git(clone, 'config', 'core.sshCommand', evil);
+    await expect(localBaseBranch(clone, 'origin/feature')).rejects.toThrow(/could not fetch origin\/feature: .*core\.sshcommand.*won't fetch/);
+    expect(git(clone, 'branch', '--list', 'feature')).toBe('');
+    await expect(localBaseBranch(clone, 'origin/later')).rejects.toThrow(/could not fetch origin\/later: .*core\.sshcommand/);
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it("fetches with git's own upload-pack, not one the repo's config names after the check", async () => {
+    const { upstream, clone } = cloned();
+    const marker = join(tempDataDir(), 'upload-pack-ran');
+    const evil = join(tempDataDir(), 'evil');
+    writeFileSync(evil, `#!/bin/sh\ntouch "${marker}"\nexit 1\n`);
+    chmodSync(evil, 0o755);
+    gitWritesBefore('fetch --quiet', clone, 'remote.origin.uploadpack', evil);
+    expect(await localBaseBranch(clone, 'origin/feature')).toBe('feature');
+    expect(git(clone, 'rev-parse', 'refs/heads/feature')).toBe(git(upstream, 'rev-parse', 'feature'));
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it("fails, saying so, when the repo's config came to name a program no pin holds as it fetched", async () => {
+    const { clone } = cloned();
+    // The user's own upload-pack, trusted, stands in for anything that writes the repo's config mid-fetch.
+    const uploadPack = join(tempDataDir(), 'upload-pack');
+    writeFileSync(uploadPack, `#!/bin/sh\ngit -C '${clone}' config lfs.customtransfer.evil.path /bin/evil\nexec git-upload-pack "$@"\n`);
+    chmodSync(uploadPack, 0o755);
+    git(clone, 'config', '--file', userGitConfig(), 'remote.origin.uploadpack', uploadPack);
+    await expect(localBaseBranch(clone, 'origin/feature')).rejects.toThrow(/could not fetch origin\/feature: .*came to set lfs\.customtransfer\.evil\.path as the board went to fetch/);
+    expect(git(clone, 'branch', '--list', 'feature')).toBe('');
   });
 
   it("moves a local branch of that name that is behind the remote's up to it", async () => {

@@ -78,7 +78,12 @@ function setup(
       branch: row.branch,
       ownedBranch: row.branch,
       worktree: row.worktree,
-      state: row.ended_at !== null && row.stopped_by_restart === 1 ? 'stopped-by-restart' : row.state,
+      state:
+        row.ended_at !== null && row.hibernated_at !== null
+          ? 'hibernated'
+          : row.ended_at !== null && row.stopped_by_restart === 1
+            ? 'stopped-by-restart'
+            : row.state,
       endedAt: row.ended_at,
       reviewOf: row.review_of,
       reviews: row.reviews_branch === null || row.reviews_head === null ? null : { branch: row.reviews_branch, head: row.reviews_head },
@@ -88,6 +93,7 @@ function setup(
   const lifecycle = createAgentLifecycle({
     db,
     reviewsDir: join(home, 'reviews'),
+    launchSettingsDir: join(home, 'launch-settings'),
     harnessPaths: {
       path: (harness) => (options.harnessMissing ? undefined : `/bin/${harness}`),
       refresh: async (harness) => void events.push(`refresh ${harness}`),
@@ -231,7 +237,7 @@ describe('relaunching an ended agent', () => {
   it('carries on a Claude conversation, back at idle and unseen, its notice cleared', () => {
     const { lifecycle, addAgent, transcript, launches, events, getRow, logs } = setup();
     const row = addAgent('a', { transcriptPath: transcript(), notice: 'old notice', state: 'failed', description: 'the task' });
-    expect(lifecycle.relaunch(row, undefined, 'to restart it')).toEqual({ started: true });
+    expect(lifecycle.wake(row, undefined, 'to restart it')).toEqual({ started: true });
     expect(launches).toEqual([
       {
         id: 'a',
@@ -246,6 +252,8 @@ describe('relaunching an ended agent', () => {
         resume: { codexSessionId: null, claudeConversation: true },
         allowProjectCodexConfig: false,
         size: { cols: 120, rows: 40 },
+        // Its role, as it was started with, so Settings' board tools only still holds after a restart.
+        role: row.role_name ?? row.role,
       },
     ]);
     expect(getRow('a')).toMatchObject({ state: 'idle', seen: 0, notice: null });
@@ -259,23 +267,81 @@ describe('relaunching an ended agent', () => {
     lifecycle.exited('a', false, 'failed');
     await flush();
     events.length = 0;
-    lifecycle.relaunch(row, 'run', 'for a run');
+    await expect(lifecycle.wake(row, 'run', 'for a run')).resolves.toEqual({ started: true });
     await flush();
-    expect(events.slice(0, 2)).toEqual(['kill shell-1', 'launch a']);
+    // Looked at first, as Wake looks at it: idle, so it goes.
+    expect(events.slice(0, 3)).toEqual(['isRunningSomething 100', 'kill shell-1', 'launch a']);
     expect(events).toContain('forget shell-1');
     expect(lifecycle.fallbackShell('a')).toBeUndefined();
   });
 
+  it('wakes as Wake does: never over a shell running something, nor its own harness running in it, saying the user could', async () => {
+    const busy = setup({ busy: true });
+    const row = busy.addAgent('a');
+    busy.lifecycle.exited('a', false, 'failed');
+    await flush();
+    await expect(busy.lifecycle.wake(row, 'run', 'for a run')).resolves.toEqual({ started: false, reason: 'its shell is running something', askUser: true });
+    expect(busy.launches).toEqual([]);
+    expect(busy.lifecycle.fallbackShell('a')).toBe('shell-1');
+    const harness = setup();
+    const other = harness.addAgent('a');
+    harness.lifecycle.exited('a', false, 'failed');
+    await flush();
+    harness.shellHarnesses.set('shell-1', 'claude');
+    await expect(harness.lifecycle.wake(other, 'run', 'for a run')).resolves.toEqual({
+      started: false,
+      reason: 'claude is running in its shell: exit it first',
+      askUser: true,
+    });
+    expect(harness.launches).toEqual([]);
+  });
+
+  it('never wakes a reviewer whose round is over, but retries one whose start failed, and one paused mid-round', () => {
+    const { lifecycle, addAgent, launches, db } = setup();
+    addAgent('author');
+    const done = addAgent('done', { reviewOf: 'author' });
+    expect(lifecycle.wake(done, 'a hand-off', 'for a hand-off')).toEqual({ started: false, reason: 'it is a reviewer whose round is over' });
+    expect(launches).toEqual([]);
+    expect(lifecycle.wake(done, 'its first message', 'to retry its start', null, true)).toEqual({ started: true });
+    const paused = addAgent('paused', { reviewOf: 'author' });
+    db.prepare("UPDATE agents SET hibernated_at = 1, hibernated_by = 'user' WHERE session_id = 'paused'").run();
+    expect(lifecycle.wake(paused, 'a hand-off', 'for a hand-off')).toEqual({ started: true });
+    expect(launches.map((spec) => spec.id)).toEqual(['done', 'paused']);
+  });
+
+  it('is busy for an agent another wake started while it looked at its shell', async () => {
+    const { lifecycle, addAgent, launches } = setup();
+    const row = addAgent('a');
+    lifecycle.exited('a', false, 'failed');
+    await flush();
+    const first = lifecycle.wake(row, 'one', 'for a run');
+    const second = lifecycle.wake(row, 'two', 'for a hand-off');
+    await expect(first).resolves.toEqual({ started: true });
+    expect(second).toEqual({ started: false, reason: 'it is being started', busy: true });
+    expect(launches.map((spec) => spec.task)).toEqual(['one']);
+  });
+
+  it('launches nothing for a wake whose daemon closed while it looked at its shell', async () => {
+    const { lifecycle, addAgent, launches } = setup();
+    const row = addAgent('a');
+    lifecycle.exited('a', false, 'failed');
+    await flush();
+    const woken = lifecycle.wake(row, 'run', 'for a run');
+    lifecycle.close();
+    await expect(woken).resolves.toEqual({ started: false, reason: 'the daemon is closing' });
+    expect(launches).toEqual([]);
+  });
+
   it('starts a Claude agent that never had a turn fresh, on its task, saying nothing', () => {
     const { lifecycle, addAgent, launches, getRow } = setup();
-    lifecycle.relaunch(addAgent('a', { description: 'the task' }), undefined, 'to restart it');
+    lifecycle.wake(addAgent('a', { description: 'the task' }), undefined, 'to restart it');
     expect(launches[0]).toMatchObject({ task: 'the task', resume: { codexSessionId: null, claudeConversation: false } });
     expect(getRow('a')!.notice).toBeNull();
   });
 
   it('starts a Claude agent whose conversation is gone fresh on its task, and says so', () => {
     const { lifecycle, addAgent, launches, getRow } = setup();
-    lifecycle.relaunch(addAgent('a', { description: 'the task', hadTurn: true }), undefined, 'to restart it');
+    lifecycle.wake(addAgent('a', { description: 'the task', hadTurn: true }), undefined, 'to restart it');
     expect(launches[0]).toMatchObject({ task: 'the task', resume: { claudeConversation: false } });
     expect(getRow('a')!.notice).toBe('No earlier conversation: started fresh');
   });
@@ -285,7 +351,7 @@ describe('relaunching an ended agent', () => {
     addAgent('a', { hadTurn: true, state: 'done' });
     await lifecycle.resume('a', 'a test', false, {});
     expect(getRow('a')!.had_turn).toBe(0);
-    lifecycle.relaunch(getRow('a')!, undefined, 'to resume it after a restart');
+    lifecycle.wake(getRow('a')!, undefined, 'to resume it after a restart');
     expect(getRow('a')!.notice).toBeNull();
   });
 
@@ -302,15 +368,15 @@ describe('relaunching an ended agent', () => {
 
   it('starts one with no task and no conversation on no prompt at all', () => {
     const { lifecycle, addAgent, launches } = setup();
-    lifecycle.relaunch(addAgent('a'), undefined, 'to restart it');
+    lifecycle.wake(addAgent('a'), undefined, 'to restart it');
     expect(launches[0]!.task).toBeUndefined();
   });
 
   it('gives a scheduled run its prompt, saying nothing of a conversation, and starts Codex afresh', () => {
     const { lifecycle, addAgent, launches, getRow, events } = setup();
-    lifecycle.relaunch(addAgent('a', { description: 'the task', notice: 'old' }), 'the run', 'for a run');
-    lifecycle.relaunch(addAgent('b', { harness: 'codex', harnessSessionId: 'conv' }), 'the run', 'for a run');
-    lifecycle.relaunch(addAgent('c', { harness: 'codex' }), 'the run', 'for a run');
+    lifecycle.wake(addAgent('a', { description: 'the task', notice: 'old' }), 'the run', 'for a run');
+    lifecycle.wake(addAgent('b', { harness: 'codex', harnessSessionId: 'conv' }), 'the run', 'for a run');
+    lifecycle.wake(addAgent('c', { harness: 'codex' }), 'the run', 'for a run');
     expect(launches.map((spec) => [spec.task, spec.resume])).toEqual([
       ['the run', { codexSessionId: null, claudeConversation: false }],
       ['the run', { codexSessionId: null, claudeConversation: true }],
@@ -323,8 +389,8 @@ describe('relaunching an ended agent', () => {
 
   it("carries on a Codex agent's conversation, and one that never named one starts fresh", () => {
     const { lifecycle, addAgent, launches, getRow } = setup();
-    lifecycle.relaunch(addAgent('a', { harness: 'codex', harnessSessionId: 'conv' }), undefined, 'to restart it');
-    lifecycle.relaunch(addAgent('b', { harness: 'codex', description: 'the task' }), undefined, 'to restart it');
+    lifecycle.wake(addAgent('a', { harness: 'codex', harnessSessionId: 'conv' }), undefined, 'to restart it');
+    lifecycle.wake(addAgent('b', { harness: 'codex', description: 'the task' }), undefined, 'to restart it');
     expect(launches.map((spec) => [spec.task, spec.resume])).toEqual([
       [undefined, { codexSessionId: 'conv', claudeConversation: true }],
       ['the task', { codexSessionId: null, claudeConversation: false }],
@@ -335,26 +401,26 @@ describe('relaunching an ended agent', () => {
 
   it("takes its repo zone's Codex setting, or with none the one it last started with, and keeps it", () => {
     const zoned = setup({ zone: { codex_bypass_hook_trust: 1 } });
-    zoned.lifecycle.relaunch(zoned.addAgent('a', { harness: 'codex', bypass: 0 }), 'run', 'for a run');
+    zoned.lifecycle.wake(zoned.addAgent('a', { harness: 'codex', bypass: 0 }), 'run', 'for a run');
     expect(zoned.launches[0]!.bypassHookTrust).toBe(true);
     expect(zoned.getRow('a')!.codex_bypass_hook_trust).toBe(1);
     const loose = setup();
-    loose.lifecycle.relaunch(loose.addAgent('a', { harness: 'codex', bypass: 1 }), 'run', 'for a run');
+    loose.lifecycle.wake(loose.addAgent('a', { harness: 'codex', bypass: 1 }), 'run', 'for a run');
     expect(loose.launches[0]!.bypassHookTrust).toBe(true);
     const off = setup({ zone: { codex_bypass_hook_trust: 0 } });
-    off.lifecycle.relaunch(off.addAgent('a', { harness: 'codex', bypass: 1 }), 'run', 'for a run');
+    off.lifecycle.wake(off.addAgent('a', { harness: 'codex', bypass: 1 }), 'run', 'for a run');
     expect(off.launches[0]!.bypassHookTrust).toBe(false);
     expect(off.getRow('a')!.codex_bypass_hook_trust).toBe(0);
   });
 
   it('refuses, saying why, when its worktree is gone or its harness is', () => {
     const { lifecycle, addAgent, launches } = setup();
-    expect(lifecycle.relaunch(addAgent('a', { cwd: '/no/such/worktree' }), undefined, 'to restart it')).toEqual({
+    expect(lifecycle.wake(addAgent('a', { cwd: '/no/such/worktree' }), undefined, 'to restart it')).toEqual({
       started: false,
       reason: 'its worktree is gone',
     });
     const missing = setup({ harnessMissing: true });
-    expect(missing.lifecycle.relaunch(missing.addAgent('a'), undefined, 'to restart it')).toEqual({
+    expect(missing.lifecycle.wake(missing.addAgent('a'), undefined, 'to restart it')).toEqual({
       started: false,
       reason: 'claude not found',
     });
@@ -364,7 +430,7 @@ describe('relaunching an ended agent', () => {
 
   it("refuses a Codex agent whose hook launcher can't be written, or whose worktree has Codex config", () => {
     const shim = setup({ shimFails: true });
-    expect(shim.lifecycle.relaunch(shim.addAgent('a', { harness: 'codex' }), 'run', 'for a run')).toEqual({
+    expect(shim.lifecycle.wake(shim.addAgent('a', { harness: 'codex' }), 'run', 'for a run')).toEqual({
       started: false,
       reason: "the Codex hook launcher can't be written: read-only",
     });
@@ -373,7 +439,7 @@ describe('relaunching an ended agent', () => {
         throw new RpcMethodError(AGENT_ERROR.projectCodexConfig, 'config');
       },
     });
-    expect(config.lifecycle.relaunch(config.addAgent('a', { harness: 'codex' }), 'run', 'for a run')).toEqual({
+    expect(config.lifecycle.wake(config.addAgent('a', { harness: 'codex' }), 'run', 'for a run')).toEqual({
       started: false,
       reason: 'its worktree has Codex config of its own, so start it by hand to review its hooks',
     });
@@ -383,14 +449,14 @@ describe('relaunching an ended agent', () => {
       },
     });
     const row = broken.addAgent('a', { state: 'failed' });
-    expect(broken.lifecycle.relaunch(row, 'run', 'for a run')).toEqual({ started: false, reason: 'it could not be relaunched: spawn failed' });
+    expect(broken.lifecycle.wake(row, 'run', 'for a run')).toEqual({ started: false, reason: 'it could not be relaunched: spawn failed' });
     expect(broken.getRow('a')!.state).toBe('failed');
   });
 
   it('stops a Codex agent it launched with the bypass flag once project config appears in its worktree', async () => {
     const { lifecycle, addAgent, events, getRow, broadcasts } = setup({ launch: () => true });
     const row = addAgent('a', { harness: 'codex' });
-    lifecycle.relaunch(row, 'run', 'for a run');
+    lifecycle.wake(row, 'run', 'for a run');
     mkdirSync(join(row.cwd, '.codex'));
     lifecycle.checkGuard('a');
     expect(events.at(-1)).toBe('kill a');
@@ -401,7 +467,7 @@ describe('relaunching an ended agent', () => {
   it('watches no worktree once told to stop, nor one launched without the bypass flag', async () => {
     const guarded = setup({ launch: () => true });
     const row = guarded.addAgent('a', { harness: 'codex' });
-    guarded.lifecycle.relaunch(row, 'run', 'for a run');
+    guarded.lifecycle.wake(row, 'run', 'for a run');
     guarded.lifecycle.stopGuard('a');
     mkdirSync(join(row.cwd, '.codex'));
     guarded.lifecycle.checkGuard('a');
@@ -410,7 +476,7 @@ describe('relaunching an ended agent', () => {
     expect(guarded.events).not.toContain('kill a');
     const unflagged = setup();
     const other = unflagged.addAgent('a', { harness: 'codex' });
-    unflagged.lifecycle.relaunch(other, 'run', 'for a run');
+    unflagged.lifecycle.wake(other, 'run', 'for a run');
     mkdirSync(join(other.cwd, '.codex'));
     unflagged.lifecycle.checkGuard('a');
     expect(unflagged.events).not.toContain('kill a');
@@ -420,7 +486,7 @@ describe('relaunching an ended agent', () => {
 describe("a Codex agent that couldn't resume its conversation", () => {
   it('is started afresh in its worktree once it exits before its SessionStart, saying why', async () => {
     const { lifecycle, addAgent, launches, getRow, events } = setup();
-    lifecycle.relaunch(addAgent('a', { harness: 'codex', harnessSessionId: 'conv' }), undefined, 'to restart it');
+    lifecycle.wake(addAgent('a', { harness: 'codex', harnessSessionId: 'conv' }), undefined, 'to restart it');
     lifecycle.exited('a', false, 'failed');
     await flush();
     expect(launches.map((spec) => spec.resume)).toEqual([
@@ -433,7 +499,7 @@ describe("a Codex agent that couldn't resume its conversation", () => {
 
   it('is not once it has started, nor when its daemon went away, nor when the user stopped it', async () => {
     const started = setup();
-    started.lifecycle.relaunch(started.addAgent('a', { harness: 'codex', harnessSessionId: 'conv' }), undefined, 'to restart it');
+    started.lifecycle.wake(started.addAgent('a', { harness: 'codex', harnessSessionId: 'conv' }), undefined, 'to restart it');
     started.lifecycle.started('a');
     started.lifecycle.exited('a', false, 'failed');
     await flush();
@@ -441,14 +507,14 @@ describe("a Codex agent that couldn't resume its conversation", () => {
     expect(started.shells).toHaveLength(1);
 
     const restarted = setup();
-    restarted.lifecycle.relaunch(restarted.addAgent('a', { harness: 'codex', harnessSessionId: 'conv' }), undefined, 'to restart it');
+    restarted.lifecycle.wake(restarted.addAgent('a', { harness: 'codex', harnessSessionId: 'conv' }), undefined, 'to restart it');
     restarted.lifecycle.exited('a', true, 'failed');
     restarted.lifecycle.exited('a', false, 'failed');
     await flush();
     expect(restarted.launches).toHaveLength(1);
 
     const stopped = setup();
-    stopped.lifecycle.relaunch(stopped.addAgent('a', { harness: 'codex', harnessSessionId: 'conv' }), undefined, 'to restart it');
+    stopped.lifecycle.wake(stopped.addAgent('a', { harness: 'codex', harnessSessionId: 'conv' }), undefined, 'to restart it');
     stopped.db.prepare('UPDATE sessions SET ended_at = NULL').run();
     const release = stopped.holdKills();
     const stopping = stopped.lifecycle.stop('a', 'a test');
@@ -802,7 +868,7 @@ describe('deleting an agent', () => {
   it('stops watching a bypassed Codex agent it deletes', async () => {
     const { lifecycle, addAgent, events } = setup({ launch: () => true });
     const row = addAgent('a', { harness: 'codex' });
-    lifecycle.relaunch(row, 'run', 'for a run');
+    lifecycle.wake(row, 'run', 'for a run');
     await lifecycle.delete('a', 'a test', true);
     events.length = 0;
     mkdirSync(join(row.cwd, '.codex'));

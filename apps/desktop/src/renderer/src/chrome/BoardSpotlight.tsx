@@ -8,7 +8,7 @@ import { rowKeyOf, Spotlight, surfaceOfSubject, windowTargetOf, type SpotlightHa
 import type { BoardSubject } from './spotlight-results';
 import { useTicketItems } from './ticket-items';
 
-import { expandedPlace, tabHostOf, type BoardContext } from './board-spotlight';
+import { boardPlace, expandedPlace, popUpPick, popUpPlace, tabHostOf, type BoardContext } from './board-spotlight';
 
 /** The tile a session row is about, or undefined for a zone. */
 const tileOf = (subject: BoardSubject): TileRef | undefined =>
@@ -16,11 +16,12 @@ const tileOf = (subject: BoardSubject): TileRef | undefined =>
 
 /**
  * The board window's ⌘K switcher. On the board, or in an expanded tile with the focus, ↵ flies to the tile, pulses and
- * selects it, and ⌘↵ opens it; the expanded tile stays expanded. In the session window shown on the board, ↵ switches
- * it to the session, as ‹ › do. A session popped out into an OS window of its own comes forward there. A zone, or an
- * item on a ticket's board, is brought into view, out of the session window. A pull request or page opens as a tab of
- * the session window or expanded tile, or from the board in its agent's window, else a window of its own; ⇧↵ opens a
- * session, pull request or page beside the session in view, in a pane of its own.
+ * selects it, and ⌘↵ opens it (on the board ⇧↵ too); the expanded tile stays expanded. In the session window shown on
+ * the board, ↵ switches it to the session, as ‹ › do; in the pop-up, the agent picked pops up in its place. A session
+ * popped out into an OS window of its own comes forward there. A zone, or an item on a ticket's board, is brought into
+ * view, out of the session window. A pull request or page opens as a tab of the session window or expanded tile, or
+ * from the board in its agent's window, else a window of its own; ⇧↵ opens a session, pull request or page beside the
+ * session in view, in a pane of its own.
  */
 export function BoardSpotlight({ ref, agents, shells, zones }: { ref?: Ref<SpotlightHandle>; agents: readonly Agent[]; shells: readonly Shell[] | undefined; zones: readonly Zone[] }) {
   const sessionWindows = useSessionWindows();
@@ -28,17 +29,27 @@ export function BoardSpotlight({ ref, agents, shells, zones }: { ref?: Ref<Spotl
   const ticketItems = useTicketItems(agents);
 
   const placeOf = (at: Element | null): SpotlightPlace<BoardContext> => {
+    const popUp = at?.closest<HTMLElement>('[data-testid="agent-popup"]')?.dataset.sessionId;
+    if (popUp !== undefined) return popUpPlace(popUp);
     const shown = shownWindow(sessionWindows.windows);
     if (shown !== undefined) return { context: { kind: 'window', id: shown.id }, mode: 'switch', current: rowKeyOf(shown) };
     const expanded = at?.closest<HTMLElement>('.expanded-tile');
     const nodeId = expanded?.closest('.react-flow__node')?.getAttribute('data-id');
     const id = expanded?.dataset.sessionId ?? expanded?.dataset.shellId;
     // On the board, ⇧↵ has a session to open beside only with an agent selected, or for a reviewer or a pull request an agent opened.
-    if (nodeId == null || id === undefined) return { context: { kind: 'board' }, mode: 'show', opensBeside: board.opensBeside };
+    if (nodeId == null || id === undefined) return boardPlace(board.opensBeside);
     return expandedPlace(nodeId, id);
   };
 
   const onPick = (context: BoardContext, subject: BoardSubject, open: boolean, windowed: boolean, beside: boolean): boolean => {
+    if (context.kind === 'popup') {
+      const agent = popUpPick(subject, windowed);
+      if (agent !== undefined && board.popUpIn({ kind: 'agent', id: agent })) return true;
+      // What the pop-up can't show opens as ⌘↵ opens it from the board, the pop-up closed: a shell, a zone, a pull
+      // request, a row of the Windows group, an agent kept pinned on the board.
+      board.closePopUp();
+      return onPick({ kind: 'board' }, subject, true, windowed, false);
+    }
     if (subject.kind === 'zone') {
       const shown = board.showZone(subject.zone.id);
       if (shown && context.kind === 'window') sessionWindows.close(context.id);

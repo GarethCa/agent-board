@@ -65,7 +65,7 @@ const bare = (key: string, text = key.toUpperCase()): Chord => ({ key, text, shi
 export const KEYS = [
   // The tile selected on the board.
   { id: 'tile.open', label: 'Open it, or type in a shape', section: 'tile', scope: 'tile', status: 'today', keys: [{ key: 'Enter', text: '↵' }] },
-  { id: 'tile.full', label: 'Open a memory or steps in full', section: 'tile', scope: 'tile', status: 'new', keys: [{ mod: 'command', key: 'Enter', text: '↵' }] },
+  { id: 'tile.full', label: 'Open a memory, a queue, a to-do list or steps in full', section: 'tile', scope: 'tile', status: 'new', keys: [{ mod: 'command', key: 'Enter', text: '↵' }] },
   { id: 'tile.rename', label: 'Rename (or click its name, then pause)', section: 'tile', scope: 'tile', status: 'today', keys: [{ key: 'F2', shift: 'any' }] },
   { id: 'tile.delete', label: 'Delete or close (asks first)', section: 'tile', scope: 'tile', status: 'today', keys: [{ text: '⌫' }] },
 
@@ -80,6 +80,19 @@ export const KEYS = [
   { id: 'move.master', label: 'Open the Captain, its message box focused; in it, shut it', section: 'move', scope: 'terminal-safe', status: 'new', keys: [{ mod: 'window', shift: true, code: 'KeyM', text: 'M' }], otherKeys: [{ mod: 'window', code: 'KeyM', text: 'M' }] },
   { id: 'move.cheatSheetAnywhere', label: 'Keyboard shortcuts, from anywhere', section: 'move', scope: 'terminal-safe', status: 'new', keys: [{ mod: 'window', code: 'Slash', text: '/' }] },
   { id: 'move.parkThought', label: 'Park a thought: a line at the back of your queue, from anywhere', section: 'move', scope: 'terminal-safe', status: 'new', keys: [{ mod: 'window', shift: true, code: 'KeyP', text: 'P' }], otherKeys: [{ mod: 'window', code: 'KeyP', text: 'P' }] },
+  // The app menu's own, from any window, as the Overview's below.
+  { id: 'move.settings', label: 'Open Settings, from any window', section: 'move', scope: 'terminal-safe', status: 'today', keys: [{ mod: 'command', key: ',' }] },
+  // macOS only, off ⌘W, which closes a tab (as in Safari); in a window with no tabs to close, ⌘W closes it too. Off
+  // macOS Ctrl+Shift+W closes a tab, and the window has no key.
+  {
+    id: 'move.closeWindow',
+    label: 'Close the window; ⌘W too, in one with no tabs',
+    section: 'move',
+    scope: 'terminal-safe',
+    status: 'today',
+    keys: [{ mod: 'command', shift: true, key: 'w', text: 'W' }, { mod: 'command', key: 'w', text: 'W' }],
+    otherKeys: [],
+  },
 
   // Putting things on the board.
   { id: 'make.agent', label: 'Agent: then click', section: 'make', scope: 'board', status: 'today', keys: [bare('a')] },
@@ -217,12 +230,16 @@ export const KEYS = [
   { id: 'dialog.close', label: 'Close, the focus back where it was', section: 'dialog', scope: 'dialog', status: 'today', keys: [{ text: 'esc' }] },
   { id: 'dialog.submit', label: 'Start it, in New agent', section: 'dialog', scope: 'dialog', status: 'today', keys: [{ mod: 'command', text: '↵' }] },
   { id: 'dialog.openFromSwitcher', label: 'Open the session, from the switcher', section: 'dialog', scope: 'dialog', status: 'today', keys: [{ mod: 'window', text: '↵' }] },
-  { id: 'dialog.openBeside', label: 'Open the row beside what is open, from the switcher', section: 'dialog', scope: 'dialog', status: 'today', keys: [{ shift: true, text: '↵' }] },
+  { id: 'dialog.openBeside', label: 'Open the row beside what is open, from the switcher; a tile picked on the board opens in its view instead', section: 'dialog', scope: 'dialog', status: 'today', keys: [{ shift: true, text: '↵' }] },
+  { id: 'dialog.openView', label: 'Open the tile picked in its view, from the switcher on the board', section: 'dialog', scope: 'dialog', status: 'today', keys: [{ shift: true, text: '↵' }] },
   { id: 'dialog.handOff', label: 'Make the new edge a hand-off, in its chooser', section: 'dialog', scope: 'dialog', status: 'today', keys: [{ text: 'H' }] },
   { id: 'dialog.answer', label: 'Answer an ask with option 1–9, in the inbox', section: 'dialog', scope: 'dialog', status: 'today', keys: [{ text: '1–9' }] },
 ] as const satisfies readonly KeyBinding[];
 
 export type KeyId = (typeof KEYS)[number]['id'];
+
+/** The keys the app menu's own items hold, in every window: main runs them, never a window's handler. */
+export const APP_MENU_KEYS = ['move.settings', 'move.closeWindow', 'window.overview'] as const satisfies readonly KeyId[];
 
 const BY_ID = new Map<string, KeyBinding>(KEYS.map((binding) => [binding.id, binding]));
 

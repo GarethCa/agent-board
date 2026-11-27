@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent, AgentStart, ExternalSession, Shell, TilePosition, Zone } from '@agent-board/daemon/protocol';
 import { AGENT_TILE_SIZE, CHIP_SIZE, freeTileSlot, PERCH_ROOM, SPACING_GAPS, tileSlot, ZONE_PADDING, zoneGrid } from '@agent-board/daemon/board-layout';
-import { drawnIn, drawsAsTicket, DRAGGED_TILE_Z_INDEX, EXPANDED_DRAG_HANDLE, holdsTiles, resizesFrom, savedMove, savedPlace, shellWithPane, tileNodeId, tileSubject, withTiles, type BoardNode } from './tiles';
+import { boardToArrange, drawnIn, drawsAsTicket, DRAGGED_TILE_Z_INDEX, EXPANDED_DRAG_HANDLE, holdsTiles, resizesFrom, savedMove, savedPlace, shellWithPane, tileNodeId, tileSubject, withTiles, type BoardNode } from './tiles';
 import { EXPANDED_SIZE, expandTile } from './expanded';
 import type { TileNodeType } from './tile';
 import { itemNode } from './items/items';
+import { arrangeBoard, arrangeInput } from '@agent-board/daemon/arrange-board';
 import { zoneNode, type ZoneNodeType } from './ZoneNode';
 
 const zone = (id: string, x = 0, repoRoot: string | null = '/code/app'): ZoneNodeType =>
@@ -501,5 +502,45 @@ describe('withTiles: ticket tiles', () => {
   it('never folds a ticket chat to a chip, however it ended', () => {
     const ended = { ...chat(), endedAt: '2026-01-01T00:00:00Z', state: 'done', shellSessionId: null, shellHarness: null } as Agent;
     expect(tile(withTiles([zone('z')], [ended], [], []), 'agent:chat').data.folded).toBeUndefined();
+  });
+});
+
+describe('boardToArrange', () => {
+  // Two zones, one holding a pinned tile; a pinned tile and a shell loose on the board; an external session's tile; a note in a zone.
+  const note = itemNode({
+    id: 'n', kind: 'sticky', zoneId: 'z', ticket: null, x: 30, y: 40, width: 200, height: 100, z: 1, rotation: 0, data: {}, createdAt: '', updatedAt: '',
+  });
+  const nodes = withTiles(
+    [zone('z'), zone('p', 1000), note],
+    [agent('loose', null, { x: 5000, y: 0, z: 1 }), agent('in', 'p', { x: 20, y: 40, z: 1 })],
+    [shell('s', null, { x: 100, y: 900, z: 1 })],
+    [external('e', null, { x: 600, y: 900, z: 1 })],
+  );
+  const pinned = new Set(['agent:loose', 'agent:in']);
+  const board = boardToArrange(nodes, pinned, () => AGENT_TILE_SIZE);
+
+  it('reads each tile by its kind, zone and pin, and every item by its zone', () => {
+    expect(board.zones.map((each) => each.id)).toEqual(['z', 'p']);
+    expect(board.tiles.map(({ id, kind, zoneId, pinned }) => ({ id, kind, zoneId, pinned }))).toEqual(
+      expect.arrayContaining([
+        { id: 'agent:loose', kind: 'agent', zoneId: null, pinned: true },
+        { id: 'agent:in', kind: 'agent', zoneId: 'p', pinned: true },
+        { id: 'shell:s', kind: 'shell', zoneId: null, pinned: false },
+        { id: 'external:e', kind: 'external', zoneId: null, pinned: false },
+      ]),
+    );
+    expect(board.tiles).toHaveLength(4);
+    expect(board.tiles.find((each) => each.id === 'agent:loose')).toMatchObject({ x: 5000, y: 0, ...AGENT_TILE_SIZE });
+    expect(board.items).toEqual([expect.objectContaining({ id: 'n', zoneId: 'z', x: 30, y: 40 })]);
+  });
+
+  it("keeps a loose pinned tile, and a zone holding one, where they are in the app's Arrange", () => {
+    const input = arrangeInput(board);
+    expect(input.zones.map((each) => each.id)).toEqual(['z']);
+    expect(input.tiles.map((each) => each.id)).toEqual(['shell:s']);
+    const arranged = arrangeBoard(board);
+    expect(arranged.zones.has('p')).toBe(false);
+    expect(arranged.tiles.has('agent:loose')).toBe(false);
+    expect(arranged.tiles.has('external:e')).toBe(false);
   });
 });

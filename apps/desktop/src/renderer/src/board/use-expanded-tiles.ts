@@ -228,6 +228,9 @@ export function useExpandedTiles({ nodes, loaded, agents, shells, externals, win
     [],
   );
 
+  // An agent's arrange moved these tiles and ended their overlaps in the saved view: they end here too, so this copy
+  // never saves them back.
+  useEffect(() => window.agentBoard.view.onFreed((ids) => actions.freeOverlaps(ids)), [actions]);
   // A tile expanded, collapsed, brought to the front or resized is laid out again.
   useEffect(() => {
     if (loaded) relayout();

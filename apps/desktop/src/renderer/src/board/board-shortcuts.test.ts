@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { setExtendedShortcuts } from '../keys/extended-shortcuts';
-import { boardKey, boardShortcut, escapeCollapsesFront, quickInsertAt } from './board-shortcuts';
+import { appKeysReach, boardKey, boardShortcut, escapeCollapsesFront, quickInsertAt, SESSION_SURFACES } from './board-shortcuts';
 
 const press = (key: string, keys: Partial<Record<'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey' | 'repeat', boolean>> = {}) => ({
   key,
@@ -125,5 +125,32 @@ describe('Esc collapsing the expanded tile in front', () => {
     const picked = focused('DIV', ['.react-flow']);
     expect(escapeCollapsesFront(picked, picked)).toBe(false);
     expect(escapeCollapsesFront(focused('DIV', ['.react-flow']), picked)).toBe(true);
+  });
+});
+
+describe('where ⌘K, ⌘/ and ⌘⇧P reach', () => {
+  /** The focus inside elements matched by these selectors, as `closest` sees it. */
+  const found = {} as Element;
+  const focusIn = (...within: string[]) => ({ closest: (selectors: string) => (selectors.split(',').some((one) => within.includes(one.trim())) ? found : null) });
+
+  it('reaches the board, and anything that is not a dialog or a menu', () => {
+    expect(appKeysReach(null)).toBe(true);
+    expect(appKeysReach(focusIn())).toBe(true);
+    expect(appKeysReach(focusIn('.expanded-tile'))).toBe(true);
+  });
+
+  it('reaches every view an agent is open in, though each is a dialog: the pop-up, and a session window', () => {
+    expect(appKeysReach(focusIn('[role="dialog"]', '[data-testid="agent-popup"]'))).toBe(true);
+    expect(appKeysReach(focusIn('[role="dialog"]', '[data-testid="session-window"]'))).toBe(true);
+  });
+
+  it('leaves any other dialog or menu its keys', () => {
+    expect(appKeysReach(focusIn('[role="dialog"]'))).toBe(false);
+    expect(appKeysReach(focusIn('[role="alertdialog"]'))).toBe(false);
+    expect(appKeysReach(focusIn('[role="menu"]'))).toBe(false);
+  });
+
+  it("leaves the pop-up out of where ⌫, a dropped tab and the board's blur go, which are a session window's or an expanded tile's", () => {
+    expect(focusIn('[data-testid="agent-popup"]').closest(SESSION_SURFACES)).toBeNull();
   });
 });

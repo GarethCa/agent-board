@@ -26,6 +26,14 @@ export interface BoardCommands {
   /** Opens the tile as Enter on it does once selected: its session window, or expanded in place, as the setting says. */
   openTile(tile: TileRef): boolean;
   /**
+   * Pops the agent's tile up in the pop-up's place, or brings its window forward if it is popped out. False for what
+   * didn't: a shell, an agent the board doesn't have, or a tile (or a helper's ticket) pinned expanded, brought to the
+   * front where it is kept.
+   */
+  popUpIn(tile: TileRef): boolean;
+  /** Closes the pop-up, if one is up. */
+  closePopUp(): void;
+  /**
    * Opens a pull request, page or session picked in ⌘K on the board, with nothing open: in the window of the agent whose
    * pull request it is, or `beside` (⇧↵) the agent selected, in a pane of its own there; else a pull request or page in
    * a window of its own. False for a session with nothing to be beside, for the caller to open as ↵ does.
@@ -64,6 +72,8 @@ export function useBoardCommands(): BoardCommands {
       openSession: (sessionId) => commands.current?.openSession(sessionId) ?? false,
       showTile: (tile, options) => commands.current?.showTile(tile, options) ?? false,
       openTile: (tile) => commands.current?.openTile(tile) ?? false,
+      popUpIn: (tile) => commands.current?.popUpIn(tile) ?? false,
+      closePopUp: () => commands.current?.closePopUp(),
       openSurface: (surface, beside) => commands.current?.openSurface(surface, beside) ?? false,
       opensBeside: (surface) => commands.current?.opensBeside(surface) ?? false,
       showZone: (zoneId) => commands.current?.showZone(zoneId) ?? false,

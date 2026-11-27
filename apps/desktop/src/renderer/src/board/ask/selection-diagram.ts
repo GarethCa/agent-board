@@ -1,5 +1,6 @@
 // A selection as Ask Claude sends it: the diagram the agent reads (short node ids, boxes from the selection's top-left),
 // which board object each node is, and where on the board the answer and the agent's tile go.
+import { plural } from '@agent-board/daemon/text-words';
 import type { Connector, ConnectorEndType, SelectionDiagram, SelectionGroup } from '@agent-board/daemon/protocol';
 import type { Rect } from '../../geometry';
 import { boundsOf } from '../editing/snap';
@@ -97,7 +98,6 @@ export function selectionSummary(diagram: SelectionDiagram): string {
   return parts.filter(Boolean).join(' · ');
 }
 
-const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? '' : 's'}`;
 
 /**
  * The zoom that draws the selection at `scale` picture pixels to a board px on a screen of `pixelRatio`, within

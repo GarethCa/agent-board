@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { Agent, AgentState, ClockData, ClockResult, ClockRun, ClockStatus } from '@agent-board/daemon/protocol';
+import type { Agent, AgentState, ClockData, ClockOnlyIf, ClockResult, ClockRun, ClockStatus } from '@agent-board/daemon/protocol';
 import { Button, Checkbox, Dialog, ErrorText, Field, Fieldset, Hint, Input, Segmented, Select, StatusPill, Switch, Textarea, Truncate } from '../ui';
 import { useAction } from '../use-action';
 import { FreshAgentFields } from './FreshAgentFields';
@@ -53,6 +53,8 @@ export function ClockDialog({ editing, status, agents, onUpdate, onDelete, onClo
   const [clock, setClock] = useState<ClockData>(() =>
     existing !== undefined ? clockData(existing.data) : { ...clockData({}), agent: (editing as { agent: Agent }).agent.sessionId, prompt: (editing as { agent: Agent }).agent.description },
   );
+  const setOnlyIf = existing === undefined ? '' : ((existing.data.onlyIf as ClockOnlyIf | null | undefined)?.command ?? '');
+  const [onlyIf, setOnlyIfDraft] = useState(setOnlyIf);
   const { busy, error, run } = useAction();
   const now = new Date();
   const preview = previewCron(clock.cron, now);
@@ -66,12 +68,18 @@ export function ClockDialog({ editing, status, agents, onUpdate, onDelete, onClo
 
   const save = () => {
     const data = { ...clock, cron: clock.cron.trim(), prompt: clock.prompt.trim() };
+    const command = onlyIf.trim();
+    /** The daemon reads what the script runs now, so a later edit to it skips the clock's runs until it is set again. */
+    const setScript = (id: string): Promise<unknown> => (command === setOnlyIf.trim() ? Promise.resolve() : window.agentBoard.items.setClockOnlyIf(id, command === '' ? null : command));
     if (existing !== undefined) {
       onUpdate(existing.id, data);
-      onClose();
+      run(() => setScript(existing.id), onClose);
       return;
     }
-    run(() => window.agentBoard.items.addClock(data, { beside: (editing as { agent: Agent }).agent.sessionId }), onClose);
+    run(async () => {
+      const made = await window.agentBoard.items.addClock(data, { beside: (editing as { agent: Agent }).agent.sessionId });
+      await setScript(made.id);
+    }, onClose);
   };
 
   const agentSelect = (value: string | null, label: string, onChange: (sessionId: string | null) => void) => (
@@ -169,6 +177,12 @@ export function ClockDialog({ editing, status, agents, onUpdate, onDelete, onClo
           works, waits for you or you are typing to it.
         </Hint>
       )}
+      <Field
+        label="Only if this exits 0 (optional)"
+        hint="A shell command run first, in the agent's folder or else the zone's. Exit 1 skips the run with nothing to do, without waking an agent; what it prints goes with the prompt. Edit the script and the clock skips until you save it here again."
+      >
+        <Input name="onlyIf" value={onlyIf} spellCheck={false} placeholder="gh pr list --search 'review-requested:@me' | grep ." onChange={(event) => setOnlyIfDraft(event.target.value)} />
+      </Field>
       {status !== undefined && status.runs.length > 0 && (
         <section className="clock-history" aria-label="Runs" data-testid="clock-history">
           {status.runs.map((each) => (

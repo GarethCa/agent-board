@@ -1,10 +1,11 @@
 import { expect, type Page } from '@playwright/test';
-import type { QueueData } from '@agent-board/daemon/protocol';
+import { TODO_PILL_SIZE, type QueueData } from '@agent-board/daemon/protocol';
 import { boardZoom, settledBox, withDaemon } from './board-helpers.ts';
 import { test, connectedDaemonPid, launchApp, removeDataDir, tempDataDir } from './launch.ts';
 
-// A queue's peek, opened by a double-click on its card, is a popover like the app's others: the same size on screen at
-// any zoom, and Esc or a click on empty board (in its zone or out of it) closes it.
+// A queue's peek, opened by its Open ↗, is a popover like the app's others: the same size on screen at any zoom, and Esc
+// or a click on empty board (in its zone or out of it) closes it. A double-click on the card opens it full screen instead;
+// a folded to-do list's peek opens on one click on its pill, and full screen on a double-click.
 
 /** Pinches the board about `at`: in (`-1`) or out (`1`), as Chromium reports a pinch, the wheel with Ctrl. */
 async function pinch(page: Page, at: { x: number; y: number }, way: -1 | 1): Promise<void> {
@@ -14,7 +15,7 @@ async function pinch(page: Page, at: { x: number; y: number }, way: -1 | 1): Pro
   await page.keyboard.up('Control');
 }
 
-test('a queue peek opened by double-click keeps its size as the board zooms, and Esc or a click on empty board closes it', async () => {
+test('a queue peek keeps its size as the board zooms, and Esc or a click on empty board closes it; a double-click opens full screen', async () => {
   const dataDir = tempDataDir();
   const app = await launchApp(dataDir);
   try {
@@ -30,7 +31,7 @@ test('a queue peek opened by double-click keeps its size as the board zooms, and
     await expect(card.locator('.listcard-row')).toHaveCount(2);
     const peek = page.locator('.listcard-peek-popover');
     const open = async () => {
-      await card.locator('.listcard-title').dblclick();
+      await card.getByRole('button', { name: 'Open ↗' }).click();
       await expect(peek).toBeVisible();
     };
 
@@ -74,6 +75,36 @@ test('a queue peek opened by double-click keeps its size as the board zooms, and
     expect(under, 'the click lands on empty board, out of the zone').toBe(true);
     await page.mouse.click(empty.x, empty.y);
     await expect.soft(peek, 'a click on empty board closes it').toBeHidden();
+
+    // A double-click on the card opens it full screen, not its peek; esc goes back.
+    await card.locator('.listcard-title').dblclick();
+    const full = page.getByTestId('queue-full');
+    await expect(full).toBeVisible();
+    await expect(peek).toBeHidden();
+    await page.keyboard.press('Escape');
+    await expect(full).toBeHidden();
+
+    // A folded to-do list: one click on its pill opens its peek, esc closes it, and a double-click opens it full screen.
+    await page.evaluate(
+      async ({ zoneId, pill }) => {
+        const user = { kind: 'user' as const };
+        const line = { id: 't1', text: 'Book the room', by: user, at: '2026-11-05T09:00:00.000Z', done: null };
+        await window.agentBoard.items.create({ kind: 'todo', zoneId, x: 480, y: 60, ...pill, data: { owner: user, folded: true, lines: [line] } } as never);
+      },
+      { zoneId: zone.id, pill: TODO_PILL_SIZE },
+    );
+    const face = page.getByTestId('todo-pill').getByRole('button', { name: /open its peek/ });
+    await face.click();
+    const todoPeek = page.getByTestId('todo-peek');
+    await expect(todoPeek).toBeVisible();
+    await expect(todoPeek.getByTestId('todo-pop-line')).toHaveCount(1);
+    await page.keyboard.press('Escape');
+    await expect(todoPeek).toBeHidden();
+    await face.dblclick();
+    const todoFull = page.getByTestId('todo-full');
+    await expect(todoFull).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(todoFull).toBeHidden();
   } finally {
     await app.close();
     await removeDataDir(dataDir);

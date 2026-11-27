@@ -1,3 +1,4 @@
+import { plural } from '@agent-board/daemon/text-words';
 import { useEffect, useMemo, useState } from 'react';
 import type { Agent, NeedsYouShows, Zone } from '@agent-board/daemon/protocol';
 import { useNeedsYouShows } from '../needs-you-setting';
@@ -107,4 +108,3 @@ function greeting(now: Date): string {
   return hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
 }
 
-const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`;

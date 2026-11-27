@@ -51,6 +51,7 @@ import {
   zoneLayoutChoiceFields,
   zoneLayoutChoiceOf,
   zoneSnapshot,
+  type LaunchSettings,
 } from '@agent-board/daemon/protocol';
 import { EFFORT_LABELS } from './AgentSetup';
 import { paneIds } from '@agent-board/daemon/pane-layout';
@@ -175,7 +176,7 @@ import { MemoryReadPulses } from './items/MemoryReadPulses';
 import { DocumentCardsContext, type DocumentCards } from './items/DocumentNode';
 import { PlanCardsContext, type PlanCards } from './items/PlanNode';
 import { StepsLookupContext } from './items/StepsNode';
-import { TodoLookupContext } from './items/TodoNode';
+import { TodoLookupContext } from './items/todo-lookup';
 import type { TodoLookup } from './items/todo-view';
 import type { StepsLookup } from './items/steps-view';
 import { useShownDocuments } from '../doc/use-shown-documents';
@@ -228,7 +229,7 @@ import type { BoardRequest, ScreenPoint, WindowTarget } from '../../../preload/a
 import { VIEW_KEYS, viewSaver } from '../../../shared/view-saver';
 import { useProvideBoardCommands, type BoardCommands } from './commands';
 import { tileSizeOf, withTileSize } from './tile-size';
-import { AGENT_TILE_SIZE, freeItemSpot, freeSpotFor, isFolded, rotatedBounds, sizedFootprint, TILE_GAP, ZONE_PADDING, zoneGrid, type Point } from '@agent-board/daemon/board-layout';
+import { AGENT_TILE_SIZE, freeItemSpot, freeZoneSpot, isFolded, TILE_GAP, ZONE_PADDING, zoneGrid, type Point } from '@agent-board/daemon/board-layout';
 import { STAGE_BOARD_KIND } from '@agent-board/daemon/stage-board';
 import { arrangeBoard as arrangeBoardLayout } from '@agent-board/daemon/arrange-board';
 import { tidyLoose as tidyLooseLayout, tidyZone as tidyZoneLayout } from '@agent-board/daemon/board-tidy';
@@ -240,6 +241,7 @@ import { useClockStatuses } from './use-clocks';
 import { GateCommandDialog } from '../gate/GateCommandDialog';
 import { ResumeExternalDialog } from './ResumeExternalDialog';
 import { NewAgentDialog } from './NewAgentDialog';
+import { RestartWithDialog } from './RestartWithDialog';
 import { CrewFlow, prefabNamed, type CrewFlowStart } from '../crews/CrewFlow';
 import { usePrefabs } from '../crews/prefab-store';
 import { RoleTemplatesDialog } from './RoleTemplatesDialog';
@@ -257,8 +259,8 @@ import { ClickOpensContext, ShellFoldersContext, TicketViewsContext, TileActions
 import {
   DRAGGED_TILE_Z_INDEX,
   drawnIn,
-  EXTERNAL_NODE_PREFIX,
   isSessionTile,
+  boardToArrange,
   isStartTile,
   isZone,
   laysOutItsTiles,
@@ -660,6 +662,8 @@ function BoardView() {
   const [home, setHome] = useState<string>();
   /** An ended agent to restart once the user says so, as the shell its pane dropped into is running something. */
   const [pendingRestart, setPendingRestart] = useState<{ sessionId: string; message: string }>();
+  /** The agent whose ⋯ › Restart with… is open. */
+  const [restartingWith, setRestartingWith] = useState<Agent>();
   /** A failed start to start again once the user confirms its warning: its worktree has Codex config of its own. */
   const [confirmingStart, setConfirmingStart] = useState<AgentStart>();
   /** The external session being resumed in agent-board, and where the board draws a tile it slotted into its zone. */
@@ -1005,6 +1009,20 @@ function BoardView() {
     },
     [report, agentHeard, lifecycleOnce, agentsRef],
   );
+  /**
+   * Restarts the agent with new launch settings, as Restart does: once at a time, and a shell running something asked
+   * about first (the settings are kept by then, so its "anyway" is a plain restart). Rejects with why it couldn't.
+   */
+  const restartWith = useCallback(
+    (sessionId: string, launchSettings: LaunchSettings, keepEnv: string[]) =>
+      lifecycleOnce(sessionId, () =>
+        window.agentBoard.agents.restartWith(sessionId, launchSettings, keepEnv).then((result) => {
+          if (result.status === 'busy') return setPendingRestart({ sessionId, message: wakeBusyText(result.message) });
+          agentHeard(result.agent);
+        }),
+      ),
+    [agentHeard, lifecycleOnce],
+  );
   /** Deletes the shell tile and ends its panes. */
   const deleteShell = useCallback(
     (shellId: string) => {
@@ -1127,13 +1145,17 @@ function BoardView() {
       // A helper its ticket's tile holds pops up as its ticket, on its tab; one popped out is brought forward.
       popUp(agent, path = 'popUp', on) {
         const plan = popUpPlan(agent, on, agentsRef.current, windowsRef.current);
-        if (plan === undefined) return;
-        if (plan.kind === 'forward') return openAgent(plan.agent);
+        if (plan === undefined) return false;
+        if (plan.kind === 'forward') {
+          openAgent(plan.agent);
+          return true;
+        }
         const { chat, on: tab } = plan;
-        if (keptOnBoard.current(chat.sessionId, path)) return;
+        if (keptOnBoard.current(chat.sessionId, path)) return false;
         for (const id of plan.minimise) minimiseWindow(id);
         collapse(tileNodeId('agent', chat.sessionId), 'popUp');
         setPoppedUp((was) => ({ id: chat.sessionId, ...(tab === undefined ? {} : { on: tab }), opening: (was?.opening ?? 0) + 1 }));
+        return true;
       },
       openShell,
       popOutAgent: (agent) => popOut({ kind: 'session', id: agent.sessionId, title: agentTitle(agent) }),
@@ -1282,6 +1304,7 @@ function BoardView() {
       resendUndelivered: (sessionId) => window.agentBoard.agents.resendUndelivered(sessionId).then(agentHeard, report('resend what was not delivered')),
       clearUndelivered: (sessionId) => window.agentBoard.agents.clearUndelivered(sessionId).then(agentHeard, report('clear what was not delivered')),
       restartAgent: (sessionId) => void restartAgent(sessionId, false),
+      restartWith: setRestartingWith,
       wakeAgent: (agent) => {
         const act = wakeAct(agent);
         if (act === 'resume') return lifecycleOnce(agent.sessionId, () => window.agentBoard.agents.resume(agent.sessionId).then(agentHeard, report('wake the agent')));
@@ -1417,7 +1440,7 @@ function BoardView() {
     [getNodes],
   );
   /** The room each zone takes on the board now, a folded one its chip's: what a tile put loose on the board keeps clear of. */
-  const zoneRooms = useCallback((): (Rect & { id: string })[] => getNodes().filter(isZone).map((zone) => ({ id: zone.id, ...layoutOf(zone) })), [getNodes]);
+  const zoneRooms = useCallback((): (Rect & { id: string })[] => getNodes().filter(isZone).map((zone) => ({ id: zone.id, ...roomOf(zone) })), [getNodes]);
   // The camera a recording spec drives, in demo mode only, beside the board's own moves (flyTo, bringIntoView).
   useDemoCamera(useCallback((zoneId: string) => zoneRooms().find((zone) => zone.id === zoneId), [zoneRooms]));
 
@@ -2552,35 +2575,25 @@ function BoardView() {
   );
 
   /**
-   * Arranges the board: whole zones in rows a gap apart, with what is in them, and the agents and shells loose on the
-   * board in rows below them, clear of what stays: the notes, shapes and text loose on it (turned ones by their upright
-   * box), and other sessions' tiles. Never inside a zone. Saved, as one step to undo.
+   * Arranges the board as an agent's `arrange` of it does (`arrangeBoard`, the daemon's): whole zones in rows a gap
+   * apart, with what is in them, and the agents and shells loose on the board in rows below them, clear of what stays.
+   * Never inside a zone. Saved, as one step to undo.
    */
   const arrangeBoard = useCallback(() => {
     const zones = nodesRef.current.filter(isZone);
-    const loose = nodesRef.current.filter(isSessionTile).filter((node) => node.parentId === undefined);
-    const moving = loose.filter((node) => !node.id.startsWith(EXTERNAL_NODE_PREFIX));
-    const fixed = [
-      ...nodesRef.current.flatMap((node): Rect[] => (isItemNode(node) && node.parentId === undefined ? [rotatedBounds(node.data.item, node.data.item.rotation)] : [])),
-      ...loose.filter((node) => !moving.includes(node)).map((node) => sizedFootprint(node.position, tidySizeOf(node))),
-    ];
+    const tiles = nodesRef.current.filter(isSessionTile);
     // Laid out as drawn, so the gaps hold on the screen, but each zone saved at its own size: the room the board makes
     // round an expanded tile, or grows a zone by to hold its tiles, is never saved.
-    const arranged = arrangeBoardLayout(
-      // A folded zone is a chip: its neighbours close up round it.
-      zones.map((node) => ({ id: node.id, ...roomOf(node) })),
-      moving.map((node) => ({ id: node.id, ...node.position, ...tidySizeOf(node) })),
-      fixed,
-    );
+    const arranged = arrangeBoardLayout(boardToArrange(nodesRef.current, pinnedRef.current, tidySizeOf));
     for (const node of zones) {
       const at = arranged.zones.get(node.id);
       // As the daemon has it now: a resize from elsewhere (another window, an orchestrator's arrange) included.
       const { width, height } = node.data.zone;
       if (at !== undefined) saveZoneLayout(node.id, { ...at, width, height }, { move: true });
     }
-    moveTilesTo(moving.filter((node) => arranged.tiles.has(node.id)), arranged.tiles, null);
-    freeOverlaps([...arranged.tiles.keys()]);
-  }, [moveTilesTo, saveZoneLayout, tidySizeOf]);
+    moveTilesTo(tiles.filter((node) => arranged.tiles.has(node.id)), arranged.tiles, null);
+    freeOverlaps(arranged.freed);
+  }, [moveTilesTo, saveZoneLayout, tidySizeOf, pinnedRef]);
   // Picked in the menu bar it runs as from the board's menu, with its ⇧L behind Extended shortcuts or not.
   useMenuBarKey('edit.arrangeBoard', arrangeBoard);
 
@@ -3043,7 +3056,7 @@ function BoardView() {
       left === undefined
         ? { x: centre.x - AGENT_TILE_SIZE.width / 2, y: centre.y - AGENT_TILE_SIZE.height / 2 }
         : { x: absoluteOf(left).x + AGENT_TILE_SIZE.width + TILE_GAP, y: absoluteOf(left).y };
-    const position = freeSpotFor(beside, AGENT_TILE_SIZE, [...zoneRooms(), ...looseTiles()]);
+    const position = freeZoneSpot(beside, AGENT_TILE_SIZE, [...zoneRooms(), ...looseTiles()]);
     const move = dropMove(drag, { tile: { zoneId: null, ...position, toFront: true } });
     if (move === undefined) return;
     void moveTab(move).then(({ shell: moved }) => {
@@ -3058,11 +3071,14 @@ function BoardView() {
     if (loaded) window.agentBoard.tabDrags.ready();
   }, [loaded]);
 
-  /** A free spot for a new zone, near the middle of the view, clear of the zones and loose tiles. */
+  /**
+   * A free spot for a new zone, near the middle of the view, clear of the zones (a folded one by its chip, as an agent's
+   * new zone measures it) and loose tiles.
+   */
   const newZoneSpot = () => {
     const centre = boardCentre();
     const wanted = { x: centre.x - DEFAULT_ZONE_SIZE.width / 2, y: centre.y - DEFAULT_ZONE_SIZE.height / 2 };
-    return freeSpotFor(wanted, DEFAULT_ZONE_SIZE, [...zoneRooms(), ...looseTiles()]);
+    return freeZoneSpot(wanted, DEFAULT_ZONE_SIZE, [...zoneRooms(), ...looseTiles()]);
   };
 
   /** Where Add zone sits by the outline of `layout`, as the view is now. */
@@ -3291,7 +3307,7 @@ function BoardView() {
         // In the middle of the view, clear of the zones and loose tiles there.
         const centre = boardCentre();
         const wanted = { x: centre.x - AGENT_TILE_SIZE.width / 2, y: centre.y - AGENT_TILE_SIZE.height / 2 };
-        const position = freeSpotFor(wanted, AGENT_TILE_SIZE, [...zoneRooms(), ...looseTiles()]);
+        const position = freeZoneSpot(wanted, AGENT_TILE_SIZE, [...zoneRooms(), ...looseTiles()]);
         const spot: { rect: ZoneLayout; shellId?: string } = { rect: { ...position, ...AGENT_TILE_SIZE } };
         looseSpots.current.add(spot);
         return window.agentBoard.shells.create({ zoneId: null, position }).then(
@@ -3435,6 +3451,11 @@ function BoardView() {
         else tileActions.expand(node.id);
         return true;
       },
+      popUpIn({ kind, id }) {
+        const agent = kind === 'agent' ? agentsRef.current.find((known) => known.sessionId === id) : undefined;
+        return agent !== undefined && !keptOnBoard.current(id, 'popUp') && tileActions.popUp(agent);
+      },
+      closePopUp: () => setPoppedUp(undefined),
       openSurface(surface, beside) {
         const opening = boardOpening(surface, switcherBoard(beside), poppedOut);
         if (opening.opens === 'window') {
@@ -4475,6 +4496,13 @@ function BoardView() {
             >
               <p>{confirmingStart.error}</p>
             </Dialog>
+          )}
+          {restartingWith !== undefined && (
+            <RestartWithDialog
+              agent={restartingWith}
+              onClose={() => setRestartingWith(undefined)}
+              onRestart={(launchSettings, keepEnv) => restartWith(restartingWith.sessionId, launchSettings, keepEnv)}
+            />
           )}
           {pendingRestart !== undefined && (
             <Dialog

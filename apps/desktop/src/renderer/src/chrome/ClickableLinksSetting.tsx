@@ -2,9 +2,9 @@ import { useEffect, useId, useState } from 'react';
 import type { Agent, DaemonSettings } from '@agent-board/daemon/protocol';
 import { ipcErrorMessage } from '../../../shared/errors';
 import { keyText } from '../keys/registry';
-import { canRestartLive } from '../session/RestartAgent';
+import { canRestartLive, WakeBusyConfirm } from '../session/RestartAgent';
 import { Button, ErrorText, Hint, Switch } from '../ui';
-import { clickableLinksView, startedOtherwise } from './clickable-links';
+import { cancelledLine, clickableLinksView, restartForLinks, startedOtherwise, wakeAnyway, type BusyShell } from './clickable-links';
 
 type OnError = (action: string) => (error: unknown) => void;
 type LinkSettings = Pick<DaemonSettings, 'clickableLinks' | 'clickableLinksFromEnvironment'>;
@@ -26,6 +26,8 @@ export function ClickableLinksSetting({ onError }: { onError: OnError }) {
   const [later, setLater] = useState(false);
   /** Why a restart did not go through, one line per agent. */
   const [problems, setProblems] = useState<string[]>([]);
+  /** Agents stopped for the restart whose shell runs something: each asks, as Wake does, before it ends that. */
+  const [busyShells, setBusyShells] = useState<BusyShell[]>([]);
 
   useEffect(() => {
     window.agentBoard.flowEdges.settings().then((now) => setSettings(linkSettings(now)), onError('read the clickable links setting'));
@@ -64,18 +66,21 @@ export function ClickableLinksSetting({ onError }: { onError: OnError }) {
   const restart = async () => {
     setBusy(true);
     setProblems([]);
-    const failed: string[] = [];
-    // One at a time, and one agent's trouble never leaves the rest unrestarted.
-    for (const agent of restartable) {
-      try {
-        await window.agentBoard.agents.stop(agent.sessionId);
-        const result = await window.agentBoard.agents.restart(agent.sessionId);
-        if (result.status === 'busy') failed.push(`${agent.name} is stopped, as its shell is running something (${result.message}). Restart it from its tile.`);
-      } catch (error) {
-        failed.push(`${agent.name} could not be restarted: ${ipcErrorMessage(error)}`);
-      }
-    }
+    setBusyShells([]);
+    const { failed, asking } = await restartForLinks(restartable, window.agentBoard.agents, ipcErrorMessage);
     setProblems(failed);
+    setBusyShells(asking);
+    setBusy(false);
+  };
+
+  const settle = (shell: BusyShell, problem?: string) => {
+    setBusyShells((now) => now.filter((each) => each.sessionId !== shell.sessionId));
+    if (problem !== undefined) setProblems((now) => [...now, problem]);
+  };
+  const wake = async (shell: BusyShell) => {
+    setBusy(true);
+    const woke = await wakeAnyway(shell, window.agentBoard.agents, ipcErrorMessage);
+    if (!woke.asking) settle(shell, woke.problem);
     setBusy(false);
   };
 
@@ -110,6 +115,15 @@ export function ClickableLinksSetting({ onError }: { onError: OnError }) {
           </Button>
         </Hint>
       )}
+      {busyShells.map((shell) => (
+        <WakeBusyConfirm
+          key={shell.sessionId}
+          message={`${shell.name} is stopped: ${shell.message}`}
+          pending={busy}
+          onWake={() => void wake(shell)}
+          onCancel={() => settle(shell, cancelledLine(shell))}
+        />
+      ))}
       {problems.map((problem) => (
         <ErrorText key={problem}>{problem}</ErrorText>
       ))}

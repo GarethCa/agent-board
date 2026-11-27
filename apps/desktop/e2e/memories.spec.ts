@@ -100,6 +100,11 @@ test('M puts a memory at the pointer ready to type; it remembers what is typed, 
     await expect(icon).toBeVisible();
     await expect(icon.locator('.listcard-count')).toHaveText('3');
     await expect.poll(async () => (await storedMemory(dataDir)).item.data.folded).toBe(true);
+    // A double-click on it opens it full screen.
+    await icon.getByRole('button', { name: /open its peek/ }).dblclick();
+    await expect(full).toBeVisible();
+    await window.keyboard.press('Escape');
+    await expect(full).toBeHidden();
     await icon.getByRole('button', { name: /open its peek/ }).click();
     const peek = window.getByTestId('memory-peek');
     await expect(peek).toBeVisible();

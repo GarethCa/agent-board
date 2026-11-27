@@ -27,7 +27,7 @@ async function agentDaemon() {
 /** A repo with worker prompts, as agent-board's own has, committed. */
 function repoWithPrompts(): string {
   const repo = tempRepo('storefront');
-  const dir = join(repo, '.claude', 'skills', 'cmux-workers');
+  const dir = join(repo, '.claude', 'agent-prompts');
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, 'impl-prompt.md'), 'Implement {{ISSUE}} on {{BRANCH}} in {{WORKTREE}}.\n');
   writeFileSync(join(dir, 'review-prompt.md'), 'Review {{ISSUE}} round {{ROUND}}: {{BRANCH}} in {{WORKTREE}}, by {{IMPL_WORKTREE}}.\n');

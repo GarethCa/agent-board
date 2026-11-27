@@ -4,7 +4,7 @@
 // board's own rules (`board-layout.ts`), so nothing here keeps a state of its own but who made a group or note.
 import type { DatabaseSync } from 'node:sqlite';
 import { agentNoteAuthor, agentNoteData, agentNoteSize } from './agent-notes.ts';
-import { arrangeBoard } from './arrange-board.ts';
+import { arrangeBoard, zoneRoom } from './arrange-board.ts';
 import { arrangeTiles, CLUSTER_LABEL_SIZE, CLUSTER_NOTE_SIZE, fittedSize, lanesOf, LANE_SLOTS, parkClusters, placedAs, type ArrangeTile, type ArrangedCluster } from './board-arrange.ts';
 import { inFreeArea } from './shelf-layout.ts';
 import { layOutSpine, type SpinePlace, type SpinePlaces, type SpineTail } from './spine-layout.ts';
@@ -15,7 +15,7 @@ import {
   clamp,
   clearOf,
   freeItemSpot,
-  freeSpotFor,
+  freeZoneSpot,
   freeTileSlot,
   gridColumnAtOrRight,
   gridPoint,
@@ -36,6 +36,10 @@ import {
   expandedSizesFrom,
   TILE_SIZES_VIEW_KEY,
   UNFOLDED_VIEW_KEY,
+  OVERLAPS_VIEW_KEY,
+  PUT_DOWN_VIEW_KEY,
+  withoutFreed,
+  ZONE_GAP,
   CHIP_SIZE,
   isFolded,
   unfoldedFrom,
@@ -108,6 +112,7 @@ import {
   type BoardPlace,
   type Connector,
   type DaemonCall,
+  type DaemonEvent,
   type DaemonMethods,
   type ExternalSession,
   type LayoutMoved,
@@ -131,13 +136,12 @@ import {
   type Zone,
   type ZoneLayoutRule,
   type CaptureStyle,
-  drawnZoneSize,
   type ZoneMap,
   type ZoneMapThing,
   startedByHand,
 } from './protocol.ts';
 import { RpcMethodError, type RpcHandlers } from './rpc.ts';
-import { cutText } from './text-cut.ts';
+import { cutText, plural } from './text-words.ts';
 import { spotOnTicketBoard } from './ticket-board.ts';
 import { arrangeTicketBoard, heldByTicket, helpersOf, ownTicketBoard } from './ticket-tiles.ts';
 import { reviewedBy, workTilesOf } from './work-units.ts';
@@ -197,6 +201,8 @@ export interface LayoutHandlerOptions {
   zones: Pick<ZoneTable, 'dropHandPlaced'>;
   /** Of `list`, the items `connection` reads: a steps, memory, queue, crew or to-do card only where its audience takes it in. */
   visible: (list: BoardItem[], connection: BoardConnection) => BoardItem[];
+  /** Tells every client: an open board hears the overlaps an arrange ends. */
+  broadcast: (event: DaemonEvent) => void;
 }
 
 /** How the Lanes rule arranges its zone. Spine lays its zone out by a pass of its own (`spineIn`). */
@@ -309,9 +315,6 @@ function settingsFrom(saved: unknown): ArrangeSettings {
   };
 }
 
-/** Space kept between a new group and the zone it is stepped past, as the board's Zone tool keeps. */
-const ZONE_GAP = 40;
-
 /** A text item's line height, and the room round its text, as the board draws body text (about). */
 const TEXT_LINE = 1.4;
 const TEXT_PAD = 8;
@@ -382,7 +385,7 @@ const SHAPE_KINDS: ReadonlySet<string> = new Set(['shape']);
 const isNote = (item: BoardItem) => NOTE_ITEM_KINDS.has(item.kind);
 
 /** Everything on the board a layout reads, at one moment. */
-interface Board {
+export interface Board {
   zones: Zone[];
   agents: Agent[];
   /** Shell tiles: a tab is no tile. */
@@ -404,14 +407,14 @@ interface Board {
  * The room each zone takes on the board, by id: a folded one its chip's, so what is placed or arranged closes up round
  * it. Its saved size stays as it was, and the board moves what came to sit there out of its way when it is unfolded.
  */
-const zoneRooms = (board: Board) => board.zones.map((zone) => ({ id: zone.id, x: zone.x, y: zone.y, ...drawnZoneSize(zone) }));
+const zoneRooms = (board: Board) => board.zones.map(zoneRoom);
 
 /**
  * The other zone `zone` would cover laid out as `layout`, if any: zones never overlap. Each is measured by the room it
  * takes (`zoneRooms`), so a folded one by its chip, as placement measures it.
  */
 const zoneCoveredBy = (board: Board, zone: Zone, layout: Rect): Zone | undefined => {
-  const room = { x: layout.x, y: layout.y, ...drawnZoneSize({ folded: zone.folded, width: layout.width, height: layout.height }) };
+  const room = zoneRoom({ ...zone, ...layout });
   const rooms = new Map(zoneRooms(board).map((each) => [each.id, each]));
   return board.zones.find((other) => other.id !== zone.id && overlaps(room, rooms.get(other.id)!));
 };
@@ -788,7 +791,7 @@ function lineBudgetParam(fields: Record<string, unknown>, clears: boolean): numb
 }
 
 /** Everything on the board a layout reads, through the daemon's own methods. */
-async function readLayoutBoard(call: DaemonCall): Promise<Board> {
+export async function readLayoutBoard(call: DaemonCall): Promise<Board> {
   const [zones, agents, shells, externals, items, sizes, unfolded, expanded, hidden, expandedSizes] = await Promise.all([
     call('zone.list', undefined),
     call('agent.list', undefined),
@@ -826,6 +829,87 @@ function expandedOf(board: Board): ExpandedBox[] {
   return placedOf(board)
     .filter((each) => board.open.has(each.key))
     .map((each) => ({ key: each.key, x: each.rect.x, y: each.rect.y, width: each.rect.width, height: each.rect.height }));
+}
+
+/**
+ * `placed` as the app draws it, if it measured it (`measures`): an item as big as it is drawn (a text item as its text takes), and
+ * given the tiles expanded now (`at`, `expandedOf`), where it is drawn: pushed aside by them, if they are the ones it
+ * was drawn round. A tile keeps the size the daemon gives it.
+ */
+function drawnAs(measures: Pick<LayoutMeasures, 'drawn'>, placed: Placed, at?: readonly ExpandedBox[]): Placed {
+  const drawn = measures.drawn(placed.key, placed.rect, placed.kind === 'item', at ?? []);
+  if (drawn === undefined) return placed;
+  const size = placed.kind === 'item' ? { width: drawn.width, height: drawn.height } : { width: placed.rect.width, height: placed.rect.height };
+  return { ...placed, rect: { ...(at !== undefined ? { x: drawn.x, y: drawn.y } : { x: placed.rect.x, y: placed.rect.y }), ...size } };
+}
+
+/**
+ * Where something of `size` goes in `zone` (or loose, with none) for `place`: at `at` on the grid column nearest it, in
+ * the nearest grid row or row of tiles already there (a lane laid out in px), or
+ * beside `near`, exactly (`roomFor` moves what is in the way aside); else the first free spot a new tile (or note)
+ * takes. Loose on the board, or where that would be outside its zone, it is moved the least distance clear of what is
+ * there but `exclude`, beside `near` where the app last drew it (`measures`).
+ */
+export function spotFor(board: Board, zone: Zone | undefined, size: Size, place: LayoutPlace, exclude: string | null, isNote: boolean, measures: Pick<LayoutMeasures, 'drawn'>): Point {
+  const here = placedOf(board).filter((each) => each.key !== exclude && each.zoneId === (zone?.id ?? null));
+  const blocking = here.map(takenBy);
+  if (zone === undefined) blocking.push(...zoneRooms(board));
+  const region =
+    zone === undefined
+      ? { left: -Infinity, top: -Infinity, right: Infinity, bottom: Infinity }
+      : { left: paddingOf(zone), top: paddingOf(zone) + (isNote ? 0 : PERCH_ROOM), right: Infinity, bottom: Infinity };
+  let wanted: Point;
+  if (place.near !== undefined) {
+    const near = placedOf(board).find((each) => each.kind === place.near!.kind && each.id === place.near!.id);
+    if (near === undefined) throw invalidParams(`no ${place.near.kind} ${place.near.id}`);
+    // Beside it where the app draws it: an expanded tile the board drew clear of something is not where it is saved.
+    wanted = besideSpot(drawnAs(measures, near, expandedOf(board)).rect, place.side ?? 'below', size);
+    if (zone !== undefined && wanted.x >= region.left && wanted.y >= region.top) return wanted;
+  } else if (place.at !== undefined) {
+    if (zone !== undefined) {
+      // A wish past the zone's reach is put at its edge, on the zone's grid.
+      const grid = zoneGrid(zone.spacing);
+      const wish = { x: clamp(place.at.x, grid.gaps.padding, zone.width + MAX_REACH), y: clamp(place.at.y, grid.gaps.padding, zone.height + MAX_REACH) };
+      const snapped = snapToGrid(wish, grid);
+      // Lanes are laid out in px, off the grid's rows: a tile's row in the zone, nearer the wish than a grid row, is its row.
+      const y = here.filter((each) => each.kind !== 'item').reduce((best, each) => (Math.abs(each.rect.y - wish.y) < Math.abs(best - wish.y) ? each.rect.y : best), snapped.y);
+      return {
+        x: snapped.x > zone.width + MAX_REACH ? snapped.x - grid.column : snapped.x,
+        y: y > zone.height + MAX_REACH ? y - grid.row : y,
+      };
+    }
+    wanted = { x: clamp(place.at.x, -BOARD_EXTENT, BOARD_EXTENT), y: clamp(place.at.y, -BOARD_EXTENT, BOARD_EXTENT) };
+  } else if (zone === undefined) {
+    return freeZoneSpot({ x: 0, y: 0 }, size, [...zoneRooms(board), ...here.map((each) => each.rect)]);
+  } else {
+    const taken = here.map((each) => each.rect);
+    return isNote ? freeItemSpot(zone.width, size, taken) : freeTileSlot(zone.width, taken, size, zoneGrid(zone.spacing));
+  }
+  // The region has no right or bottom edge, so a clear spot is always found.
+  return nearestFreeSpot(wanted, blocking, region, size)!;
+}
+
+/**
+ * Where a new agent's tile goes in `zoneId` (loose, with null): the first free slot `spotFor` gives any new tile, clear
+ * of what is there, the zone's perches and its edge.
+ */
+async function newAgentSpot(call: DaemonCall, zoneId: string | null): Promise<Point> {
+  const board = await readLayoutBoard(call);
+  const zone = zoneId === null ? undefined : board.zones.find((each) => each.id === zoneId);
+  // Placed near nothing: how the app drew the board is never asked.
+  return spotFor(board, zone, AGENT_TILE_SIZE, {}, null, false, { drawn: () => undefined });
+}
+
+/** Starts a new agent with `start` at the spot `newAgentSpot` gives it in `zoneId`. */
+export type PlaceNewAgent = <T>(zoneId: string | null, start: (position: Point) => Promise<T>) => Promise<T>;
+
+/**
+ * Places new agents one at a time in each zone: each spot is read once the tile started before it is on the board, so
+ * two agents starting together never get the same one.
+ */
+export function newAgentPlacer(call: DaemonCall): PlaceNewAgent {
+  const placing = keyedQueue();
+  return (zoneId, start) => placing(zoneId ?? '', async () => start(await newAgentSpot(call, zoneId)));
 }
 
 /** The space a zone's spacing keeps between its edge and what it holds. */
@@ -881,6 +965,7 @@ export function layoutHandlers<Context extends BoardConnection>({
   measures,
   zones,
   visible,
+  broadcast,
   warn = () => {},
 }: LayoutHandlerOptions): RpcHandlers<LayoutMethods & Pick<DaemonMethods, 'orchestrator.spawn' | 'orchestrator.close'>, Context> {
   const zoneMadeBy = db.prepare('SELECT made_by FROM zones WHERE id = ?');
@@ -892,22 +977,32 @@ export function layoutHandlers<Context extends BoardConnection>({
   /** Arranges, one at a time per zone. */
   const arranging = keyedQueue();
 
-  /**
-   * `placed` as the app draws it, if it measured it: an item as big as it is drawn (a text item as its text takes), and
-   * given the tiles expanded now (`at`, `expandedOf`), where it is drawn: pushed aside by them, if they are the ones it
-   * was drawn round. A tile keeps the size the daemon gives it.
-   */
-  const asDrawn = (placed: Placed, at?: readonly ExpandedBox[]): Placed => {
-    const drawn = measures.drawn(placed.key, placed.rect, placed.kind === 'item', at ?? []);
-    if (drawn === undefined) return placed;
-    const size = placed.kind === 'item' ? { width: drawn.width, height: drawn.height } : { width: placed.rect.width, height: placed.rect.height };
-    return { ...placed, rect: { ...(at !== undefined ? { x: drawn.x, y: drawn.y } : { x: placed.rect.x, y: placed.rect.y }), ...size } };
-  };
+  /** `placed` where and how big the app draws it (`drawnAs`), by what it measured. */
+  const asDrawn = (placed: Placed, at?: readonly ExpandedBox[]): Placed => drawnAs(measures, placed, at);
 
   const madeBy = (statement: typeof zoneMadeBy, id: string): string | null =>
     (statement.get(id) as { made_by: string | null } | undefined)?.made_by ?? null;
 
   const readBoard = () => readLayoutBoard(call);
+
+  /**
+   * Ends the overlaps of the tiles `freed` (by key) that the app saves with its view, as its own arrange ends them: the
+   * pairs they are let overlap in, and their put-down marks. An open board is told, so it drops them from its own copy
+   * by the same rule and never saves them back.
+   */
+  const freeOverlaps = async (freed: readonly string[]) => {
+    if (freed.length === 0) return;
+    const gone = new Set(freed);
+    for (const [key, ends] of [
+      [OVERLAPS_VIEW_KEY, 'either'],
+      [PUT_DOWN_VIEW_KEY, 'first'],
+    ] as const) {
+      const saved = await call('view.get', { key });
+      const kept = Array.isArray(saved) ? withoutFreed(saved, gone, ends) : undefined;
+      if (kept !== undefined) await call('view.set', { key, value: kept });
+    }
+    broadcast({ type: 'overlaps.freed', ids: [...freed] });
+  };
 
   /** The zone `zoneId` names, where any orchestrator may put things (null: loose on the board). */
   const checkDestination = (_me: Orchestrator, board: Board, zoneId: string | null): Zone | undefined => {
@@ -933,52 +1028,6 @@ export function layoutHandlers<Context extends BoardConnection>({
     placed.kind === 'item'
       ? access.madeByCrew(me, madeBy(itemMadeBy, placed.id))
       : placed.kind === 'shell' || (placed.kind === 'agent' && !keptInPlace(me, board.agents.find((each) => each.sessionId === placed.id)!));
-
-  /**
-   * Where something of `size` goes in `zone` (or loose, with none) for `place`: at `at` on the grid column nearest it, in
-   * the nearest grid row or row of tiles already there (a lane laid out in px), or
-   * beside `near`, exactly (`roomFor` moves what is in the way aside); else the first free spot a new tile (or note)
-   * takes. Loose on the board, or where that would be outside its zone, it is moved the least distance clear of what is
-   * there but `exclude`.
-   */
-  const spotFor = (board: Board, zone: Zone | undefined, size: Size, place: LayoutPlace, exclude: string | null, isNote: boolean): Point => {
-    const here = placedOf(board).filter((each) => each.key !== exclude && each.zoneId === (zone?.id ?? null));
-    const blocking = here.map(takenBy);
-    if (zone === undefined) blocking.push(...zoneRooms(board));
-    const region =
-      zone === undefined
-        ? { left: -Infinity, top: -Infinity, right: Infinity, bottom: Infinity }
-        : { left: paddingOf(zone), top: paddingOf(zone) + (isNote ? 0 : PERCH_ROOM), right: Infinity, bottom: Infinity };
-    let wanted: Point;
-    if (place.near !== undefined) {
-      const near = placedOf(board).find((each) => each.kind === place.near!.kind && each.id === place.near!.id);
-      if (near === undefined) throw invalidParams(`no ${place.near.kind} ${place.near.id}`);
-      // Beside it where the app draws it: an expanded tile the board drew clear of something is not where it is saved.
-      wanted = besideSpot(asDrawn(near, expandedOf(board)).rect, place.side ?? 'below', size);
-      if (zone !== undefined && wanted.x >= region.left && wanted.y >= region.top) return wanted;
-    } else if (place.at !== undefined) {
-      if (zone !== undefined) {
-        // A wish past the zone's reach is put at its edge, on the zone's grid.
-        const grid = zoneGrid(zone.spacing);
-        const wish = { x: clamp(place.at.x, grid.gaps.padding, zone.width + MAX_REACH), y: clamp(place.at.y, grid.gaps.padding, zone.height + MAX_REACH) };
-        const snapped = snapToGrid(wish, grid);
-        // Lanes are laid out in px, off the grid's rows: a tile's row in the zone, nearer the wish than a grid row, is its row.
-        const y = here.filter((each) => each.kind !== 'item').reduce((best, each) => (Math.abs(each.rect.y - wish.y) < Math.abs(best - wish.y) ? each.rect.y : best), snapped.y);
-        return {
-          x: snapped.x > zone.width + MAX_REACH ? snapped.x - grid.column : snapped.x,
-          y: y > zone.height + MAX_REACH ? y - grid.row : y,
-        };
-      }
-      wanted = { x: clamp(place.at.x, -BOARD_EXTENT, BOARD_EXTENT), y: clamp(place.at.y, -BOARD_EXTENT, BOARD_EXTENT) };
-    } else if (zone === undefined) {
-      return freeSpotFor({ x: 0, y: 0 }, size, [...zoneRooms(board), ...here.map((each) => each.rect)]);
-    } else {
-      const taken = here.map((each) => each.rect);
-      return isNote ? freeItemSpot(zone.width, size, taken) : freeTileSlot(zone.width, taken, size, zoneGrid(zone.spacing));
-    }
-    // The region has no right or bottom edge, so a clear spot is always found.
-    return nearestFreeSpot(wanted, blocking, region, size)!;
-  };
 
   /**
    * What moves aside, and to where, for `rect` (a tile's footprint, or an item's rect) to go in `zone`: the
@@ -2238,7 +2287,7 @@ export function layoutHandlers<Context extends BoardConnection>({
         entry.detail = `into ${where}`;
         const size: Size = { width: placed.rect.width, height: placed.rect.height };
         const isNote = target.kind === 'item';
-        const spot = spotFor(level, zone, size, place, tileKey(target), isNote);
+        const spot = spotFor(level, zone, size, place, tileKey(target), isNote, measures);
         const rect = isNote ? { ...spot, ...size } : sizedFootprint(spot, size);
         const aside = zone === undefined || (place.at === undefined && place.near === undefined) ? [] : roomFor(me, level, zone, rect, tileKey(target));
         const grown = zone === undefined ? undefined : grownWith(zone, { ...spot, ...size }, isNote, aside);
@@ -2295,19 +2344,14 @@ export function layoutHandlers<Context extends BoardConnection>({
       return access.logged(me, 'arrange-board', entry, async (): Promise<BoardArrangeResult> => {
         const arrange = async (): Promise<BoardArrangeResult> => {
           const board = await readBoard();
-          const loose = placedOf(board).filter((each) => each.zoneId === null);
-          // A tile pinned expanded stays where it is, and so does the zone it is in: the rest go round them.
-          const pinned = board.agents.filter((agent) => agent.pinnedExpanded);
-          const pinnedKeys = new Set(pinned.map((agent) => tileSizeKey('agent', agent.sessionId)));
-          const pinnedZones = new Set(pinned.map((agent) => agent.zoneId).filter((id) => id !== null));
-          const rooms = zoneRooms(board);
-          // Its agents and shells; an external session's tile stays put, as the notes, shapes and text do.
-          const tiles = loose.filter((each) => (each.kind === 'agent' && !pinnedKeys.has(each.key)) || each.kind === 'shell');
-          const arranged = arrangeBoard(
-            rooms.filter((room) => !pinnedZones.has(room.id)),
-            tiles.map((each) => ({ id: each.key, ...each.rect })),
-            [...loose.filter((each) => !tiles.includes(each)).map(takenBy), ...rooms.filter((room) => pinnedZones.has(room.id))],
-          );
+          const placed = placedOf(board);
+          const pinned = new Set(board.agents.filter((agent) => agent.pinnedExpanded).map((agent) => tileSizeKey('agent', agent.sessionId)));
+          const arranged = arrangeBoard({
+            zones: board.zones,
+            tiles: placed.flatMap((each) => (each.kind === 'item' ? [] : [{ id: each.key, kind: each.kind, zoneId: each.zoneId, pinned: pinned.has(each.key), ...each.rect }])),
+            items: placed.flatMap((each) => (each.kind === 'item' ? [{ zoneId: each.zoneId, rotation: each.rotation, ...each.rect }] : [])),
+          });
+          const tiles = placed.filter((each) => arranged.tiles.has(each.key));
           const zones = board.zones.flatMap((zone) => {
             const at = arranged.zones.get(zone.id);
             return at === undefined ? [] : [{ zone, at }];
@@ -2315,13 +2359,12 @@ export function layoutHandlers<Context extends BoardConnection>({
           for (const { zone, at } of zones) await call('zone.update', { id: zone.id, ...at, width: zone.width, height: zone.height });
           const moved: LayoutMoved[] = [];
           for (const tile of tiles) {
-            const at = arranged.tiles.get(tile.key);
-            if (at === undefined) continue;
+            const at = arranged.tiles.get(tile.key)!;
             await moveTo(tile, null, at);
             moved.push({ target: { kind: tile.kind as 'agent' | 'shell', id: tile.id }, zoneId: null, ticket: null, ...at });
           }
-          const count = (n: number, what: string) => `${n} ${what}${n === 1 ? '' : 's'}`;
-          entry.detail = `${count(zones.length, 'zone')} and ${count(moved.length, 'loose tile')}`;
+          await freeOverlaps(arranged.freed);
+          entry.detail = `${plural(zones.length, 'zone')} and ${plural(moved.length, 'loose tile')}`;
           return { zones: zones.map(({ zone, at }) => ({ zoneId: zone.id, ...at })), moved };
         };
         // Behind every zone's arranges (and the loose board's), in one order, so none of them fits a zone from where it
@@ -2419,7 +2462,7 @@ export function layoutHandlers<Context extends BoardConnection>({
               : { x: own.x + own.width + ZONE_GAP, y: own.y };
         // As the Zone tool places one: clear of every zone (never inside one) and of the loose tiles.
         const loose = placedOf(board).flatMap((each) => (each.zoneId === null ? [each.rect] : []));
-        const at = freeSpotFor(wanted, size, [...zoneRooms(board), ...loose]);
+        const at = freeZoneSpot(wanted, size, [...zoneRooms(board), ...loose]);
         const color = optionalStringParam(p, 'color');
         const zone = await call('zone.addUnbound', { name, ...at, ...size, ...(color === undefined ? {} : { color }) });
         markZone.run(me.agent?.sessionId ?? null, zone.id);
@@ -2592,7 +2635,7 @@ export function layoutHandlers<Context extends BoardConnection>({
           const slotOf = nearAgent !== undefined && mayMove(me, board, nearAgent) ? nearAgent : undefined;
           const size =
             slotOf !== undefined ? AGENT_TILE_SIZE : agentNote ? agentNoteSize(text, undefined, undefined, lines) : asked === 'sticky' ? STICKY_SIZE : textSize(signed);
-          const spot = slotOf !== undefined ? { x: slotOf.rect.x, y: slotOf.rect.y } : spotFor(board, zone, size, place, null, true);
+          const spot = slotOf !== undefined ? { x: slotOf.rect.x, y: slotOf.rect.y } : spotFor(board, zone, size, place, null, true, measures);
           const aside = zone === undefined || (place.at === undefined && place.near === undefined) ? [] : roomFor(me, board, zone, { ...spot, ...size }, null);
           const grown = zone === undefined ? undefined : grownWith(zone, { ...spot, ...size }, true, aside);
           if (zone !== undefined) checkGrowth(board, zone, grown!, 'put there,');
@@ -2703,7 +2746,7 @@ export function layoutHandlers<Context extends BoardConnection>({
           const zoneId = ticket === null ? zoneOfPlace(board, place, me.zoneId) : null;
           const zone = checkDestination(me, board, zoneId);
           const size = shapeSize(data);
-          const spot = spotFor(board, zone, size, place, null, true);
+          const spot = spotFor(board, zone, size, place, null, true, measures);
           const aside = zone === undefined || (place.at === undefined && place.near === undefined) ? [] : roomFor(me, board, zone, { ...spot, ...size }, null);
           const grown = zone === undefined ? undefined : grownWith(zone, { ...spot, ...size }, true, aside);
           if (zone !== undefined) checkGrowth(board, zone, grown!, 'put there,');
@@ -2742,7 +2785,7 @@ export function layoutHandlers<Context extends BoardConnection>({
           const zone = checkDestination(me, board, zoneId);
           // Placed as one block, as a note of its size would be.
           const size = { width: drawn.width, height: drawn.height };
-          const spot = spotFor(board, zone, size, place, null, true);
+          const spot = spotFor(board, zone, size, place, null, true, measures);
           const aside = zone === undefined || (place.at === undefined && place.near === undefined) ? [] : roomFor(me, board, zone, { ...spot, ...size }, null);
           const grown = zone === undefined ? undefined : grownWith(zone, { ...spot, ...size }, true, aside);
           if (zone !== undefined) checkGrowth(board, zone, grown!, 'put there,');

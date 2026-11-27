@@ -1,10 +1,9 @@
 // The to-do commands as the CLI and MCP give them (`remind "<text>"`, `remind ls [--mine]`, `remind done|undo|rm <n>`):
 // lines for the user to do, added to the caller's own to-do list, and the lists it reads, with who ticked each line
 // and when. A line is named by its place in the caller's own list, as `remind ls --mine` numbers it.
+import { plural } from './text-words.ts';
 import { agentToken, BoardError, BoardRefs, itemPlace, readCards, type BoardSession, type BoardView } from './board-ops.ts';
 import type { BoardItem, StepsWho, TodoData, TodoLine } from './protocol.ts';
-
-const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
 
 /** A time as the user's clock shows it: `14:06` today, `2026-11-10 14:06` before. */
 export function clockText(at: string, now = new Date()): string {

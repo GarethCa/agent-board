@@ -85,6 +85,7 @@ function host(agents = new Map<string, Agent>(), stubs: Partial<HostAgents> = {}
       deliverAfterTurn: () => {},
       userTyping: () => false,
       resume: () => Promise.reject(new Error('not here')),
+      restartWith: () => Promise.reject(new Error('not here')),
       stop: () => Promise.reject(new Error('not here')),
       pause: () => Promise.reject(new Error('not here')),
       finalMessage: () => undefined,

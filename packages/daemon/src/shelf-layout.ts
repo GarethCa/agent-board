@@ -119,8 +119,11 @@ const CARD_FOOT = 20;
 export const MAX_MEMBER_LINES = 4;
 /** A waiting row's height, with its ticket and title and what it waits on. */
 export const WAITING_ROW_HEIGHT = 56;
-/** Done's folded line. */
-const DONE_LINE_HEIGHT = 28;
+/**
+ * Done's folded line, "N done · Show", that its cards fold behind, on a shelf and on a stage board. Not a Spine zone's
+ * done line (`DONE_LINE_HEIGHT`), an item of its own, which is taller.
+ */
+export const DONE_FOLD_HEIGHT = 28;
 /** A shelf heading's height, and the gaps between shelves and between the cards on one. */
 export const SHELF_HEADING = 28;
 export const SHELF_GAP = 24;
@@ -321,8 +324,8 @@ export function layoutShelves(input: ShelfInput): ShelfLayout {
         }
       } else if (on.length > 0) {
         // Done: one line, then its chips once shown. One that needs the user is never folded away.
-        doneLine = { x, y, width, height: DONE_LINE_HEIGHT, count: on.length, shown: input.doneShown };
-        y += DONE_LINE_HEIGHT + CARD_GAP;
+        doneLine = { x, y, width, height: DONE_FOLD_HEIGHT, count: on.length, shown: input.doneShown };
+        y += DONE_FOLD_HEIGHT + CARD_GAP;
         for (const stack of on) {
           if (!input.doneShown && !stack.needsYou) continue;
           Object.assign(stack, { x, y, width, height: CHIP_SIZE.height, placed: true });
@@ -474,11 +477,11 @@ export function layoutClusters(input: Omit<ShelfInput, 'footOf' | 'open'>): Clus
   if (done.length > 0) {
     // On a row of its own, after the rest.
     if (x > padding) y += rowHeight + gap;
-    doneLine = { x: padding, y, width: CHIP_SIZE.width, height: DONE_LINE_HEIGHT, count: done.length, shown: input.doneShown };
+    doneLine = { x: padding, y, width: CHIP_SIZE.width, height: DONE_FOLD_HEIGHT, count: done.length, shown: input.doneShown };
     right = Math.max(right, padding + CHIP_SIZE.width);
-    bottom = Math.max(bottom, y + DONE_LINE_HEIGHT);
+    bottom = Math.max(bottom, y + DONE_FOLD_HEIGHT);
     x = padding;
-    y += DONE_LINE_HEIGHT + CARD_GAP;
+    y += DONE_FOLD_HEIGHT + CARD_GAP;
     rowHeight = 0;
     // Placed while folded too, but not drawn, and not counted in the zone's size.
     for (const cluster of done) place(cluster, input.doneShown);

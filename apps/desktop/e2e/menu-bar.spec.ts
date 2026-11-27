@@ -38,11 +38,13 @@ test('File › New Sticky Note puts a note on the board as N does, and the Proje
   try {
     // Its board key is the grey line under it, never an accelerator.
     await expect.poll(() => menuItem(app, ['File', 'New Sticky Note'])).toMatchObject({ sublabel: 'Board key: N', enabled: true });
+    // The menu is there before the board is: the item presses N, which only a drawn board hears.
+    await expect(window.locator('.react-flow__pane')).toBeVisible();
     await pick(app, ['File', 'New Sticky Note']);
     await expect.poll(async () => (await window.evaluate(() => globalThis.window.agentBoard.items.list())).map((item) => item.kind)).toEqual(['sticky']);
 
     // Nothing selected: the Project menu says so.
-    expect((await menuItem(app, ['Project']))?.rows[0]).toBe('Select a project on the board');
+    await expect.poll(async () => (await menuItem(app, ['Project']))?.rows[0]).toBe('Select a project on the board');
     const zone = await window.evaluate(() => globalThis.window.agentBoard.zones.addUnbound({ name: 'web', x: 200, y: 200, width: 600, height: 400 }));
     await zoneNamed(window, 'web').getByTestId('zone-tab').getByText('web', { exact: true }).click();
     await expect.poll(async () => (await menuItem(app, ['Project']))?.rows).toContain('Colour');

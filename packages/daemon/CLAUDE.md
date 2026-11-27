@@ -14,7 +14,7 @@ The daemon owns the board: the SQLite database, the agents' terminals, the hooks
 | Subsystem | Files |
 |---|---|
 | Start, stop, the socket | `daemon.ts`, `event-ring.ts` (every broadcast event numbered, the recent ones kept for devices that drop), `run-daemon.ts` (a daemon in the foreground, as `agent-board daemon` runs it), `daemon-launch.ts`, `restart.ts`, `stop.ts`, `lock.ts`, `spawn.ts`, `rpc.ts`, `params.ts`, `client.ts`, `paths.ts`, `migrate.ts` (SQL in `migrations/`), `schema-rollback.ts` (backups before migrating, and an older daemon on a newer database) |
-| Agents | `agents.ts`, `agent-spawns.ts` (the harness command line and env), `agent-starts.ts`, `agent-lifecycle.ts`, `worktrees.ts`, `harness-path.ts`, `login-path.ts`, `board-env.ts` |
+| Agents | `agents.ts`, `agent-close.ts` (every close and delete: helpers, then reviewers, then the agent, unsaved work judged one way), `agent-spawns.ts` (the harness command line and env), `agent-starts.ts`, `agent-lifecycle.ts`, `worktrees.ts`, `harness-path.ts`, `login-path.ts`, `board-env.ts` |
 | Agent state from hooks | `hook-ingress.ts`, `hook-forwarder.ts`, `hook-states.ts`, `harness-state.ts`, `claude-state.ts`, `codex-state.ts`, `human-status.ts`, `turn-status.ts`, `quiet-turns.ts`, `subagents.ts` |
 | Reading the harness's screen | `startup-screen.ts`, `codex-screen.ts`, `rate-limit-screen.ts`, `codex-config-guard.ts` |
 | Terminals and shells | `sessions.ts`, `terminal-sizing.ts` (who of a terminal's viewers sets its size), `left-screen.ts` (the screen a full-screen harness leaves as it exits), `terminal-backend.ts`, `node-pty-backend.ts`, `terminal-input.ts`, `shells.ts`, `shell-integration.ts`, `pane-layout.ts`, `window-layout.ts`, `foreground.ts`, `background-commands.ts` |

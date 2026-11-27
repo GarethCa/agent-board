@@ -8,7 +8,7 @@ import { createPullRequest, deleteRemoteBranch, mergePullRequest, pullRequestDet
 import { cleanupProblem, inCheckoutWhy, inRepoCheckout, isOpenPullRequest, mergeBlocked, noRepoWhy, openPullRequestBlocked, pullRequestBody, shortCommit, type GateCleanup } from './gate-rules.ts';
 import { boardCaller, type BoardCallerSources, type BoardConnection } from './board.ts';
 import type { GateHost } from './gates.ts';
-import { pushLfsObjects, runGit } from './git.ts';
+import { pushBranch, runGit } from './git.ts';
 import { invalidParams, paramsObject, stringParam } from './params.ts';
 import type { Agent, DaemonMethods, GateMerged, LinkedIssue } from './protocol.ts';
 import type { RpcHandlers } from './rpc.ts';
@@ -97,10 +97,8 @@ export function gateActionHandlers<Context extends BoardConnection>(options: Gat
     const body = pullRequestBody({ template, handover, run: gated ? run : undefined, issue });
     const title = agent.issue === null ? agent.name : `${shortIssueId(agent.issue)}: ${agent.issue.title}`;
     // The commit checked, whatever the branch has moved on to since; never forced, so a branch that has moved on
-    // elsewhere is the user's to sort out. The push runs no hooks (see `runGit`), so LFS's objects go up first.
-    const lfs = await pushLfsObjects(agent.worktree, 'origin', head);
-    if (!lfs.ok) throw invalidParams(`Could not push ${agent.ownedBranch}'s Git LFS files: ${lfs.stderr}`);
-    const pushed = await runGit(agent.worktree, ['push', 'origin', `${head}:refs/heads/${agent.ownedBranch}`]);
+    // elsewhere is the user's to sort out. `pushBranch` runs no hooks, so it sends LFS's objects up first.
+    const pushed = await pushBranch(agent.worktree, 'origin', head, agent.ownedBranch);
     if (!pushed.ok) throw invalidParams(`Could not push ${agent.ownedBranch}: ${pushed.stderr}`);
     // A commit pushed by its hash sets no upstream: set it, so the agent's own `git push` goes on to the same branch.
     const upstream = await runGit(agent.worktree, ['branch', `--set-upstream-to=origin/${agent.ownedBranch}`, agent.ownedBranch]);

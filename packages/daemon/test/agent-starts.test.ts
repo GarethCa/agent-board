@@ -285,6 +285,22 @@ describe('starting an agent', () => {
     expect(recorder.screenText(sessionId)).not.toContain('implementer');
   });
 
+  it('retries no start over the shell its pane dropped into while that shell runs something, saying so', async () => {
+    const { client, recorder } = await startDaemon({ startFailure: 'ANTHROPIC_API_KEY not set' });
+    const zone = await addZone(client, tempRepo());
+
+    const { sessionId } = await client.call('agent.start', { zoneId: zone.id, prompt: 'Go', ...SIZE });
+    const failed = await recorder.waitFor(
+      (event): event is AgentUpdatedEvent => isUpdate(sessionId)(event) && event.agent.startup?.failed === true && event.agent.shellSessionId !== null,
+    );
+    // Its own echo of the line never reads "running": only the command's output does, as it starts its sleep.
+    await client.call('session.attach', { sessionId: failed.agent.shellSessionId! });
+    await client.call('session.write', { sessionId: failed.agent.shellSessionId!, data: 'echo run""ning; sleep 30\r' });
+    await recorder.waitForText(failed.agent.shellSessionId!, '\nrunning');
+    await expect(client.call('agent.retryStart', { sessionId })).rejects.toThrow(/can't be started again: its shell is running something/);
+    expect((await client.call('session.list')).map((session) => session.id)).toContain(failed.agent.shellSessionId);
+  });
+
   it("retries a Claude agent that exited as it started by typing its whole first message once, at its prompt, never on its command line", async () => {
     const { client, recorder } = await startDaemon({ startFailure: 'ANTHROPIC_API_KEY not set', startFailureOnce: true });
     const zone = await addZone(client, tempRepo());

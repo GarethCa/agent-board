@@ -26,6 +26,18 @@ describe("an expanded tile's header", () => {
     expect(headButtons({ shell: { id: 's1' } as Shell }).closer).toBe('collapse');
   });
 
+  it("opens an agent's pop-up from ⤢ under the pop-up's setting, and its session window under the others", () => {
+    const agent = { agent: galleryAgent('waiting') };
+    expect(headButtons(agent, 'popup').maximise).toMatchObject({ label: 'Open the pop-up', open: 'popUp', path: 'popUp' });
+    expect(headButtons(agent, 'expand').maximise).toMatchObject({ label: 'Maximise', open: 'maximise' });
+    expect(headButtons(agent, 'window').maximise).toMatchObject({ label: 'Maximise', open: 'maximise', path: 'maximise' });
+    expect(headButtons(agent, 'maximised').maximise).toMatchObject({ open: 'maximise' });
+    // A shell has no pop-up.
+    expect(headButtons({ shell: { id: 's1' } as Shell }, 'popup').maximise).toMatchObject({ label: 'Maximise', open: 'maximise' });
+    const { maximise } = headButtons({ agent: { ...galleryAgent('waiting'), pinnedExpanded: true } }, 'popup');
+    expect(keptOnBoard('agent:1', new Set(['agent:1']), expandTile([], 'agent:1'), maximise!.path)).toBe(false);
+  });
+
   it('has no window buttons for an external session', () => {
     const external = headButtons({});
     expect(external.maximise).toBeUndefined();

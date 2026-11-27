@@ -1,5 +1,6 @@
 import { needsYouKind, needsYouNow, questionPrompt, type Agent, type AgentAsk, type AgentStepsWait, type NeedsYouKind, type NeedsYouShows, type PermissionPrompt, type PromptQuestion } from '@agent-board/daemon/protocol';
 import { isOpenPullRequest } from '@agent-board/daemon/gate-rules';
+import { ago } from '@agent-board/daemon/text-words';
 import { planTitle } from './claude-plan';
 
 /** Longest tool summary shown; the full input is in the agent's terminal. */
@@ -206,11 +207,7 @@ export function permissionWaitLine(prompt: PermissionPrompt, agentName: string, 
 
 /** How long ago `at` was, roughly: "just now", "4 min ago", "2 h ago", "3 d ago". */
 export function sinceText(at: string, now: number): string {
-  const minutes = Math.floor((now - Date.parse(at)) / 60_000);
-  if (minutes < 1) return 'just now';
-  if (minutes < 60) return `${minutes} min ago`;
-  const hours = Math.floor(minutes / 60);
-  return hours < 24 ? `${hours} h ago` : `${Math.floor(hours / 24)} d ago`;
+  return ago(at, now, 'inbox');
 }
 
 /**

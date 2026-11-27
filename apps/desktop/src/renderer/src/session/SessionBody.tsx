@@ -32,7 +32,7 @@ import { TerminalPane, type AttachState, type PaneStatus } from './TerminalPane'
 import { composerBlock } from './composer-block';
 import { canRestart, endedShellLabel, exitText, RestartAgent } from './RestartAgent';
 import { HARNESS_COMMANDS, wordedTabLabel, planSurfaceOf, pullRequestSurfaceOf, shellOwner, tabLiveShells, windowShells, worstState, type TabOwner, type WindowSurface } from './tabs';
-import { agentWorktrees, dropKey, dropOver as dropOverValue, foreignFolder, tabMover } from './shell-moves';
+import { agentWorktrees, dropKey, dropOver as dropOverValue, foreignFolder, tabMover, type TabDrag } from './shell-moves';
 import type { StripTab, TabAdds } from './TabStrip';
 import { useWindowPanes, type WindowPanesControl } from './use-window-panes';
 import { PaneStrip, paneAdds, WindowPanes } from './WindowPanes';
@@ -507,6 +507,8 @@ export interface PaneRow {
   adds(): TabAdds;
   /** Splits the pane, a new shell beside it. */
   split(): void;
+  /** What one of its tabs drags as, onto the board, a tile or another window: undefined for one that stays put. */
+  dragOf(key: string): TabDrag | undefined;
 }
 
 /** A + with nothing to act on: a body not drawn yet. */
@@ -535,6 +537,11 @@ function usePaneRow(onRow: ((row: PaneRow) => void) | undefined, panes: WindowPa
         return paneAdds(now, now.panes.find((pane) => pane.surfaces.some((surface) => surface.key === OWN_SURFACE)) ?? now.focusedPane, where);
       },
       split: () => latest.current.panes?.split('horizontal'),
+      dragOf: (key) => {
+        const now = latest.current.panes;
+        const surface = now?.panes.flatMap((pane) => pane.surfaces).find((each) => each.key === key);
+        return now === undefined || surface === undefined ? undefined : now.dragOf(surface);
+      },
     });
     // `said` is what the row shows; the handlers read the latest panes when they run.
   }, [said]);

@@ -8,7 +8,7 @@ import { fakeHarnessEnv } from '@agent-board/fake-harness';
 import { createFakeGitHub, FAKE_GITHUB_STATE } from '@agent-board/tracker/testing';
 import { RPC_ERROR } from '../src/protocol.ts';
 import { removeWorktree } from '../src/worktrees.ts';
-import { connectTestClient, git, recordEvents, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
+import { connectTestClient, git, pushesTo, recordEvents, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
 
 const SIZE = { cols: 100, rows: 30 };
 
@@ -27,7 +27,7 @@ async function setup(scenario: 'waiting' | 'orchestrate' = 'waiting') {
   const bare = join(tempDataDir(), 'origin.git');
   execFileSync('git', ['init', '--quiet', '--bare', bare]);
   git(repo, 'remote', 'add', 'origin', 'https://github.com/acme/app.git');
-  git(repo, 'remote', 'set-url', '--push', 'origin', bare);
+  pushesTo(bare, 'https://github.com/acme/app.git');
   git(repo, 'branch', '-M', 'main');
   const zone = await client.call('zone.add', { path: repo, x: 0, y: 0 });
   // The user's own work, uncommitted, that nothing may touch.

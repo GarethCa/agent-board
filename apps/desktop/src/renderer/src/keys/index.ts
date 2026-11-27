@@ -16,9 +16,12 @@ export function historyStep(event: Pick<KeyboardEvent, 'metaKey' | 'ctrlKey' | '
   return pressed('edit.redo', event) ? 'redo' : undefined;
 }
 
+/** A dialog or a menu, whose keys are their own. */
+export const OVERLAYS = '[role="dialog"], [role="alertdialog"], [role="menu"]';
+
 /** Whether the focus is in a dialog or a menu, whose keys are their own. */
 export function inOverlay(): boolean {
-  return document.activeElement?.closest('[role="dialog"], [role="alertdialog"], [role="menu"]') != null;
+  return document.activeElement?.closest(OVERLAYS) != null;
 }
 
 /** The key that turns the wheel into a zoom on the board, as React Flow names it: the command key. */

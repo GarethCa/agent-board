@@ -6,7 +6,8 @@ import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from 
 import { scratch } from './scratch.ts';
 
 // A to-do list on the board: an agent's `remind` (the fake claude's `Remind: …`) puts one under its tile, its zone's tab
-// counts what is left, and the user ticks, adds and folds it in place, each saved as the user's.
+// counts what is left, and the user ticks, adds and folds it in place, each saved as the user's. Folded, one click on
+// its pill opens a peek of it, and ⤢ there or a double-click on the pill opens it full screen.
 
 const card = (window: Page) => window.getByTestId('todo-card');
 const badge = (window: Page) => window.getByTestId('zone-todo-badge');
@@ -43,7 +44,7 @@ test("an agent's reminders make its to-do list, counted on the zone's tab, which
     await badge(window).click();
     const popover = window.getByTestId('zone-todo-popover');
     await expect(popover.getByTestId('zone-todo-group')).toHaveCount(1);
-    await expect(popover.getByTestId('zone-todo-line')).toHaveCount(2);
+    await expect(popover.getByTestId('todo-pop-line')).toHaveCount(2);
     await popover.getByRole('checkbox', { name: 'Restart the app' }).click();
     await expect(card(window).getByTestId('todo-count')).toHaveText('All done');
     await popover.getByRole('checkbox', { name: 'Restart the app' }).click();
@@ -51,7 +52,7 @@ test("an agent's reminders make its to-do list, counted on the zone's tab, which
 
     // A double-click edits a line there: esc cancels the edit and leaves the list open, ↵ saves it trimmed, and an
     // emptied line keeps its words.
-    const text = (name: string) => popover.getByTestId('zone-todo-line').locator('.todo-text', { hasText: name });
+    const text = (name: string) => popover.getByTestId('todo-pop-line').locator('.todo-text', { hasText: name });
     const lineField = popover.getByTestId('todo-input');
     await text('Restart the app').dblclick();
     await lineField.fill('Half typed');
@@ -95,12 +96,56 @@ test("an agent's reminders make its to-do list, counted on the zone's tab, which
     await expect(badge(window)).toHaveText('2');
     await expect.poll(async () => (await savedLines(window)).map((line) => line.by.kind)).toEqual(['agent', 'agent', 'user']);
 
+    // A double-click on the card's head opens it full screen, and so does ⌘↵ on the selected list; esc goes back.
+    const todoFull = window.getByTestId('todo-full');
+    await card(window).locator('.todo-head').dblclick();
+    await expect(todoFull).toBeVisible();
+    await window.keyboard.press('Escape');
+    await expect(todoFull).toHaveCount(0);
+    await window.keyboard.press('Meta+Enter');
+    await expect(todoFull).toBeVisible();
+    await window.keyboard.press('Escape');
+    await expect(todoFull).toHaveCount(0);
+
     // Ticked off, the tab's count goes, and the folded pill says all done.
     for (const name of ['Restart the app', 'Book the release slot']) await card(window).getByRole('checkbox', { name }).click();
     await expect(badge(window)).toHaveCount(0);
     await card(window).locator('.todo-head').click({ button: 'right' });
     await window.getByRole('menuitem', { name: 'Fold' }).click();
     await expect(window.getByTestId('todo-pill')).toHaveText(/All done/);
+
+    // One click on the pill opens its peek, which adds a line of the user's.
+    const face = window.getByTestId('todo-pill').getByRole('button', { name: /open its peek/ });
+    await face.click();
+    const peek = window.getByTestId('todo-peek');
+    await expect(peek).toBeVisible();
+    await peek.getByPlaceholder('Add a to-do').fill('Write the notes');
+    await peek.getByPlaceholder('Add a to-do').press('Enter');
+    await expect(peek.getByTestId('todo-pop-line')).toHaveCount(4);
+    await expect(badge(window)).toHaveText('1');
+
+    // ⤢ opens it full screen: what is left, then what is ticked; Space ticks the picked line, esc goes back.
+    await peek.getByRole('button', { name: 'Open full screen' }).click();
+    const full = todoFull;
+    await expect(full).toBeVisible();
+    await expect(peek).toHaveCount(0);
+    const rows = full.getByRole('list', { name: 'To-dos in groups' }).locator('.todo-full-item');
+    await expect(rows).toHaveCount(4);
+    await expect(rows.first()).toHaveText(/Write the notes/);
+    await expect(rows.first()).toBeFocused();
+    await window.keyboard.press(' ');
+    await expect(badge(window)).toHaveCount(0);
+    await expect.poll(async () => (await savedLines(window))[3]?.done?.by.kind).toBe('user');
+    await window.keyboard.press('Escape');
+    await expect(full).toHaveCount(0);
+
+    // A double-click on the pill opens it full screen too. Show an agent's line on the board: the full screen goes, so
+    // the board shows it.
+    await face.dblclick();
+    await expect(full).toBeVisible();
+    await full.getByRole('button', { name: /^Send #214 off for approval/ }).click();
+    await full.getByRole('button', { name: /^Show .+ on the board$/ }).click();
+    await expect(full).toHaveCount(0);
   } finally {
     await app.close();
     await removeDataDir(dataDir);

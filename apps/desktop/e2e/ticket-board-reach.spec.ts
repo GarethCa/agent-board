@@ -3,6 +3,7 @@ import { rmSync } from 'node:fs';
 import { launch, sessionWindow, TURN_MS, windowKey } from './agent-helpers.ts';
 import { removeDataDir, tempDataDir, test } from './launch.ts';
 import { scratch } from './scratch.ts';
+import { drawsAsTicket } from '../src/renderer/src/board/tiles.ts';
 
 /** Starts an agent in `zoneId` through the daemon: a ticket's chat, or one of its helpers. */
 const start = (window: Page, params: { zoneId: string; prompt: string; name?: string; ticketChat?: boolean; ticket?: string; position?: { x: number; y: number } }) =>
@@ -37,6 +38,21 @@ test("⌘K finds a helper from the main board on its ticket's tile and a note on
 
     // The minimap marks the ticket's tile, which has a board of its own, and no other.
     await expect(window.locator('.board-minimap').getByTestId('minimap-ticket-mark')).toHaveCount(1);
+    // While its chat starts, the helper has a tile of its own; once the chat draws as its ticket's tile, that tile holds
+    // it. Picked before then, the helper's own tile would be selected and then go. So wait for the chat to have started,
+    // with nothing waiting on a click to reach it: the board's own test of whether it draws as its ticket's tile.
+    await expect
+      .poll(
+        async () => {
+          const agents = await window.evaluate(() => globalThis.window.agentBoard.agents.list());
+          const drawn = agents.find((each) => each.sessionId === chat.sessionId);
+          return drawn !== undefined && drawsAsTicket(drawn);
+        },
+        { timeout: TURN_MS },
+      )
+      .toBe(true);
+    await expect(window.locator(`.react-flow__node[data-id="agent:${chat.sessionId}"]`)).toHaveCount(1);
+    await expect(window.locator(`.react-flow__node[data-id="agent:${helper.sessionId}"]`)).toHaveCount(0);
 
     // ⌘K from the main board: the helper's row says the ticket it is on, and picking it shows it here, as before.
     await window.keyboard.press(windowKey('k'));
@@ -44,8 +60,8 @@ test("⌘K finds a helper from the main board on its ticket's tile and a note on
     const helperRow = spotlight(window).getByTestId('spotlight-row').filter({ hasText: 'Build the watch settings' });
     await expect(helperRow).toContainText(chat.name);
     await helperRow.click();
-    // The tile that draws it is picked: the ticket's card, if it holds the helper, else the helper's own.
-    await expect(window.locator(`.react-flow__node.selected:is([data-id="agent:${chat.sessionId}"], [data-id="agent:${helper.sessionId}"])`)).toHaveCount(1);
+    // The tile that draws it is picked: the ticket's tile, which holds the helper.
+    await expect(window.locator(`.react-flow__node.selected[data-id="agent:${chat.sessionId}"]`)).toHaveCount(1);
     await expect(board).toBeHidden();
 
     // ⌘K finds the note on the ticket's board, under the ticket's name, and zooms in to show it there: it is on no other.
@@ -54,6 +70,8 @@ test("⌘K finds a helper from the main board on its ticket's tile and a note on
     const noteRow = spotlight(window).getByTestId('spotlight-row').filter({ hasText: 'Make the dot 8 px on dark' });
     await expect(noteRow).toHaveAttribute('data-kind', 'item');
     await expect(noteRow).toContainText(chat.name);
+    // Enter picks the active row: wait until the results have settled on the note's.
+    await expect(noteRow).toHaveAttribute('aria-selected', 'true');
     await window.keyboard.press('Enter');
     await expect(board).toBeVisible();
     await expect(board.locator('.react-flow__node.selected')).toContainText('Make the dot 8 px on dark');

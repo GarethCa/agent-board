@@ -119,7 +119,7 @@ test("Shift+Enter in the fallback shell of an ended agent is ESC CR while its ha
     await expanded.getByTestId('session-terminal').click();
     // Quit claude at its prompt: the pane drops into a shell.
     await window.keyboard.press('Control+D');
-    await expect(expanded.getByTestId('session-window-status')).toHaveText('ended · shell');
+    await expect(expanded.getByTestId('expanded-tile-shell')).toHaveText('ended · shell');
     const restart = expanded.getByTestId('restart-agent');
     await expect(restart).toBeVisible();
 
@@ -127,7 +127,7 @@ test("Shift+Enter in the fallback shell of an ended agent is ESC CR while its ha
     await expanded.getByTestId('session-terminal').click();
     await window.keyboard.type('claude');
     await window.keyboard.press('Enter');
-    await expect(expanded.getByTestId('session-window-status')).toHaveText('claude running in this shell', { timeout: TURN_MS });
+    await expect(expanded.getByTestId('expanded-tile-shell')).toHaveText('claude running in this shell', { timeout: TURN_MS });
     await expect(restart).toBeHidden();
     await typeTwoLines(window);
     // One message of two lines at the fake's prompt (a CR between them would have sent "line one" alone, and shown
@@ -136,7 +136,7 @@ test("Shift+Enter in the fallback shell of an ended agent is ESC CR while its ha
 
     // It exits back to the shell prompt: a plain shell again, where Shift+Enter is Enter.
     await window.keyboard.press('Control+D');
-    await expect(expanded.getByTestId('session-window-status')).toHaveText('ended · shell', { timeout: TURN_MS });
+    await expect(expanded.getByTestId('expanded-tile-shell')).toHaveText('ended · shell', { timeout: TURN_MS });
     await expect(restart).toBeVisible();
     await window.keyboard.type('echo shifted-$((40 + 2))');
     await window.keyboard.press('Shift+Enter');

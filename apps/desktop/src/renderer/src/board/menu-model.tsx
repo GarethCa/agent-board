@@ -174,6 +174,7 @@ type AgentMenuActions = Pick<
   | 'setMuted'
   | 'setEffort'
   | 'setRole'
+  | 'restartWith'
   | 'openReview'
   | 'startReview'
   | 'openGate'
@@ -263,6 +264,9 @@ export function agentMenu(input: AgentMenuInput): ModelEntry[] {
     },
     reasoningEntry(agent, actions),
     roleEntry(agent, actions),
+    ...(restartsInPlace(agent)
+      ? [{ id: 'restart-with', label: 'Restart with…', icon: <RotateCcw />, hint: 'Env vars it starts with; carries on its conversation', onSelect: () => actions.restartWith(agent) }]
+      : []),
     'separator',
     ...reviewEntries(input),
     ...gateEntries(agent, gate, actions),
@@ -300,7 +304,7 @@ const POP_UP_RUN = ['pause', 'wake', 'continue-on-credits', 'run-gate', 'open-re
 /**
  * An agent's menu in its pop-up, on its tab's ⋯ (or a right-click on the tab) and on a lone agent's header ⋯: its name,
  * then what it runs (Pause, Run gate, Open beside…, Open review, Pop out, Fold to a chip), its session (Interrupt, Rename,
- * Restart agent, Stop session), the rest of its menu, and Delete agent last. Open stays out: the pop-up is it.
+ * Restart agent, Restart with…, Stop session), the rest of its menu, and Delete agent last. Open stays out: the pop-up is it.
  */
 export function popUpAgentMenu(input: PopUpAgentMenuInput): ModelEntry[] {
   const { agent, actions, openBeside = [], openBesideThis, closeSide, rename } = input;
@@ -333,9 +337,10 @@ export function popUpAgentMenu(input: PopUpAgentMenuInput): ModelEntry[] {
     ...(agent.endedAt === null && restartsInPlace(agent)
       ? [{ id: 'restart', label: 'Restart agent', icon: <RotateCcw />, hint: 'Stops it and starts it again, carrying on its conversation', onSelect: () => actions.restartAgent(agent.sessionId) }]
       : []),
+    ...byId('restart-with'),
     ...(stop?.enabled === true ? [{ id: 'stop', label: 'Stop session', icon: <OctagonX />, hint: stop.hint, onSelect: () => actions.stopAgent(agent.sessionId) }] : []),
   ];
-  const placed = new Set([...POP_UP_RUN, 'open', 'open-window', 'expand', 'rename', 'delete']);
+  const placed = new Set([...POP_UP_RUN, 'open', 'open-window', 'expand', 'rename', 'restart-with', 'delete']);
   const rest = rows.filter((entry) => !placed.has(entry.id));
   return [{ heading: agent.name }, ...run, 'separator', ...session, ...(rest.length > 0 ? ['separator' as const, ...rest] : []), 'separator', ...byId('delete')];
 }

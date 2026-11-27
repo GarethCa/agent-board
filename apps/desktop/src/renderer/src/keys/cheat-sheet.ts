@@ -75,7 +75,8 @@ export function cheatSheet(context: SheetContext, { extended, filter = '', isMac
       here: here.includes(id),
       rows: KEYS.filter((entry) => entry.section === id && isActive(entry, extended, simplified) && !(context === 'pop-up' && NOT_IN_POP_UP.has(entry.id)))
         .map(rowOf)
-        .filter(kept),
+        // A key with no chord on this platform (Close Window off macOS) has nothing to show.
+        .filter((row) => row.keys.length > 0 && kept(row)),
     }))
     .filter((section) => section.rows.length > 0);
 }

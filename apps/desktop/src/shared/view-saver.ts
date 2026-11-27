@@ -1,5 +1,5 @@
 // How the app keeps where it left the board (its viewport, its windows, pop-outs' places) in the daemon's view state.
-import { EXPANDED_HIDDEN_VIEW_KEY, EXPANDED_SIZES_VIEW_KEY, EXPANDED_VIEW_KEY, TILE_SIZES_VIEW_KEY, UNFOLDED_VIEW_KEY } from '@agent-board/daemon/board-layout';
+import { EXPANDED_HIDDEN_VIEW_KEY, EXPANDED_SIZES_VIEW_KEY, EXPANDED_VIEW_KEY, OVERLAPS_VIEW_KEY, PUT_DOWN_VIEW_KEY, TILE_SIZES_VIEW_KEY, UNFOLDED_VIEW_KEY } from '@agent-board/daemon/board-layout';
 
 /** The view state keys the app uses (`view.get`/`view.set`). */
 export const VIEW_KEYS = {
@@ -20,10 +20,13 @@ export const VIEW_KEYS = {
   tileSizes: TILE_SIZES_VIEW_KEY,
   /** The closed agents the user unfolded from their chips, by node id; the rest of the closed ones are chips. The daemon reads it too. */
   unfolded: UNFOLDED_VIEW_KEY,
-  /** The tiles dragged onto another, one of them expanded, by node id: left there, over it, not moved clear. */
-  expandedOverlaps: 'expandedTiles.overlaps',
-  /** The tiles put down while tiles were expanded, by node id, with those tiles: not pushed with their rows again. */
-  putDown: 'expandedTiles.putDown',
+  /**
+   * The tiles dragged onto another, one of them expanded, by node id: left there, over it, not moved clear.
+   * The daemon's arrange of the board ends those of the tiles it moves too.
+   */
+  expandedOverlaps: OVERLAPS_VIEW_KEY,
+  /** The tiles put down while tiles were expanded, by node id, with those tiles: not pushed with their rows again. The daemon's arrange ends them too. */
+  putDown: PUT_DOWN_VIEW_KEY,
   /** Whether onboarding was finished or skipped, and whether the board menu offers it again. */
   onboarding: 'onboarding',
   /** Whether onboarding sent its test notification, the one that makes the OS ask; not whether the OS allowed it. */

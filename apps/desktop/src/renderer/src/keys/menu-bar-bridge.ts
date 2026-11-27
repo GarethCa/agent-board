@@ -10,7 +10,7 @@ import { MENU_BAR_ACTIONS, type MenuBarAction, type MenuBarCommand, type MenuBar
 import type { ModelEntry } from '../board/menu-model';
 import { isSimplified, observeRoot } from '../design';
 import { extendedShortcuts, onExtendedShortcuts } from './extended-shortcuts';
-import { menuBarKeys, menuBarRows, pressOf, runRow, type MenuBarWhere } from './menu-bar';
+import { menuBarKeys, menuBarRows, pressOf, runRow, type MenuBarWhere, type WindowKeys } from './menu-bar';
 import { chordsOf, chordPressed, KEYS, type KeyBinding } from './registry';
 
 /** How long apart the window's keydown and the menu's accelerator for the same key are one press, not two. */
@@ -21,7 +21,8 @@ type Press = Pick<KeyboardEvent, 'key' | 'code' | 'metaKey' | 'ctrlKey' | 'shift
 
 export interface MenuBarWindow {
   isMac: boolean;
-  /** The keys as they show now (the setting and the design read again), and which can run `where`. */
+  /** The keys this kind of window has handlers for: the menu bar greys the rest. */
+  handles: WindowKeys;
   /** The keys as the menu bar shows them, `where` the window is now; `runnable`, those the window runs on a click. */
   keys(where: MenuBarWhere, runnable: ReadonlySet<string>): Record<string, MenuBarKey>;
   /** Whether the focus is in a session window, or the window is one. */
@@ -57,6 +58,7 @@ export function createMenuBarBridge(window: MenuBarWindow) {
     return entries === undefined ? null : menuBarRows(entries);
   };
   const where = (): MenuBarWhere => ({
+    handles: window.handles,
     board: conditions.board.size > 0,
     selection: conditions.selection.size > 0,
     arrows: conditions.arrows.size > 0,
@@ -189,11 +191,12 @@ const SESSION_WINDOW = '.session-window';
 const OWN_SESSION_WINDOW = '.session-window-own-window';
 let bridge: MenuBarBridge | undefined;
 
-/** Starts the window's half of the menu bar, for a window with the app's preload. */
-export function startMenuBar(): void {
+/** Starts the window's half of the menu bar, for a window with the app's preload that handles `handles`. */
+export function startMenuBar(handles: WindowKeys): void {
   const api = window.agentBoard.menuBar;
   bridge = createMenuBarBridge({
     isMac,
+    handles,
     keys: (where, runnable) => menuBarKeys(isMac, extendedShortcuts(), isSimplified(), where, runnable),
     inSession: () => document.activeElement?.closest(SESSION_WINDOW) != null || document.querySelector(OWN_SESSION_WINDOW) !== null,
     report: (state) => api.report(state),

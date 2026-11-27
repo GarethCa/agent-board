@@ -12,7 +12,7 @@ import { createGateHost } from '../src/gates.ts';
 import { migrate } from '../src/migrate.ts';
 import { BOARD_CALLER_METHODS, BOARD_ERROR, RPC_ERROR, type Agent, type AgentUpdatedEvent, type DaemonMethod, type GateRun, type GateUpdatedEvent } from '../src/protocol.ts';
 import { paneIds } from '../src/pane-layout.ts';
-import { connectTestClient, git, recordEvents, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
+import { connectTestClient, git, pushesTo, recordEvents, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
 
 const SIZE = { cols: 100, rows: 30 };
 
@@ -329,7 +329,7 @@ async function pullRequestDaemon({ gated = true, printsToken = false, ticketChat
   const bare = join(tempDataDir(), 'origin.git');
   execFileSync('git', ['init', '--quiet', '--bare', bare]);
   git(repo, 'remote', 'add', 'origin', 'https://github.com/acme/app.git');
-  git(repo, 'remote', 'set-url', '--push', 'origin', bare);
+  pushesTo(bare, 'https://github.com/acme/app.git');
   mkdirSync(join(repo, '.github'));
   writeFileSync(join(repo, '.github', 'pull_request_template.md'), '## Problem\n\n<!-- What. -->\n\n## Change\n\n## How to verify\n');
   git(repo, 'add', '.');
@@ -416,6 +416,18 @@ describe('Open PR and Merge', { timeout: 20_000 }, () => {
     ]) {
       await expect(call).rejects.toMatchObject({ code: BOARD_ERROR.notAllowed });
     }
+  });
+
+  it("pushes nothing when the repo's own config names a program git would run, such as an ssh command", async () => {
+    const { github, client, bare, agent, passed } = await pullRequestDaemon();
+    await passed();
+    git(agent.worktree, 'config', 'core.sshCommand', join(tempDataDir(), 'evil'));
+    await expect(client.call('gate.openPullRequest', { sessionId: agent.sessionId })).rejects.toMatchObject({
+      code: RPC_ERROR.invalidParams,
+      message: expect.stringMatching(/^Could not push .*core\.sshcommand, which names a program git would run; the board won't push with it/),
+    });
+    expect(git(bare, 'branch', '--list')).toBe('');
+    expect(github.calls().some((call) => call.args[1] === 'create')).toBe(false);
   });
 
   it('opens a pull request only once the gate passed on the head: pushed, from the template, the handover and the gate table', async () => {

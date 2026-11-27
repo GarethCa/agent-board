@@ -1,6 +1,8 @@
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { Agent } from '@agent-board/daemon/protocol';
-import { canRestart, canRestartLive, exitText } from './RestartAgent';
+import { canRestart, canRestartLive, exitText, WakeBusyConfirm } from './RestartAgent';
 
 const agent = (fields: Partial<Agent>): Agent =>
   ({ harness: 'claude', state: 'done', endedAt: '2026-10-11T12:00:00.000Z', exitCode: 0, reviewOf: null, shellHarness: null, ...fields }) as Agent;
@@ -30,5 +32,14 @@ describe('restarting an ended agent', () => {
     expect(exitText(agent({ state: 'done' }))).toBe('Done. Wake carries on this conversation.');
     expect(exitText(agent({ state: 'failed', exitCode: 1 }))).toBe('Exited on an error (code 1). Wake carries on this conversation.');
     expect(exitText(agent({ state: 'failed', exitCode: 0 }))).toBe('Exited on an error. Wake carries on this conversation.');
+  });
+});
+
+describe('the busy-shell confirm', () => {
+  it("says what waking does to the shell's command, as the board's confirm does, and offers Wake anyway", () => {
+    const html = renderToStaticMarkup(createElement(WakeBusyConfirm, { message: 'its shell is running something', pending: false, onWake: () => {}, onCancel: () => {} }));
+    expect(html).toContain('its shell is running something. Waking the agent ends it. Wake it anyway?');
+    expect(html).toContain('Wake anyway');
+    expect(html).toContain('Cancel');
   });
 });

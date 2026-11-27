@@ -100,8 +100,8 @@ async function agentSide(setup: Setup, zoneId: string) {
 async function agentSideOf(setup: Setup, sessionId: string) {
   const { daemon, client, recorder } = setup;
   await client.call('session.attach', { sessionId });
-  await recorder.waitForText(sessionId, ':end\r\n');
-  const token = /identity:(.*):end\r\n/.exec(recorder.screenText(sessionId))![1]!;
+  // Its echo can come in the attach's snapshot, which draws the line break as a cursor move: the token alone is matched.
+  const token = (await recorder.waitForMatch(sessionId, /identity:([A-Za-z0-9_-]+):end/))[1]!;
   const connection = await connectTestClient(daemon);
   await connection.call('board.identify', { token });
   return { token, connection };
@@ -285,9 +285,7 @@ describe('a user-side caller: a shell, or the user with no token', () => {
     expect(started.spawnedBy).toBeNull();
     await setup.client.call('orchestrator.wait', { sessionIds: [started.sessionId] });
     expect((await setup.client.call('orchestrator.read', { sessionId: started.sessionId })).text).toBeTruthy();
-    // Removes it, as the user does in the app, but never one with unsaved work: its handover is a file git has not seen.
-    await expect(setup.client.call('orchestrator.close', { sessionId: started.sessionId, remove: true })).rejects.toMatchObject({ code: AGENT_ERROR.unsavedWork });
-    // A close loses nothing: it takes it off the board, the board's own files with it.
+    // A close loses nothing: it takes it off the board, the board's own files (its handover) with it.
     await expect(setup.client.call('orchestrator.close', { sessionId: started.sessionId })).resolves.toBeNull();
     const [line] = await setup.client.call('orchestrator.activity', { limit: 1 });
     expect(line).toMatchObject({ orchestratorName: 'you', action: 'close', outcome: 'done' });
@@ -1599,6 +1597,96 @@ describe('restarting an ended agent', () => {
         e.type === 'hook' && e.sessionId === sessionId && e.event === 'SessionStart' && setup.recorder.events.indexOf(e) >= before,
     );
 
+  it('starts an agent with launch settings of its own over the CLI and the MCP, shows only their names, and restarts a running one with new ones', async () => {
+    const setup = await orchestrateDaemon();
+    const lead = await agentSide(setup, setup.zone.id);
+    const env = { [BOARD_SOCKET_ENV]: setup.daemon.socketPath, [BOARD_TOKEN_ENV]: lead.token };
+    let out = '';
+    const io = { out: (text: string) => (out += text), err: (text: string) => (out += text), env };
+
+    const code = await runBoardCommand('new', ['--name', 'quiet', '--env', 'CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=0', '--env', 'DISABLE_TELEMETRY=s3cret', '--settings', '{"outputStyle":"Explanatory"}', '--', 'Go'], io);
+    expect(code).toBe(0);
+    expect(out).toContain('Launch settings: env CLAUDE_CODE_EXPERIMENTAL_CODE_MODE, DISABLE_TELEMETRY; settings outputStyle.');
+    expect(out).not.toContain('s3cret');
+    const quiet = (await setup.client.call('agent.list')).find((each) => each.name === 'quiet')!;
+    expect(quiet.launchSettings).toEqual({ env: ['CLAUDE_CODE_EXPERIMENTAL_CODE_MODE', 'DISABLE_TELEMETRY'], settings: ['outputStyle'] });
+    out = '';
+    expect(await runBoardCommand('ls', ['--json'], io)).toBe(0);
+    expect(out).not.toContain('s3cret');
+
+    const mcp = mcpAs(setup, lead.token);
+    expect(await mcp.callTool('new_agent', { name: 'codexer', harness: 'codex', prompt: 'Go', env: { DISABLE_ERROR_REPORTING: '1' } })).toMatchObject({ isError: false });
+    expect((await setup.client.call('agent.list')).find((each) => each.name === 'codexer')!.launchSettings).toEqual({ env: ['DISABLE_ERROR_REPORTING'], settings: [] });
+    // Nothing that runs a command unasked: a settings helper, a shell's startup files, or code node loads.
+    for (const [name, launch] of [
+      ['helper', { settings: { apiKeyHelper: 'touch /tmp/owned' } }],
+      ['zdotdir', { env: { ZDOTDIR: '/tmp/evil' } }],
+      ['node options', { env: { NODE_OPTIONS: '--require /tmp/evil.js' } }],
+      ['nested env', { settings: { env: { NODE_OPTIONS: '--require /tmp/evil.js' } } }],
+    ] as const) {
+      const result = await mcp.callTool('new_agent', { name, prompt: 'Go', ...launch });
+      expect(result).toMatchObject({ isError: true, text: expect.stringMatching(/is not one an agent may set/) });
+    }
+    out = '';
+    expect(await runBoardCommand('new', ['--env', 'NODE_OPTIONS=--require /tmp/evil.js', '--', 'Go'], io)).toBe(1);
+    expect(out).toContain('NODE_OPTIONS is not one an agent may set');
+    expect((await setup.client.call('agent.list')).map((each) => each.name)).not.toContain('helper');
+    // Never a setting that loosens what an agent may do, nor one that cuts it off from the board.
+    expect(await mcp.callTool('new_agent', { name: 'loose', prompt: 'Go', settings: { permissions: { defaultMode: 'bypassPermissions' } } })).toMatchObject({ isError: true });
+    expect(await mcp.callTool('new_agent', { name: 'codex settings', harness: 'codex', prompt: 'Go', settings: { model: 'x' } })).toMatchObject({ isError: true });
+    out = '';
+    expect(await runBoardCommand('new', ['--env', 'AGENT_BOARD_SOCKET=/tmp/x', '--', 'Go'], io)).toBe(1);
+    expect(await runBoardCommand('new', ['--env', 'NOEQUALS', '--', 'Go'], io)).not.toBe(0);
+    expect(await runBoardCommand('new', ['--settings', '[1]', '--', 'Go'], io)).not.toBe(0);
+
+    // A running agent restarts with its new settings, carrying on its conversation.
+    await setup.recorder.waitFor((e): e is typeof e => e.type === 'agent.updated' && e.agent.sessionId === quiet.sessionId && e.agent.state === 'idle');
+    const before = setup.recorder.events.length;
+    expect(await mcp.callTool('restart', { agent: `agent:${quiet.sessionId.slice(0, 4)}`, env: { CLAUDE_CODE_EXPERIMENTAL_CODE_MODE: '0' } })).toMatchObject({
+      isError: false,
+      text: expect.stringContaining('Launch settings: env CLAUDE_CODE_EXPERIMENTAL_CODE_MODE; settings outputStyle.'),
+    });
+    expect((await sessionStartAfter(setup, before, quiet.sessionId)).payload).toMatchObject({ source: 'resume', session_id: quiet.sessionId });
+    // A restart is held to the same list.
+    const ref = `agent:${quiet.sessionId.slice(0, 4)}`;
+    expect(await mcp.callTool('restart', { agent: ref, settings: { apiKeyHelper: 'touch /tmp/owned' } })).toMatchObject({ isError: true });
+    expect(await mcp.callTool('restart', { agent: ref, env: { ZDOTDIR: '/tmp/evil' } })).toMatchObject({ isError: true });
+    out = '';
+    expect(await runBoardCommand('restart', [ref, '--env', 'NODE_OPTIONS=--require /tmp/evil.js'], io)).toBe(1);
+    expect(out).toContain('NODE_OPTIONS is not one an agent may set');
+  });
+
+  it('refuses new launch settings for a live reviewer or a mid-turn agent, with nothing stopped or stored', async () => {
+    const setup = await orchestrateDaemon();
+    const { token, connection } = await agentSide(setup, setup.zone.id);
+    const child = await connection.call('orchestrator.spawn', { token, name: 'child' });
+    git(child.worktree, '-c', 'user.name=T', '-c', 'user.email=t@e', 'commit', '--allow-empty', '-q', '-m', 'the work');
+    const round = await setup.client.call('review.start', { sessionId: child.sessionId });
+    await expect(connection.call('orchestrator.restart', { token, sessionId: round.reviewer!, launchSettings: { env: { DISABLE_TELEMETRY: '1' } } })).rejects.toThrow(
+      /reviewer in its round/,
+    );
+    const reviewer = (await setup.client.call('agent.list')).find((each) => each.sessionId === round.reviewer)!;
+    expect(reviewer).toMatchObject({ endedAt: null, launchSettings: null });
+
+    // Its own env holds its fake's tool call, so its turn stays open.
+    const worker = await setup.client.call('agent.spawn', {
+      zoneId: setup.zone.id,
+      name: 'worker',
+      prompt: 'Run: ls | List the files',
+      launchSettings: { env: { FAKE_HARNESS_HANG_TOOL: '1' } },
+      ...SIZE,
+    });
+    await untilAgent(setup.recorder, worker.sessionId, (each) => each.state === 'running');
+    await expect(connection.call('orchestrator.restart', { token, sessionId: worker.sessionId, launchSettings: { env: { DISABLE_TELEMETRY: '1' } } })).rejects.toThrow(
+      /mid-turn: restart it once its turn ends/,
+    );
+    expect((await setup.client.call('agent.list')).find((each) => each.sessionId === worker.sessionId)).toMatchObject({
+      endedAt: null,
+      state: 'running',
+      launchSettings: { env: ['FAKE_HARNESS_HANG_TOOL'] },
+    });
+  });
+
   it('restarts an ended agent another agent started in place, carrying on its conversation, over the CLI and the MCP, and logs it', async () => {
     const setup = await orchestrateDaemon();
     const lead = await agentSide(setup, setup.zone.id);
@@ -2629,7 +2717,7 @@ describe('an orchestrator setting its crew’s status lines', () => {
       setBy: lead.agent.name,
     });
     expect(await run(['set', 'Nope', '--agent', ref(outsider)])).toEqual({ code: 1, out: expect.stringMatching(/not in your crew/) });
-    expect(await run(['set', 'Done', '--agent', ref(worker), '--done'])).toEqual({ code: 2, out: expect.stringMatching(/--done is for your own status/) });
+    expect(await run(['set', 'Done', '--agent', ref(worker), '--done'])).toEqual({ code: 2, out: expect.stringMatching(/done is for your own status/) });
 
     const mcp = mcpAs(setup, lead.token);
     expect(await mcp.callTool('set_status', { summary: 'From the MCP', agent: ref(worker) })).toMatchObject({ isError: false, text: expect.stringMatching(/^Set the status of agent:/) });
@@ -3044,11 +3132,11 @@ describe('agents setting their characters’ poses', () => {
     });
     expect(await run('status', ['set', 'Running the suite', '--pose', 'none'])).toEqual({
       code: 0,
-      out: expect.stringMatching(/^status set: Running the suite\nYour character: .*, the board's \(set one with `agent-board status set --pose`\)\.\n?$/),
+      out: expect.stringMatching(/^Your tile now says: "Running the suite" \(17 of 120 characters, shown in full\)\.\nYour character: .*, the board's \(set one with `agent-board status set --pose`\)\.\n?$/),
     });
     expect(await run('status', ['set', '--pose', 'dancing'])).toEqual({ code: 2, out: expect.stringMatching(/unknown pose 'dancing'; poses: thinking/) });
     expect(await run('status', ['set', '--face', 'happy'])).toEqual({ code: 2, out: expect.stringMatching(/--face and --prop go with a --pose/) });
-    expect(await run('status', ['set', '--pose', 'testing', '--progress', '40'])).toEqual({ code: 2, out: expect.stringMatching(/--progress goes with a summary/) });
+    expect(await run('status', ['set', '--pose', 'testing', '--progress', '40'])).toEqual({ code: 2, out: expect.stringMatching(/progress goes with a summary/) });
     expect(await run('send', ['agent:x', 'hi', '--pose', 'testing'])).toEqual({ code: 2, out: expect.stringMatching(/--pose is only for `status set`/) });
     expect(await run('status', ['set', '--agent', `agent:${worker.sessionId.slice(0, 4)}`, '--pose', 'waiting-on-review'])).toEqual({
       code: 0,
@@ -3271,7 +3359,7 @@ describe('agents setting their work categories', () => {
     expect(await run('identify', [])).toMatchObject({ code: 0, out: expect.stringMatching(/\ncategory Waiting on others "With Legal", waiting on Northwind Pay support · #48213, yours;/) });
     expect(await run('status', ['set', 'Merged', '--done'])).toEqual({
       code: 0,
-      out: 'status set: Merged (finished)\nYour category: Done, yours; it goes with the next prompt.\n',
+      out: 'Your tile now says: "Merged" (6 of 120 characters, shown in full), and that your work is finished.\nYour category: Done, yours; it goes with the next prompt.\n',
     });
     expect(await run('status', ['set', '--category', 'none'])).toEqual({ code: 0, out: expect.stringMatching(/^Your category: none set: the board guesses one/) });
     // Identify says what the board guesses, and why.

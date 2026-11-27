@@ -65,6 +65,17 @@ test('an agent pinned expanded stays open at its place and size through Esc, a d
     await expect(expandedTile(window)).toHaveAttribute('data-pinned', 'true');
     await expect.poll(() => nodeRect(expandedNode(window))).toEqual(at);
 
+    // Under the pop-up's setting, ⤢ opens its pop-up instead; back from it, the tile is pinned where it was.
+    await setClickOpens(window, 'Pop-up');
+    await head().getByRole('button', { name: 'Open the pop-up' }).click();
+    await expect(window.getByTestId('agent-popup')).toBeVisible();
+    await expect(expandedTile(window)).toHaveCount(0);
+    await window.getByTestId('agent-popup').getByRole('button', { name: 'Back to its tile' }).click();
+    await expect(window.getByTestId('agent-popup')).toHaveCount(0);
+    await expect(expandedTile(window)).toHaveAttribute('data-pinned', 'true');
+    await expect.poll(() => nodeRect(expandedNode(window))).toEqual(at);
+    await setClickOpens(window, 'Expand in place');
+
     // After a restart it is expanded again, at the same place and size.
     await app.close();
     ({ app, window } = await launch(dataDir, env));

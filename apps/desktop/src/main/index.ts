@@ -11,7 +11,7 @@ import { acceptAfterArgs } from '../shared/accept';
 import { appearanceFrom, appearanceQuery, themeFor } from '../shared/appearance';
 import { APP_NAME } from '../shared/brand';
 import aboutIcon from '../../../../brand/png/app-icon/icon-512.png?asset';
-import { DAEMON_IPC, WINDOW_IPC, WINDOW_QUERY, type RestartDaemonResult, type WindowTarget } from '../preload/api';
+import { DAEMON_IPC, VIEW_IPC, WINDOW_IPC, WINDOW_QUERY, type RestartDaemonResult, type WindowTarget } from '../preload/api';
 import { registerAgentIpc, registerAgentOpening } from './agents';
 import { markAppWindow } from './app-windows';
 import { traceNotificationClick } from './click-trace';
@@ -48,6 +48,7 @@ import { registerSetupIpc, setAppMenu } from './setup';
 import { registerShellIpc } from './shells';
 import { registerTrackerIpc } from './trackers';
 import { daemonViewState, holdQuitForViewSaves, registerViewIpc } from './view';
+import { forwardEvents } from './broadcast';
 import { clearWebLogins, registerWebTabIpc } from './web-tabs';
 import { pageKeys } from './page-keys';
 import { registerTabDragIpc } from './tab-drags';
@@ -355,6 +356,8 @@ registerExpandedTrace(join(dataDir, EXPANDED_TRACE_FILE));
 registerViewIpc(view, (key, value) => {
   if (key === VIEW_KEYS.extendedShortcuts) extendedShortcuts = value !== false;
 });
+// An agent's arrange ends the overlaps of the tiles it moves in the saved view; each board drops them from its own copy.
+forwardEvents(daemon, ['overlaps.freed'], VIEW_IPC.freed);
 view.get(VIEW_KEYS.extendedShortcuts).then(
   (saved) => (extendedShortcuts = saved !== false),
   () => {},

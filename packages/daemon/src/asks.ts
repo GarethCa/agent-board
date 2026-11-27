@@ -46,7 +46,7 @@ import {
 import type { RpcHandlers } from './rpc.ts';
 import { planDecisionText } from './plan-told.ts';
 import { oneLine } from './terminal-input.ts';
-import { cutText } from './text-cut.ts';
+import { cutText } from './text-words.ts';
 import { lineDiff } from './text-diff.ts';
 import { flagLeadOf } from './ticket-tiles.ts';
 import { isInside, realPath, whyNotWritable, writeWhole } from './user-files.ts';

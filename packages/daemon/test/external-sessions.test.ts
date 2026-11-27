@@ -325,6 +325,19 @@ describe('external sessions', () => {
       expect(unsortedGroups(db)[0]).toMatchObject({ x: 776 + 40, y: 50 });
     });
 
+    it('steps right past a tile loose on the board where it would go, as a new zone does', async () => {
+      const db = new DatabaseSync(':memory:');
+      migrate(db, MIGRATIONS.slice(0, 27));
+      db.exec(`INSERT INTO zones (id, repo_root, folder, name, color, x, y, width, height) VALUES ('a', '/code/app', '', 'app', '#4c6ef5', 0, 50, 300, 200);
+        INSERT INTO shells (id, zone_id, name, cwd, layout, x, y) VALUES ('sh', NULL, 'sh', '/', '{}', 400, 100);
+        INSERT INTO external_sessions (id, harness, session_id, cwd, state) VALUES ('claude:s1', 'claude', 's1', '/', 'idle');`);
+      migrate(db);
+      const external = createExternalSessionHost({ db, groupsDir: '/groups', isAgentSession: () => false, broadcast: () => {}, log: () => {} });
+      onTestFinished(() => external.stop());
+      // Wanted at 300 + 40, where the loose shell (400, 256 wide) is: one zone gap right of it instead.
+      expect(unsortedGroups(db)[0]).toMatchObject({ x: 400 + 256 + 40, y: 50 });
+    });
+
     it("is made for a board's sessions that had no zone before it was a group, when the daemon starts", async () => {
       const db = new DatabaseSync(':memory:');
       migrate(db, MIGRATIONS.slice(0, 27));

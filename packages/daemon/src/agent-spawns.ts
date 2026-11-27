@@ -14,6 +14,7 @@ import { projectCodexConfig } from './codex-config-guard.ts';
 import { runGit } from './git.ts';
 import { CODEX_HOOK_TIMEOUTS, codexHookCommand, HOOK_ENV_PREFIX, HOOK_TOKEN_ENV, HOOK_URL_ENV } from './hook-forwarder.ts';
 import { FORCED_HYPERLINK_ENV, userForcedHyperlink } from './hyperlink-env.ts';
+import { launchSettingsParam, removeLaunchSettingsFile, storedLaunchSettings, withOwnSettings, writeLaunchSettingsFile } from './launch-settings.ts';
 import { keyedQueue } from './keyed-queue.ts';
 import { loginShellKind } from './login-path.ts';
 import { invalidParams } from './params.ts';
@@ -31,6 +32,7 @@ import {
   type AgentRole,
   type Effort,
   type Harness,
+  type LaunchSettings,
   type LinkedIssue,
   type SpawnAgentParams,
   type TerminalSize,
@@ -124,6 +126,7 @@ interface AgentSpawnOptions
     | 'worktreesDir'
     | 'scratchDir'
     | 'groupsDir'
+    | 'launchSettingsDir'
     | 'rememberFolder'
     | 'harnessPaths'
     | 'hookShimPath'
@@ -132,6 +135,7 @@ interface AgentSpawnOptions
     | 'env'
     | 'compactWindow'
     | 'defaultEffort'
+    | 'boardToolsOnly'
     | 'clickableLinks'
     | 'shell'
     | 'shellArgs'
@@ -201,6 +205,10 @@ export interface LaunchSpec {
   size: TerminalSize;
   /** It may change nothing: Claude starts in plan mode, Codex in its read-only sandbox. */
   readOnly?: boolean;
+  /** Its role, a custom one by its name, which Settings may give the board's MCP tools alone; none if left out. */
+  role?: string | null;
+  /** Its own env vars and Claude settings, added to the board's (`LaunchSettings`); none if left out. */
+  launchSettings?: LaunchSettings;
 }
 
 /**
@@ -242,17 +250,52 @@ export function createAgentSpawns(
   forget(sessionId: string): void;
 } {
   const { db, sessions, getRow, get, rows, getZone, repoZoneFor, announce, watch } = options;
-  const insert = db.prepare(
+  const insertRow = db.prepare(
     `INSERT INTO agents (session_id, zone_id, repo_root, codex_bypass_hook_trust, model, effort, role, role_name, name, description,
        branch, worktree, state, issue_provider, issue_id, issue_title, issue_url, x, y, z, review_of, base_commit,
        owns_worktree, harness_session_id, spawned_by, reviews_branch, reviews_head)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (:sessionId, :zoneId, :repoRoot, :bypassHookTrust, :model, :effort, :role, :roleName, :name, :description,
+       :branch, :worktree, 'idle', :issueProvider, :issueId, :issueTitle, :issueUrl, :x, :y, :z, :reviewOf, :baseCommit,
+       :ownsWorktree, :harnessSessionId, :spawnedBy, :reviewsBranch, :reviewsHead)`,
   );
+  /** Adds a started agent's row, idle until its SessionStart hook says it runs. */
+  const insert = (agent: NewAgentRow): void => {
+    const [issueProvider, issueId, issueTitle, issueUrl] = issueColumns(agent.issue ?? null);
+    insertRow.run({
+      sessionId: agent.sessionId,
+      zoneId: agent.zoneId,
+      repoRoot: agent.repoRoot,
+      bypassHookTrust: agent.bypassHookTrust,
+      model: agent.model,
+      effort: agent.effort,
+      role: agent.role,
+      roleName: agent.roleName,
+      name: agent.name,
+      description: agent.description.slice(0, MAX_DESCRIPTION_LENGTH),
+      branch: agent.branch,
+      worktree: agent.worktree,
+      issueProvider,
+      issueId,
+      issueTitle,
+      issueUrl,
+      x: agent.position?.x ?? null,
+      y: agent.position?.y ?? null,
+      z: agent.position?.z ?? null,
+      reviewOf: agent.reviewOf ?? null,
+      baseCommit: agent.baseCommit,
+      ownsWorktree: agent.ownsWorktree ? 1 : 0,
+      harnessSessionId: agent.harnessSessionId ?? null,
+      spawnedBy: agent.spawnedBy ?? null,
+      reviewsBranch: agent.reviews?.branch ?? null,
+      reviewsHead: agent.reviews?.head ?? null,
+    });
+  };
   const setPlainFolder = db.prepare('UPDATE agents SET plain_folder = 1 WHERE session_id = ?');
   const selectNames = db.prepare('SELECT name FROM agents');
   const selectZones = db.prepare('SELECT * FROM zones');
   const setReadOnly = db.prepare('UPDATE agents SET read_only = 1 WHERE session_id = ?');
   const setPurpose = db.prepare('UPDATE agents SET purpose = ? WHERE session_id = ?');
+  const setLaunchSettings = db.prepare('UPDATE agents SET launch_settings = ? WHERE session_id = ?');
   const setMaster = db.prepare('UPDATE agents SET master = 1 WHERE session_id = ?');
   /**
    * Where a lead chat's builder works: in the chat's own worktree, on its branch, which it never owns, so the chat can
@@ -274,6 +317,14 @@ export function createAgentSpawns(
   const setCrewDepth = db.prepare(
     'UPDATE agents SET crew_depth = COALESCE((SELECT crew_depth FROM agents WHERE session_id = ?), 0) + 1 WHERE session_id = ?',
   );
+
+  /**
+   * Whether an agent of `repoRoot` whose tile is in `zoneId` starts Codex with the hook-trust bypass: its repo's zone's
+   * setting (`repoZoneOf`), else `fallback` (on for a new agent). Every start asks it, a reviewer's too, so a zone's
+   * change reaches the next start.
+   */
+  const zoneBypassHookTrust = (zoneId: string | null, repoRoot: string, fallback = 1): number =>
+    repoZoneFor(zoneId, repoRoot)?.codex_bypass_hook_trust ?? fallback;
 
   /** Whether an agent whose tile is in `zoneId` gets the board MCP server: on unless its zone turned it off. */
   const boardMcpOn = (zoneId: string | null): boolean => zoneId === null || getZone(zoneId)?.board_mcp !== 0;
@@ -302,10 +353,29 @@ export function createAgentSpawns(
     if (harnessPath === undefined) throw invalidParams(options.harnessPaths.notFound(harness));
     const token = newToken();
     const boardCli = options.boardCliPath !== undefined && boardMcpOn(spec.zoneId) ? options.boardCliPath : undefined;
+    // Settings may keep a role's Claude agents to the board's tools: no MCP server but the one passed here (none, in a
+    // zone with the board MCP off), and no claude.ai connectors.
+    const boardOnly = harness === 'claude' && options.boardToolsOnly(spec.role ?? null);
+    // Only Claude Code has a knob for it, and only when the setting is on: off leaves whatever the user's own env has.
+    const compactWindow = options.compactWindow();
+    /** The env knobs the board sets on a Claude agent, which win over its own launch settings. */
+    const boardKnobs: Record<string, string> = {
+      ...(harness === 'claude' && compactWindow > 0 ? { CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(compactWindow) } : {}),
+      ...(boardOnly ? { ENABLE_CLAUDEAI_MCP_SERVERS: 'false' } : {}),
+    };
     let harnessCommand: HarnessLaunch;
     if (harness === 'claude') {
       const statusLine = configuredStatusLine([cwd, worktree], options.env);
-      const settings = JSON.stringify(claudeSettings(options.hookUrl(), Math.max(options.permissionHoldMs, ASKING_PERMISSION_HOLD_MS), statusLine === undefined ? undefined : 'user' in statusLine ? statusLine.user : null));
+      const board = claudeSettings(options.hookUrl(), Math.max(options.permissionHoldMs, ASKING_PERMISSION_HOLD_MS), statusLine === undefined ? undefined : 'user' in statusLine ? statusLine.user : null);
+      // The agent's own settings go in the one --settings: a second would replace the board's hooks.
+      const own = withOwnSettings(board, spec.launchSettings);
+      // Claude lays this env block over its process env: the board's own knobs go in it too, to win over the agent's.
+      if (own.env !== undefined) own.env = { ...(own.env as Record<string, string>), ...boardKnobs };
+      const json = JSON.stringify(own);
+      // An agent with settings of its own gets them in a file only the user can read: its env values may be secrets,
+      // which argv would show to anyone running `ps`. Every other agent keeps the board's inline settings.
+      const settings = spec.launchSettings === undefined ? json : writeLaunchSettingsFile(options.launchSettingsDir, id, json);
+      if (spec.launchSettings === undefined) removeLaunchSettingsFile(options.launchSettingsDir, id);
       harnessCommand = {
         command: harnessPath,
         args: [
@@ -314,6 +384,7 @@ export function createAgentSpawns(
           '--settings',
           settings,
           ...(boardCli === undefined ? [] : ['--mcp-config', JSON.stringify(claudeMcpConfig(options.boardMcpUrl()))]),
+          ...(boardOnly ? ['--strict-mcp-config'] : []),
           ...(spec.model === null ? [] : ['--model', spec.model]),
           ...(spec.effort === null ? [] : ['--effort', spec.effort]),
           ...(spec.readOnly === true ? ['--permission-mode', 'plan'] : []),
@@ -339,12 +410,11 @@ export function createAgentSpawns(
     }
     const { command, args } = harnessLaunch(options.shell, options.shellArgs, cwd, harnessCommand.command, harnessCommand.args);
     // With the PATH of the user's interactive shell, which a script harness may need to find its interpreter.
-    const env = { ...options.harnessPaths.launchEnv(options.env) };
+    // Its own env vars come over the user's; the board's knobs, and the board's own env, come over them (and over its
+    // --settings env block, above). A FORCE_HYPERLINK of its own counts as the user's, below, and wins there too.
+    const env = { ...options.harnessPaths.launchEnv(options.env), ...spec.launchSettings?.env, ...boardKnobs };
     // A daemon started from inside Claude Code must not make its agents think they are nested in it.
     delete env.CLAUDECODE;
-    // Only Claude Code has a knob for it, and only when the setting is on: off leaves whatever the user's own env has.
-    const compactWindow = options.compactWindow();
-    if (harness === 'claude' && compactWindow > 0) env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = String(compactWindow);
     // A `FORCE_HYPERLINK` that carries our marker was set by an agent-board this daemon was started from (inside one of
     // its Claude agents): not the user's, so it goes, and the setting decides afresh. The same rule as Settings reports.
     const own = userForcedHyperlink(env);
@@ -559,6 +629,7 @@ export function createAgentSpawns(
     if (model !== null && !MODEL_NAME.test(model)) throw invalidParams(`${model} is not a model name`);
     const notTaken = params.effort === undefined ? undefined : effortRefusal(harness, params.effort);
     if (notTaken !== undefined) throw invalidParams(notTaken);
+    const launchSettings = launchSettingsParam(params.launchSettings, harness);
     if (params.role !== undefined && typeof params.role !== 'string') throw invalidParams('role must be a string');
     // A built-in role, or a custom one by its name.
     const choice = params.role === undefined ? null : roleChoice(params.role);
@@ -570,7 +641,7 @@ export function createAgentSpawns(
       throw invalidParams(`a template is at most ${MAX_ROLE_TEMPLATE_LENGTH} characters`);
     }
     // Not asked for, it is its role's default from Settings, else every new agent's.
-    const effort = params.effort ?? options.defaultEffort(harness, choice === null ? null : (choice.name ?? choice.role));
+    const effort = params.effort ?? options.defaultEffort(harness, launchRole({ role: choice?.role ?? null, role_name: choice?.name ?? null }));
     // A reviewer checks out the branch it reviews, detached: it has none of its own.
     const reviewer = choice !== null && REVIEWER_ROLES.includes(choice.role);
     if (reviewer && params.branch !== undefined) {
@@ -615,7 +686,7 @@ export function createAgentSpawns(
     reservedNames.set(id, shownName);
     const shown: NewStart = { sessionId: id, zoneId, position: position ?? null, name: shownName, harness, model, effort, spawnedBy: spawnedBy ?? null };
     const run = (progress: StartProgress, allowProjectCodexConfig: boolean) =>
-      startAgent({ id, shownName, params, spawnedBy, place: at, plain: folder !== undefined, used, zone, harness, model, effort, choice, reviewer, mainCheckout, fromZone, ticket, allowProjectCodexConfig }, progress);
+      startAgent({ id, shownName, params, spawnedBy, place: at, plain: folder !== undefined, used, zone, harness, model, effort, launchSettings, choice, reviewer, mainCheckout, fromZone, ticket, allowProjectCodexConfig }, progress);
     const progress = starts.open(shown, {
       retry: (again, allow) => void run(again, allow).catch(() => {}),
       dismissed: () => reservedNames.delete(id),
@@ -645,6 +716,7 @@ export function createAgentSpawns(
       harness: Harness;
       model: string | null;
       effort: Effort | null;
+      launchSettings: LaunchSettings | undefined;
       choice: ReturnType<typeof roleChoice> | null;
       reviewer: boolean;
       /** It works in the repo's own checkout: no worktree is made for it. */
@@ -657,7 +729,7 @@ export function createAgentSpawns(
     },
     progress: StartProgress,
   ): Promise<Agent> => {
-    const { id, shownName, params, spawnedBy, place, plain, used, zone, harness, model, effort, choice, reviewer, mainCheckout, fromZone, ticket, allowProjectCodexConfig } = start;
+    const { id, shownName, params, spawnedBy, place, plain, used, zone, harness, model, effort, launchSettings, choice, reviewer, mainCheckout, fromZone, ticket, allowProjectCodexConfig } = start;
     const { zoneId, prompt = '', name, issueId, cols, rows } = params;
     const role = choice?.role ?? null;
     // What was made for it so far, undone if it fails to start: its harness, its worktree and branch, then any scratch repo.
@@ -767,9 +839,8 @@ export function createAgentSpawns(
               : options.roleTemplates.describe(templateZone, repoRoot, choice!);
       }
       const firstMessage = [template, task].filter(Boolean).join('\n\n');
-      // A zone-less agent takes the bypass setting of its repo's zone, else the default (on).
-      const bypassHookTrust =
-        zone?.repo_root === repoRoot ? zone.codex_bypass_hook_trust : (repoZoneFor(zoneId, repoRoot)?.codex_bypass_hook_trust ?? 1);
+      const bypassHookTrust = zoneBypassHookTrust(zoneId, repoRoot);
+      const roleName = choice?.name ?? null;
 
       // A folder zone's folder may be untracked, so missing from the new worktree.
       const cwd = folder === '' ? worktree : join(worktree, folder);
@@ -790,37 +861,33 @@ export function createAgentSpawns(
         allowProjectCodexConfig,
         size: { cols, rows },
         readOnly,
+        role: launchRole({ role, role_name: roleName }),
+        ...(launchSettings === undefined ? {} : { launchSettings }),
       });
       // Should the agent not be made after all, its harness must not run on with no tile.
       undo.unshift(() => sessions.kill(id, 'its start failing').then(() => sessions.forget(id)));
       // The session already runs, but its hooks can't arrive before this synchronous insert. It is idle until its
       // SessionStart hook says it runs.
-      insert.run(
-        id,
-        tile.zoneId,
+      insert({
+        sessionId: id,
+        zoneId: tile.zoneId,
         repoRoot,
         bypassHookTrust,
         model,
         effort,
         role,
-        choice?.name ?? null,
-        tile.name,
-        description.slice(0, MAX_DESCRIPTION_LENGTH),
+        roleName,
+        name: tile.name,
+        description,
         branch,
         worktree,
-        'idle',
-        ...issueColumns(fromIssue?.issue ?? null),
-        tile.position?.x ?? null,
-        tile.position?.y ?? null,
-        tile.position === null ? null : frontZ(db),
-        null,
+        issue: fromIssue?.issue ?? null,
+        position: tile.position === null ? null : { ...tile.position, z: frontZ(db) },
         baseCommit,
-        owns ? 1 : 0,
-        null,
-        spawnedBy ?? null,
-        reviews?.branch ?? null,
-        reviews?.head ?? null,
-      );
+        ownsWorktree: owns,
+        spawnedBy,
+        reviews,
+      });
       reservedNames.delete(id);
       if (firstMessage !== '') {
         firstMessages.set(id, firstMessage);
@@ -829,6 +896,8 @@ export function createAgentSpawns(
       // What it is for, as `setStatus` keeps it: one line, cut to the cap.
       const purpose = cutPurpose(oneLine(params.purpose ?? ''));
       if (purpose !== '') setPurpose.run(purpose, id);
+      const stored = storedLaunchSettings(launchSettings);
+      if (stored !== null) setLaunchSettings.run(stored, id);
       if (readOnly) setReadOnly.run(id);
       if (plain) setPlainFolder.run(id);
       if (place?.master === true) setMaster.run(id);
@@ -908,6 +977,10 @@ export function createAgentSpawns(
       // A reviewer's effort is its role's default, not the implementer's.
       const effort = options.defaultEffort(implementer.harness, 'reviewer');
       const id = randomUUID();
+      // Its zone's setting as it starts, as for any start; with no zone of its repo left, the implementer's, as a
+      // relaunch keeps its own: never looser than the agent it reviews.
+      const bypassHookTrust = zoneBypassHookTrust(implementer.zone_id, repoRoot, implementer.codex_bypass_hook_trust);
+      const role = { role: 'reviewer', role_name: null } as const;
       // The folder of its worktree the implementer works in, a folder zone's.
       const cwd = join(worktree, relative(implementer.worktree, implementer.cwd));
       try {
@@ -917,45 +990,38 @@ export function createAgentSpawns(
           harness: implementer.harness,
           model: implementer.model,
           effort,
-          bypassHookTrust: implementer.codex_bypass_hook_trust === 1,
+          bypassHookTrust: bypassHookTrust === 1,
           zoneId: implementer.zone_id,
           cwd,
           worktree,
           task: prompt,
           allowProjectCodexConfig: false,
           size: { cols, rows },
+          role: launchRole(role),
         });
       } catch (error) {
         await removeWorktree(repoRoot, worktree, branch).catch(() => {});
         throw error;
       }
-      insert.run(
-        id,
-        implementer.zone_id,
+      insert({
+        sessionId: id,
+        zoneId: implementer.zone_id,
         repoRoot,
-        implementer.codex_bypass_hook_trust,
-        implementer.model,
+        bypassHookTrust,
+        model: implementer.model,
         effort,
-        'reviewer',
-        null,
+        role: role.role,
+        roleName: role.role_name,
         name,
-        `Reviews ${implementer.name}'s work on ${implementer.branch}`.slice(0, MAX_DESCRIPTION_LENGTH),
+        description: `Reviews ${implementer.name}'s work on ${implementer.branch}`,
         branch,
         worktree,
-        'idle',
-        ...issueColumns(null),
         // Loose on the board with its implementer, it is put just below and right of it; in a zone, the zone lays it out.
-        loose ? implementer.x! + REVIEWER_OFFSET : null,
-        loose ? implementer.y! + REVIEWER_OFFSET : null,
-        loose ? frontZ(db) : null,
-        of,
-        null,
-        1,
-        null,
-        null,
-        null,
-        null,
-      );
+        position: loose ? { x: implementer.x! + REVIEWER_OFFSET, y: implementer.y! + REVIEWER_OFFSET, z: frontZ(db) } : null,
+        reviewOf: of,
+        baseCommit: null,
+        ownsWorktree: true,
+      });
       options.promptQueued(id);
       options.log(`spawned ${implementer.harness} reviewer ${id} of ${of} on ${branch} in ${worktree}`);
       announce(id);
@@ -989,7 +1055,7 @@ export function createAgentSpawns(
         mkdirSync(cwd, { recursive: true });
         at = { cwd, worktree, repoRoot, branch, ownsWorktree: true };
       }
-      const bypassHookTrust = repoZoneFor(zoneId, at.repoRoot)?.codex_bypass_hook_trust ?? 1;
+      const bypassHookTrust = zoneBypassHookTrust(zoneId, at.repoRoot);
       // Its work from here on is what a review looks at: the commit it carries on from.
       const head = at.branch === '' ? undefined : await runGit(at.worktree, ['rev-parse', 'HEAD']).catch(() => undefined);
       const baseCommit = head?.ok ? head.stdout : null;
@@ -1015,32 +1081,24 @@ export function createAgentSpawns(
         await undo?.().catch(() => {});
         throw error;
       }
-      insert.run(
+      insert({
         sessionId,
         zoneId,
-        at.repoRoot,
+        repoRoot: at.repoRoot,
         bypassHookTrust,
-        null,
-        null,
-        null,
-        null,
+        model: null,
+        effort: null,
+        role: null,
+        roleName: null,
         name,
-        description.slice(0, MAX_DESCRIPTION_LENGTH),
-        at.branch,
-        at.worktree,
-        'idle',
-        ...issueColumns(null),
-        position?.x ?? null,
-        position?.y ?? null,
-        position?.z ?? null,
-        null,
+        description,
+        branch: at.branch,
+        worktree: at.worktree,
+        position: position ?? null,
         baseCommit,
-        at.ownsWorktree ? 1 : 0,
-        codexSessionId,
-        null,
-        null,
-        null,
-      );
+        ownsWorktree: at.ownsWorktree,
+        harnessSessionId: codexSessionId,
+      });
       watch(sessionId, harness, at.cwd, at.worktree, bypassed, codexSessionId);
       options.log(`adopted ${harness} session ${sessionId} as an agent in ${at.cwd}`);
       announce(sessionId);
@@ -1289,6 +1347,37 @@ function plainText(line: string): string {
     .replace(/(\*\*|__)(.+?)\1/g, '$2')
     .replace(/(^|[^\w*])\*(?!\s)([^*]+?)\*(?!\w)/g, '$1$2')
     .replace(/(^|[^\w])_(?!\s)([^_]+?)_(?!\w)/g, '$1$2');
+}
+
+/** A new agent's row, as `insert` adds it: what each start knows, the rest null unless given. */
+interface NewAgentRow {
+  sessionId: string;
+  zoneId: string | null;
+  repoRoot: string;
+  /** `codex_bypass_hook_trust`: 1 when Codex starts with the bypass flag. */
+  bypassHookTrust: number;
+  model: string | null;
+  effort: Effort | null;
+  role: AgentRole | null;
+  roleName: string | null;
+  name: string;
+  /** Cut to `MAX_DESCRIPTION_LENGTH` as it is stored. */
+  description: string;
+  branch: string;
+  worktree: string;
+  issue?: LinkedIssue | null;
+  position: { x: number; y: number; z: number | null } | null;
+  reviewOf?: string;
+  baseCommit: string | null;
+  ownsWorktree: boolean;
+  harnessSessionId?: string | null;
+  spawnedBy?: string;
+  reviews?: { branch: string; head: string } | null;
+}
+
+/** The role an agent's harness starts as (`LaunchSpec.role`): a custom role by its name, else its role. Every start and relaunch asks it. */
+export function launchRole(row: Pick<AgentRow, 'role' | 'role_name'>): string | null {
+  return row.role_name ?? row.role;
 }
 
 /** The `issue_provider`, `issue_id`, `issue_title` and `issue_url` columns for an agent's issue, all null for none. */

@@ -7,8 +7,11 @@ export type HeadButton = { label: string; tooltip: string };
 
 /** The window buttons and the closing button an expanded tile's header shows, for the tile as it is now. */
 export type HeadButtons = {
-  /** Into its session window: an agent's or a shell's (an external session has none). */
-  maximise?: HeadButton & { path: WindowPath };
+  /**
+   * ⤢: an agent's pop-up, where it splits, under the pop-up's setting; else its session window, as a shell's. An
+   * external session has neither.
+   */
+  maximise?: HeadButton & { open: 'popUp' | 'maximise'; path: WindowPath };
   /** Into an OS window of its own. */
   popOut?: HeadButton;
   /** Where the header ends: Unpin while pinned expanded, else Collapse. */
@@ -28,13 +31,17 @@ export function headDoubleClick(setting: ClickOpens, { agent, shell }: Pick<Tile
 
 /**
  * The header's window buttons, the same for a tile pinned expanded as for any other: pinned, its window and pop-out
- * open, and it is back where it was, pinned, once they close. Only the closing button differs.
+ * open, and it is back where it was, pinned, once they close. Only the closing button differs. An agent's ⤢ opens what
+ * opening its tile would, its pop-up by default; under the other settings, its session window.
  */
-export function headButtons({ agent, shell }: Pick<TileData, 'agent' | 'shell'>): HeadButtons {
+export function headButtons({ agent, shell }: Pick<TileData, 'agent' | 'shell'>, setting: ClickOpens = 'window'): HeadButtons {
   const windowed = agent !== undefined || shell !== undefined;
+  const popUp = agent !== undefined && setting === 'popup';
   return {
     ...(windowed && {
-      maximise: { label: 'Maximise', tooltip: 'Maximise into its session window', path: 'maximise' },
+      maximise: popUp
+        ? { label: 'Open the pop-up', tooltip: 'Open its pop-up: bigger, and it can split', open: 'popUp', path: 'popUp' }
+        : { label: 'Maximise', tooltip: 'Maximise into its session window', open: 'maximise', path: 'maximise' },
       popOut: { label: 'Pop out', tooltip: 'Into its own window' },
     }),
     closer: agent?.pinnedExpanded === true ? 'unpin' : 'collapse',

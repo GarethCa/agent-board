@@ -39,7 +39,7 @@ import {
 import { RpcMethodError, type RpcHandlers } from './rpc.ts';
 import { answerWords, stepsProblem } from './steps-format.ts';
 import { oneLine } from './terminal-input.ts';
-import { cutText } from './text-cut.ts';
+import { cutText } from './text-words.ts';
 import type { AgentHost } from './agents.ts';
 
 type StepsMethods = Pick<DaemonMethods, 'board.newSteps' | 'board.readSteps' | 'board.updateSteps' | 'steps.answer' | 'steps.tick' | 'steps.send'>;

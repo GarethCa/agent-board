@@ -852,9 +852,9 @@ describe('crew prefabs from the command line', () => {
     await usage('prefab', ['show', 'Pair', '--out', 'x'], '--out is only for `prefab export`');
     await usage('prefab', ['ls', '--add'], '--add and --replace are only for `prefab import`');
     await usage('prefab', ['copy', 'x'], 'the prefab commands are');
-    await usage('new', ['--prefab', 'Pair', '--model', 'opus', '--', 'Go'], "--model is the prefab's to set");
-    await usage('new', ['--prefab', 'Ticket', '--chat', 'boss', '--', 'Go'], '--chat is implementer or lead');
-    await usage('new', ['--chat', 'lead', '--', 'Go'], 'give --prefab too');
+    await usage('new', ['--prefab', 'Pair', '--model', 'opus', '--', 'Go'], "model is the prefab's to set");
+    await usage('new', ['--prefab', 'Ticket', '--chat', 'boss', '--', 'Go'], 'chat is implementer or lead');
+    await usage('new', ['--chat', 'lead', '--', 'Go'], 'give a prefab too');
   });
 
   it('lists the library, exports a prefab, imports it back only with --add, and removes it', async () => {

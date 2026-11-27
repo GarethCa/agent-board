@@ -30,7 +30,7 @@ import { boardMcpHandlers } from './board-mcp.ts';
 import { openBoardSession } from './board-ops.ts';
 import { createCaptureHost } from './zone-captures.ts';
 import { createLayoutMeasures } from './layout-measures.ts';
-import { layoutHandlers, spotBesideAgent } from './orchestrator-layout.ts';
+import { layoutHandlers, newAgentPlacer, spotBesideAgent } from './orchestrator-layout.ts';
 import { createTodoHost } from './todos.ts';
 import { agentNoteAuthor } from './agent-notes.ts';
 import { createOrchestratorHost, type OrchestratorHost } from './orchestrators.ts';
@@ -60,7 +60,6 @@ import { readTestOverrides } from './test-overrides.ts';
 import { NOTHING_AFTER_RESTART, resumeAfterRestart } from './resume-after-restart.ts';
 import { daemonPaths, listenOnSocket, prepareDataDir, prepareSocketDir } from './paths.ts';
 import {
-  AGENT_ERROR,
   DAEMON_VERSION,
   DOCUMENT_CARD_SIZE,
   PLAN_CARD_SIZE,
@@ -68,10 +67,8 @@ import {
   PROTOCOL_VERSION,
   lineSplitter,
   waitsForYou,
-  type Agent,
   type BoardItem,
   type BuildInfo,
-  type ClosedKept,
   type DaemonEvent,
   type AfterRestart,
   type DaemonHealth,
@@ -99,17 +96,17 @@ import { createCrewCards, type CrewCards } from './crew-cards.ts';
 import { gitCrewBranches, openCrewPullRequest } from './crew-branches.ts';
 import { editedFiles, gitSharedWorktree } from './crew-worktree.ts';
 import { createCrewLoop } from './crew-loop.ts';
-import { unsavedWork } from './worktrees.ts';
+import { createAgentCloser, UnsavedWorkError } from './agent-close.ts';
 import { createPrefabDrafts } from './prefab-drafts.ts';
 import { createPrefabLibrary } from './prefab-library.ts';
 import { createRoleTemplates } from './role-templates.ts';
 import { createReviewHost } from './reviews.ts';
 import { createSelectionAsks } from './selection-asks.ts';
 import { createBoardMaster } from './master.ts';
-import { handleRpcLine, RpcMethodError, type RpcHandlers } from './rpc.ts';
+import { handleRpcLine, type RpcHandlers } from './rpc.ts';
 import { createClockHost } from './clocks.ts';
 import { createClockTemplateHost } from './clock-templates.ts';
-import { createSettings, defaultEffort } from './settings.ts';
+import { boardToolsOnly, createSettings, defaultEffort } from './settings.ts';
 import { createUsageHost } from './usage.ts';
 import { createShellHost } from './shells.ts';
 import { followSystemTimeZone } from './time-zone.ts';
@@ -568,6 +565,8 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       onRead: (sessionId, own, first) => crew.hearsPullRequests?.(sessionId, own, first),
       log,
     });
+    // A clock's and a queue's new agents, one at a time in a zone; `call` is made below, before a clock first fires.
+    const placeNewAgent = newAgentPlacer((method, params) => call(method, params));
     const clockTemplates = createClockTemplateHost({ db, clock: options.clock ?? systemClock, broadcast });
     // `agents` and `handlers` are made below; a clock first fires from a timer, once they exist.
     const clocks = createClockHost({
@@ -577,9 +576,9 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         get: (sessionId) => agents.get(sessionId),
         list: () => agents.list(),
         runScheduled: (...args) => agents.runScheduled(...args),
+        isWaking: (sessionId) => agents.isWaking(sessionId),
         spawn: (...args) => agents.spawn(...args),
         finalMessage: (sessionId) => agents.finalMessage(sessionId),
-        delete: (...args) => agents.delete(...args),
         stop: (...args) => agents.stop(...args),
         deliver: (...args) => agents.deliver(...args),
         announce: (sessionId) => agents.announce(sessionId),
@@ -588,6 +587,9 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         pause: (...args) => agents.pause(...args),
       },
       call: async (method, params) => handlers[method](params as never, DAEMON_ITSELF) as never,
+      placeAgent: (zoneId, start) => placeNewAgent(zoneId, start),
+      // As `agent.delete` without force: the agent's or its helpers' unsaved work refuses it before any goes.
+      close: (sessionId, why) => closer.closeAgent(sessionId, { why, unsaved: 'refuse' }).then(() => {}),
       broadcast,
       log,
       templates: clockTemplates,
@@ -681,6 +683,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       sessions,
       worktreesDir: options.worktreesDir ?? defaultWorktreesDir(),
       reviewsDir: join(options.dataDir, 'reviews'),
+      launchSettingsDir: join(options.dataDir, 'launch-settings'),
       groupsDir,
       scratchDir: options.scratchDir ?? (process.env.AGENT_BOARD_SCRATCH_DIR || join(homedir(), '.agent-board', 'scratch')),
       // The zone table is made below; agents remember folders only once they spawn.
@@ -691,6 +694,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       boardCliPath: cli === undefined ? undefined : cliPath,
       compactWindow: () => settings.get().compactWindow,
       defaultEffort: (harness, role) => defaultEffort(settings.get(), harness, role),
+      boardToolsOnly: (role) => boardToolsOnly(settings.get(), role),
       clickableLinks: () => settings.get().clickableLinks,
       env: options.agentEnv ?? process.env,
       shell,
@@ -757,7 +761,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       pullRequestOf: (chatId) => ticketPullRequest([chatId, ...helpersOf(agents.list(), chatId).map((helper) => helper.sessionId)]),
       read: (ref) => pullRequestWatchFacts(ref, { gh }),
       viewer: () => ghLogin({ gh }),
-      tell: (chatId, text) => agents.runScheduled(chatId, text),
+      tell: (chatId, text) => agents.runScheduled(chatId, text, undefined, 'News of its pull request'),
       changed: (chatId) => agents.announce(chatId),
       log,
     });
@@ -867,55 +871,8 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     const zones = zoneHandlers<unknown>(db, zoneTable, trackers, (zoneId) =>
       agents.dismissStartsIn(zoneId),
     );
-    // A ticket's chat goes after its helpers, on the app's Delete and an agent's remove alike. Unforced, none goes while
-    // the chat or a helper has unsaved work, so a removal never stops halfway.
-    const withHelpers = async (sessionId: string, unforced: boolean, remove: (id: string) => Promise<unknown>): Promise<void> => {
-      const helpers = helpersOf(agents.list(), sessionId);
-      if (unforced && helpers.length > 0) {
-        for (const agent of [...helpers, agents.get(sessionId)]) {
-          if (agent?.ownsWorktree !== true) continue;
-          const reason = await unsavedWork(agent.repoRoot, agent.worktree, agent.ownedBranch);
-          if (reason !== undefined) throw new RpcMethodError(AGENT_ERROR.unsavedWork, `${agent.name}: ${reason}`);
-        }
-      }
-      for (const helper of helpers) if (agents.get(helper.sessionId) !== undefined) await remove(helper.sessionId);
-      await remove(sessionId);
-    };
-    /**
-     * Ends the agent, then says what unsaved work its own worktree holds (but for the board's files: a review, a
-     * handover), if any. Ended first, so nothing it writes after the check is lost with its worktree.
-     */
-    const endThenCheck = async (sessionId: string, why: string): Promise<string | undefined> => {
-      const agent = agents.get(sessionId);
-      if (agent === undefined) return undefined;
-      if (agent.endedAt === null) await agents.stop(sessionId, why);
-      return agent.ownsWorktree ? unsavedWork(agent.repoRoot, agent.worktree, agent.ownedBranch, { ignoreBoardFiles: true }) : undefined;
-    };
-    /**
-     * Closes a ticket's chat after its helpers (but its own reviewers, which its close takes), or none of them. Each
-     * helper, and the chat too with `checkChat`, is checked for unsaved work (but the board's files, as a close checks)
-     * while it runs, then ended and checked again, so nothing written as it stopped is lost: one with some refuses the
-     * close before any agent goes. The helpers then go, clean, and `closeChat` closes the chat.
-     */
-    const withHelpersClosed = async (sessionId: string, why: string, checkChat: boolean, closeChat: () => Promise<void>): Promise<void> => {
-      const helpers = helpersOf(agents.list(), sessionId).filter((helper) => helper.reviewOf !== sessionId);
-      if (helpers.length > 0) {
-        const chat = agents.get(sessionId);
-        const checked = checkChat && chat !== undefined ? [...helpers, chat] : helpers;
-        const refuse = async (unsaved: (agent: Agent) => Promise<string | undefined>) => {
-          for (const agent of checked) {
-            const reason = await unsaved(agent);
-            if (reason !== undefined) throw new RpcMethodError(AGENT_ERROR.unsavedWork, agent === chat ? reason : `${agent.name}: ${reason}`);
-          }
-        };
-        await refuse(async (agent) => (agent.ownsWorktree ? unsavedWork(agent.repoRoot, agent.worktree, agent.ownedBranch, { ignoreBoardFiles: true }) : undefined));
-        await refuse((agent) => endThenCheck(agent.sessionId, why));
-        for (const { sessionId: id } of helpers) {
-          if (agents.get(id) !== undefined) await reviews.deleteAgent(id, why, () => agents.delete(id, why, true).then(() => null));
-        }
-      }
-      await closeChat();
-    };
+    // Every close and delete: a ticket's chat after its helpers, every agent after its reviewers, unsaved work judged one way.
+    const closer = createAgentCloser({ agents, reviews, log });
     const orchestrators = createOrchestratorHost({
       db,
       sessions,
@@ -924,25 +881,11 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       shells,
       zones: () => zoneTable.list(),
       flowEdges,
-      // As `agent.delete` without force: its reviewers go first (forced, unless `forceReviewers` is false), and a
-      // ticket's chat after its helpers.
+      // As `agent.delete` without force; its reviewers' unsaved work refuses it too when `forceReviewers` is false.
       deleteAgent: (sessionId, why, forceReviewers) =>
-        withHelpers(sessionId, true, (id) => reviews.deleteAgent(id, why, () => agents.delete(id, why, false).then(() => null), forceReviewers)),
-      // As the crew's close below, but unsaved work keeps the worktree and branch rather than the agent. A ticket's
-      // chat closes after its helpers, as it is removed after them.
-      closeAgent: async (sessionId, why) => {
-        let closed: ClosedKept | null = null;
-        await withHelpersClosed(sessionId, why, false, async () => {
-          const agent = agents.get(sessionId);
-          const unsaved = await endThenCheck(sessionId, why);
-          const keep = unsaved !== undefined;
-          await reviews.deleteAgent(sessionId, why, () => agents.delete(sessionId, why, true, keep, keep).then(() => null));
-          if (!keep || agent === undefined) return;
-          log(`kept ${agent.name}'s worktree ${agent.worktree} and branch ${agent.ownedBranch} at its close: ${unsaved}`);
-          closed = { worktree: agent.worktree, branch: agent.ownedBranch, why: unsaved };
-        });
-        return closed;
-      },
+        closer.closeAgent(sessionId, { why, unsaved: 'refuse', checkReviewers: forceReviewers === false }).then(() => {}),
+      // Unsaved work in its own worktree keeps the worktree and branch, and the close says so.
+      closeAgent: (sessionId, why) => closer.closeAgent(sessionId, { why, ends: true, unsaved: 'keep' }),
       removeAsks,
       broadcast,
       log,
@@ -962,15 +905,14 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       deliver: (from, to, name, text) => agents.deliver(from, to, name, text),
       flag: (sessionId, reason) => void agents.flag(sessionId, reason, null),
       clearFlag: (sessionId) => void agents.clearFlag(sessionId),
-      // As `agent.delete`, its reviewers first, ended and then checked for unsaved work (`endThenCheck`). Any change but
-      // the board's own files, or a commit no branch or remote has, keeps it (ended), and the crew says so.
-      // A ticket's chat closes after its helpers, as the orchestrators' close does.
+      // Unsaved work keeps the agent (ended), and the crew says so, naming it itself.
       close: (sessionId, why) =>
-        withHelpersClosed(sessionId, why, true, async () => {
-          const reason = await endThenCheck(sessionId, why);
-          if (reason !== undefined) throw new Error(reason);
-          await reviews.deleteAgent(sessionId, why, () => agents.delete(sessionId, why, true).then(() => null));
-        }),
+        closer.closeAgent(sessionId, { why, ends: true, unsaved: 'refuse' }).then(
+          () => {},
+          (error: unknown) => {
+            throw error instanceof UnsavedWorkError && error.sessionId === sessionId ? new Error(error.reason) : error;
+          },
+        ),
       tell: (sessionId, text) => agents.tell(sessionId, text),
       news: (sessionId, kind, detail, gate) => orchestrators.crewNews(sessionId, kind, detail, gate),
       branches: gitCrewBranches(options.worktreesDir ?? defaultWorktreesDir()),
@@ -1039,6 +981,9 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       db,
       log,
       call: (method, params) => call(method, params),
+      placeAgent: (zoneId, start) => placeNewAgent(zoneId, start),
+      // As `agent.delete` without force: the agent's or its helpers' unsaved work refuses it before any goes.
+      close: (sessionId, why) => closer.closeAgent(sessionId, { why, unsaved: 'refuse' }).then(() => {}),
       place: (sessionId, size) => spotBesideAgent(call, sessionId, size),
       broadcast,
     });
@@ -1206,6 +1151,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         measures,
         zones: zoneTable,
         visible: (list, connection) => late.visibleItems!(list, connection),
+        broadcast,
         warn: log,
       }),
       ...itemOwners.handlers<SessionSubscriber & BoardConnection>(),
@@ -1242,14 +1188,18 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       ...memoryQueue.handlers<SessionSubscriber & BoardConnection>(),
       ...todos.handlers<SessionSubscriber & BoardConnection>(),
       ...usage.handlers<SessionSubscriber & BoardConnection>(),
-      // Its reviewers go first, and the rounds it reviewed say it has gone, each told to every client; a ticket's chat
-      // goes after its helpers, each deleted as it is asked to be.
-      'agent.delete': async (params, context) => {
+      // The user's Delete: forced, or keeping the worktree, its helpers go the same way; else unsaved work refuses it.
+      'agent.delete': async (params) => {
         const p = paramsObject(params);
         const sessionId = stringParam(p, 'sessionId');
-        await withHelpers(sessionId, p.force !== true && p.keepWorktree !== true, (id) =>
-          reviews.deleteAgent(id, "the app's agent.delete", async () => agentHandlers(agents)['agent.delete']({ ...p, sessionId: id }, context)),
-        );
+        const force = optionalBooleanParam(p, 'force') === true;
+        const keepWorktree = optionalBooleanParam(p, 'keepWorktree') === true;
+        await closer.closeAgent(sessionId, {
+          why: "the app's agent.delete",
+          unsaved: force ? 'lose' : 'refuse',
+          ...(keepWorktree ? { keep: { worktree: true, branch: true } } : {}),
+          helpers: force || keepWorktree ? 'as-agent' : 'refuse',
+        });
         return null;
       },
       ...reviews.handlers<SessionSubscriber>(),
@@ -1263,14 +1213,10 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         githubRepo: (sessionId) => githubRepo(repoZoneTracker(sessionId)),
         pullRequests: (sessionId) => pullRequests.get(sessionId),
         refreshPullRequests: (sessionId) => pullRequests.refresh(sessionId),
-        // Merged: nothing of its work is lost, so nothing stops it short. Its reviewers go first, as with `agent.delete`;
-        // a ticket's chat after its helpers, whose work was not merged with it, so none goes while one holds unsaved work.
-        deleteAgent: async (sessionId, keep) => {
-          const why = "the merge gate's cleanup after its merge";
-          await withHelpersClosed(sessionId, why, false, () =>
-            reviews.deleteAgent(sessionId, why, () => agents.delete(sessionId, why, true, keep.worktree, keep.branch).then(() => null)).then(() => {}),
-          );
-        },
+        // Merged: its own worktree and branch go as the gate judged them. Its helpers' work was not merged with it, so
+        // none goes while one holds unsaved work.
+        deleteAgent: (sessionId, keep) =>
+          closer.closeAgent(sessionId, { why: "the merge gate's cleanup after its merge", ends: true, unsaved: 'lose', keep }).then(() => {}),
         comment: (issue, body) => trackers.comment(issue, body),
         recordPullRequest: (sessionId, pr) => {
           const record = pullRequestRecord(pr.url, pr.title);

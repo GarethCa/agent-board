@@ -6,6 +6,7 @@ import { isAbsolute, relative, resolve, sep } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { AgentHost } from './agents.ts';
 import type { Answered } from './deliveries.ts';
+import { MESSAGE_RULES, planMessage, type MessagePlan } from './message-plan.ts';
 import { agentTarget, boardCaller, sessionCaller, type ActivityLogger, type BoardCallerSources, type BoardConnection } from './board.ts';
 import type { FlowEdgeHost } from './flow-edges.ts';
 import { runGit } from './git.ts';
@@ -47,6 +48,7 @@ import {
   type Effort,
   EFFORTS,
   type Harness,
+  type LaunchSettings,
   type OrchestratorAction,
   type OrchestratorActivity,
   type GivenRole,
@@ -67,6 +69,13 @@ import { RpcMethodError, type RpcHandlers } from './rpc.ts';
 import { keptAll, type RemoveAskEnd, type RemoveAskStore } from './remove-asks.ts';
 import { flagLeadOf, helpersOf } from './ticket-tiles.ts';
 import { isWorking } from './turn-status.ts';
+import { checkAgentLaunchSettings } from './launch-settings.ts';
+
+/** Launch settings an agent gave, refused if they hold any an agent may not set; their shape is checked as it starts. */
+function agentLaunchSettings(value: unknown): LaunchSettings | undefined {
+  checkAgentLaunchSettings(value);
+  return value as LaunchSettings | undefined;
+}
 
 /** The orchestrator methods but the layout commands, which `orchestrator-layout.ts` handles. */
 type OrchestratorMethods = Omit<
@@ -210,7 +219,7 @@ export interface OrchestratorHostOptions extends BoardCallerSources {
   db: DatabaseSync;
   agents: Pick<
     AgentHost,
-    'get' | 'list' | 'announce' | 'handCrew' | 'removedOrchestrator' | 'fallbackOwner' | 'spawn' | 'answer' | 'interrupt' | 'setEffort' | 'setPinnedExpanded' | 'setRole' | 'roleTemplate' | 'continueOnCredits' | 'resume' | 'stop' | 'pause' | 'finalMessage' | 'waitsAtPrompt' | 'setStatus' | 'setName' | 'setPurpose' | 'clearFlag' | 'sendUnsent' | 'clearUnsent' | 'queueAfterTurn' | 'dropNotices' | 'deliverAfterTurn' | 'userTyping'
+    'get' | 'list' | 'announce' | 'handCrew' | 'removedOrchestrator' | 'fallbackOwner' | 'spawn' | 'answer' | 'interrupt' | 'setEffort' | 'setPinnedExpanded' | 'setRole' | 'roleTemplate' | 'continueOnCredits' | 'resume' | 'restartWith' | 'stop' | 'pause' | 'finalMessage' | 'waitsAtPrompt' | 'setStatus' | 'setName' | 'setPurpose' | 'clearFlag' | 'sendUnsent' | 'clearUnsent' | 'queueAfterTurn' | 'dropNotices' | 'deliverAfterTurn' | 'userTyping'
   >;
   zones: () => Zone[];
   flowEdges: Pick<FlowEdgeHost, 'create' | 'get' | 'link' | 'remove'>;
@@ -701,15 +710,24 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
     if (why !== undefined) throw invalidParams(`an orchestrator may not send this text: ${why}`);
   };
 
-  /** Refuses `text` to `to` unless a send could deliver it: its text, and an agent not ended or waiting on the user. */
-  const checkSendable = (to: Agent, text: string) => {
+  /**
+   * The plan for a send of `text` to `to` (`planMessage`), refusing it unless a send could deliver it: its text, and an
+   * agent not ended or waiting on the user. A busy agent, mid-turn or with messages waiting for its turn to end, keeps
+   * it until then.
+   */
+  const checkSendable = (to: Agent, text: string): MessagePlan => {
     checkText(text);
-    if (to.endedAt !== null && to.state !== 'hibernated') throw invalidParams(`${to.name} has ended`);
-    if (to.permissions.length > 0 || to.state === 'needs-permission') {
-      throw invalidParams(`${to.name} needs the user's permission first`);
-    }
     // Waiting on the user mid-turn: what was typed would be queued into that turn, not answer it.
-    if (waitsOnUser(to)) throw invalidParams(`${to.name} is waiting on the user's answer to its question or plan`);
+    const blocked =
+      to.permissions.length > 0 || to.state === 'needs-permission'
+        ? `${to.name} needs the user's permission first`
+        : waitsOnUser(to)
+          ? `${to.name} is waiting on the user's answer to its question or plan`
+          : undefined;
+    const busy = !SENDABLE_STATES.has(to.state) ? 'it is mid-turn' : to.messagesWaiting > 0 ? 'messages wait for its turn to end' : undefined;
+    const plan = planMessage({ name: to.name, ended: to.endedAt !== null, paused: to.state === 'hibernated', blocked, busy }, MESSAGE_RULES.send);
+    if (plan.do === 'refuse') throw invalidParams(plan.reason);
+    return plan;
   };
 
   /**
@@ -887,6 +905,8 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
                 // Checked as the agent starts: implementer or lead, with ticketChat.
                 chatKind: p.chatKind as TicketChatKind | undefined,
                 ticket: optionalStringParam(p, 'ticket'),
+                // Checked for its harness as the agent starts.
+                launchSettings: agentLaunchSettings(p.launchSettings),
                 prompt,
                 ...SPAWN_SIZE,
               },
@@ -915,8 +935,7 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
             checkSteerable(me, to);
             if (clear) return { ...agents.clearUnsent(to.sessionId, false), delivery: 'cleared' };
             if (submit) return submitUnsent(me, to);
-            checkSendable(to, text);
-            const midTurn = !SENDABLE_STATES.has(to.state);
+            const plan = checkSendable(to, text);
             // A message an agent sent lets the receiver answer it (an answer opens nothing back). Not its own crew, which
             // answers in its turn's last message. The Captain hears from leads all over the board: it is told who each
             // message is from, as it can answer any of them.
@@ -961,7 +980,7 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
               logSend(`queued until ${until} (${to.messagesWaiting + 1} waiting)`);
               return { ...sentTo(to, sender, delivery), typed };
             };
-            if (midTurn || to.messagesWaiting > 0) return keep('queued-after-turn');
+            if (plan.do === 'after-turn') return keep('queued-after-turn');
             if (agents.userTyping(to.sessionId)) return keep('queued-while-typing');
             awaitingTurn.add(to.sessionId);
             let answered: Answered;
@@ -1286,8 +1305,13 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
               entry.detail = `fresh${prompt === undefined || prompt.trim() === '' ? '' : `: ${prompt.trim()}`}`;
               if (prompt !== undefined) checkText(prompt);
             }
-            // Never forced: a busy shell is the user's to end.
-            return agents.resume(agent.sessionId, actedBy(me, 'restart'), false, fresh ? { prompt: prompt === undefined || prompt.trim() === '' ? undefined : prompt } : undefined);
+            const anew = fresh ? { prompt: prompt === undefined || prompt.trim() === '' ? undefined : prompt } : undefined;
+            // Never forced: a busy shell is the user's to end. New launch settings restart a live agent too.
+            if (p.launchSettings !== undefined) {
+              entry.detail = [entry.detail, 'with new launch settings'].filter(Boolean).join(', ');
+              return agents.restartWith(agent.sessionId, agentLaunchSettings(p.launchSettings), actedBy(me, 'restart'), false, anew);
+            }
+            return agents.resume(agent.sessionId, actedBy(me, 'restart'), false, anew);
           });
         },
 

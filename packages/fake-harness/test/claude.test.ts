@@ -320,9 +320,12 @@ describe('fake claude', () => {
     await untilEvents(recorder, 'PermissionRequest');
     await shown;
 
+    // Both listen before the interrupt: the two lines can come in one chunk, which a later listener never sees.
+    const declinedLine = untilStdout(child, 'User declined to answer questions');
+    const interruptedLine = untilStdout(child, 'Interrupted');
     child.kill('SIGINT');
-    await untilStdout(child, 'User declined to answer questions');
-    await untilStdout(child, 'Interrupted');
+    await declinedLine;
+    await interruptedLine;
     const asked = recorder.events.length;
     child.stdin.write('carry on\n');
     await untilEvents(recorder, 'Stop');

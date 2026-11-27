@@ -1,7 +1,10 @@
+import { execFileSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it, onTestFinished } from 'vitest';
 import { fakeHarnessEnv } from '@agent-board/fake-harness';
 import { createFakeGitHub, FAKE_GITHUB_STATE, type FakeGitHubPullRequest } from '@agent-board/tracker/testing';
+import { CODEX_BYPASS_FLAG } from '../src/agent-spawns.ts';
+import type { DaemonClient } from '../src/client.ts';
 import type { DaemonOptions } from '../src/daemon.ts';
 import { daemonPaths } from '../src/paths.ts';
 import { parseReviewDoc } from '../src/review-doc.ts';
@@ -113,6 +116,44 @@ describe('review rounds', { timeout: ROUNDS_MS }, () => {
 
     const reviewer = (await client.call('agent.list')).find((agent) => agent.sessionId === round.reviewer);
     expect(reviewer).toMatchObject({ zoneId: null, role: 'reviewer', position: { x: 548, y: 648 } });
+  });
+
+  describe("a Codex reviewer's hook-trust bypass", () => {
+    /** A Codex implementer in a zone that has the bypass on or off; its turns are slow, so its reviewer is still running when read. */
+    const codexImplementer = async (bypass: boolean) => {
+      const daemon = await startTestDaemon({
+        worktreesDir: tempDataDir(),
+        agentEnv: fakeHarnessEnv({ scenario: 'review', home: tempDataDir(), idleNotifyMs: 200, stepDelayMs: 500 }),
+      });
+      const client = await connectTestClient(daemon);
+      const zone = await client.call('zone.add', { path: tempRepo(), x: 0, y: 0 });
+      await client.call('zone.configure', { id: zone.id, codexBypassHookTrust: bypass });
+      const codex = await client.call('agent.spawn', { zoneId: zone.id, harness: 'codex', prompt: 'Write the code', name: 'Codexer', ...SIZE });
+      return { client, zone, codex };
+    };
+    const commandLine = async (client: DaemonClient, sessionId: string) => {
+      const session = (await client.call('session.list')).find((s) => s.id === sessionId)!;
+      return execFileSync('ps', ['-ww', '-o', 'command=', '-p', String(session.pid)], { encoding: 'utf8' });
+    };
+
+    it("starts with its zone's setting now, not the one its implementer started with", async () => {
+      const { client, zone, codex } = await codexImplementer(true);
+      await client.call('zone.configure', { id: zone.id, codexBypassHookTrust: false });
+
+      const round = await client.call('review.start', { sessionId: codex.sessionId });
+
+      expect(await commandLine(client, round.reviewer!)).not.toContain(CODEX_BYPASS_FLAG);
+    });
+
+    it("keeps its implementer's setting when no zone of its repo is left", async () => {
+      const { client, zone, codex } = await codexImplementer(false);
+      await client.call('agent.move', { sessionId: codex.sessionId, zoneId: null, x: 500, y: 600 });
+      await client.call('zone.remove', { id: zone.id });
+
+      const round = await client.call('review.start', { sessionId: codex.sessionId });
+
+      expect(await commandLine(client, round.reviewer!)).not.toContain(CODEX_BYPASS_FLAG);
+    });
   });
 
   it('sends the doc to the implementer as its next message, headed as a hand-off from its reviewer', async () => {

@@ -4,7 +4,8 @@ import type { MenuBarRow } from '../../../shared/menu-bar';
 import { agentMenu, menuIds, type ModelEntry } from '../board/menu-model';
 import { galleryAgent } from '../board/TileGallery';
 import { createMenuBarBridge, type MenuBarWindow } from './menu-bar-bridge';
-import { acceleratorOf, keyAvailable, menuBarKey, menuBarKeys, menuBarRows, pressOf, runRow, type MenuBarWhere } from './menu-bar';
+import { WINDOW_QUERY } from '../../../preload/api';
+import { acceleratorOf, keyAvailable, menuBarKey, menuBarKeys, menuBarRows, pressOf, runRow, WINDOW_KEYS, windowKeysFor, type MenuBarWhere } from './menu-bar';
 import { binding, chordsOf, KEYS, pressed, type KeyBinding, type KeyId } from './registry';
 
 describe('a chord as an accelerator', () => {
@@ -66,6 +67,35 @@ describe('the keys the menu bar shows', () => {
     // Focus in a session window on the board: ⌘D is Split Beside's, so Duplicate is off.
     expect(can('edit.duplicate', where({ board: true, selection: true, session: true }))).toBe(false);
     expect(can('window.splitBeside', where({ board: true, selection: true, session: true }))).toBe(true);
+  });
+
+  it('greys the keys a kind of window has no handler for: in Settings and the Overview, the switcher, the cheat sheet and the Captain', () => {
+    const at = (handles: MenuBarWhere['handles']): MenuBarWhere => ({ handles, board: false, selection: false, arrows: false, session: false });
+    const can = (id: KeyId, where: MenuBarWhere) => keyAvailable(binding(id), where);
+    for (const id of ['move.spotlight', 'move.cheatSheetAnywhere', 'move.master'] as const) {
+      expect(can(id, at(WINDOW_KEYS.settings)), id).toBe(false);
+      expect(can(id, at(WINDOW_KEYS.overview)), id).toBe(false);
+      expect(can(id, at(WINDOW_KEYS.board)), id).toBe(true);
+    }
+    // Settings has Park a thought; the Overview has nothing of its own.
+    expect(can('move.parkThought', at(WINDOW_KEYS.settings))).toBe(true);
+    expect(can('move.parkThought', at(WINDOW_KEYS.overview))).toBe(false);
+    // A session window of its own: its keys, the switcher and the cheat sheet, but not the board's Captain.
+    const popOut: MenuBarWhere = { ...at(WINDOW_KEYS.popOut), session: true };
+    for (const id of ['window.splitBeside', 'window.closeTab', 'move.spotlight', 'move.cheatSheetAnywhere', 'move.parkThought'] as const) expect(can(id, popOut), id).toBe(true);
+    expect(can('move.master', popOut)).toBe(false);
+    // A session window's keys stay greyed in Settings, as it is none.
+    expect(can('window.closeTab', { ...at(WINDOW_KEYS.settings), session: true })).toBe(false);
+  });
+
+  it('knows the kind of window by the query main opened it with', () => {
+    const of = (query: Record<string, string>) => windowKeysFor(new URLSearchParams(query));
+    expect(of({ [WINDOW_QUERY.settings]: '' })).toBe(WINDOW_KEYS.settings);
+    expect(of({ [WINDOW_QUERY.settings]: 'general' })).toBe(WINDOW_KEYS.settings);
+    expect(of({ [WINDOW_QUERY.overview]: '' })).toBe(WINDOW_KEYS.overview);
+    expect(of({ [WINDOW_QUERY.popOut]: 'agent:1', [WINDOW_QUERY.kind]: 'agent' })).toBe(WINDOW_KEYS.popOut);
+    expect(of({})).toBe(WINDOW_KEYS.board);
+    expect(of({ [WINDOW_QUERY.design]: 'simplified' })).toBe(WINDOW_KEYS.board);
   });
 
   it('keeps an item whose key is off clickable when the window can run it, without the key’s accelerator', () => {
@@ -150,6 +180,7 @@ function bridge(more: Partial<MenuBarWindow> = {}) {
   let now = 0;
   const window: MenuBarWindow = {
     isMac: true,
+    handles: WINDOW_KEYS.board,
     keys: () => ({ 'edit.duplicate': { accelerator: 'CommandOrControl+D', text: '⌘D', enabled: true } }),
     inSession: () => false,
     report: (state) => reports.push(state),
@@ -230,12 +261,12 @@ describe("the window's half of the menu bar", () => {
     const { bridge: menuBar } = bridge({ inSession: () => session, keys: (where) => (asked.push(where), {}) });
     const [board, tile] = [Symbol('board'), Symbol('tile')];
     menuBar.report(true);
-    expect(asked.at(-1)).toEqual({ board: false, selection: false, arrows: false, session: false });
+    expect(asked.at(-1)).toEqual({ handles: WINDOW_KEYS.board, board: false, selection: false, arrows: false, session: false });
     menuBar.setWhen('board', board, true);
     menuBar.setWhen('selection', tile, true);
     session = true;
     menuBar.changed();
-    expect(asked.at(-1)).toEqual({ board: true, selection: true, arrows: false, session: true });
+    expect(asked.at(-1)).toEqual({ handles: WINDOW_KEYS.board, board: true, selection: true, arrows: false, session: true });
     menuBar.setWhen('selection', tile, false);
     expect(asked.at(-1)).toMatchObject({ selection: false });
   });

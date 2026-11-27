@@ -2,13 +2,11 @@ import { memo, useCallback, useContext, useEffect, useState } from 'react';
 import type { NodeProps } from '@xyflow/react';
 import { MEMORY_CARD_SIZE, LIST_CARD_FOLDED_SIZE, LIST_CARD_MIN_SIZE, type MemoryChange, type MemoryEntry } from '@agent-board/daemon/protocol';
 import { useToast } from '../../ui';
-import { pressed } from '../../keys/registry';
-import { isTyping } from '../../keys/typing';
 import { useNow } from '../../inbox/use-now';
 import { ItemActionsContext, useOnlySelected, type ItemNodeType } from './items';
 import { CardResizer, FoldedPicture } from './CardSizing';
 import { foldTo } from './card-size';
-import { ListCardPeekPopover, ListCardToolbar, useFocusOnce, useFresh, useRows, useZone, why } from './ListCardNodeParts';
+import { ListCardPeekPopover, ListCardToolbar, useFocusOnce, useFresh, useFullKey, useRows, useZone, why } from './ListCardNodeParts';
 import { MemoryCardView, MemoryIconView, MemoryPeek, type AddEntry } from './MemoryCard';
 import { MemoryFull, type Unsaved } from './MemoryFull';
 import { entryName, freshEntry, inListOrder, memoryData, newestWrite, scopeText, whoText } from './memory-card';
@@ -18,8 +16,9 @@ const readView = (id: string) => window.agentBoard.items.readMemory(id).then((vi
 
 /**
  * A memory on the board: open, a card listing its documents and facts with a box to remember a fact (A); folded, its
- * brain icon alone (D). The icon opens the peek beside it, with every entry to search, edit, pin or remove; the card's
- * Open (a double-click, or ⌘↵ while it is selected) opens it full screen, where documents are read and written.
+ * brain icon alone (D). The icon opens the peek beside it, with every entry to search, edit, pin or remove, and a
+ * double-click on it opens it full screen; so does the card's Open (a double-click, or ⌘↵ while it is selected), where
+ * documents are read and written.
  */
 export const MemoryNode = memo(function MemoryNode({ id: nodeId, data, selected: picked, dragging, width, height }: NodeProps<ItemNodeType>) {
   const selected = useOnlySelected(picked);
@@ -49,16 +48,7 @@ export const MemoryNode = memo(function MemoryNode({ id: nodeId, data, selected:
     setFull(true);
   }, []);
   // ⌘↵ on the selected memory opens it full screen.
-  useEffect(() => {
-    if (!selected || full) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (!pressed('tile.full', event) || isTyping(event) || document.querySelector('[role="dialog"]') !== null) return;
-      event.preventDefault();
-      openFull();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [selected, full, openFull]);
+  useFullKey(selected, full, openFull);
   const shown = entries ?? [];
   const count = entries?.length ?? memory.count;
 
@@ -135,6 +125,7 @@ export const MemoryNode = memo(function MemoryNode({ id: nodeId, data, selected:
       pulse={fresh !== undefined}
       sub={fresh === undefined ? undefined : `${whoText(fresh.changedBy)} wrote ${entryName(fresh)}`}
       onOpen={() => setPeek(true)}
+      onFull={openFull}
     >
       {toolbar}
     </MemoryIconView>
@@ -209,6 +200,7 @@ export const MemoryNode = memo(function MemoryNode({ id: nodeId, data, selected:
           onUnsaved={unsaved}
           onClose={() => setFull(false)}
           openLink={openLink}
+          object={() => document.querySelector<HTMLElement>(`.react-flow__node[data-id="${CSS.escape(nodeId)}"]`)}
         />
       )}
     </>

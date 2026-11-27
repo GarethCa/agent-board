@@ -9074,14 +9074,14 @@ button.chat-chip[aria-expanded='true'] {
   gap: var(--space-1);
 }
 
-/* A memory full screen: its head and tabs, a bar of search and filters, then its list beside the entry picked. */
-.memory-full {
+/* The frame every full screen shares (FullScreen.tsx): head, an optional bar, the body, and an optional line of keys. */
+.full-screen {
   position: fixed;
   top: 50%;
   left: 50%;
   z-index: var(--layer-dialog);
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   width: min(1180px, calc(100vw - var(--space-8)));
   height: min(820px, calc(100vh - var(--space-8)));
   overflow: hidden;
@@ -9089,7 +9089,19 @@ button.chat-chip[aria-expanded='true'] {
   animation: ui-rise var(--motion-fast) var(--ease-out);
 }
 
-.memory-full[data-inline='true'] {
+.full-screen[data-bar='true'] {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.full-screen[data-foot='true'] {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.full-screen[data-bar='true'][data-foot='true'] {
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+}
+
+.full-screen[data-inline='true'] {
   position: relative;
   top: auto;
   left: auto;
@@ -9100,7 +9112,7 @@ button.chat-chip[aria-expanded='true'] {
   animation: none;
 }
 
-.memory-full-head {
+.full-screen-head {
   display: flex;
   align-items: center;
   gap: var(--space-2-5);
@@ -9108,7 +9120,7 @@ button.chat-chip[aria-expanded='true'] {
   border-bottom: 1px solid var(--separator);
 }
 
-.memory-full-face {
+.full-screen-face {
   display: grid;
   flex: none;
   place-items: center;
@@ -9119,12 +9131,12 @@ button.chat-chip[aria-expanded='true'] {
   color: var(--accent-strong);
 }
 
-.memory-full-face svg {
+.full-screen-face svg {
   width: var(--font-size-lg);
   height: var(--font-size-lg);
 }
 
-.memory-full-title {
+.full-screen-title {
   overflow: hidden;
   margin: 0;
   font-size: var(--font-size-lg);
@@ -9133,11 +9145,36 @@ button.chat-chip[aria-expanded='true'] {
   white-space: nowrap;
 }
 
-.memory-full-tabs {
+/* The title with a line under it. */
+.full-screen-named {
+  display: grid;
+  min-width: 0;
+}
+
+.full-screen-sub {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.full-screen-count {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The head's own controls, then the close button, at its end. */
+.full-screen-head-end {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2-5);
   margin-left: auto;
 }
 
-.memory-full-bar {
+.full-screen-bar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -9194,13 +9231,13 @@ button.chat-chip[aria-expanded='true'] {
   box-shadow: var(--shadow-focus);
 }
 
-.memory-full-bar-end {
+.full-screen-bar-end {
   display: flex;
   gap: var(--space-2);
   margin-left: auto;
 }
 
-.memory-full-body {
+.full-screen-body {
   display: grid;
   grid-template-columns: minmax(220px, 290px) minmax(0, 1fr);
   min-height: 0;
@@ -9218,8 +9255,14 @@ button.chat-chip[aria-expanded='true'] {
   list-style: none;
 }
 
-/* The list's column: the entries, then who read the memory, under them. */
-.memory-full-side {
+.full-screen-body[data-single] {
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+
+/* The list's column: in a memory, the entries, then who read it, under them. */
+.full-screen-side {
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -9339,11 +9382,22 @@ button.chat-chip[aria-expanded='true'] {
   text-align: center;
 }
 
-.memory-full-detail {
+.full-screen-detail {
   display: flex;
   min-width: 0;
   min-height: 0;
   overflow: auto;
+}
+
+/* The keys at a full screen's foot. */
+.full-screen-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  padding: var(--space-2) var(--space-4);
+  border-top: 1px solid var(--separator);
+  color: var(--muted);
+  font-size: var(--font-size-xs);
 }
 
 .memory-full-empty {
@@ -9589,6 +9643,128 @@ button.chat-chip[aria-expanded='true'] {
   margin-right: auto;
   margin-left: 0;
 }
+
+/* A queue's full screen: the memory's list and detail, with its jobs' places in line, result, buttons and Next. */
+.queue-full-group,
+.queue-full-rows {
+  display: grid;
+  gap: var(--space-0-5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.queue-full-item[data-done] .memory-full-item-name b {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.queue-full-item .memory-full-item-sub {
+  padding-left: 0;
+}
+
+.queue-full-place {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  min-width: var(--space-5);
+  height: var(--space-5);
+  border-radius: var(--radius-pill);
+  background: var(--hover);
+  color: var(--text-soft);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-semibold);
+}
+
+.queue-full-standing,
+.queue-full-hint {
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+}
+
+.queue-full-heading,
+.queue-full-title {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--font-size-lg);
+  font-weight: var(--weight-bold);
+}
+
+.queue-full-title {
+  padding: var(--space-1) var(--space-1-5);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  font-family: inherit;
+  text-align: left;
+  cursor: text;
+}
+
+.queue-full-title:hover {
+  border-color: var(--control-edge);
+}
+
+.queue-full-edit {
+  flex: none;
+  min-height: calc(var(--font-size-lg) * 3);
+  resize: vertical;
+}
+
+.queue-full-text {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: var(--font-size-sm);
+}
+
+.queue-full-link {
+  display: inline-flex;
+  align-self: flex-start;
+  align-items: center;
+  max-width: 100%;
+  gap: var(--space-1);
+  padding: var(--space-0-5) var(--space-2);
+  overflow: hidden;
+  border: 1px solid var(--control-edge);
+  border-radius: var(--radius-pill);
+  background: none;
+  color: var(--text-soft);
+  font: inherit;
+  font-size: var(--font-size-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.queue-full-link svg {
+  flex: none;
+  width: var(--font-size-xs);
+  height: var(--font-size-xs);
+}
+
+.queue-full-result {
+  padding: var(--space-2) var(--space-3);
+  border-left: 2px solid var(--success);
+  border-radius: var(--radius-sm);
+  background: var(--hover);
+  color: var(--text-soft);
+  font-size: var(--font-size-sm);
+}
+
+.queue-full-acts,
+.queue-full-next {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.queue-full-next {
+  justify-content: space-between;
+  margin-top: auto;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--separator);
+}
+
 
 /* The gallery's full screen, drawn in place under its cards. */
 .listcard-gallery-full {
@@ -20364,6 +20540,90 @@ button.tile-folded-row:is(:hover, :focus-visible) {
   margin: 0;
   padding: var(--space-2);
   color: var(--muted);
+}
+
+/* One list's peek, beside its folded pill: its lines, a field to add one, and ⤢ for full screen. */
+.ui-popover.todo-peek-popover {
+  box-sizing: border-box;
+  width: 300px;
+  max-height: min(420px, var(--radix-popover-content-available-height));
+  padding: var(--space-1-5);
+  overflow-y: auto;
+  border-radius: var(--radius-card);
+}
+
+.todo-peek {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.todo-peek-add {
+  box-sizing: border-box;
+  width: 100%;
+}
+
+/* The pill's face: its glyph and words, one button that lays out as the pill's own. */
+.todo-pill-face {
+  display: contents;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+/* A to-do list's full screen: the memory's list and detail, in the to-do teal throughout. */
+.todo-full .full-screen-face {
+  background: var(--todo-solid);
+  color: var(--todo-on);
+}
+
+.todo-full .memory-full-item[aria-current='true'] {
+  background: var(--todo-soft);
+  box-shadow: var(--todo-cursor);
+}
+
+.todo-full .memory-full-chip[aria-pressed='true'] {
+  border-color: var(--todo-edge);
+  background: var(--todo-soft);
+  color: var(--todo-ink);
+}
+
+.todo-full .ui-button[data-variant='primary'] {
+  border-color: var(--todo-solid);
+  background: var(--todo-solid);
+  color: var(--todo-on);
+}
+
+.todo-full-item .memory-full-item-name .todo-box {
+  flex: none;
+}
+
+.todo-full-item[data-done] .memory-full-item-name b,
+.todo-full-title[data-done] {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.todo-full-tick {
+  display: inline-flex;
+  gap: var(--space-1-5);
+  align-items: center;
+  padding: var(--space-0-5) var(--space-2) var(--space-0-5) var(--space-1);
+  border: 1px solid var(--todo-edge);
+  border-radius: var(--radius-pill);
+  background: var(--raised);
+  color: var(--todo-ink);
+  font: inherit;
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+}
+
+.todo-full-tick:hover {
+  background: var(--todo-soft);
+}
+
+.todo-full-input {
+  box-sizing: border-box;
+  width: 100%;
 }
 
 /* A zone's Done line: the tickets a Clean up folded away, in one row. */

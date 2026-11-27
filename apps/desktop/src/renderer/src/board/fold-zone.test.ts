@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { arrangeBoard, BOARD_ARRANGE_GAP, type BoardZone } from '@agent-board/daemon/arrange-board';
+import { BOARD_ARRANGE_GAP, laidOut, type BoardZone } from '@agent-board/daemon/arrange-board';
 import { AGENT_TILE_SIZE, overlaps, sizedFootprint, type Rect } from '@agent-board/daemon/board-layout';
 import { FOLDED_ZONE_SIZE, type Agent, type Shell, type Zone } from '@agent-board/daemon/protocol';
 import { chipLine, foldedSessionIds, foldedToast, roomToUnfold, unfoldedToast, unfoldMoves, withFoldedExternals, withFoldedZones, type InTheWay } from './fold-zone';
@@ -130,7 +130,7 @@ describe('the room an unfolding zone makes', () => {
     ];
     type Board = { zones: BoardZone[]; tiles: typeof tiles };
     const arranged = (board: Board): Board => {
-      const moved = arrangeBoard(board.zones, board.tiles);
+      const moved = laidOut(board.zones, board.tiles);
       return { zones: board.zones.map((each) => ({ ...each, ...moved.zones.get(each.id) })), tiles: board.tiles.map((each) => ({ ...each, ...moved.tiles.get(each.id) })) };
     };
     const movables = (board: Board): InTheWay[] => [

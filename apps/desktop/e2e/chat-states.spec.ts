@@ -31,7 +31,12 @@ async function pickStyle(window: Page, style: Style): Promise<void> {
     await expect(choices.getByRole('radio', { name: /^Cards/ })).toBeChecked();
     await choices.getByRole('radio', { name: /^Timeline/ }).check();
   } else if (style === 'Status line') {
-    await sessionWindow(window).getByRole('group', { name: 'Chat style' }).getByRole('button', { name: 'Status line' }).click();
+    // A click as the window settles can land on nothing: pick until the switch says it is picked (picking it again is a no-op).
+    const statusLine = sessionWindow(window).getByRole('group', { name: 'Chat style' }).getByRole('button', { name: 'Status line' });
+    await expect(async () => {
+      await statusLine.click();
+      await expect(statusLine).toHaveAttribute('aria-pressed', 'true', { timeout: 1_000 });
+    }).toPass({ timeout: 10_000 });
   }
 }
 

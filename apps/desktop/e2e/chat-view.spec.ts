@@ -230,7 +230,7 @@ test('on the timeline rail, a run of tool calls is one collapsed line that opens
   }
 });
 
-test("an expanded tile shows the chat from the switch in its pane strip, and the choice is the session window's too", async () => {
+test("an expanded tile shows the chat from the switch in its header, and the choice is the session window's too", async () => {
   const { repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env);
@@ -242,7 +242,7 @@ test("an expanded tile shows the chat from the switch in its pane strip, and the
     await setClickOpens(window, 'Expand in place');
     await tile(window).dblclick();
     const expanded = window.getByTestId('expanded-tile');
-    const view = expanded.locator('.session-window-strip').getByRole('group', { name: 'View' });
+    const view = expanded.locator('.expanded-tile-head').getByRole('group', { name: 'View of every agent in this pop-up' });
     const chat = expanded.getByTestId('chat-view');
     await expect(view.getByRole('button', { name: 'Terminal' })).toHaveAttribute('aria-pressed', 'true');
     await expect(chat).toBeHidden();
@@ -278,7 +278,7 @@ test("an expanded tile's chat renders the agent's Markdown and opens its links w
     await setClickOpens(window, 'Expand in place');
     await tile(window).dblclick();
     const expanded = window.getByTestId('expanded-tile');
-    const view = expanded.locator('.session-window-strip').getByRole('group', { name: 'View' });
+    const view = expanded.locator('.expanded-tile-head').getByRole('group', { name: 'View of every agent in this pop-up' });
     const chat = expanded.getByTestId('chat-view');
     await view.getByRole('button', { name: 'Chat' }).click();
     const reply = chat.getByTestId('chat-assistant').last();

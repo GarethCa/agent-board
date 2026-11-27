@@ -30,6 +30,35 @@ describe('watchPullRequests', () => {
     }
   });
 
+  it('asks again about a settled agent once it runs again, settled by a read that saw it ended', async () => {
+    let ended = true;
+    let found: PullRequest[] = [];
+    let asked = 0;
+    const watcher = watchPullRequests({
+      agents: () => [{ ...agent, ended }],
+      pullRequests: async () => {
+        asked += 1;
+        return { own: found, pushed: [] };
+      },
+      intervalMs: 5,
+      onChange: () => {},
+      log: () => {},
+    });
+    try {
+      // Ended with none: settled, and asked no more.
+      await expect.poll(() => asked).toBe(1);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(asked).toBe(1);
+
+      // Resumed, it merges a pull request: the watcher sees it.
+      ended = false;
+      found = [{ ...pr, state: 'merged' }];
+      await expect.poll(() => watcher.get('s1')).toEqual(found);
+    } finally {
+      watcher.stop();
+    }
+  });
+
   it('asks nothing until started, when made to start later, then tells of every read and whether it was the first', async () => {
     let asked = 0;
     const reads: [string, PullRequest[], boolean][] = [];

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { isAbsolute } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { finiteNumberParam, invalidParams, paramsObject, stringParam } from './params.ts';
 import type { ImageStore } from './image-store.ts';
@@ -25,6 +26,7 @@ import {
   MAX_SUGGESTIONS,
   isLineBudget,
   MAX_AGENT_NOTE_LINES,
+  MAX_CLOCK_ONLY_IF,
   type ImageRef,
   type LinkData,
   MAX_TEXT_FONT_SIZE,
@@ -245,6 +247,9 @@ const KIND_DATA: Record<BoardItemKind, (data: Record<string, unknown>) => void> 
       if (data[key] !== null && typeof data[key] !== 'string') throw invalidParams(`a clock's ${key} must be a session id or null`);
     }
     if (!isFreshAgent(data.fresh)) throw invalidParams("a clock's fresh must be { harness, model, role, closeWhenDone }");
+    if (data.onlyIf != null && !isOnlyIf(data.onlyIf)) {
+      throw invalidParams(`a clock's onlyIf must be { command, cwd, fingerprint }, its command up to ${MAX_CLOCK_ONLY_IF} characters, or null`);
+    }
   },
   shape: (data) => {
     const owner = 'a shape';
@@ -590,6 +595,12 @@ function noItem(id: string): RpcMethodError {
 
 function isClockMark(value: unknown): boolean {
   return isObject(value) && ['sessionId', 'name', 'why', 'at'].every((key) => typeof value[key] === 'string');
+}
+
+/** A clock's only-if script: a command, not blank and not too long, and the sha-256 of what it ran when set. */
+function isOnlyIf(value: unknown): boolean {
+  if (!isObject(value) || typeof value.command !== 'string' || (value.cwd !== undefined && typeof value.cwd !== 'string') || typeof value.fingerprint !== 'string') return false;
+  return value.command.trim() !== '' && value.command.length <= MAX_CLOCK_ONLY_IF && (value.cwd === undefined || isAbsolute(value.cwd)) && /^[0-9a-f]{64}$/.test(value.fingerprint);
 }
 
 /**

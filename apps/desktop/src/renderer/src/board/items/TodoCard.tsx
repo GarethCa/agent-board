@@ -7,6 +7,7 @@ import type { TodoData, TodoLine } from '@agent-board/daemon/protocol';
 import { ContextMenu, Tooltip, type MenuEntry } from '../../ui';
 import { HarnessMark } from '../HarnessMark';
 import { useScrollFade } from './CardSizing';
+import { iconPress } from './full-screen';
 import { cursorAfterRemove, headCountIn, moveCursor, openWriters, pillText, todoCounts, todoKey, todoState, writerOf, type TodoLook, type TodoLookup, type Writer } from './todo-view';
 
 /** What the user does to a list; each is saved where it is drawn. Those it can't do there are left out, with their menu entries. */
@@ -26,6 +27,8 @@ export interface TodoCardActions {
   deleteList?(): void;
   /** Opens an agent's list as the To do tab of its window. */
   openInWindow?(): void;
+  /** Opens the list full screen. */
+  openFull?(): void;
   /** Gives the keys back to the board. */
   leave(): void;
 }
@@ -52,7 +55,7 @@ interface TodoCardProps {
 
 const SHORTCUT = { tick: 'Space', edit: '↵', copy: '⌘C', remove: '⌫', add: 'N', clear: '⇧⌫' };
 
-function WriterChip({ writer }: { writer: Writer }) {
+export function WriterChip({ writer }: { writer: Writer }) {
   return (
     <span className="todo-writer" data-you={writer.kind === 'you' || undefined} title={writer.kind === 'you' ? 'You wrote this' : `${writer.name} wrote this`}>
       {writer.kind === 'you' ? <i className="todo-writer-you" aria-hidden /> : writer.harness === undefined ? <i className="todo-writer-agent" aria-hidden /> : <HarnessMark harness={writer.harness} className="todo-writer-mark" />}
@@ -246,6 +249,7 @@ export function TodoCardView({ data, lookup, zoneName, look = 'card', steppedIn,
   const headEntries: MenuEntry[] = [
     { label: 'Add a to-do', icon: <Plus />, shortcut: SHORTCUT.add, onSelect: () => startAdd(null) },
     { label: `Clear ticked (${counts.ticked})`, icon: <Check />, shortcut: SHORTCUT.clear, disabled: counts.ticked === 0, onSelect: actions.clear },
+    ...(actions.openFull ? [{ label: 'Open full screen', icon: <Maximize2 />, shortcut: '⌘↵', onSelect: actions.openFull }] : []),
     ...(actions.openInWindow ? [{ label: 'Open in its window', icon: <AppWindow />, onSelect: actions.openInWindow }] : []),
     ...(actions.fold ? [{ label: 'Fold', icon: <Minimize2 />, onSelect: () => actions.fold?.(true) }] : []),
     ...(actions.deleteList ? ['separator' as const, { label: 'Delete list', icon: <Trash2 />, danger: true, onSelect: actions.deleteList }] : []),
@@ -286,6 +290,12 @@ export function TodoCardView({ data, lookup, zoneName, look = 'card', steppedIn,
       data-keys-own={steppedIn || undefined}
       tabIndex={-1}
       onKeyDown={onKeyDown}
+      // Two clicks on its head, foot or the space between lines open it full screen; on a line's text they edit it.
+      onDoubleClick={(event) => {
+        if (actions.openFull === undefined || (event.target as HTMLElement).closest('button, input, .todo-text, .todo-grip') !== null) return;
+        event.stopPropagation();
+        actions.openFull();
+      }}
     >
       {children}
       {clipboard && <span className="todo-clip" aria-hidden />}
@@ -425,17 +435,25 @@ export function TodoCardView({ data, lookup, zoneName, look = 'card', steppedIn,
 }
 
 /** Folded: a pill of what is left and who wrote it; all done, a quiet one with Clear; empty, a dashed + To do. */
-export function TodoPillView({ data, lookup, onOpen, onClear, children }: { data: TodoData; lookup: TodoLookup; onOpen(): void; onClear(): void; children?: ReactNode }) {
+export function TodoPillView({ data, lookup, onOpen, onFull, onUnfold, onClear, children }: { data: TodoData; lookup: TodoLookup; onOpen(): void; onFull?(): void; onUnfold(): void; onClear(): void; children?: ReactNode }) {
   const counts = todoCounts(data);
   const state = todoState(counts);
   const writers = openWriters(data, lookup);
   return (
-    <div className="todo-pill" data-testid="todo-pill" data-state={state} onDoubleClick={(event) => (event.stopPropagation(), onOpen())}>
+    <div className="todo-pill" data-testid="todo-pill" data-state={state} onDoubleClick={(event) => event.stopPropagation()}>
       {children}
-      <span className="todo-pill-icon" aria-hidden>
-        {state === 'done' ? <Check /> : state === 'empty' ? <Plus /> : <SquareCheckBig />}
-      </span>
-      <b className="todo-pill-text">{pillText(counts)}</b>
+      {/* One click opens the peek; two, full screen. */}
+      <button
+        type="button"
+        className="todo-pill-face"
+        aria-label={onFull === undefined ? 'To do: open its peek' : 'To do: open its peek; double-click for full screen'}
+        onClick={(event) => (iconPress(event.detail, onFull !== undefined) === 'full' ? onFull?.() : onOpen())}
+      >
+        <span className="todo-pill-icon" aria-hidden>
+          {state === 'done' ? <Check /> : state === 'empty' ? <Plus /> : <SquareCheckBig />}
+        </span>
+        <b className="todo-pill-text">{pillText(counts)}</b>
+      </button>
       {state === 'open' && (
         <span className="todo-pill-writers" aria-label={`Written by ${writers.map((each) => (each.kind === 'you' ? 'you' : each.name)).join(', ')}`}>
           {writers.slice(0, 3).map((writer) =>
@@ -452,7 +470,7 @@ export function TodoPillView({ data, lookup, onOpen, onClear, children }: { data
           Clear
         </button>
       )}
-      <button type="button" className="todo-pill-open nodrag" aria-label="Open the list" title="Open the list" onClick={onOpen}>
+      <button type="button" className="todo-pill-open nodrag" aria-label="Unfold the list" title="Unfold the list" onClick={onUnfold}>
         <Maximize2 aria-hidden />
       </button>
     </div>

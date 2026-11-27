@@ -9,7 +9,7 @@
 import { lanesOf, LANE_SLOTS, type ArrangeLink } from './board-arrange.ts';
 import { AGENT_TILE_SIZE, isClosed, PERCH_ROOM, tileSizeKey, zoneGrid, type Point, type Size } from './board-layout.ts';
 import { isOrchestratorRole, startedByHand, type Agent, type ArrangeSpacing, type NeedsYouShows } from './protocol.ts';
-import { cardHeight, CARD_GAP, needsUser, SHELF_STAGES, stageOf, WORKING_STATES, type ShelfStage } from './shelf-layout.ts';
+import { cardHeight, CARD_GAP, DONE_FOLD_HEIGHT, needsUser, SHELF_STAGES, stageOf, WORKING_STATES, type ShelfStage } from './shelf-layout.ts';
 import { SPINE_GAPS } from './spine-layout.ts';
 import { heldByTicket } from './ticket-tiles.ts';
 import { workTilesOf } from './work-units.ts';
@@ -33,8 +33,6 @@ const STAGE_HEAD = 36 + 8;
 export const STAGE_GAP = 24;
 /** A quiet card's width: a tile's, never stretched to its stage. */
 export const STAGE_CARD_WIDTH = AGENT_TILE_SIZE.width;
-/** Done's line, "N done · Show", that its cards fold behind. */
-export const DONE_LINE_HEIGHT = 28;
 /** A card for later, at the foot of To do: its text, on a line or two. */
 export const LATER_CARD_HEIGHT = 52;
 /** The tickets a Doing column holds before the next starts beside it. */
@@ -319,13 +317,13 @@ export function layOutStageBoard(input: StageBoardInput): StageBoardLayout {
       let cards = on;
       if (stage === 'done' && on.length > 0) {
         // Its tickets fold behind one line, that shows them under it.
-        fold = { x, y, width: STAGE_CARD_WIDTH, height: DONE_LINE_HEIGHT, count: on.length, shown: input.data.showDone };
-        bottom = Math.max(bottom, y + DONE_LINE_HEIGHT);
+        fold = { x, y, width: STAGE_CARD_WIDTH, height: DONE_FOLD_HEIGHT, count: on.length, shown: input.data.showDone };
+        bottom = Math.max(bottom, y + DONE_FOLD_HEIGHT);
         if (!input.data.showDone) {
-          for (const ticket of on) Object.assign(ticket, { x, y, width: STAGE_CARD_WIDTH, height: DONE_LINE_HEIGHT, folded: true });
+          for (const ticket of on) Object.assign(ticket, { x, y, width: STAGE_CARD_WIDTH, height: DONE_FOLD_HEIGHT, folded: true });
           cards = [];
         }
-        y += DONE_LINE_HEIGHT + CARD_GAP;
+        y += DONE_FOLD_HEIGHT + CARD_GAP;
       }
       for (const ticket of cards) {
         const height = cardHeight(ticket.members.length, input.footOf(ticket.members));

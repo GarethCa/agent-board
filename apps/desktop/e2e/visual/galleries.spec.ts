@@ -73,11 +73,12 @@ for (const { theme, suffix } of THEMES) {
   }
 }
 
-// Every look of a to-do list: lines left, a line under the pointer, stepped in, editing, adding, all done, empty, the clipboard look, and folded.
+// Every look of a to-do list: lines left, a line under the pointer, stepped in, editing, adding, all done, empty, the clipboard look, and folded; then its peek and its full screen.
 for (const { theme, suffix } of THEMES) {
   const shot = `todo-gallery${suffix}`;
+  const more = ['peek', 'full'].map((name) => ({ name, shot: `todo-${name}${suffix}` }));
   test(`every look of a to-do list: the to-do gallery, ${theme}`, async () => {
-    needsBaselines(shot);
+    needsBaselines(shot, ...more.map((each) => each.shot));
     const dataDir = tempDataDir();
     const { app, window } = await launchGallery(dataDir, theme, undefined, {}, '#gallery-todo');
     try {
@@ -87,6 +88,7 @@ for (const { theme, suffix } of THEMES) {
       await ignorePointer(window);
       await settle(window);
       await expect.soft(gallery).toHaveScreenshot(`${shot}.png`, SHOT);
+      for (const { name, shot: named } of more) await expect.soft(window.getByTestId(`todo-gallery-${name}`)).toHaveScreenshot(`${named}.png`, SHOT);
     } finally {
       await app.close();
       await removeDataDir(dataDir);
@@ -498,7 +500,7 @@ for (const design of ['classic', 'simplified'] as const) {
 }
 
 /** A queue's looks (board/items/QueueGallery.tsx): open for agents, for the user and empty, folded to its icon, and its peek. */
-const QUEUE_SHOTS = ['card', 'inbox', 'empty', 'icons', 'peek'];
+const QUEUE_SHOTS = ['card', 'inbox', 'empty', 'icons', 'peek', 'full-agents', 'full-taken', 'full-user'];
 /**
  * A queue handed on, on its own page: the user's with a Needs-you row, one no one takes from, a ticket on its taker's
  * tile, the focus view, Hand on and the drain sheet.

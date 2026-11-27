@@ -1,15 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Agent } from '@agent-board/daemon/protocol';
+import type { RestartAgentResult } from '../../../preload/api';
 import { NO_TILE_ACTIONS } from '../board/tile';
 import { gateSurfaceOf } from '../session/tabs';
-import { doBoardAgentAction, popOutActions, type PopOutParts } from './pop-out-actions';
+import { doBoardAgentAction, popOutActions, wakeFromWindow, type PopOutParts } from './pop-out-actions';
 
 const agent = { sessionId: 'coder', schedule: null } as unknown as Agent;
 
 function parts() {
   const resolved = () => vi.fn<(...args: unknown[]) => Promise<never>>(async () => ({}) as never);
   const api = {
-    agents: { interrupt: resolved(), pause: resolved(), resume: resolved(), continueOnCredits: resolved(), setMuted: resolved(), setEffort: resolved(), setRole: resolved() },
+    agents: { interrupt: resolved(), pause: resolved(), restart: vi.fn<(sessionId: string, force?: boolean) => Promise<RestartAgentResult>>(async () => ({ status: 'restarted', agent })), continueOnCredits: resolved(), setMuted: resolved(), setEffort: resolved(), setRole: resolved() },
     reviews: { start: resolved() },
     gates: { run: resolved() },
     items: { update: resolved() },
@@ -47,15 +48,36 @@ describe('popOutActions', () => {
     actions.deleteAgent('coder');
     actions.stopAgent('coder');
     actions.restartAgent('coder');
+    actions.restartWith(agent);
     actions.scheduleAgent(agent);
     actions.closeTicket('coder');
     expect(api.windows.requestBoard.mock.calls.map(([request]) => request)).toEqual([
       { kind: 'agent', sessionId: 'coder', action: 'delete' },
       { kind: 'agent', sessionId: 'coder', action: 'stop' },
       { kind: 'agent', sessionId: 'coder', action: 'restart' },
+      { kind: 'agent', sessionId: 'coder', action: 'restart-with' },
       { kind: 'agent', sessionId: 'coder', action: 'schedule' },
       { kind: 'agent', sessionId: 'coder', action: 'close-ticket' },
     ]);
+  });
+
+  it("wakes the agent in the window, and asks the board's confirm only when its shell is running something", async () => {
+    const { api, actions } = parts();
+    await actions.resumeAgent('coder');
+    expect(api.agents.restart).toHaveBeenCalledWith('coder');
+    expect(api.windows.requestBoard).not.toHaveBeenCalled();
+    api.agents.restart.mockResolvedValueOnce({ status: 'busy', message: 'its shell is running something' });
+    await actions.resumeAgent('coder');
+    expect(api.windows.requestBoard).toHaveBeenCalledWith({ kind: 'agent', sessionId: 'coder', action: 'restart' });
+  });
+
+  it("wakes from a window's header the same way, and fails as the wake does", async () => {
+    const { api } = parts();
+    api.agents.restart.mockResolvedValueOnce({ status: 'busy', message: 'its shell is running something' });
+    await wakeFromWindow(api, 'coder');
+    expect(api.windows.requestBoard).toHaveBeenCalledWith({ kind: 'agent', sessionId: 'coder', action: 'restart' });
+    api.agents.restart.mockRejectedValueOnce(new Error('gone'));
+    await expect(wakeFromWindow(api, 'coder')).rejects.toThrow('gone');
   });
 
   it("asks the board for a reviewer's Open review, of an implementer this window doesn't show", () => {

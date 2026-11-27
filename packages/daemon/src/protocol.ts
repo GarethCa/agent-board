@@ -1557,6 +1557,11 @@ export interface DaemonSettings {
    * over `defaultEffort`. None by default.
    */
   roleEfforts: Record<string, Effort>;
+  /**
+   * The roles (by name, as `roleEfforts` keys them) whose new Claude agents get the board's MCP tools and no others:
+   * none of the user's own MCP servers or claude.ai connectors, whose tool lists every turn re-reads. None by default.
+   */
+  boardToolsOnly: string[];
 }
 
 /** What an edge would carry if its `from` agent handed off now: its name (`plan.md`) and text, or why it can't. */
@@ -1657,6 +1662,45 @@ export type Effort = (typeof EFFORTS)[number];
 /** When an agent takes a reasoning effort it is set to (`agent.setEffort`): now, once its turn ends, or when next started. */
 export type EffortApplies = 'now' | 'after-turn' | 'restart';
 export type EffortPending = Exclude<EffortApplies, 'now'>;
+
+/**
+ * An agent's own launch settings, added to what the board launches its harness with and kept for every later start:
+ * env vars (any harness: in its process env, and for Claude in its `--settings` `env` block too, which beats the
+ * user's settings), and Claude `--settings` keys (Claude only), its keys winning over the board's. None may be the
+ * board's own: no `AGENT_BOARD_*` env var, and no `hooks` or `statusLine`. Values may be secrets: only their names
+ * are ever shown (`LaunchSettingKeys`).
+ */
+export interface LaunchSettings {
+  env?: Record<string, string>;
+  settings?: Record<string, unknown>;
+}
+
+/** The names in an agent's launch settings, never their values: its env var names, and its Claude settings' keys. */
+export interface LaunchSettingKeys {
+  env: string[];
+  settings: string[];
+}
+
+/** A name a shell takes for an env var. */
+export const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * `NAME=value` as an env var: the name before the first `=`, which must be one a shell takes, and the value all after
+ * it, as given (spaces too). Undefined when it isn't one. `agent-board --env` and the app's env fields read it alike.
+ */
+export function envPair(text: string): { name: string; value: string } | undefined {
+  const at = text.indexOf('=');
+  if (at === -1) return undefined;
+  const name = text.slice(0, at);
+  return ENV_NAME.test(name) ? { name, value: text.slice(at + 1) } : undefined;
+}
+
+/** An agent's launch settings by name only, as `env A, B; settings outputStyle`: undefined for none. */
+export function launchSettingNames(keys: LaunchSettingKeys | null): string | undefined {
+  if (keys === null) return undefined;
+  const parts = [...(keys.env.length === 0 ? [] : [`env ${keys.env.join(', ')}`]), ...(keys.settings.length === 0 ? [] : [`settings ${keys.settings.join(', ')}`])];
+  return parts.length === 0 ? undefined : parts.join('; ');
+}
 
 /** The reasoning efforts each harness takes. */
 export const HARNESS_EFFORTS: Record<Harness, readonly Effort[]> = { claude: EFFORTS, codex: ['low', 'medium', 'high', 'xhigh'] };
@@ -1963,6 +2007,8 @@ export interface Agent {
    * prompt then), or only when it is next started (`restart`: its harness can't change it live). Null once it has it.
    */
   effortPending: EffortPending | null;
+  /** The names in its own launch settings (`LaunchSettings`), never their values; null for none. */
+  launchSettings: LaunchSettingKeys | null;
   /** The role it was started in, or null for none. */
   role: AgentRole | null;
   /** A custom role's name, as `parseRole` read it: `designer`. Null for any other role, or a custom one unnamed. */
@@ -2523,7 +2569,30 @@ export interface ClockData {
    * zone shows a "+N" chip for it instead. Missing on a clock that was never set aside.
    */
   tucked?: boolean;
+  /**
+   * A script the user set (`clock.setOnlyIf`) that each fire runs first: exit 0 runs the clock, with what the script
+   * printed added to its prompt; any other exit skips the run, and no agent is woken. Missing on a clock without one.
+   */
+  onlyIf?: ClockOnlyIf | null;
 }
+
+/**
+ * A clock's only-if script. It runs in its agent's folder, else its zone's, for at most a minute. `cwd` is that folder
+ * and `fingerprint` what the command ran there (`commandPlan`), both as they were when the user set it: once either
+ * changes (an agent can move its clock to another folder, by joining it or making it start fresh agents), the clock
+ * skips until the user sets it again. Only the user sets one: no agent path, template or prefab carries it.
+ */
+export interface ClockOnlyIf {
+  command: string;
+  /** Missing on a script set before it: that clock skips, as moved, until the user sets it again. */
+  cwd?: string;
+  fingerprint: string;
+}
+
+/** The longest only-if command. */
+export const MAX_CLOCK_ONLY_IF = 1_000;
+/** Why a run skipped when its only-if script exited 1: it found nothing to do. */
+export const NOTHING_TO_DO = 'nothing to do';
 
 /** An agent's change to its own clock, as the clock's data keeps it. */
 export interface ClockMark {
@@ -4144,6 +4213,8 @@ export interface OrchestratorSpawnParams {
   chatKind?: TicketChatKind;
   /** As `SpawnAgentParams.ticket`: the caller's own ticket's, or none, without. */
   ticket?: string;
+  /** As `SpawnAgentParams.launchSettings`. */
+  launchSettings?: LaunchSettings;
 }
 
 /** What `orchestrator.spawn` answers: the agent, and which role template its first message began with, if one. */
@@ -5257,6 +5328,8 @@ export type SpawnAgentParams = TerminalSize & {
   purpose?: string;
   /** Start a Codex agent even though its worktree has Codex config of its own (see `AGENT_ERROR.projectCodexConfig`). */
   allowProjectCodexConfig?: boolean;
+  /** Its own env vars and Claude settings (`LaunchSettings`), kept for every later start. None without. */
+  launchSettings?: LaunchSettings;
   /** Shown on its tile; made from the prompt when missing. */
   name?: string;
   /**
@@ -5689,9 +5762,11 @@ export interface DaemonMethods {
   /** Re-reads the branch of every live agent's worktree, so the next `agent.list` shows renames and checkouts. */
   'agent.refreshBranches': { params: undefined; result: null };
   /**
-   * Ends the agent's session and removes its worktree and branch. Fails with `AGENT_ERROR.unsavedWork` when the
-   * worktree has uncommitted changes or the branch has commits no other branch has, unless `force`. With
-   * `keepWorktree` it leaves the worktree and branch as they are (and so never stops short for unsaved work).
+   * Ends the agent's session and removes its worktree and branch; a ticket's chat takes its helpers first, then its
+   * reviewers. Fails with `AGENT_ERROR.unsavedWork` when the worktree of the agent or of a helper has uncommitted
+   * changes (the board's own files under `.agent-board/` aside) or its branch has commits no other branch has, unless
+   * `force`: before any agent goes, and once more just before the agent itself goes. With `keepWorktree` it leaves every
+   * worktree and branch as they are (and so never stops short for unsaved work).
    */
   'agent.delete': { params: SessionRef & { force?: boolean; keepWorktree?: boolean }; result: null };
   /**
@@ -5792,6 +5867,15 @@ export interface DaemonMethods {
    * agent, or when its worktree is gone.
    */
   'agent.resume': { params: SessionRef & { force?: boolean }; result: Agent };
+  /**
+   * Gives the agent its own launch settings and starts it again with them, carrying on its conversation (Claude
+   * `--resume`, `codex resume`): stopped first if it is live, then started as `agent.resume` starts it. Each part given
+   * (`env`, `settings`) replaces that part, an empty one clearing it; a part left out is kept, and `keepEnv` names env
+   * vars it kept to keep alongside a new `env`. One mid-turn is stopped too, and told to carry on as it resumes. Fails
+   * with `invalidParams`, with nothing stored or stopped, for a reviewer or one whose harness runs in its shell; for
+   * settings its harness can't take (`LaunchSettings`); and as `agent.resume` fails.
+   */
+  'agent.restartWith': { params: SessionRef & { launchSettings: LaunchSettings; force?: boolean; keepEnv?: string[] }; result: Agent };
   /**
    * Types the continue line ("The app restarted; carry on from where you were.") at the prompt of a live agent a
    * restart cut off mid-turn (`cutOffMidTurn`), which the daemon's start brought back typed nothing: the restart
@@ -5993,14 +6077,14 @@ export interface DaemonMethods {
    * new conversation instead (a new harness session id in the same tile, worktree and branch; the old one is kept in
    * `Agent.earlierConversations`), on `prompt` if given, which an orchestrator may type like a `send`. `prompt` needs `fresh`.
    */
-  'orchestrator.restart': { params: { token?: string; sessionId: string; fresh?: boolean; prompt?: string }; result: Agent };
+  'orchestrator.restart': { params: { token?: string; sessionId: string; fresh?: boolean; prompt?: string; launchSettings?: LaunchSettings }; result: Agent };
   /**
    * Ends the agent's session and takes its tile off the board, its reviewers first, with the notes and document cards
    * it holds. Its worktree and branch go too, unless they hold unsaved work (the board's own files under
    * `.agent-board/` aside): then they stay, and it resolves with what stayed and why; else with null. Nothing in reach of
    * the agent is lost, so the caller may close any agent but itself, and but one the user started by hand: an agent
    * closes that only through `orchestrator.askRemove` (`BOARD_ERROR.outOfScope`). With `remove`, it deletes the agent with its
-   * worktree and branch instead (`agent.delete`, never forced, so `AGENT_ERROR.unsavedWork` stands), which only an
+   * worktree and branch instead (as `agent.delete` without `force`, so `AGENT_ERROR.unsavedWork` stands), which only an
    * agent the orchestrator started may be; it resolves with null.
    */
   'orchestrator.close': { params: { token?: string; sessionId: string; remove?: boolean }; result: ClosedKept | null };
@@ -6617,6 +6701,12 @@ export interface DaemonMethods {
    * data a clock can't have.
    */
   'clock.add': { params: { data: Partial<ClockData>; place: ClockPlace; template?: string }; result: BoardItem };
+  /**
+   * Sets the clock's only-if script (`ClockData.onlyIf`) to `command`, as it runs now where the clock runs it, or
+   * clears it (null). The user's alone: not a board caller's. Fails with `invalidParams` for an unknown clock, an empty
+   * or too long command, or a clock with no agent or zone to run it in.
+   */
+  'clock.setOnlyIf': { params: { id: string; command: string | null }; result: BoardItem };
   /**
    * The caller changes its own clock: the one that messages it, or whose run started it. `result` says what it does
    * now. Fails with `invalidParams` for a caller with no clock, or more than one and none named, and for a clock that
@@ -7358,6 +7448,15 @@ export interface ShellRemovedEvent {
 }
 
 
+/**
+ * The tiles `ids` were moved by the board's own layout (an agent's arrange): their overlaps and put-down marks are gone
+ * from the saved view state, so an open board drops them from its own copy too, and never saves them back.
+ */
+export interface OverlapsFreedEvent {
+  type: 'overlaps.freed';
+  ids: string[];
+}
+
 export type DaemonEvent =
   | ZoneUpdatedEvent
   | ZoneRemovedEvent
@@ -7392,6 +7491,7 @@ export type DaemonEvent =
   | OrchestratorActivityEvent
   | PrefabDraftAddedEvent
   | PrefabDraftRemovedEvent
+  | OverlapsFreedEvent
   | CaptureRequestedEvent;
 
 export const EVENT_METHOD = 'event';
