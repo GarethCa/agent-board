@@ -226,6 +226,7 @@ describe('subagents on a Hybrid tile', () => {
       model: null,
       effort: null,
       effortPending: null,
+      launchSettings: null,
       role: null,
       roleName: null,
       reviews: null,

@@ -3,6 +3,7 @@
 // answer with as text and JSON. Every answer names the memory or queue it came from.
 import { readFileSync } from 'node:fs';
 import { basename, resolve as resolvePath } from 'node:path';
+import { plural } from './text-words.ts';
 import { agentToken, BoardError, BoardRefs, itemPlace, readCards, type BoardSession, type BoardView } from './board-ops.ts';
 import {
   MAX_MEMORY_KEY,
@@ -14,6 +15,8 @@ import {
   type MemoryEntry,
   type MemoryReaders,
   type MemoryView,
+  QUEUE_ADD_KINDS,
+  QUEUE_ROW_KINDS,
   type QueueAddKind,
   type QueueChange,
   type QueueData,
@@ -38,7 +41,6 @@ const day = (at: string) => at.slice(0, 10);
 const indent = (text: string, by: string) => text.replace(/\n/g, `\n${by}`);
 const sizeOf = (bytes: number) => (bytes < 1024 ? `${bytes} B` : `${Math.round(bytes / 1024)} KB`);
 const size = (text: string) => sizeOf(Buffer.byteLength(text));
-const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 /** A queue row of each kind, as an answer counts it: "2 tasks", "1 thing to read". */
 const ROW_NOUNS: Record<QueueJob['kind'], [string, string]> = {
   task: ['task', 'tasks'],
@@ -194,6 +196,57 @@ export type MemoryUpdate =
   | { action: 'restore'; entry: string; version: number }
   | { action: 'confirm'; entry: string };
 
+/** A version to put back, as history lists it: a whole number from 1, or its digits as typed (`v3` or `3`). */
+export function versionNumber(value: unknown): number {
+  const digits = typeof value === 'string' ? /^v?(\d+)$/.exec(value)?.[1] : undefined;
+  const version = digits === undefined ? value : Number(digits);
+  if (!Number.isInteger(version) || (version as number) < 1) throw new BoardError('give the version to put back, as history lists it');
+  return version as number;
+}
+
+/** What an entry update needs: the entry, by its key or #id. */
+const needEntry = (entry: string | undefined) => {
+  if (entry === undefined || entry.trim() === '') throw new BoardError('give the entry: its key, or its #id');
+  return entry;
+};
+
+/** What a memory update is given, by the CLI or the MCP, before it is read. */
+export interface MemoryUpdateInput {
+  action: string | undefined;
+  entry?: string;
+  text?: string;
+  key?: string;
+  /** Keep the text as a note, or (for edit) take its key off. */
+  note?: boolean;
+  path?: string;
+  document?: string;
+  pinned?: boolean;
+  /** For restore, as typed or sent. */
+  version?: unknown;
+}
+
+/** The one reading of a memory update, the CLI's and the MCP's alike. */
+export function memoryUpdate(input: MemoryUpdateInput): MemoryUpdate {
+  if (input.key !== undefined && input.note === true) throw new BoardError('give a key, or no key for a note: not both');
+  const key = input.key === undefined ? {} : { key: input.key };
+  const text = input.text === undefined ? {} : { text: input.text };
+  switch (input.action) {
+    case 'add':
+      return { action: 'add', ...text, ...(input.path === undefined ? {} : { path: input.path }), ...(input.document === undefined ? {} : { document: input.document }), ...key, note: input.note === true };
+    case 'edit':
+      return { action: 'edit', entry: needEntry(input.entry), ...text, ...key, note: input.note === true, ...(input.pinned === undefined ? {} : { pinned: input.pinned }) };
+    case 'rm':
+    case 'remove':
+      return { action: 'remove', entry: needEntry(input.entry) };
+    case 'restore':
+      return { action: 'restore', entry: needEntry(input.entry), version: versionNumber(input.version) };
+    case 'confirm':
+      return { action: 'confirm', entry: needEntry(input.entry) };
+    default:
+      throw new BoardError('the memory updates are add, edit, remove, restore and confirm');
+  }
+}
+
 /** The text file at `path`, from `cwd`; refused for one that isn't text (a NUL, or bytes that aren't UTF-8). */
 const readFile = (path: string, cwd: string) => {
   let text: string;
@@ -306,6 +359,81 @@ export type QueueUpdate =
   | { action: 'later'; job: string }
   | { action: 'up'; job: string }
   | { action: 'drain'; on: boolean; most?: number };
+
+/** What a queue update is given, by the CLI or the MCP, before it is read. */
+export interface QueueUpdateInput {
+  action: string | undefined;
+  job?: string;
+  text?: string;
+  /** For add: one job's detail, with `text` its headline. */
+  body?: string;
+  kind?: string;
+  front?: boolean;
+  link?: string;
+  result?: string;
+  to?: string;
+  /** For restore, as typed or sent. */
+  version?: unknown;
+  on?: boolean;
+  /** For drain, as typed or sent. */
+  most?: unknown;
+}
+
+/** The one reading of a queue update, the CLI's and the MCP's alike. */
+export function queueUpdate(input: QueueUpdateInput): QueueUpdate {
+  const job = () => {
+    if (input.job === undefined || input.job.trim() === '') throw new BoardError('give the job: its #id');
+    return input.job;
+  };
+  const link = input.link === undefined ? {} : { link: input.link };
+  switch (input.action) {
+    case 'add': {
+      const { kind, text = '' } = input;
+      if (kind !== undefined && !(QUEUE_ADD_KINDS as readonly string[]).includes(kind)) throw new BoardError(`kind is one of ${QUEUE_ROW_KINDS.join(', ')} (or job, note)`);
+      if (text.trim() === '') throw new BoardError('give the jobs to queue, one a line');
+      if (input.body !== undefined && /[\r\n]/.test(text.trim())) throw new BoardError('with a body, give one headline: the body holds the rest');
+      return {
+        action: 'add',
+        text,
+        ...(input.body === undefined ? {} : { body: input.body }),
+        ...(kind === undefined ? {} : { kind: kind as QueueAddKind }),
+        front: input.front === true,
+        ...link,
+      };
+    }
+    case 'take':
+      return { action: 'take', ...(input.job === undefined ? {} : { job: input.job }) };
+    case 'edit': {
+      const which = job();
+      if ((input.text === undefined || input.text === '') && input.link === undefined) throw new BoardError('give the new text, or a link');
+      return { action: 'edit', job: which, ...(input.text === undefined || input.text === '' ? {} : { text: input.text }), ...link };
+    }
+    case 'done':
+      return { action: 'done', job: job(), ...(input.result === undefined ? {} : { result: input.result }) };
+    case 'rm':
+    case 'remove':
+      return { action: 'remove', job: job() };
+    case 'drop':
+    case 'later':
+    case 'up':
+      return { action: input.action, job: job() };
+    case 'restore':
+      return { action: 'restore', job: job(), version: versionNumber(input.version) };
+    case 'move': {
+      const which = job();
+      if (input.to === undefined || input.to.trim() === '') throw new BoardError('give where to move it: the #id of the job to put it before, top or last');
+      return { action: 'move', job: which, to: input.to };
+    }
+    case 'drain': {
+      if (input.on === undefined) throw new BoardError('give drain on or off');
+      const most = typeof input.most === 'string' && /^\d+$/.test(input.most) ? Number(input.most) : input.most;
+      if (most !== undefined && (!Number.isInteger(most) || (most as number) < 1 || (most as number) > 3)) throw new BoardError('most is 1, 2 or 3');
+      return { action: 'drain', on: input.on, ...(most === undefined ? {} : { most: most as number }) };
+    }
+    default:
+      throw new BoardError('the queue updates are add, take, drop, done, edit, move, later, up, remove, restore and drain');
+  }
+}
 
 /** `queue add|edit|…`: changes the queue `ref` names, and says what it did. */
 export async function updateQueue(session: BoardSession, ref: string, update: QueueUpdate): Promise<BoardView> {

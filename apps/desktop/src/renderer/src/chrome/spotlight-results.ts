@@ -1,5 +1,6 @@
 // What the ⌘K switcher lists: grouped before anything is typed, one ranked fuzzy list after. Pure, so the
 // grouping and the ranking are unit-tested.
+import { plural } from '@agent-board/daemon/text-words';
 import { needsYouNow, permissionPrompt, planPending, pullRequestKey, pullRequestOfUrl, questionPrompt, type Agent, type BoardItem, type LibraryPrefab, type NeedsYouShows, type OpenPullRequest, type PullRequestRef, type Shell, type Zone } from '@agent-board/daemon/protocol';
 import type { Placement, SessionWindows } from '../windows/session-windows';
 import { extendedShortcuts } from '../keys/extended-shortcuts';
@@ -628,10 +629,9 @@ function shellRow(shell: Shell, zoneName: (zoneId: string | null) => string, mar
 }
 
 function zoneRow(zone: Zone, agents: readonly Agent[], shells: readonly Shell[], marks: readonly number[]): SpotlightRow {
-  const count = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
   const agentCount = agents.filter((agent) => agent.zoneId === zone.id).length;
   const shellCount = shells.filter((shell) => shell.zoneId === zone.id).length;
-  return { key: `zone:${zone.id}`, subject: { kind: 'zone', zone }, name: zone.name, sub: `${count(agentCount, 'agent')} · ${count(shellCount, 'shell')}`, marks };
+  return { key: `zone:${zone.id}`, subject: { kind: 'zone', zone }, name: zone.name, sub: `${plural(agentCount, 'agent')} · ${plural(shellCount, 'shell')}`, marks };
 }
 
 /** What an agent that needs you asks: a permission, its question, a plan to review, or what it last said, on one line. */

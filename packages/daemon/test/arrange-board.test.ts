@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { AGENT_TILE_SIZE, overlaps, PERCH_ROOM, type Rect } from '../src/board-layout.ts';
-import { arrangeBoard, BOARD_ARRANGE_GAP as GAP, type BoardZone } from '../src/arrange-board.ts';
+import { FOLDED_ZONE_SIZE } from '../src/protocol.ts';
+import { arrangeBoard, arrangeInput, BOARD_ARRANGE_GAP as GAP, laidOut, type BoardToArrange, type BoardZone } from '../src/arrange-board.ts';
 
 /** A messy board: six zones of mixed sizes, some on top of each other. */
 const MESSY: BoardZone[] = [
@@ -17,20 +18,20 @@ const STRAYS = [
   { id: 'agent:3', x: 1200, y: 760, width: 400, height: 300 },
 ];
 
-/** Every zone where `arrangeBoard` put it, or where it was. */
+/** Every zone where `laidOut` put it, or where it was. */
 const zonesAfter = (zones: readonly BoardZone[], moved: Map<string, { x: number; y: number }>): Rect[] =>
   zones.map((zone) => ({ ...zone, ...moved.get(zone.id) }));
-/** Every tile's footprint (with its characters' room) where `arrangeBoard` put it, or where it was. */
+/** Every tile's footprint (with its characters' room) where `laidOut` put it, or where it was. */
 const tilesAfter = (tiles: typeof STRAYS, moved: Map<string, { x: number; y: number }>): Rect[] =>
   tiles.map((tile) => {
     const at = { ...tile, ...moved.get(tile.id) };
     const size = { width: tile.width ?? AGENT_TILE_SIZE.width, height: tile.height ?? AGENT_TILE_SIZE.height };
     return { x: at.x, y: at.y - PERCH_ROOM, width: size.width, height: size.height + PERCH_ROOM };
   });
-/** `zones` and `tiles` where `arrangeBoard` put them, and arranged again: what that second arrange moves. */
+/** `zones` and `tiles` where `laidOut` put them, and arranged again: what that second arrange moves. */
 function arrangedAgain(zones: readonly BoardZone[], tiles: typeof STRAYS, fixed: readonly Rect[] = []) {
-  const first = arrangeBoard(zones, tiles, fixed);
-  return arrangeBoard(
+  const first = laidOut(zones, tiles, fixed);
+  return laidOut(
     zones.map((zone) => ({ ...zone, ...first.zones.get(zone.id) })),
     tiles.map((tile) => ({ ...tile, ...first.tiles.get(tile.id) })),
     fixed,
@@ -41,14 +42,14 @@ const NOTHING = { zones: new Map(), tiles: new Map() };
 /** The space between two rects, the larger of the two axes' (negative: they overlap on both). */
 const spaceBetween = (a: Rect, b: Rect) => Math.max(b.x - (a.x + a.width), a.x - (b.x + b.width), b.y - (a.y + a.height), a.y - (b.y + b.height));
 
-describe('arrangeBoard', () => {
+describe('laidOut', () => {
   it('lays zones out in rows in reading order from the top-left of where they are, a gap apart, top-aligned', () => {
     const zones = [
       { id: 'b', x: 2000, y: 130, width: 600, height: 300 },
       { id: 'a', x: 100, y: 100, width: 500, height: 400 },
       { id: 'c', x: 50, y: 1200, width: 700, height: 200 },
     ];
-    const { zones: moved } = arrangeBoard(zones, []);
+    const { zones: moved } = laidOut(zones, []);
     expect(moved).toEqual(
       new Map([
         ['a', { x: 50, y: 100 }],
@@ -59,7 +60,7 @@ describe('arrangeBoard', () => {
   });
 
   it('leaves a messy board of six zones and strays with no overlaps and every zone at least a gap from the rest', () => {
-    const { zones, tiles } = arrangeBoard(MESSY, STRAYS);
+    const { zones, tiles } = laidOut(MESSY, STRAYS);
     const all = [...zonesAfter(MESSY, zones), ...tilesAfter(STRAYS, tiles)];
     for (const [index, a] of all.entries()) {
       for (const b of all.slice(index + 1)) expect(overlaps(a, b), `${JSON.stringify(a)} ${JSON.stringify(b)}`).toBe(false);
@@ -73,7 +74,7 @@ describe('arrangeBoard', () => {
   });
 
   it('gathers the loose tiles in rows a gap below the zones, in reading order', () => {
-    const { zones, tiles } = arrangeBoard(MESSY, STRAYS);
+    const { zones, tiles } = laidOut(MESSY, STRAYS);
     const bottom = Math.max(...zonesAfter(MESSY, zones).map((zone) => zone.y + zone.height));
     const footprints = tilesAfter(STRAYS, tiles);
     expect(Math.min(...footprints.map((tile) => tile.y))).toBe(bottom + GAP);
@@ -88,7 +89,7 @@ describe('arrangeBoard', () => {
       { id: 'a', x: 0, y: 0, width: 500, height: 400 },
       { id: 'b', x: 2000, y: 0, width: 500, height: 400 },
     ];
-    const { zones: moved, tiles } = arrangeBoard(zones, [{ id: 'shell:1', x: 0, y: 900 }], [sticky]);
+    const { zones: moved, tiles } = laidOut(zones, [{ id: 'shell:1', x: 0, y: 900 }], [sticky]);
     expect(moved.get('b')).toEqual({ x: sticky.x + sticky.width + GAP, y: 0 });
     expect(arrangedAgain(zones, [{ id: 'shell:1', x: 0, y: 900 }], [sticky])).toEqual(NOTHING);
     for (const rect of [...zonesAfter(zones, moved), ...tilesAfter([{ id: 'shell:1', x: 0, y: 900 }], tiles)]) {
@@ -103,7 +104,7 @@ describe('arrangeBoard', () => {
       { id: 'b', x: 0, y: 1000, width: 500, height: 400 },
       { id: 'c', x: 0, y: 2000, width: 500, height: 400 },
     ];
-    const { zones: moved } = arrangeBoard(zones, [], [divider]);
+    const { zones: moved } = laidOut(zones, [], [divider]);
     const below = divider.y + divider.height + GAP;
     expect(moved).toEqual(
       new Map([
@@ -122,7 +123,7 @@ describe('arrangeBoard', () => {
       { id: 'b', x: 2000, y: 0, width: 400, height: 300 },
     ];
     const below = sticky.height + GAP;
-    expect(arrangeBoard(zones, [], [sticky]).zones).toEqual(
+    expect(laidOut(zones, [], [sticky]).zones).toEqual(
       new Map([
         ['a', { x: 0, y: below }],
         ['b', { x: 500 + GAP, y: below }],
@@ -140,7 +141,7 @@ describe('arrangeBoard', () => {
       { id: 'c', x: 0, y: 900, width: 500, height: 300 },
       { id: 'd', x: 0, y: 2000, width: 500, height: 300 },
     ];
-    const { zones: moved, tiles } = arrangeBoard(zones, [{ id: 'shell:1', x: 0, y: 3000 }], [shape]);
+    const { zones: moved, tiles } = laidOut(zones, [{ id: 'shell:1', x: 0, y: 3000 }], [shape]);
     const placed = zonesAfter(zones, moved);
     for (const [index, a] of placed.entries()) {
       expect(spaceBetween(a, shape)).toBeGreaterThanOrEqual(GAP);
@@ -154,9 +155,9 @@ describe('arrangeBoard', () => {
   });
 
   it('arranges the same board the same way however it is listed, and an arranged board moves nothing', () => {
-    const first = arrangeBoard(MESSY, STRAYS);
-    expect(arrangeBoard(MESSY.toReversed(), STRAYS.toReversed())).toEqual(first);
-    const again = arrangeBoard(
+    const first = laidOut(MESSY, STRAYS);
+    expect(laidOut(MESSY.toReversed(), STRAYS.toReversed())).toEqual(first);
+    const again = laidOut(
       zonesAfter(MESSY, first.zones).map((rect, index) => ({ ...rect, id: MESSY[index]!.id })),
       STRAYS.map((tile) => ({ ...tile, ...first.tiles.get(tile.id) })),
     );
@@ -164,10 +165,10 @@ describe('arrangeBoard', () => {
   });
 
   it('lays out loose tiles alone from where the topmost is, and has nothing to do on an empty board', () => {
-    const { zones, tiles } = arrangeBoard([], [{ id: 'a', x: 500, y: 300 }, { id: 'b', x: 100, y: 900 }]);
+    const { zones, tiles } = laidOut([], [{ id: 'a', x: 500, y: 300 }, { id: 'b', x: 100, y: 900 }]);
     expect(zones).toEqual(new Map());
     expect(tiles).toEqual(new Map([['a', { x: 100, y: 300 }], ['b', { x: 100 + AGENT_TILE_SIZE.width + 16, y: 300 }]]));
-    expect(arrangeBoard([], [])).toEqual({ zones: new Map(), tiles: new Map() });
+    expect(laidOut([], [])).toEqual({ zones: new Map(), tiles: new Map() });
   });
 
   it('leaves the strays where they went when a fixed item sent the first zone of every row right', () => {
@@ -178,7 +179,7 @@ describe('arrangeBoard', () => {
       { id: 't1', x: -300, y: 1500 },
       { id: 't2', x: 100, y: 2600 },
     ];
-    const { zones: moved, tiles: placed } = arrangeBoard(zones, tiles, fixed);
+    const { zones: moved, tiles: placed } = laidOut(zones, tiles, fixed);
     // The strays start at the zones' new left edge.
     expect(Math.min(...[...placed.values()].map((tile) => tile.x))).toBe(moved.get('z')!.x);
     expect(arrangedAgain(zones, tiles, fixed)).toEqual(NOTHING);
@@ -219,7 +220,7 @@ describe('arrangeBoard', () => {
         height: between(20, 600),
       }));
       const tiles = Array.from({ length: between(0, 5) }, (_, index) => ({ id: `t${index}`, x: between(-3000, 5000), y: between(-3000, 5000) }));
-      const first = arrangeBoard(zones, tiles, fixed);
+      const first = laidOut(zones, tiles, fixed);
       const placed = zonesAfter(zones, first.zones);
       const footprints = tilesAfter(tiles, first.tiles);
       const label = JSON.stringify({ zones, tiles, fixed });
@@ -237,3 +238,65 @@ describe('arrangeBoard', () => {
   });
 });
 
+describe('arrangeBoard', () => {
+  /** A board as both the app and the daemon read it: two zones, one holding a pinned expanded tile; loose tiles of every kind; a turned note. */
+  const BOARD: BoardToArrange = {
+    zones: [
+      { id: 'web', x: 300, y: 80, width: 900, height: 600, folded: false },
+      { id: 'pinned', x: 2000, y: 2000, width: 1200, height: 800, folded: false },
+      { id: 'chip', x: -900, y: 500, width: 800, height: 700, folded: true },
+    ],
+    tiles: [
+      { id: 'agent:in', kind: 'agent', zoneId: 'pinned', pinned: true, x: 40, y: 40, width: 960, height: 600 },
+      { id: 'agent:a', kind: 'agent', zoneId: null, pinned: false, ...AGENT_TILE_SIZE, x: 1400, y: -600 },
+      { id: 'shell:b', kind: 'shell', zoneId: null, pinned: false, ...AGENT_TILE_SIZE, x: -200, y: 2600 },
+      { id: 'agent:big', kind: 'agent', zoneId: null, pinned: true, x: 4000, y: 0, width: 960, height: 600 },
+      { id: 'external:c', kind: 'external', zoneId: null, pinned: false, ...AGENT_TILE_SIZE, x: 600, y: 1800 },
+    ],
+    items: [
+      { zoneId: null, rotation: 0, x: 2000, y: 400, width: 400, height: 100 },
+      { zoneId: 'web', rotation: 0, x: 0, y: 0, width: 100, height: 100 },
+    ],
+  };
+
+  it('moves only the zones and loose agents and shells, round what stays', () => {
+    const input = arrangeInput(BOARD);
+    expect(input.zones.map((zone) => zone.id)).toEqual(['web', 'chip']);
+    expect(input.tiles.map((tile) => tile.id)).toEqual(['agent:a', 'shell:b']);
+    expect(input.fixed).toEqual([
+      // The note loose on the board; the one in a zone moves with it.
+      { x: 2000, y: 400, width: 400, height: 100 },
+      // The pinned loose tile and the external session's, with their characters' room.
+      { x: 4000, y: -PERCH_ROOM, width: 960, height: 600 + PERCH_ROOM },
+      { x: 600, y: 1800 - PERCH_ROOM, width: AGENT_TILE_SIZE.width, height: AGENT_TILE_SIZE.height + PERCH_ROOM },
+      // The zone holding a pinned tile.
+      { id: 'pinned', x: 2000, y: 2000, width: 1200, height: 800 },
+    ]);
+  });
+
+  it('measures a folded zone by its chip', () => {
+    const chip = arrangeInput(BOARD).zones.find((zone) => zone.id === 'chip')!;
+    expect({ width: chip.width, height: chip.height }).toEqual({ width: Math.min(FOLDED_ZONE_SIZE.width, 800), height: FOLDED_ZONE_SIZE.height });
+  });
+
+  it('is the layout of its input, freeing the tiles it moves', () => {
+    const { zones, tiles, fixed } = arrangeInput(BOARD);
+    const laid = laidOut(zones, tiles, fixed);
+    const arranged = arrangeBoard(BOARD);
+    expect(arranged.zones).toEqual(laid.zones);
+    expect(arranged.tiles).toEqual(laid.tiles);
+    expect(arranged.freed.toSorted()).toEqual(['agent:a', 'shell:b']);
+    expect(arranged.zones.has('pinned')).toBe(false);
+  });
+
+  it('frees nothing when no tile moves', () => {
+    const once = arrangeBoard(BOARD);
+    const again = arrangeBoard({
+      zones: BOARD.zones.map((zone) => ({ ...zone, ...once.zones.get(zone.id) })),
+      tiles: BOARD.tiles.map((tile) => ({ ...tile, ...once.tiles.get(tile.id) })),
+      items: BOARD.items,
+    });
+    expect(again.freed).toEqual([]);
+    expect(again.tiles.size).toBe(0);
+  });
+});

@@ -9,7 +9,7 @@ import { documentSurfaceOf, gateSurfaceOf, planSurfaceOf, pullRequestSurfaceOf }
 /** The rows of an agent's menu a popped-out window leaves out: it is open already, out of the board. */
 export const POP_OUT_DROPS = ['open', 'open-window', 'expand', 'pop-out', 'fold', 'pin-expanded'];
 
-type Api = { agents: Pick<AgentBoardApi['agents'], 'interrupt' | 'pause' | 'resume' | 'continueOnCredits' | 'setMuted' | 'setEffort' | 'setRole'> } & {
+type Api = { agents: Pick<AgentBoardApi['agents'], 'interrupt' | 'pause' | 'restart' | 'continueOnCredits' | 'setMuted' | 'setEffort' | 'setRole'> } & {
   reviews: Pick<AgentBoardApi['reviews'], 'start'>;
   gates: Pick<AgentBoardApi['gates'], 'run'>;
   items: Pick<AgentBoardApi['items'], 'update'>;
@@ -31,6 +31,15 @@ export interface PopOutParts {
   report(action: string): (error: unknown) => void;
 }
 
+/**
+ * Wakes the agent from a window with no board of its own; a shell running something asks first, with the board's
+ * confirm, as the board comes forward. Fails as the wake does.
+ */
+export async function wakeFromWindow(api: Pick<Api, 'agents' | 'windows'>, sessionId: string): Promise<void> {
+  const woke = await api.agents.restart(sessionId);
+  if (woke.status === 'busy') await api.windows.requestBoard({ kind: 'agent', sessionId, action: 'restart' });
+}
+
 /** The tile actions of a popped-out agent's window, over `base` (what does nothing there). */
 export function popOutActions(base: TileActions, { api, sessionId: own, requestTab, requestReviewTab, report }: PopOutParts): TileActions {
   const board = (sessionId: string, action: BoardAgentAction) => void api.windows.requestBoard({ kind: 'agent', sessionId, action });
@@ -39,7 +48,7 @@ export function popOutActions(base: TileActions, { api, sessionId: own, requestT
     ...base,
     interruptAgent: (sessionId) => void api.agents.interrupt(sessionId).catch(report('interrupt the agent')),
     pauseAgent: (sessionId) => api.agents.pause(sessionId).then(ignore, report('pause the agent')),
-    resumeAgent: (sessionId) => api.agents.resume(sessionId).then(ignore, report('resume the agent')),
+    resumeAgent: (sessionId) => wakeFromWindow(api, sessionId).catch(report('resume the agent')),
     continueOnCredits: (sessionId) => api.agents.continueOnCredits(sessionId).then(ignore, report('continue it on credits')),
     setMuted: (sessionId, muted) => void api.agents.setMuted(sessionId, muted).catch(report(muted ? "mute the agent's notifications" : "unmute the agent's notifications")),
     setEffort: (sessionId, effort) => void api.agents.setEffort(sessionId, effort).catch(report("change the agent's reasoning")),
@@ -70,6 +79,7 @@ export function popOutActions(base: TileActions, { api, sessionId: own, requestT
     deleteAgent: (sessionId) => board(sessionId, 'delete'),
     stopAgent: (sessionId) => board(sessionId, 'stop'),
     restartAgent: (sessionId) => board(sessionId, 'restart'),
+    restartWith: (agent) => board(agent.sessionId, 'restart-with'),
     wakeAgent: async (agent) => board(agent.sessionId, 'wake'),
     scheduleAgent: (agent) => board(agent.sessionId, 'schedule'),
     linkIssue: (agent) => board(agent.sessionId, 'link-issue'),
@@ -82,6 +92,7 @@ export function doBoardAgentAction(actions: TileActions, agent: Agent, action: B
   if (action === 'delete') actions.deleteAgent(agent.sessionId);
   else if (action === 'stop') actions.stopAgent(agent.sessionId);
   else if (action === 'restart') actions.restartAgent(agent.sessionId);
+  else if (action === 'restart-with') actions.restartWith(agent);
   else if (action === 'wake') void actions.wakeAgent(agent);
   else if (action === 'schedule') actions.scheduleAgent(agent);
   else if (action === 'link-issue') actions.linkIssue(agent);

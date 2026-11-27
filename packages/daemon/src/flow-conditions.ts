@@ -63,7 +63,7 @@ const lastLine = (output: string) =>
     ?.slice(0, 200);
 
 /** What a command that didn't pass says: how it ended, and its last line. */
-function failure({ code, timedOut, output }: RunResult): string {
+export function commandFailure({ code, timedOut, output }: RunResult): string {
   const said = lastLine(output);
   const how = timedOut ? 'timed out' : code === null ? 'was stopped' : `exited ${code}`;
   return said === undefined ? how : `${how}: ${said}`;
@@ -95,7 +95,7 @@ export function createConditionChecker(sources: ConditionSources): ConditionChec
     const run = async () => {
       const result = await sources.run(command, agent.worktree, GATE_TIMEOUT_MS);
       const at = head === undefined ? '' : ` at ${head.slice(0, 7)}`;
-      return result.code === 0 ? { passed: true, detail: `green${at}` } : { passed: false, detail: `red${at}: ${failure(result)}` };
+      return result.code === 0 ? { passed: true, detail: `green${at}` } : { passed: false, detail: `red${at}: ${commandFailure(result)}` };
     };
     if (head === undefined) return run();
     const key = `${agent.worktree}\0${command}\0${fingerprint}`;
@@ -112,7 +112,7 @@ export function createConditionChecker(sources: ConditionSources): ConditionChec
       if (why !== undefined) return { passed: false, detail: why, needsApproval: true };
       if (condition.kind === 'gate-green') return gate(condition.command, fingerprint!, agent);
       const result = await sources.run(condition.command, agent.worktree, SCRIPT_TIMEOUT_MS);
-      return result.code === 0 ? { passed: true, detail: 'exited 0' } : { passed: false, detail: failure(result) };
+      return result.code === 0 ? { passed: true, detail: 'exited 0' } : { passed: false, detail: commandFailure(result) };
     }
     switch (condition.kind) {
       case 'pr-checks': {

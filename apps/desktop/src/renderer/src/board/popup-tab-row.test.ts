@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { afterClose, closedView, foldRow, keptOrders, movedTab, openedView, popUpRowKey, rowOrder, soloRow, steppedTab, viewRow, withKeptOrder } from './popup-tab-row';
+import { afterClose, closedView, foldRow, keptOrders, movedTab, openedView, popUpRowKey, rowOrder, shellDragOf, soloRow, steppedTab, viewRow, withKeptOrder } from './popup-tab-row';
 
 const tab = (key: string, kind: 'view' | 'agent' | 'shell' = 'agent') => ({ key, kind });
 const keys = (tabs: readonly { key: string }[]) => tabs.map(({ key }) => key);
@@ -23,6 +23,22 @@ describe('rowOrder', () => {
 
   it('puts a new tab first when nothing before it in the plain order is kept', () => {
     expect(keys(rowOrder(row, ['chat', 'builder', 'reviewer', 'zsh']))).toEqual(['board', 'chat', 'builder', 'reviewer', 'zsh']);
+  });
+});
+
+describe('shellDragOf', () => {
+  const dragOf = (key: string) => `drag of ${key}`;
+
+  it('lets only the shells drag out of the row where shells are let out', () => {
+    const of = shellDragOf(true, ['zsh'], dragOf)!;
+    expect(of('zsh')).toBe('drag of zsh');
+    expect(of('builder')).toBeUndefined();
+    expect(of('board')).toBeUndefined();
+  });
+
+  it("lets nothing drag out of a pop-up's row, or of a row with nothing to drag", () => {
+    expect(shellDragOf(false, ['zsh'], dragOf)).toBeUndefined();
+    expect(shellDragOf(true, ['zsh'], undefined)).toBeUndefined();
   });
 });
 

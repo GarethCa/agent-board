@@ -50,8 +50,11 @@ export function fillTemplate(body: string, values: TemplateValues): string {
   return body.replace(VARIABLE, (whole, name: string) => (Object.hasOwn(values, name) ? values[name as keyof TemplateValues] : whole));
 }
 
-/** Where a repo keeps its worker prompts, and the one each role is seeded from. */
-const PROMPTS_DIR = join('.claude', 'skills', 'cmux-workers');
+/**
+ * Where a repo keeps its worker prompts, the first that has a role's file winning, and the file each role is seeded from.
+ * The second is where they lived before (a worker skill's folder), still read so a repo that has them there keeps them.
+ */
+const PROMPTS_DIRS = [join('.claude', 'agent-prompts'), join('.claude', 'skills', 'cmux-workers')];
 const SEED_FILES: Partial<Record<AgentRole, string>> = {
   implementer: 'impl-prompt.md',
   reviewer: 'review-prompt.md',
@@ -73,14 +76,17 @@ export function roleSeed(repoRoot: string | null, role: AgentRole): RoleSeed {
   const file = SEED_FILES[role];
   if (file === undefined) return { body: '', source: null };
   if (repoRoot !== null) {
-    try {
-      const text = readFileSync(join(repoRoot, PROMPTS_DIR, file), 'utf8');
+    for (const dir of PROMPTS_DIRS) {
+      let text: string;
+      try {
+        text = readFileSync(join(repoRoot, dir, file), 'utf8');
+      } catch {
+        continue; // Not here: the next folder, then the app's own.
+      }
       const body = text.replace(SEED_VARIABLE, (whole, name: string) =>
         SEED_NAMES.has(name.toLowerCase()) ? `{{${name.toLowerCase()}}}` : whole,
       );
       return { body, source: file };
-    } catch {
-      // No such prompt in this repo: the app's own.
     }
   }
   return { body: BUILT_IN[role] ?? '', source: null };

@@ -5,15 +5,15 @@ import { createFakeGitHub, FAKE_GITHUB_STATE } from '@agent-board/tracker/testin
 import { agentNoteSize } from '../src/agent-notes.ts';
 import { BOARD_ARRANGE_GAP } from '../src/arrange-board.ts';
 import { CLUSTER_LABEL_SIZE } from '../src/board-arrange.ts';
-import { AGENT_TILE_SIZE, clearOf, freeTileSlot, zoneGrid, overlaps as rectsOverlap, CREW_GAP, GRID_COLUMN as COLUMN, GRID_ORIGIN as FIRST, gridPoint, PERCH_ROOM, RAIL_GAP, ROW_STEP, sizedFootprint, SPACING_GAPS, TILE_GAP, tileSizeKey, tileSlot, ZONE_PADDING, type Rect } from '../src/board-layout.ts';
+import { AGENT_TILE_SIZE, clearOf, freeTileSlot, zoneGrid, overlaps as rectsOverlap, CREW_GAP, GRID_COLUMN as COLUMN, GRID_ORIGIN as FIRST, gridPoint, OVERLAPS_VIEW_KEY, PERCH_ROOM, PUT_DOWN_VIEW_KEY, RAIL_GAP, ROW_STEP, sizedFootprint, SPACING_GAPS, TILE_GAP, tileSizeKey, tileSlot, ZONE_PADDING, type Rect } from '../src/board-layout.ts';
 import type { DaemonClient } from '../src/client.ts';
-import { spotBesideAgent } from '../src/orchestrator-layout.ts';
+import { readLayoutBoard, spotBesideAgent, spotFor } from '../src/orchestrator-layout.ts';
 import type { DaemonCall } from '../src/protocol.ts';
 import { SPINE_GAPS } from '../src/spine-layout.ts';
 import { daemonPaths } from '../src/paths.ts';
 import { RULE_SETTLE_MS } from '../src/zone-rules.ts';
 import { lintLine, spareSlots } from '../src/zone-map.ts';
-import { AGENT_NOTE_SIZE, BOARD_ERROR, FOLDED_ZONE_SIZE, measuredText, RPC_ERROR, STICKY_SIZE, type Agent, type AgentUpdatedEvent, type ArrangeLayout, type BoardItem, type DaemonEvent, type DaemonMethod, type ExpandedBox, type MeasuredBox, type Zone } from '../src/protocol.ts';
+import { AGENT_NOTE_SIZE, BOARD_ERROR, FOLDED_ZONE_SIZE, measuredText, RPC_ERROR, STICKY_SIZE, type Agent, type AgentUpdatedEvent, type ArrangeLayout, type BoardItem, type DaemonEvent, type DaemonMethod, type ExpandedBox, type MeasuredBox, type OverlapsFreedEvent, type Zone } from '../src/protocol.ts';
 import { connectTestClient, git, recordEvents, startTestDaemon, TEST_CLI_LAUNCHER, tempDataDir, tempRepo } from './helpers.ts';
 
 // Orchestrators laying out their zone: move, arrange, groups and notes, each checked against the orchestrator's scope,
@@ -2389,6 +2389,34 @@ describe('orchestrator.arrangeBoard', () => {
     expect(space).toBeGreaterThanOrEqual(BOARD_ARRANGE_GAP);
     expect(await mcp.callTool('arrange', { zone: 'board' })).toMatchObject({ isError: false, text: 'The board was arranged already: nothing moved.' });
     expect(await mcp.callTool('arrange', { zone: 'board', by: 'role' })).toMatchObject({ isError: true, text: expect.stringContaining('arrange board takes no --by') });
+  });
+
+  it('ends the saved overlaps and put-downs of the tiles it moves, as the app’s Arrange board does, and keeps the rest', async () => {
+    const setup = await layoutDaemon();
+    const me = await lead(setup, setup.zone.id);
+    const loose = await setup.client.call('shell.create', { zoneId: null, position: { x: 5000, y: 3000 } });
+    const tile = `shell:${loose.id}`;
+    await setup.client.call('view.set', { key: OVERLAPS_VIEW_KEY, value: [[tile, 'agent:x'], ['agent:y', 'agent:z']] });
+    await setup.client.call('view.set', { key: PUT_DOWN_VIEW_KEY, value: [[tile, ['agent:x']], ['agent:y', [tile]]] });
+
+    await me.connection.call('orchestrator.arrangeBoard', { token: me.token });
+
+    expect(await setup.client.call('view.get', { key: OVERLAPS_VIEW_KEY })).toEqual([['agent:y', 'agent:z']]);
+    expect(await setup.client.call('view.get', { key: PUT_DOWN_VIEW_KEY })).toEqual([['agent:y', [tile]]]);
+    // An open board hears which tiles it moved, so it drops them from its own copy and never saves them back.
+    const told = await setup.recorder.waitFor((event: DaemonEvent): event is OverlapsFreedEvent => event.type === 'overlaps.freed');
+    expect(told.ids).toContain(tile);
+  });
+});
+
+describe('spotFor', () => {
+  it('puts something loose on the board clear of the zones, as an agent’s new note or tile is', async () => {
+    const setup = await layoutDaemon();
+    const board = await readLayoutBoard(((method: DaemonMethod, params: unknown) => setup.client.call(method, params as never)) as DaemonCall);
+    const spot = spotFor(board, undefined, AGENT_TILE_SIZE, {}, null, false, { drawn: () => undefined });
+    const box = { ...spot, ...AGENT_TILE_SIZE };
+    expect(board.zones.length).toBeGreaterThan(0);
+    for (const zone of board.zones) expect(rectsOverlap(box, zone)).toBe(false);
   });
 });
 

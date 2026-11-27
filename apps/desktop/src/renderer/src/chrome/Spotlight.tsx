@@ -4,10 +4,9 @@ import { pullRequestOfUrl, type Agent, type BoardItem, type OpenPullRequest, typ
 import { CircleDot, FileText, GitPullRequest, Globe, Link, MessageCircleDashed, MessageSquareText, Plus, Search, Settings, LibraryBig, ListFilter, Shapes, StickyNote, type LucideIcon } from 'lucide-react';
 import { CrewFaces } from '../crews/icons';
 import { usePrefabs } from '../crews/prefab-store';
-import { SESSION_SURFACES } from '../board/board-shortcuts';
+import { appKeysReach } from '../board/board-shortcuts';
 import { HarnessMark } from '../board/HarnessMark';
 import { agentTitle, shellTitle } from '../board/use-board-windows';
-import { inOverlay } from '../keys';
 import { openParkThought } from '../keys/park-thought';
 import { keysText, keyText, pressed } from '../keys/registry';
 import { agentPill, STATE_LABELS, TILE_STATE_LABELS } from '../states';
@@ -52,6 +51,8 @@ export interface SpotlightPlace<C> {
   current?: string;
   /** Whether ⇧↵ opens the surface beside something here, rather than as ↵ does; with none, every surface does. */
   opensBeside?(surface: Surface): boolean;
+  /** On the board: ⇧↵ opens a tile's view, as ⌘↵ does, rather than beside. */
+  shiftOpens?: boolean;
 }
 
 /** The key of the "New agent named …" row, among the rows' keys as ↑↓ move through them. */
@@ -114,10 +115,26 @@ export const windowTargetOf = (subject: SpotlightSubject): WindowTarget | undefi
       ? { kind: 'shell', id: subject.shell.id, title: shellTitle(subject.shell) }
       : undefined;
 
-/** Whether ⇧↵ opens the subject beside what is open: a session, a pull request or a web page, where the place has one to be beside; anything else as ↵ does. */
+/** Whether ⇧↵ opens a tile's view: an agent's or a shell's, picked on the board. */
+export const shiftOpensTile = (subject: SpotlightSubject, place: SpotlightPlace<unknown> | undefined): boolean =>
+  place?.shiftOpens === true && (subject.kind === 'agent' || subject.kind === 'shell');
+
+/**
+ * Whether ⇧↵ opens the subject beside what is open: a session, a pull request or a web page, where the place has one to
+ * be beside, but not a tile picked on the board, which ⇧↵ opens; anything else as ↵ does.
+ */
 export function opensBeside(subject: SpotlightSubject, place: SpotlightPlace<unknown> | undefined): boolean {
   const surface = surfaceOfSubject(subject);
-  return surface !== undefined && (place?.opensBeside?.(surface) ?? true);
+  return surface !== undefined && !shiftOpensTile(subject, place) && (place?.opensBeside?.(surface) ?? true);
+}
+
+/**
+ * What ↵ on a row asks for, by the keys held with it: ⌘↵ opens it; ⇧↵ opens it beside what is open where it can, and
+ * on the board opens a tile's view, as ⌘↵ does.
+ */
+export function enterAsks(subject: SpotlightSubject, place: SpotlightPlace<unknown> | undefined, keys: Pick<KeyboardEvent, 'metaKey' | 'ctrlKey' | 'shiftKey'>): { open: boolean; beside: boolean } {
+  const shiftOpens = keys.shiftKey && shiftOpensTile(subject, place);
+  return { open: keys.metaKey || keys.ctrlKey || shiftOpens, beside: keys.shiftKey && opensBeside(subject, place) };
 }
 
 /** What a row opens as a tab of a window: a session shown there, a pull request's tab or a web tab; undefined for anything else. */
@@ -180,8 +197,8 @@ export function Spotlight<C>({ ref, agents, shells, zones, windows, ticketItems,
     const onKeyDown = (event: KeyboardEvent) => {
       if (!pressed('move.spotlight', event)) return;
       const opened = openedRef.current;
-      // Another dialog or menu keeps its keys; a session window, a dialog too, is one of the views it switches.
-      if (opened === undefined && inOverlay() && document.activeElement?.closest(SESSION_SURFACES) == null) return;
+      // Another dialog or menu keeps its keys; a view an agent is open in (a pop-up, a session window), a dialog too, is one it opens from.
+      if (opened === undefined && !appKeysReach(document.activeElement)) return;
       event.preventDefault();
       event.stopPropagation();
       if (opened !== undefined) dismiss(opened);
@@ -294,7 +311,10 @@ export function Spotlight<C>({ ref, agents, shells, zones, windows, ticketItems,
       setActiveKey(keys[(index + step + keys.length) % keys.length]!);
     } else if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
       event.preventDefault();
-      if (active !== undefined) pick(active, event.metaKey || event.ctrlKey, event.shiftKey);
+      if (active !== undefined) {
+        const { open, beside } = enterAsks(active.subject, opened?.place, event);
+        pick(active, open, beside);
+      }
       else if (activeKeyNow === NEW_AGENT_KEY) startNew();
     }
   };
@@ -304,10 +324,12 @@ export function Spotlight<C>({ ref, agents, shells, zones, windows, ticketItems,
   const opensCrew = active?.subject.kind === 'crew';
   const filtering = active?.subject.kind === 'filter';
   const beside = active !== undefined && opensBeside(active.subject, place);
+  // On the board, ⇧↵ opens a tile's view: the pill and the foot say so, in the place of ⌘↵, which does the same.
+  const shiftOpens = active !== undefined && shiftOpensTile(active.subject, place);
   // Short beside ⇧↵, for the pill to leave the field's placeholder whole; the foot still says what each key does.
   // A pull request or a page opens in a tab of its own, so ↵ opens it wherever ⌘K is.
   const opensPage = active?.subject.kind === 'pr' || active?.subject.kind === 'web';
-  const where = filtering ? 'filter' : opensCrew || opensPage ? 'open' : showing ? (beside ? 'show' : 'show on board') : beside ? 'switch' : 'switch here';
+  const where = filtering ? 'filter' : opensCrew || opensPage ? 'open' : showing ? (beside || shiftOpens ? 'show' : 'show on board') : beside ? 'switch' : 'switch here';
   const newAgentRow = offerNew && (
     <div
       id={`${listId}-${NEW_AGENT_KEY}`}
@@ -372,6 +394,7 @@ export function Spotlight<C>({ ref, agents, shells, zones, windows, ticketItems,
             <span className="spotlight-where" data-testid="spotlight-where">
               ↵ {where}
               {beside && ` · ${keyText('dialog.openBeside')} beside`}
+              {shiftOpens && ` · ${keyText('dialog.openView')} open`}
             </span>
           </div>
           <div className="spotlight-list" id={listId} role="listbox" aria-label="Sessions, zones and settings">
@@ -441,12 +464,12 @@ export function Spotlight<C>({ ref, agents, shells, zones, windows, ticketItems,
             )}
             {showing && !opensCrew && !filtering && (
               <span>
-                <Kbd>{keyText('dialog.openFromSwitcher')}</Kbd> open
+                <Kbd>{keyText(shiftOpens ? 'dialog.openView' : 'dialog.openFromSwitcher')}</Kbd> open
               </span>
             )}
             {/* Short with ⇧↵ or the columns there too, for the foot to keep to one line. */}
             <span>
-              <Kbd>{keyText('dialog.close')}</Kbd> {columns || beside ? 'back' : 'back to where you were'}
+              <Kbd>{keyText('dialog.close')}</Kbd> {columns || beside || shiftOpens ? 'back' : 'back to where you were'}
             </span>
           </div>
         </RadixDialog.Content>

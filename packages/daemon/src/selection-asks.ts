@@ -33,7 +33,7 @@ import {
   type SuggestedShape,
   type DaemonCall,
 } from './protocol.ts';
-import { cutText } from './text-cut.ts';
+import { cutText, plural } from './text-words.ts';
 import type { FolderPlace } from './agent-spawns.ts';
 import type { RpcHandlers } from './rpc.ts';
 
@@ -72,7 +72,7 @@ export function selectionPrompt(ask: Pick<AskSelectionParams, 'question' | 'diag
   const lines = [
     ask.question.trim(),
     '',
-    `The user selected part of a diagram on their board (${counted(ask.diagram.nodes.length, 'object')}, ${counted(ask.diagram.edges.length, 'arrow')}${shapes > 0 ? `, ${counted(shapes, 'shape')} among them` : ''}) and asked you about it.`,
+    `The user selected part of a diagram on their board (${plural(ask.diagram.nodes.length, 'object')}, ${plural(ask.diagram.edges.length, 'arrow')}${shapes > 0 ? `, ${plural(shapes, 'shape')} among them` : ''}) and asked you about it.`,
     `- The picture: \`${files.picture}\` (drawn at ${ask.pictureScale ?? 2}×: only the selected objects, cropped to them). Look at it.`,
     `- Its structure, below and in \`${files.diagram}\`: each node's id, kind, text and box (x, y, width, height in board px from the selection's top-left), the arrows between nodes, and the zones they are in.`,
     '',
@@ -95,8 +95,6 @@ export function selectionPrompt(ask: Pick<AskSelectionParams, 'question' | 'diag
   }
   return lines.join('\n');
 }
-
-const counted = (count: number, noun: string) => `${count} ${noun}${count === 1 ? '' : 's'}`;
 
 /** How an answer's suggestions are read: the objects its arrows may join, and where the selection's (0, 0) is. */
 export interface AnswerContext {

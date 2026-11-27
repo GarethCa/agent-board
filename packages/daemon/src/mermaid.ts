@@ -3,7 +3,7 @@
 // and an agent's `diagram add` draw the same diagram, and an export reads back as what was exported. A hand-written
 // reader of the two grammars' common lines, not Mermaid itself: the board needs their structure, not their drawing.
 import type { Rect } from './board-layout.ts';
-import { cutText } from './text-cut.ts';
+import { cutText } from './text-words.ts';
 import { facingSides, shapeSize } from './diagram.ts';
 import {
   FILL_SLOT_COLORS,

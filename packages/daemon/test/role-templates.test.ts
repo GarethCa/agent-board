@@ -46,7 +46,7 @@ describe('fillTemplate', () => {
 describe('roleSeed', () => {
   const repoWithPrompts = (files: Record<string, string>) => {
     const repo = tempDataDir();
-    const dir = join(repo, '.claude', 'skills', 'cmux-workers');
+    const dir = join(repo, '.claude', 'agent-prompts');
     mkdirSync(dir, { recursive: true });
     for (const [name, text] of Object.entries(files)) writeFileSync(join(dir, name), text);
     return repo;
@@ -78,6 +78,17 @@ describe('roleSeed', () => {
     expect(roleSeed(null, 'implementer').body).toContain('{{issue}}');
   });
 
+  it('still reads a prompt from the worker skill folder it used to live in, the new folder winning', () => {
+    const repo = repoWithPrompts({ 'impl-prompt.md': 'New {{ISSUE}}' });
+    const old = join(repo, '.claude', 'skills', 'cmux-workers');
+    mkdirSync(old, { recursive: true });
+    writeFileSync(join(old, 'impl-prompt.md'), 'Old');
+    writeFileSync(join(old, 'review-prompt.md'), 'Old review {{ROUND}}');
+
+    expect(roleSeed(repo, 'implementer')).toEqual({ body: 'New {{issue}}', source: 'impl-prompt.md' });
+    expect(roleSeed(repo, 'reviewer')).toEqual({ body: 'Old review {{round}}', source: 'review-prompt.md' });
+  });
+
   it('starts a custom role empty', () => {
     expect(roleSeed(repoWithPrompts({}), 'custom')).toEqual({ body: '', source: null });
   });
@@ -94,8 +105,8 @@ describe('RoleTemplates.describe', () => {
   };
   const repoWithSeed = () => {
     const repo = tempDataDir();
-    mkdirSync(join(repo, '.claude', 'skills', 'cmux-workers'), { recursive: true });
-    writeFileSync(join(repo, '.claude', 'skills', 'cmux-workers', 'impl-prompt.md'), 'Implement.');
+    mkdirSync(join(repo, '.claude', 'agent-prompts'), { recursive: true });
+    writeFileSync(join(repo, '.claude', 'agent-prompts', 'impl-prompt.md'), 'Implement.');
     return repo;
   };
   const implementer = { role: 'implementer', name: null } as const;

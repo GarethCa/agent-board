@@ -55,6 +55,8 @@ import {
   type ShapeType,
   type Shell,
   statusLine,
+  isStatusProgress,
+  MAX_STATUS_LENGTH,
   type UsageReading,
   type UsageWindow,
   type WaitState,
@@ -65,9 +67,11 @@ import {
   type PrefabDraft,
   MAX_PREFAB_FILE_BYTES,
   RPC_ERROR,
+  type LaunchSettings,
+  launchSettingNames,
 } from './protocol.ts';
 import { ticketWatchOf, watchesSummary } from './ticket-watches.ts';
-import { cutText } from './text-cut.ts';
+import { cutText, plural } from './text-words.ts';
 import { characterReading, type CharacterReading, type CharacterSet } from './character.ts';
 import { WORK_CATEGORY_LABELS, workCategory } from './work-category.ts';
 import { parsePrefab, prefabFile, prefabFileName } from './crew-prefabs.ts';
@@ -446,6 +450,8 @@ function agentJson(refs: BoardRefs, agent: Agent, caller: BoardCaller | null) {
     zone: agent.zoneId === null ? null : refs.of('zone', agent.zoneId),
     harness: agent.harness,
     model: agent.model,
+    // Names alone: their values may be secrets.
+    launchSettings: agent.launchSettings,
     role: agent.role,
     roleName: agent.roleName,
     reviews: agent.reviews,
@@ -807,10 +813,6 @@ export function inZone(refs: BoardRefs, zoneId: string | null): string {
   return zone === undefined ? '(loose)' : `(in ${refs.of('zone', zone.id)} ${zone.name})`;
 }
 
-function plural(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? '' : 's'}`;
-}
-
 /** An agent as an end of an edge: its ref, name and state. */
 function endLabel(refs: BoardRefs, sessionId: string): string {
   const agent = refs.board.agents.find((each) => each.sessionId === sessionId);
@@ -1015,7 +1017,7 @@ export function showView(refs: BoardRefs, object: BoardObject, caller: BoardCall
  * Sets the caller's own status: its line (`summary`), its character's pose (`character`), its work category
  * (`category`), or more than one. Throws `BoardError` outside an agent-board session.
  */
-export async function setOwnStatus(
+async function setOwnStatus(
   session: BoardSession,
   summary: string | undefined,
   progress: number | undefined,
@@ -1079,17 +1081,17 @@ function identifyCategoryWords(refs: BoardRefs, agent: Agent): string {
 }
 
 /** What a status set with a category answers: the category it has now. */
-export function categoryAnswer(agent: Agent): string {
+function categoryAnswer(agent: Agent): string {
   return `Your category: ${categoryWords(agent)}.`;
 }
 
 /** What a status set with a description answers: what the agent is for now, or that it says nothing. */
-export function purposeAnswer(agent: Agent, whose = 'Your'): string {
+function purposeAnswer(agent: Agent, whose = 'Your'): string {
   return agent.purpose === null ? `${whose} description is cleared.` : `${whose} description: "${agent.purpose}". It stays until another is set.`;
 }
 
 /** What a status set with a pose answers: the pose drawn, the one set, and when that goes. */
-export function characterAnswer(agent: Agent): string {
+function characterAnswer(agent: Agent): string {
   return `Your character: ${characterWords(characterReading(agent))}.`;
 }
 
@@ -1121,7 +1123,7 @@ export function flagLine(agent: Agent, cleared = false): string {
 }
 
 /** `status set --agent`: the line or pose of an agent in the caller's crew, which its tile says the caller set. */
-export async function setCrewStatus(
+async function setCrewStatus(
   session: BoardSession,
   ref: string,
   summary: string | undefined,
@@ -1151,6 +1153,54 @@ export async function setCrewStatus(
   };
 }
 
+/** A status set, as the CLI and the MCP both give it: its character and category already read. */
+export interface StatusSet {
+  summary?: string;
+  progress?: number;
+  done?: boolean;
+  character?: CharacterSet;
+  category?: WorkCategoryParams;
+  description?: string;
+  /** An agent in the caller's crew to set the status of, by ref or name: the caller's own without. */
+  agent?: string;
+}
+
+/** The checks a status set passes before it is sent, the CLI's and the MCP's alike. */
+export function checkStatusSet(set: StatusSet): void {
+  if (set.summary === undefined && set.character === undefined && set.category === undefined && set.description === undefined) {
+    throw new BoardError('give a summary, a character, a category, a description, or more');
+  }
+  if (set.progress !== undefined && !isStatusProgress(set.progress)) throw new BoardError('progress must be a whole number from 0 to 100');
+  if (set.progress !== undefined && set.summary === undefined) throw new BoardError('progress goes with a summary');
+  if (set.agent !== undefined && set.done === true) throw new BoardError('done is for your own status: a crew member says it is finished itself');
+}
+
+/**
+ * `status set` and `set_status`: the caller's own status, or a crew member's, and the one answer both give: what the
+ * tile says now, then its category, description and character as set. A character set also gives `reading`, the line
+ * of JSON the MCP adds for a client to read: the CLI has --json for that.
+ */
+export async function setStatus(session: BoardSession, set: StatusSet): Promise<BoardView & { reading?: string }> {
+  checkStatusSet(set);
+  const { summary, progress, character, category, description } = set;
+  if (set.agent !== undefined) return setCrewStatus(session, set.agent, summary, progress, character, category, description);
+  const agent = await setOwnStatus(session, summary, progress, set.done === true, character, category, description);
+  const lines =
+    summary === undefined
+      ? []
+      : [
+          `Your tile now says: "${statusLine(agent.status!)}" (${agent.status!.summary.length} of ${MAX_STATUS_LENGTH} characters, shown in full)${agent.workFinishedAt === null ? '' : ', and that your work is finished'}.`,
+        ];
+  if (category !== undefined || set.done === true) lines.push(categoryAnswer(agent));
+  if (description !== undefined) lines.push(purposeAnswer(agent));
+  if (character !== undefined) {
+    const { shown, yours, expires } = characterReading(agent);
+    lines.push(characterAnswer(agent));
+    return { text: lines.join('\n'), json: agent, reading: JSON.stringify({ ok: true, shown, yours, expires }) };
+  }
+  return { text: lines.join('\n'), json: agent };
+}
+
 /** The orchestrator commands' options for a new agent, as typed: refs and names, not ids. */
 export interface NewAgentOptions {
   prompt: string;
@@ -1174,6 +1224,8 @@ export interface NewAgentOptions {
   issue?: string;
   /** What it is for, as `status set --description`: kept as its purpose from the start. */
   description?: string;
+  /** Env vars and Claude settings of its own, added to what the board launches it with, and kept for its restarts. */
+  launchSettings?: LaunchSettings;
 }
 
 /** The caller, and the agent `ref` names. */
@@ -1250,6 +1302,11 @@ function checkout(agent: Agent): string {
   return agent.reviews === null ? `on ${agent.branch}` : `detached at ${shortCommit(agent.reviews.head)} of ${agent.reviews.branch}`;
 }
 
+/** An agent's launch settings as a line: their names, never their values, which may be secrets. */
+function launchSettingsWords(agent: Agent): string {
+  return `Launch settings: ${launchSettingNames(agent.launchSettings) ?? 'none of its own'}.`;
+}
+
 /** `new`: starts an agent as the caller, an orchestrator. */
 export async function newAgent(session: BoardSession, options: NewAgentOptions): Promise<BoardView> {
   const { caller, token, refs } = await orchestratingCaller(session);
@@ -1290,6 +1347,7 @@ export async function newAgent(session: BoardSession, options: NewAgentOptions):
     ...(options.edges === undefined ? {} : { edges: options.edges }),
     ...(options.issue === undefined ? {} : { issueId: options.issue }),
     ...(options.description === undefined ? {} : { description: options.description }),
+    ...(options.launchSettings === undefined ? {} : { launchSettings: options.launchSettings }),
   });
   const fresh = await freshAgentLine(session, started.sessionId);
   // Which template its first message began with, so an orchestrator that wrote the whole prompt sees it was prefixed.
@@ -1300,8 +1358,9 @@ export async function newAgent(session: BoardSession, options: NewAgentOptions):
         ? '\n  No role template: its first message is your prompt alone.'
         : '';
   const about = options.description === undefined ? '' : `\n  ${purposeAnswer(fresh.agent, 'Its')}`;
+  const launch = fresh.agent.launchSettings === null ? '' : `\n  ${launchSettingsWords(fresh.agent)}`;
   return {
-    text: `Started ${fresh.line}\n  ${checkout(started)} in ${tilde(started.worktree)}, ${inZone(fresh.refs, started.zoneId)}${templateLine}${about}`,
+    text: `Started ${fresh.line}\n  ${checkout(started)} in ${tilde(started.worktree)}, ${inZone(fresh.refs, started.zoneId)}${templateLine}${about}${launch}`,
     json: { ...agentJson(fresh.refs, fresh.agent, session.caller), template: started.template },
   };
 }
@@ -1483,6 +1542,23 @@ export async function draftPrefab(session: BoardSession, path: string, assumed: 
 export async function removePrefab(session: BoardSession, name: string): Promise<BoardView> {
   await session.client.call('orchestrator.removePrefab', { token: session.token, name });
   return { text: `Removed the crew prefab ${name.trim()}.`, json: { removed: name.trim() } };
+}
+
+/** What a prefab sets itself, which a start with a prefab can't: the names the MCP gives them. */
+export const PREFAB_SETS = ['harness', 'model', 'effort', 'role', 'template', 'base', 'edges', 'env', 'settings'] as const;
+
+/**
+ * The checks a start's prefab and chat pass, the CLI's and the MCP's alike: `set` is the first of `PREFAB_SETS` given,
+ * if any. Returns the chat, read.
+ */
+export function checkPrefabStart(prefab: string | undefined, chat: string | undefined, set: (typeof PREFAB_SETS)[number] | undefined): 'implementer' | 'lead' | undefined {
+  if (prefab === undefined) {
+    if (chat !== undefined) throw new BoardError('chat picks the kind of ticket chat a ticket prefab starts: give a prefab too');
+    return undefined;
+  }
+  if (set !== undefined) throw new BoardError(`${set} is the prefab's to set: with a prefab, give only the prompt (or a file of it), zone, repo, issue, chat, name, branch and description`);
+  if (chat !== undefined && chat !== 'implementer' && chat !== 'lead') throw new BoardError('chat is implementer or lead');
+  return chat;
 }
 
 export interface StartPrefabOptions {
@@ -1867,17 +1943,20 @@ export async function continueAgent(session: BoardSession, ref: string): Promise
 
 /**
  * `restart`: starts an ended agent again in place, carrying on its conversation; with `fresh`, a new conversation
- * (on `prompt`, if any) in the same tile, worktree and branch.
+ * (on `prompt`, if any) in the same tile, worktree and branch. With `launchSettings`, it starts with those instead (each
+ * part given replaces its part; an empty one clears it), stopping it first if it runs.
  */
-export async function restartAgent(session: BoardSession, ref: string, anew?: { prompt?: string }): Promise<BoardView> {
+export async function restartAgent(session: BoardSession, ref: string, anew?: { prompt?: string }, launchSettings?: LaunchSettings): Promise<BoardView> {
   const { token, agent } = await orchestratorTarget(session, ref);
   await session.client.call('orchestrator.restart', {
     token,
     sessionId: agent.sessionId,
     ...(anew === undefined ? {} : { fresh: true, ...(anew.prompt === undefined ? {} : { prompt: anew.prompt }) }),
+    ...(launchSettings === undefined ? {} : { launchSettings }),
   });
   const fresh = await freshAgentLine(session, agent.sessionId);
-  return { text: `Restarted ${fresh.line}`, json: agentJson(fresh.refs, fresh.agent, session.caller) };
+  const keys = launchSettings === undefined ? '' : `\n  ${launchSettingsWords(fresh.agent)}`;
+  return { text: `Restarted ${fresh.line}${keys}`, json: agentJson(fresh.refs, fresh.agent, session.caller) };
 }
 
 /** `pause`: hibernates an idle agent, ending its session to free what it held, its conversation kept for its wake. */

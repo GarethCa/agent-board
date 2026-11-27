@@ -1,9 +1,10 @@
 // The menu bar's renderer half, as pure functions: how the registry's keys show in it (main/menu-bar-items.ts draws
 // them), the key press a picked item stands for, and a model menu (board/menu-model.tsx) as rows main can draw. Picking
 // an item presses its key, so a menu item and its key do the same thing through the same handler.
+import { WINDOW_QUERY } from '../../../preload/api';
 import type { MenuBarKey, MenuBarRow } from '../../../shared/menu-bar';
 import type { ModelEntry } from '../board/menu-model';
-import { chordsOf, chordText, isActive, KEYS, type Chord, type KeyBinding } from './registry';
+import { chordsOf, chordText, isActive, KEYS, type Chord, type KeyBinding, type KeyId, type SectionId } from './registry';
 
 // The `code`s of the keys matched by place, as an accelerator names them.
 const CODE_NAMES: Record<string, string> = { BracketLeft: '[', BracketRight: ']', Slash: '/', Backslash: '\\', Period: '.', Comma: ',', Semicolon: ';', Quote: "'", Backquote: '`', Minus: '-', Equal: '=' };
@@ -46,8 +47,40 @@ export function acceleratorOf(chord: Chord, isMac: boolean): string | undefined 
   }
 }
 
+/** The keys a window has handlers for: whole sections of the registry, and single keys of the others. */
+export interface WindowKeys {
+  sections: readonly SectionId[];
+  keys?: readonly KeyId[];
+}
+
+/**
+ * The keys each kind of window handles. The board's window has them all. A session window popped out has its own keys,
+ * the switcher, the cheat sheet and Park a thought; Settings has only Park a thought, and the Overview none. The menu
+ * bar greys the rest, and a web tab keeps them for its page. A window that gains a key's handler gains it here too.
+ */
+export const WINDOW_KEYS = {
+  board: { sections: ['tile', 'move', 'make', 'edit', 'window', 'dialog'] },
+  popOut: { sections: ['window', 'dialog'], keys: ['move.spotlight', 'move.cheatSheetAnywhere', 'move.parkThought'] },
+  settings: { sections: [], keys: ['move.parkThought'] },
+  overview: { sections: [] },
+} as const satisfies Record<string, WindowKeys>;
+
+/** The keys a window handles, by the query main opened it with: as main.tsx picks what the window mounts. */
+export function windowKeysFor(query: URLSearchParams): WindowKeys {
+  if (query.get(WINDOW_QUERY.settings) !== null) return WINDOW_KEYS.settings;
+  if (query.has(WINDOW_QUERY.overview)) return WINDOW_KEYS.overview;
+  return query.get(WINDOW_QUERY.popOut) !== null ? WINDOW_KEYS.popOut : WINDOW_KEYS.board;
+}
+
+/** Whether a window that handles `keys` has a handler for `entry`. */
+export function windowHandles(keys: WindowKeys, entry: KeyBinding): boolean {
+  return keys.sections.includes(entry.section) || (keys.keys?.includes(entry.id as KeyId) ?? false);
+}
+
 /** What the focused window has now, which says which of the menu bar's key items can run in it. */
 export interface MenuBarWhere {
+  /** The keys the window has handlers for; every key when left out. */
+  handles?: WindowKeys;
   /** The board is in this window. */
   board: boolean;
   /** Something on the board is selected. */
@@ -62,12 +95,13 @@ export interface MenuBarWhere {
 const ON_SELECTION = new Set(['edit.duplicate', 'edit.delete', 'edit.front', 'edit.forward', 'edit.backward', 'edit.back', 'edit.resetRotation', 'make.askClaude']);
 
 /**
- * Whether a binding's key does anything where the window is now: a session window's keys only with the focus in one (a
+ * Whether a binding's key does anything where the window is now: none the window has no handler for, a session window's keys only with the focus in one (a
  * session window on the board, or a window that is one), the board's only in a window with the board, and its keys for
  * the selection only with something selected. So a menu item for one is greyed where its key would do something else,
  * such as ⌘D, which duplicates on the board and splits in a session window.
  */
 export function keyAvailable(entry: KeyBinding, where: MenuBarWhere): boolean {
+  if (where.handles !== undefined && !windowHandles(where.handles, entry)) return false;
   if (entry.section === 'window') return where.session;
   if (entry.id === 'edit.swapDirection') return where.board && where.arrows && !where.session;
   // Not while a session window has focus, where ⌘D and ⌘[ ⌘] are its own (Split Beside, Previous and Next).

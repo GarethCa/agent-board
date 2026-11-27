@@ -380,7 +380,7 @@ test("with the setting on, an agent's chat panned out of view and back is the sa
     await tile(window).dblclick();
     const expanded = window.getByTestId('expanded-tile');
     const chat = expanded.getByTestId('chat-view');
-    await expanded.locator('.session-window-strip').getByRole('group', { name: 'View' }).getByRole('button', { name: 'Chat' }).click();
+    await expanded.locator('.expanded-tile-head').getByRole('group', { name: 'View of every agent in this pop-up' }).getByRole('button', { name: 'Chat' }).click();
     await expect(chat.getByTestId('chat-assistant')).toHaveText(['Which database should I use, Postgres or SQLite?']);
     await listenForTerminals(window);
     await chat.evaluate((element) => void ((element as HTMLElement).dataset.mark = 'kept'));

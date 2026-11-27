@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { AGENT_TILE_SIZE, PERCH_ROOM, tileSizeKey } from '../src/board-layout.ts';
 import type { Agent } from '../src/protocol.ts';
-import { cardHeight } from '../src/shelf-layout.ts';
+import { cardHeight, DONE_FOLD_HEIGHT } from '../src/shelf-layout.ts';
 import {
-  DONE_LINE_HEIGHT,
   EMPTY_STAGE_BOARD_SIZE,
   LATER_CARD_HEIGHT,
   layOutStageBoard,
@@ -305,11 +304,11 @@ describe('layOutStageBoard', () => {
   it('folds Done to one line that counts its tickets, their cards hidden behind it', () => {
     const done = (id: string, minutes: number) => agent(id, { pullRequests: [pr('merged')], finishedAt: at(5), createdAt: at(minutes) });
     const laid = layOutStageBoard(input([lead, done('d1', 0), done('d2', 1)]));
-    expect(laid.fold).toEqual({ x: BLOCK_PAD + 840, y: FIRST, width: 256, height: DONE_LINE_HEIGHT, count: 2, shown: false });
+    expect(laid.fold).toEqual({ x: BLOCK_PAD + 840, y: FIRST, width: 256, height: DONE_FOLD_HEIGHT, count: 2, shown: false });
     const cards = laid.tickets.filter((ticket) => ticket.stage === 'done');
     expect(cards.map((ticket) => ticket.folded)).toEqual([true, true]);
     expect(laid.columns[3]!.count).toBe(2);
-    expect(laid.size.height).toBe(FIRST + DONE_LINE_HEIGHT + BLOCK_PAD);
+    expect(laid.size.height).toBe(FIRST + DONE_FOLD_HEIGHT + BLOCK_PAD);
   });
 
   it('shows Done’s cards under its line once shown', () => {
@@ -318,8 +317,8 @@ describe('layOutStageBoard', () => {
     expect(laid.fold).toMatchObject({ y: FIRST, count: 2, shown: true });
     const cards = laid.tickets.filter((ticket) => ticket.stage === 'done');
     expect(cards.map((ticket) => [ticket.folded, ticket.y])).toEqual([
-      [false, FIRST + DONE_LINE_HEIGHT + 12],
-      [false, FIRST + DONE_LINE_HEIGHT + 12 + cardHeight(1, false) + 12],
+      [false, FIRST + DONE_FOLD_HEIGHT + 12],
+      [false, FIRST + DONE_FOLD_HEIGHT + 12 + cardHeight(1, false) + 12],
     ]);
   });
 

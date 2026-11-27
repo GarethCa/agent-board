@@ -1,12 +1,12 @@
 import { execFileSync } from 'node:child_process';
 import { createServer as createHttpServer } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
-import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { chmodSync, cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
-import { afterAll, onTestFinished } from 'vitest';
+import { afterAll, onTestFinished, vi } from 'vitest';
 import { createMemoryCredentialStore } from '@agent-board/tracker/testing';
 import { startDaemon, type Daemon, type DaemonOptions } from '../src/daemon.ts';
 import { connectDaemon, type DaemonClient } from '../src/client.ts';
@@ -14,8 +14,12 @@ import { BOARD_SESSION_ENV, BOARD_SOCKET_ENV, BOARD_TOKEN_ENV, BOARD_ZONE_ENV } 
 import { HOOK_TOKEN_ENV, HOOK_URL_ENV, type CliLauncher } from '../src/hook-forwarder.ts';
 import { hashToken } from '../src/tokens.ts';
 import { migrate } from '../src/migrate.ts';
-import type { DaemonEvent } from '../src/protocol.ts';
+import type { Agent, DaemonEvent } from '../src/protocol.ts';
+import { AGENT_TILE_SIZE, type Rect } from '../src/board-layout.ts';
 import { daemonPaths } from '../src/paths.ts';
+
+/** What an agent's tile takes up on the board. */
+export const tileOf = (agent: Pick<Agent, 'position'>): Rect => ({ ...agent.position!, ...AGENT_TILE_SIZE });
 
 /** A fresh data dir, removed when the test ends. */
 export function tempDataDir(): string {
@@ -120,13 +124,59 @@ export function git(cwd: string, ...args: string[]): string {
   return execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }).trim();
 }
 
+/** The global configs `userGitConfig` made, which later calls in the test add to rather than replace. */
+const userConfigs = new Set<string>();
+
+/**
+ * The user's own git config for this test: a global config that includes the one before it, made on the first call. What
+ * the board trusts as the user's choice (a push URL, a filter) goes here, never in the repo's config, which an agent can write.
+ */
+export function userGitConfig(): string {
+  const global = process.env.GIT_CONFIG_GLOBAL;
+  if (global !== undefined && userConfigs.has(global)) return global;
+  const made = join(tempDataDir(), 'gitconfig');
+  writeFileSync(made, `[include]\n\tpath = ${global ?? join(homedir(), '.gitconfig')}\n`);
+  userConfigs.add(made);
+  vi.stubEnv('GIT_CONFIG_GLOBAL', made);
+  onTestFinished(() => void vi.unstubAllEnvs());
+  return made;
+}
+
+/**
+ * Sends pushes to `url` to the bare repo `bare` instead, the way the user's own config could: a `pushInsteadOf` in a
+ * global config for this test, which includes the one before it. The board pushes to a folder on this machine only when
+ * the user's own config names it, never the repo's.
+ */
+export function pushesTo(bare: string, url: string): void {
+  execFileSync('git', ['config', '--file', userGitConfig(), '--add', `url.${bare}.pushInsteadOf`, url]);
+}
+
+/**
+ * Writes `key` = `value` into `repo`'s own config just before each git command whose arguments hold `command` (as
+ * `'merge --no-ff'`) starts, through a `git` first on PATH for this test: an agent's write that lands between the board's
+ * check of the config and the command it guards, every time.
+ */
+export function gitWritesBefore(command: string, repo: string, key: string, value: string): void {
+  const quote = (word: string) => `'${word.replaceAll("'", "'\\''")}'`;
+  const real = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+  const bin = join(tempDataDir(), 'bin');
+  mkdirSync(bin, { recursive: true });
+  const wrapper = join(bin, 'git');
+  writeFileSync(wrapper, `#!/bin/sh\ncase " $* " in *${quote(` ${command} `)}*) ${quote(real)} -C ${quote(repo)} config ${quote(key)} ${quote(value)} ;; esac\nexec ${quote(real)} "$@"\n`);
+  chmodSync(wrapper, 0o755);
+  vi.stubEnv('PATH', `${bin}:${process.env.PATH ?? ''}`);
+  onTestFinished(() => void vi.unstubAllEnvs());
+}
+
 /**
  * Makes every checkout of `repo`'s files (a new worktree's included) run the shell command `command` first: a smudge
- * filter on a file committed for it. A test's hold on a checkout, where a hook would do but the board runs none.
+ * filter on a file committed for it, named in the user's own config (`userGitConfig`), as the board runs no filter the
+ * repo's config names. A test's hold on a checkout, where a hook would do but the board runs none.
  */
 export function onCheckout(repo: string, command: string): void {
-  git(repo, 'config', 'filter.on-checkout.smudge', `${command}; cat`);
-  git(repo, 'config', 'filter.on-checkout.clean', 'cat');
+  const config = userGitConfig();
+  execFileSync('git', ['config', '--file', config, 'filter.on-checkout.smudge', `${command}; cat`]);
+  execFileSync('git', ['config', '--file', config, 'filter.on-checkout.clean', 'cat']);
   writeFileSync(join(repo, '.gitattributes'), 'checkout.txt filter=on-checkout\n');
   writeFileSync(join(repo, 'checkout.txt'), 'checked out\n');
   git(repo, 'add', '.gitattributes', 'checkout.txt');

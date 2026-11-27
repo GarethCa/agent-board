@@ -63,6 +63,15 @@ export async function pinRandomText(page: Page) {
     for (const element of document.querySelectorAll(".hybrid-tile-branch, .session-window-where, .details-branch, .agent-shelves-footer-branch, [data-testid='setup-branch'] .agent-shelves-mono, .ui-section-meta, .spotlight-sub")) {
       for (const node of textNodes(element)) node.data = node.data.replace(/-[0-9a-f]{6}(?=$|-review-r\d+$)/, '-000000');
     }
+    // A menu row's detail (an agent's Copy rows: branch, worktree, session id). Masked in shots, but a mask is as wide as
+    // its text, and this run's hex in a proportional font would move its edge.
+    for (const element of document.querySelectorAll('.ui-menu-detail')) {
+      for (const node of textNodes(element)) {
+        node.data = node.data
+          .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, '00000000-0000-0000-0000-000000000000')
+          .replace(/-[0-9a-f]{6}(?=$|-review-r\d+$)/, '-000000');
+      }
+    }
     for (const element of document.querySelectorAll('.details-soft')) {
       for (const node of textNodes(element)) node.data = `~/.agent-board/worktrees/${node.data.split('/').at(-1)!.replace(/-[0-9a-f]{6}$/, '-000000')}`;
     }

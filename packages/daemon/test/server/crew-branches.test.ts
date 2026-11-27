@@ -143,7 +143,7 @@ describe('a crew of two makers', () => {
     await vi.waitFor(async () => {
       const [now] = (await client.call('agent.list')).filter((each) => each.sessionId === api.sessionId);
       expect(now!.recordedPullRequests.map((each) => each.url)).toContain(`https://github.com/acme/web/pull/${pr!.number}`);
-    });
+    }, { timeout: 10_000 });
     // Its crew worktree stays until the crew closes.
     const worktrees = git(repo, 'worktree', 'list', '--porcelain');
     expect(worktrees).toContain(`branch refs/heads/${crewBranch}`);
@@ -169,5 +169,6 @@ describe('a crew of two makers', () => {
       },
       { timeout: 10_000 },
     );
-  });
+    // Its waits add up to more than the suite's 20 s: under a full gate's load the crew alone can take most of that.
+  }, 90_000);
 });

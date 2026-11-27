@@ -3,6 +3,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { plural } from './text-words.ts';
 import { BoardError, BoardRefs, callerTicket, connectorLine, connectorsIn, connectorsOnTicket, itemLine, itemPlace, readEveryBoard, ticketBoardName, REF_KINDS, resolveAgent, shapeSectionLines, zoneLine, type BoardSession, type BoardView, type RefKind } from './board-ops.ts';
 import { checkPlacements } from './params.ts';
 import {
@@ -231,8 +232,6 @@ const DIAGRAM_HINTS: Record<ReadFace, { members: string; whole: string; all: str
   cli: { members: 'members with --sections, or `agent-board show <ref>`', whole: '`agent-board show <ref>` for one whole', all: '`agent-board tree --json` lists them all' },
   mcp: { members: 'members with sections: true', whole: 'each section cut to its first 12 lines', all: 'the board tool lists them all' },
 };
-
-const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? '' : 's'}`;
 
 /**
  * The zone's diagram, kept short whatever its size: its shapes, each by its kind, text and section counts (with

@@ -2,11 +2,12 @@ import { existsSync, writeFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { join } from 'node:path';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
-import { fakeHarnessEnv } from '@agent-board/fake-harness';
+import { fakeHarnessEnv, McpClient } from '@agent-board/fake-harness';
 import { runBoardCommand } from '../src/board-cli.ts';
 import { daemonPaths } from '../src/paths.ts';
 import { BOARD_ERROR, MAX_MEMORY_VALUE, type Agent, type AgentUpdatedEvent, type BoardItem, type DaemonEvent, type MemoryData, type MemoryView, type QueueData, QUEUE_LATER } from '../src/protocol.ts';
-import { connectTestClient, onCheckout, recordEvents, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
+import { overlaps } from '../src/board-layout.ts';
+import { connectTestClient, onCheckout, recordEvents, startTestDaemon, tempDataDir, tempRepo, TEST_CLI_LAUNCHER, tileOf } from './helpers.ts';
 
 const SIZE = { cols: 120, rows: 40 };
 
@@ -583,7 +584,7 @@ describe('kinds of queue row', () => {
     expect(wrong.code).not.toBe(0);
     expect(wrong.err).toContain('kind must be one of task, request, prompt, info');
     await expect(client.call('queue.change', { id: mine.id, change: { action: 'add', kind: 'task', text: 'Do it' } })).rejects.toThrow(/review, questions, backlog, read on the user's queue/);
-    expect((await cli(env, 'queue', 'add', 'Backlog', '--kind', 'chore', 'x')).err).toContain('--kind is one of');
+    expect((await cli(env, 'queue', 'add', 'Backlog', '--kind', 'chore', 'x')).err).toContain('kind is one of');
   });
 
   it('takes a headline with a body as one job, and keeps what its finisher says as it is done', async () => {
@@ -595,6 +596,8 @@ describe('kinds of queue row', () => {
     const [job] = (await client.call('queue.read', { id: card.id })).jobs;
     expect(job).toMatchObject({ kind: 'task', text: 'Fix the login\n\nThe token expires early.\n\nSee the logs.' });
     expect((await cli(env, 'queue', 'add', 'Backlog', '--body', 'x', 'one\ntwo')).err).toContain('give one headline');
+    const mcp = new McpClient({ command: TEST_CLI_LAUNCHER.command, args: [...TEST_CLI_LAUNCHER.args, 'mcp'], env: { ...process.env, ...env } }, tempDataDir());
+    expect(await mcp.callTool('queue_update', { queue: 'Backlog', action: 'add', headline: 'one\ntwo', body: 'x' })).toMatchObject({ isError: true, text: expect.stringContaining('give one headline') });
     const long = 'x'.repeat(81);
     expect((await cli(env, 'queue', 'add', 'Backlog', '--body', 'x', long)).err).toContain('a headline is one line of 1 to 80 characters');
     await expect(client.call('queue.change', { id: card.id, change: { action: 'add', text: 'a', headline: 'b' } })).rejects.toThrow(/not both/);
@@ -838,6 +841,48 @@ describe('a hand-on its agent never gets', () => {
 });
 
 describe('draining a queue', () => {
+  /** A queue of one job, drained one at a time and closing its agent when done; the agent it started, once it waits. */
+  const drained = async (setup: Awaited<ReturnType<typeof boardDaemon>>, before?: (card: BoardItem) => Promise<unknown>) => {
+    const { client, recorder, zone } = setup;
+    const data = { title: 'Backlog', madeBy: { kind: 'user' }, audience: 'agents', noAgents: false, count: 0 };
+    const card = await client.call('item.create', { kind: 'queue', zoneId: zone.id, x: 40, y: 80, width: 340, height: 244, data });
+    await client.call('queue.change', { id: card.id, change: { action: 'add', text: 'Fix the login' } });
+    await before?.(card);
+    await client.call('item.update', { id: card.id, data: { drain: { on: true, harness: 'claude', model: null, role: null, closeWhenDone: true, most: 1, started: [] } } });
+    const named = async () => (await client.call('agent.list')).find((agent) => agent.name === 'Fix the login');
+    await expect.poll(named, { timeout: 15_000 }).toBeDefined();
+    const agent = (await named())!;
+    await client.call('session.attach', { sessionId: agent.sessionId });
+    await recorder.waitForText(agent.sessionId, `agent-board queue done item:${card.id}`);
+    return { card, agent };
+  };
+
+  it('starts its agent clear of what is in its zone, the queue and a note under it too', async () => {
+    const setup = await boardDaemon();
+    let note: BoardItem | undefined;
+    const { card, agent } = await drained(setup, async () => {
+      note = await setup.client.call('item.create', { kind: 'sticky', zoneId: setup.zone.id, x: 40, y: 348, width: 240, height: 200, data: { text: 'Under the queue', color: '#fff3a3' } });
+    });
+    const tile = tileOf(agent);
+    expect(overlaps(tile, card)).toBe(false);
+    expect(overlaps(tile, note!)).toBe(false);
+  });
+
+  it('closes an agent done with its job with its reviewers', async () => {
+    const setup = await boardDaemon();
+    const { client } = setup;
+    const { card, agent } = await drained(setup);
+    const round = await client.call('review.start', { sessionId: agent.sessionId, ...SIZE });
+    expect(round.reviewer).toEqual(expect.any(String));
+
+    const [job] = (await client.call('queue.read', { id: card.id })).jobs;
+    await client.call('queue.change', { id: card.id, change: { action: 'done', job: job!.id } });
+    await client.call('agent.answer', { sessionId: agent.sessionId, text: 'Thanks' });
+    await expect.poll(async () => (await client.call('agent.list')).map((each) => each.sessionId), { timeout: 15_000 }).toEqual([]);
+    // The round goes with its implementer.
+    expect((await client.call('review.list')).find((each) => each.id === round.id)).toBeUndefined();
+  });
+
   it('starts a fresh agent for each waiting job while fewer than most are taken, and closes one done with its job', async () => {
     const { client, recorder, zone } = await boardDaemon();
     const data = { title: 'Backlog', madeBy: { kind: 'user' }, audience: 'agents', noAgents: false, count: 0 };
@@ -953,7 +998,7 @@ describe('draining a queue', () => {
     await cli(lead.env, 'queue', 'add', 'Backlog', '--', 'Fix the login');
     const other = await start('Memory: Mine', undefined, 'Other');
     expect((await cli(other.env, 'queue', 'drain', 'Backlog', 'on')).err).toContain("isn't yours");
-    expect((await cli(lead.env, 'queue', 'drain', 'Backlog', 'on', '--most', '4')).err).toContain('--most is 1, 2 or 3');
+    expect((await cli(lead.env, 'queue', 'drain', 'Backlog', 'on', '--most', '4')).err).toContain('most is 1, 2 or 3');
     expect((await cli(lead.env, 'queue', 'drain', 'Backlog', 'on', '--most', '1')).out).toContain('at most 1 at once');
     await expect.poll(async () => (await client.call('agent.list')).some((agent) => agent.name === 'Fix the login'), { timeout: 15_000 }).toBe(true);
     expect((await cli(lead.env, 'queue', 'drain', 'Backlog', 'off')).out).toContain('starts no more agents');

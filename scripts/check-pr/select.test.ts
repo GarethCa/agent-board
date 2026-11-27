@@ -277,7 +277,7 @@ describe('selectChecks', () => {
   it('runs no checks beyond the cheap ones for docs, prompts and tooling with their own tests', () => {
     const plan = selectChecks([
       'docs/BRIEF.md',
-      '.claude/skills/cmux-workers/worker.sh',
+      '.claude/agent-prompts/impl-prompt.md',
       'scripts/try-latest/try-latest.ts',
       'scripts/release-public/sanitise.ts',
       'release/public.config.ts',

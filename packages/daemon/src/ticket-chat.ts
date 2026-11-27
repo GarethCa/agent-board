@@ -14,7 +14,7 @@ export interface TicketChatAgents {
   spawn(params: SpawnAgentParams, spawnedBy?: string): Promise<Agent>;
   delete(sessionId: string, why: string, force: boolean, keepWorktree?: boolean): Promise<void>;
   /** Types `text` to the agent as its next turn, or queues it. */
-  runScheduled(sessionId: string, text: string): unknown;
+  runScheduled(sessionId: string, text: string, notTyped?: (reason: string) => void, label?: string): unknown;
   announce(sessionId: string): void;
 }
 
@@ -102,7 +102,7 @@ export function createTicketChatHost({ db, agents, log }: TicketChatHostOptions)
       }
       if (started.worktree !== chat.worktree) log(`${started.name} did not start in ${chat.name}'s worktree: it builds in ${started.worktree}`);
       agents.announce(chat.sessionId);
-      agents.runScheduled(chat.sessionId, toLeadText(started));
+      agents.runScheduled(chat.sessionId, toLeadText(started), undefined, 'A hand-over of its ticket');
     });
 
   const toImplementer = (chat: Agent, gone: Agent | undefined) =>
@@ -113,7 +113,7 @@ export function createTicketChatHost({ db, agents, log }: TicketChatHostOptions)
       if (gone !== undefined && gone.endedAt === null && agents.get(gone.sessionId) !== undefined) {
         await agents.delete(gone.sessionId, `${chat.name} took its branch back`, false, true);
       }
-      agents.runScheduled(chat.sessionId, toImplementerText(gone));
+      agents.runScheduled(chat.sessionId, toImplementerText(gone), undefined, 'A hand-over of its ticket');
     });
 
   const pending = (chat: Agent, kind: TicketChatKind | null) => {

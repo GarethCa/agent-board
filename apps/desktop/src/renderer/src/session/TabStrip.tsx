@@ -64,7 +64,8 @@ interface TabStripProps {
   trailing?: ReactNode;
   /**
    * Given, every tab drags along the strip, and only along it: dropped at `index` (as `drop` counts it, the tab still in
-   * place), it moves there. Dropped anywhere else it stays put. A pop-up's row has it in place of `dragOf`.
+   * place), it moves there. Dropped anywhere else it stays put. A pop-up's row has it in place of `dragOf`, but for a tab
+   * `dragOf` gives a drag for, which drags as that.
    */
   reorder?(id: string, index: number): void;
   /** The tab the user came from, underlined so one click (or ⌘[) goes back to it. */
@@ -76,6 +77,9 @@ interface TabStripProps {
 /** What a tab dragged along a strip that reorders carries: its own type, so nothing else (the board, a window) takes it. */
 /** What a tab of a reorderable row carries as it is dragged: its id. A pop-up's panes take it too, to show it there. */
 export const ROW_TAB_TYPE = 'application/x-agent-board-row-tab';
+
+/** Whether a tab drags along its strip, one that reorders: not one that drags as itself (a shell, out of an expanded tile's row). */
+export const movesAlong = (reorders: boolean, drag: TabDrag | undefined): boolean => reorders && drag === undefined;
 
 /** What a session window's strip adds: its + menu, and Split. */
 export interface TabAdds {
@@ -184,7 +188,7 @@ export function TabStrip({ tabs, active, focused = false, onSelect, onAltSelect,
       <div ref={list} className="session-tabs-list" role="tablist" aria-label={label} onKeyDown={move}>
         {tabs.map((tab, index) => {
           const drag = dragOf?.(tab.id);
-          const moves = reorder !== undefined;
+          const moves = movesAlong(reorder !== undefined, drag);
           return (
             <Fragment key={tab.id}>
               {over === index && slot}

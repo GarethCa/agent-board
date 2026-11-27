@@ -34,6 +34,7 @@ const DEFAULT_SETTINGS: DaemonSettings = {
   keepWebLogins: true,
   defaultEffort: null,
   roleEfforts: {},
+  boardToolsOnly: [],
 };
 
 /** The settings that are switches. */
@@ -64,6 +65,7 @@ export function createSettings(db: DatabaseSync, changed: (now: DaemonSettings, 
       for (const name of SWITCHES) if (key === name && typeof JSON.parse(value) === 'boolean') settings[name] = JSON.parse(value);
       if (key === 'defaultEffort' && EFFORTS.includes(JSON.parse(value))) settings.defaultEffort = JSON.parse(value);
       if (key === 'roleEfforts') settings.roleEfforts = savedRoleEfforts(JSON.parse(value));
+      if (key === 'boardToolsOnly') settings.boardToolsOnly = savedRoles(JSON.parse(value));
     }
     return settings;
   };
@@ -79,6 +81,7 @@ export function createSettings(db: DatabaseSync, changed: (now: DaemonSettings, 
         const roleEfforts = fields.roleEfforts === undefined ? undefined : roleEffortsParam(fields);
         if (efforts !== undefined) upsert.run('defaultEffort', JSON.stringify(efforts));
         if (roleEfforts !== undefined) upsert.run('roleEfforts', JSON.stringify(roleEfforts));
+        if (fields.boardToolsOnly !== undefined) upsert.run('boardToolsOnly', JSON.stringify(boardToolsOnlyParam(fields)));
         if (fields.heldPayloads !== undefined) upsert.run('heldPayloads', JSON.stringify(oneOf(fields, 'heldPayloads', HELD_PAYLOAD_STORAGE)));
         for (const key of ['claudePath', 'codexPath'] as const) {
           if (fields[key] !== undefined) upsert.run(key, JSON.stringify(harnessPathParam(fields, key)));
@@ -131,6 +134,14 @@ export function defaultEffort(settings: Pick<DaemonSettings, 'defaultEffort' | '
 }
 
 /**
+ * Whether a new Claude agent in role `role` (a built-in role, or a custom one's name) gets the board's MCP tools alone,
+ * by Settings. An agent with no role never does.
+ */
+export function boardToolsOnly(settings: Pick<DaemonSettings, 'boardToolsOnly'>, role: string | null): boolean {
+  return role !== null && settings.boardToolsOnly.includes(roleKey(role));
+}
+
+/**
  * The name a role's effort is kept under: matched in ASCII case only, as role templates are, and a follow-up reviewer's
  * under the reviewers'.
  */
@@ -167,4 +178,20 @@ function savedRoleEfforts(value: unknown): Record<string, Effort> {
       .filter(([, effort]) => EFFORTS.includes(effort as Effort))
       .map(([role, effort]) => [roleKey(role), effort]),
   ) as Record<string, Effort>;
+}
+
+/** The roles whose Claude agents get the board's tools alone, from Settings: each by its name, once. */
+function boardToolsOnlyParam(fields: Record<string, unknown>): string[] {
+  const value = fields.boardToolsOnly;
+  if (!Array.isArray(value)) throw invalidParams('boardToolsOnly must be a list of role names');
+  for (const role of value) {
+    if (typeof role !== 'string' || role.trim() === '') throw invalidParams('boardToolsOnly takes each role by its name');
+  }
+  return [...new Set((value as string[]).map(roleKey))];
+}
+
+/** The roles saved for the board's tools alone, leaving out any that are not a name. */
+function savedRoles(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.filter((role): role is string => typeof role === 'string' && role.trim() !== '').map(roleKey))];
 }

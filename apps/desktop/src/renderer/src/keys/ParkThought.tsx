@@ -1,11 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import * as RadixDialog from '@radix-ui/react-dialog';
 import { MessageCircleDashed } from 'lucide-react';
-import { SESSION_SURFACES } from '../board/board-shortcuts';
+import { appKeysReach } from '../board/board-shortcuts';
 import { focusKeeper } from '../chrome/Spotlight';
 import { errorMessage } from '../../../shared/errors';
 import { Kbd, useToast } from '../ui';
-import { inOverlay } from '.';
 import { onParkThought, parkLine, parkThought, unpark } from './park-thought';
 import { pressed } from './registry';
 
@@ -31,8 +30,8 @@ export function ParkThought() {
     const onKeyDown = (event: KeyboardEvent) => {
       if (!pressed('move.parkThought', event)) return;
       const open = restoreRef.current;
-      // Another dialog or menu keeps its keys; a session window, a dialog too, is where it opens from.
-      if (open === undefined && inOverlay() && document.activeElement?.closest(SESSION_SURFACES) == null) return;
+      // Another dialog or menu keeps its keys; a view an agent is open in (a pop-up, a session window), a dialog too, is where it opens from.
+      if (open === undefined && !appKeysReach(document.activeElement)) return;
       event.preventDefault();
       event.stopPropagation();
       if (open !== undefined) input.current?.focus();

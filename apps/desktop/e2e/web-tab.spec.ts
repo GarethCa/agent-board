@@ -88,6 +88,8 @@ async function freePort(): Promise<number> {
 /** Types `typed` into the web tab's address row and goes there. */
 async function goTo(window: Page, typed: string): Promise<void> {
   const address = webView(window).getByTestId('web-address');
+  // The last page's own address, coming in after the typing, would take its place: wait for the tab to have it first.
+  await expect(webView(window)).toHaveAttribute('aria-busy', 'false');
   await address.fill(typed);
   await address.press('Enter');
 }
@@ -429,7 +431,7 @@ test('web tabs keep a login across closing the tab and a restart, as a browser d
     await expect(webView(window).getByTestId('web-private')).toHaveText('Private');
     const privateId = (await webView(window).getAttribute('data-web-tab'))!;
     const privateCookies = () => app.evaluate(({ session }, id) => session.fromPartition(`web-tab-${id}`).cookies.get({}).then((all) => all.length), privateId);
-    expect(await privateCookies()).toBe(1);
+    await expect.poll(privateCookies).toBe(1);
     expect(await sharedCookies(app)).toEqual([]);
     await closeWebTab(app, window, host);
     await expect.poll(privateCookies).toBe(0);
@@ -438,9 +440,9 @@ test('web tabs keep a login across closing the tab and a restart, as a browser d
 
     // Signed in in one web tab, another opened after it closed is signed in too.
     await goTo(window, `${server.url}login`);
-    await expect((await webPage(app, `${server.url}login`)).locator('h1')).toHaveText('Signed in');
+    await expectHeading(app, `${server.url}login`, 'Signed in');
     await closeWebTab(app, window, host);
-    expect(await sharedCookies(app)).toEqual(['login']);
+    await expect.poll(() => sharedCookies(app)).toEqual(['login']);
     await openWebTab(app, window, 'Web…', `${server.url}account`, 'Signed in');
 
     // And after a restart, the tab kept loads signed in.
@@ -448,12 +450,13 @@ test('web tabs keep a login across closing the tab and a restart, as a browser d
     await expect.poll(() => keptWebUrl(window, shellId)).toBe(`${server.url}account`);
     await app.close();
     ({ app, window } = await launch(dataDir, appEnv));
-    await expect((await webPage(app, `${server.url}account`)).locator('h1')).toHaveText('Signed in');
+    await expectHeading(app, `${server.url}account`, 'Signed in');
 
     // Clear browsing data, once confirmed, signs every web tab out.
     await confirmClear(window, (webTabs) => webTabs.getByRole('button', { name: 'Clear browsing data…' }).click());
+    // Read from the main process: the page reloaded afresh, and Playwright's list of pages can still hold the old one.
+    await expectHeading(app, `${server.url}account`, 'Signed out');
     expect(await sharedCookies(app)).toEqual([]);
-    await expect((await webPage(app, `${server.url}account`)).locator('h1')).toHaveText('Signed out');
 
     // Turned off in Settings, what was kept goes, and the tab, opened again, is private and says so: signing in there keeps nothing.
     await goTo(window, `${server.url}login`);

@@ -261,6 +261,14 @@ describe('the cheat sheet', () => {
     expect(at('window')).toEqual(['window*', 'move', 'make', 'edit', 'tile', 'dialog']);
   });
 
+  it("lists the board's ⇧↵ in ⌘K, opening the pick's view, with its keys from the registry", () => {
+    const row = (isMac: boolean, extended = true) => cheatSheet('board', { extended, isMac }).flatMap((section) => section.rows).find((entry) => entry.id === 'dialog.openView');
+    expect(row(true)?.label).toBe('Open the tile picked in its view, from the switcher on the board');
+    expect(row(true)?.keys).toEqual(['⇧↵']);
+    expect(row(false)?.keys).toEqual(['⇧↵']);
+    expect(row(true, false)?.keys).toEqual(['⇧↵']);
+  });
+
   it('filters by label or key, dropping sections left empty', () => {
     const split = cheatSheet('window', { extended: true, filter: 'split', isMac: true });
     expect(split.map((section) => section.id)).toEqual(['window']);
@@ -268,7 +276,7 @@ describe('the cheat sheet', () => {
       ['Split beside', ['⌘D']],
       ['Split below', ['⌘⇧D']],
     ]);
-    expect(ids(cheatSheet('board', { extended: true, filter: '⌘⇧', isMac: true }))).toEqual(['move.master', 'move.parkThought', 'make.askClaude', 'edit.redo', 'window.splitBelow', 'window.runGate', 'window.overview', 'window.openLinkBrowser']);
+    expect(ids(cheatSheet('board', { extended: true, filter: '⌘⇧', isMac: true }))).toEqual(['move.master', 'move.parkThought', 'move.closeWindow', 'make.askClaude', 'edit.redo', 'window.splitBelow', 'window.runGate', 'window.overview', 'window.openLinkBrowser']);
     expect(cheatSheet('board', { extended: true, filter: 'nothing like this' })).toEqual([]);
   });
 });

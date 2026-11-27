@@ -3,7 +3,7 @@ import { AGENT_TILE_SIZE } from '@agent-board/daemon/board-layout';
 import { useMemo } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
 import { HybridTile } from './HybridTile';
-import { PopupTabs } from './AgentPopup';
+import { AgentViewTabs } from './agent-view/AgentViewTabs';
 import { popUpRow } from './agent-popup';
 import { tokenNumber } from '../theme';
 import { PopoverPreview } from '../ui';
@@ -328,7 +328,7 @@ const nothing = () => {};
 export function TicketPopupRowGallery() {
   const row = (testId: string, size: { width: number }) => (
     <div style={size} data-testid={testId}>
-      <PopupTabs
+      <AgentViewTabs
         row={ROW_TABS}
         active={REVIEWER}
         from={ROW.chat.sessionId}

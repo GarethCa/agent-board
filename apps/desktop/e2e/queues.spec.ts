@@ -95,6 +95,32 @@ test('Q puts a queue at the pointer ready to type; it queues jobs and notes, sho
     await window.keyboard.press('Escape');
     await expect(peek).toBeHidden();
 
+    // A double-click on the card opens it full screen, its jobs in groups beside the one picked, focused in the list;
+    // Esc goes back to the board, the focus on the queue again.
+    await card.locator('.queue-counts').dblclick();
+    const full = window.getByTestId('queue-full');
+    await expect(full).toBeVisible();
+    await expect(full.getByRole('list', { name: 'Jobs in groups' })).toContainText('Waiting, in order');
+    await expect(full.locator('.queue-full-item[aria-current="true"]')).toBeFocused();
+    // ⌥↑ and ⌥↓ move the picked job in its group, and the focus stays on its row as the list redraws.
+    await window.keyboard.press('ArrowDown');
+    const picked = full.locator('.queue-full-item[aria-current="true"]');
+    await expect(picked).toContainText('Fix the login page');
+    await window.keyboard.press('Alt+ArrowUp');
+    await expect.poll(() => openTexts(dataDir)).toEqual(['Fix the login page', 'Ask first']);
+    await expect(full.locator('.queue-full-item').first()).toContainText('Fix the login page');
+    await expect(picked).toBeFocused();
+    await window.keyboard.press('Alt+ArrowDown');
+    await expect.poll(() => openTexts(dataDir)).toEqual(['Ask first', 'Fix the login page']);
+    await expect(full.locator('.queue-full-item').first()).toContainText('Ask first');
+    await expect(picked).toContainText('Fix the login page');
+    await expect(picked).toBeFocused();
+    await window.keyboard.press('Escape');
+    await expect(full).toBeHidden();
+    await expect
+      .poll(() => window.evaluate(() => document.activeElement?.closest('.react-flow__node')?.querySelector('[data-testid="queue-card"]') != null))
+      .toBe(true);
+
     // Folded, it is its ticket with its count, the NEXT tab naming the next job, and its scope; a click opens the peek.
     await card.locator('.listcard-title').click();
     await window.getByRole('button', { name: 'Fold to its icon' }).click();

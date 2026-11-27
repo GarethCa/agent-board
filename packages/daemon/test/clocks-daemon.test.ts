@@ -1,12 +1,15 @@
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import { fakeHarnessEnv, type FakeScenario } from '@agent-board/fake-harness';
 import type { DaemonClient } from '../src/client.ts';
-import { MAX_CLOCK_TEMPLATES, MAX_CLOCK_TEMPLATES_PER_AGENT, RPC_ERROR, type Agent, type AgentUpdatedEvent, type ClockData, type ClockStatus, type ClockUpdatedEvent, type DaemonEvent, type Harness, type HookEvent } from '../src/protocol.ts';
+import { BOARD_ERROR, MAX_CLOCK_TEMPLATES, MAX_CLOCK_TEMPLATES_PER_AGENT, NOTHING_TO_DO, RPC_ERROR, type Agent, type AgentUpdatedEvent, type ClockData, type ClockStatus, type ClockUpdatedEvent, type DaemonEvent, type Harness, type HookEvent } from '../src/protocol.ts';
 import { daemonPaths } from '../src/paths.ts';
 import { runBoardCommand } from '../src/board-cli.ts';
+import { overlaps } from '../src/board-layout.ts';
 import { createFakeClock } from './fake-clock.ts';
-import { connectTestClient, recordEvents, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
+import { connectTestClient, recordEvents, startTestDaemon, tempDataDir, tempRepo, tileOf } from './helpers.ts';
 import { pinTimeZone } from './pin-time-zone.ts';
 
 pinTimeZone('Europe/London');
@@ -58,20 +61,56 @@ describe('clocks', () => {
     const running = await untilStatus(recorder, made.id, (status) => status.runs[0]?.sessionId != null);
     const [run] = running.runs;
     expect(run).toMatchObject({ outcome: 'running', agentName: 'Check the deps #1', dueAt: EIGHT.toISOString() });
-    // Its tile goes under the clock, in its zone.
-    expect((await client.call('agent.list')).find((agent) => agent.sessionId === run!.sessionId)).toMatchObject({
-      zoneId: zone.id,
-      name: 'Check the deps #1',
-      position: { x: 40, y: 40 + 76 + 24 },
-    });
+    // Its tile goes in its zone, clear of the clock.
+    const started = (await client.call('agent.list')).find((agent) => agent.sessionId === run!.sessionId)!;
+    expect(started).toMatchObject({ zoneId: zone.id, name: 'Check the deps #1' });
+    expect(overlaps(tileOf(started), made)).toBe(false);
 
     const done = await untilStatus(recorder, made.id, (status) => status.runs[0]?.outcome === 'done');
     expect(done.runs[0]).toMatchObject({ result: 'All tests pass.', reason: null, finishedAt: expect.any(String) });
     expect((await client.call('agent.list')).some((agent) => agent.sessionId === run!.sessionId)).toBe(false);
     const notes = (await client.call('item.list')).filter((item) => item.kind === 'agent-note');
     expect(notes).toEqual([
-      expect.objectContaining({ zoneId: zone.id, x: 40, y: 140, data: expect.objectContaining({ text: 'All tests pass.', agent: expect.objectContaining({ name: 'Check the deps #1' }) }) }),
+      expect.objectContaining({ zoneId: zone.id, x: started.position!.x, y: started.position!.y, data: expect.objectContaining({ text: 'All tests pass.', agent: expect.objectContaining({ name: 'Check the deps #1' }) }) }),
     ]);
+  });
+
+  it("starts a fresh agent clear of what is in its zone, the clock and a note under it too", async () => {
+    const { client, recorder, clock, zone } = await clockDaemon();
+    const made = await freshClock(client, zone.id, {});
+    const note = await client.call('item.create', { kind: 'sticky', zoneId: zone.id, x: 40, y: 140, width: 240, height: 200, data: { text: 'Under the clock', color: '#fff3a3' } });
+    clock.advanceTo(EIGHT);
+    const [run] = (await untilStatus(recorder, made.id, (status) => status.runs[0]?.sessionId != null)).runs;
+    const started = (await client.call('agent.list')).find((agent) => agent.sessionId === run!.sessionId)!;
+    expect(overlaps(tileOf(started), made)).toBe(false);
+    expect(overlaps(tileOf(started), note)).toBe(false);
+  });
+
+  it('closes a fresh agent with its reviewers once its run is over', async () => {
+    const { client, recorder, clock, zone } = await clockDaemon('waiting');
+    const made = await freshClock(client, zone.id, { cron: '0 * * * *' });
+    clock.advanceTo(EIGHT);
+    const [run] = (await untilStatus(recorder, made.id, (status) => status.runs[0]?.sessionId != null)).runs;
+    await untilAgent(recorder, run!.sessionId!, (agent) => agent.lastMessage?.endsWith('?') === true);
+    const round = await client.call('review.start', { sessionId: run!.sessionId!, ...SIZE });
+    expect(round.reviewer).toEqual(expect.any(String));
+
+    await client.call('agent.answer', { sessionId: run!.sessionId!, text: 'SQLite' });
+    await untilStatus(recorder, made.id, (status) => status.runs[0]?.outcome === 'done');
+    await expect.poll(async () => (await client.call('agent.list')).map((agent) => agent.sessionId), { timeout: 10_000 }).toEqual([]);
+    // The round goes with its implementer.
+    expect((await client.call('review.list')).find((each) => each.id === round.id)).toBeUndefined();
+  });
+
+  it('starts the fresh agents of two clocks firing together in one zone clear of each other', async () => {
+    const { client, recorder, clock, zone } = await clockDaemon();
+    const first = await freshClock(client, zone.id, {});
+    const second = await client.call('clock.add', { place: { zoneId: zone.id, x: 40, y: 140 }, data: { cron: '0 8 * * *', does: 'fresh', prompt: 'Check the docs' } });
+    clock.advanceTo(EIGHT);
+    const started = await Promise.all([first, second].map(async (made) => (await untilStatus(recorder, made.id, (status) => status.runs[0]?.sessionId != null)).runs[0]!.sessionId!));
+    const tiles = (await client.call('agent.list')).filter((agent) => started.includes(agent.sessionId)).map(tileOf);
+    expect(tiles).toHaveLength(2);
+    expect(overlaps(tiles[0]!, tiles[1]!)).toBe(false);
   });
 
   it('leaves the agent open, and its result in the history alone, when it is told to', async () => {
@@ -875,5 +914,109 @@ describe('clock templates', () => {
       message: expect.stringContaining('unknown board token'),
     });
     expect((await setup.client.call('clockTemplate.list', {})).map((each) => each.name)).toEqual(['Early']);
+  }, 20_000);
+});
+
+describe('a clock with an only-if script', () => {
+  /** A daemon whose agents play every prompt as `ask-plan` does: anything but `Flag:` or `Clock:` runs the tests. */
+  const watchDaemon = () => clockDaemon('ask-plan', tempDataDir(), true);
+  type Setup = Awaited<ReturnType<typeof watchDaemon>>;
+  const runs = (setup: Setup, clockId: string, count: number) => untilStatus(setup.recorder, clockId, (status) => status.runs.length === count && status.runs[0]!.outcome !== 'running');
+
+  it("runs its script in its agent's folder first: exit 1 skips the run, a changed script skips it, exit 0 sends what it printed", async () => {
+    const setup = await watchDaemon();
+    const agent = await setup.client.call('agent.spawn', { zoneId: setup.zone.id, prompt: 'Run the tests', ...SIZE });
+    await setup.client.call('session.attach', { sessionId: agent.sessionId });
+    await untilAgent(setup.recorder, agent.sessionId, (seen) => seen.state === 'idle' || seen.state === 'waiting');
+    const made = await setup.client.call('clock.add', { place: { beside: agent.sessionId }, data: { cron: '0 * * * *', prompt: 'Review the open PRs' } });
+    writeFileSync(join(agent.cwd, 'check.sh'), 'exit 1\n');
+    const set = await setup.client.call('clock.setOnlyIf', { id: made.id, command: 'sh check.sh' });
+    expect(set.data.onlyIf).toEqual({ command: 'sh check.sh', cwd: agent.cwd, fingerprint: expect.stringMatching(/^[0-9a-f]{64}$/) });
+
+    setup.clock.advanceTo(EIGHT);
+    const nothing = await runs(setup, made.id, 1);
+    expect(nothing.runs[0]).toMatchObject({ outcome: 'skipped', reason: NOTHING_TO_DO, sessionId: null, awaitsTurn: false });
+
+    // Edited since it was set: it skips until the user sets it again.
+    writeFileSync(join(agent.cwd, 'check.sh'), 'echo "PR 12 waits for review"\n');
+    await setup.client.call('clock.runNow', { id: made.id });
+    expect((await runs(setup, made.id, 2)).runs[0]).toMatchObject({ outcome: 'skipped', reason: 'its only-if script has changed since you set it: set it again' });
+
+    await setup.client.call('clock.setOnlyIf', { id: made.id, command: 'sh check.sh' });
+    await setup.client.call('clock.runNow', { id: made.id });
+    const done = await untilStatus(setup.recorder, made.id, (status) => status.runs.length === 3 && status.runs[0]!.finishedAt !== null);
+    expect(done.runs[0]).toMatchObject({ outcome: 'done', awaitsTurn: true, sessionId: agent.sessionId, result: 'All tests pass.' });
+    expect(setup.recorder.screenText(agent.sessionId)).toContain('PR 12 waits for review');
+
+    const cleared = await setup.client.call('clock.setOnlyIf', { id: made.id, command: null });
+    expect(cleared.data.onlyIf).toBeNull();
+  }, 30_000);
+
+  it("runs a fresh clock's script in its zone's folder, and skips on any other exit, saying how it ended", async () => {
+    const setup = await clockDaemon();
+    const made = await freshClock(setup.client, setup.zone.id, {});
+    writeFileSync(join(setup.zone.repoRoot!, 'gate.sh'), 'echo "the API is down"\nexit 3\n');
+    await setup.client.call('clock.setOnlyIf', { id: made.id, command: 'sh gate.sh' });
+    setup.clock.advanceTo(EIGHT);
+    expect((await runs(setup, made.id, 1)).runs[0]).toMatchObject({ outcome: 'skipped', reason: 'its only-if script exited 3: the API is down', sessionId: null });
+    expect((await setup.client.call('agent.list')).length).toBe(0);
+  });
+
+  it('skips once its agent moves the clock to another folder, by making it start fresh agents', async () => {
+    const setup = await watchDaemon();
+    const agent = await setup.client.call('agent.spawn', { zoneId: setup.zone.id, prompt: 'Clock: {"after":"idle","why":"Nothing yet"}', ...SIZE });
+    await setup.client.call('session.attach', { sessionId: agent.sessionId });
+    await untilAgent(setup.recorder, agent.sessionId, (seen) => seen.state === 'idle' || seen.state === 'waiting');
+    const token = /identity:(.*):end\r\n/.exec(setup.recorder.screenText(agent.sessionId))?.[1];
+    const made = await setup.client.call('clock.add', { place: { beside: agent.sessionId }, data: { cron: '0 * * * *', prompt: 'Review the open PRs' } });
+    writeFileSync(join(agent.cwd, 'check.sh'), 'echo "PR 12 waits for review"\n');
+    // The same script in the zone's folder, so only the folder differs.
+    writeFileSync(join(setup.zone.repoRoot!, 'check.sh'), 'echo "PR 12 waits for review"\n');
+    await setup.client.call('clock.setOnlyIf', { id: made.id, command: 'sh check.sh' });
+
+    const agentClient = await connectTestClient(setup.daemon);
+    await agentClient.call('clock.self', { token, after: 'close', why: 'A fresh look each hour' });
+    setup.clock.advanceTo(EIGHT);
+    expect((await runs(setup, made.id, 1)).runs[0]).toMatchObject({
+      outcome: 'skipped',
+      reason: 'its only-if script would run in another folder than you set it for: set it again',
+      sessionId: null,
+    });
+    expect((await setup.client.call('agent.list')).length).toBe(1);
+  }, 20_000);
+
+  it('skips, as moved, a script set before it kept its folder, and the clock still takes updates', async () => {
+    const setup = await clockDaemon();
+    const made = await freshClock(setup.client, setup.zone.id, {});
+    writeFileSync(join(setup.zone.repoRoot!, 'gate.sh'), 'exit 0\n');
+    const set = await setup.client.call('clock.setOnlyIf', { id: made.id, command: 'sh gate.sh' });
+    const { fingerprint } = (set.data as { onlyIf: { fingerprint: string } }).onlyIf;
+    await setup.client.call('item.update', { id: made.id, data: { onlyIf: { command: 'sh gate.sh', fingerprint } } });
+    await setup.client.call('item.update', { id: made.id, data: { prompt: 'Check again' } });
+    setup.clock.advanceTo(EIGHT);
+    expect((await runs(setup, made.id, 1)).runs[0]).toMatchObject({ outcome: 'skipped', reason: expect.stringContaining('another folder'), sessionId: null });
+  });
+
+  it('is set by the user alone: refused from an agent, in a clock it adds, and as data that is not a set script', async () => {
+    const setup = await watchDaemon();
+    const agent = await setup.client.call('agent.spawn', { zoneId: setup.zone.id, prompt: 'Clock: {"after":"idle","why":"Nothing yet"}', ...SIZE });
+    await setup.client.call('session.attach', { sessionId: agent.sessionId });
+    await untilAgent(setup.recorder, agent.sessionId, (seen) => seen.state === 'idle' || seen.state === 'waiting');
+    const token = /identity:(.*):end\r\n/.exec(setup.recorder.screenText(agent.sessionId))?.[1];
+    const made = await setup.client.call('clock.add', { place: { beside: agent.sessionId }, data: { cron: '0 * * * *', prompt: 'Check' } });
+
+    const agentClient = await connectTestClient(setup.daemon);
+    const onlyIf = { command: 'true', cwd: '/tmp', fingerprint: 'a'.repeat(64) };
+    await expect(agentClient.call('orchestrator.addClock', { token, data: { cron: '0 * * * *', prompt: 'Check', agent: agent.sessionId, onlyIf } })).rejects.toMatchObject({
+      code: BOARD_ERROR.outOfScope,
+      message: "only the user sets a clock's only-if script",
+    });
+    // The connection is the agent's now: the user's methods are not.
+    await expect(agentClient.call('clock.setOnlyIf', { id: made.id, command: 'true' })).rejects.toMatchObject({ code: BOARD_ERROR.notAllowed });
+    await expect(setup.client.call('item.update', { id: made.id, data: { onlyIf: { command: 'true', cwd: 'relative', fingerprint: 'a'.repeat(64) } } })).rejects.toMatchObject({
+      message: expect.stringContaining("a clock's onlyIf must be { command, cwd, fingerprint }"),
+    });
+    await expect(setup.client.call('clock.setOnlyIf', { id: made.id, command: '  ' })).rejects.toMatchObject({ code: RPC_ERROR.invalidParams });
+    expect((await setup.client.call('item.list')).find((item) => item.id === made.id)!.data.onlyIf).toBeUndefined();
   }, 20_000);
 });

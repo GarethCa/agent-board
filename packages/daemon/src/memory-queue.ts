@@ -11,8 +11,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { boardCaller, connectionAgent, isOwnLiveSession, type BoardCallerSources, type BoardConnection } from './board.ts';
 import { notReadBecause, readsItem } from './item-scope.ts';
 import { isObject } from './json.ts';
-import { AGENT_TILE_SIZE, freeSpotFor } from './board-layout.ts';
-import { cutText } from './text-cut.ts';
+import { cutText } from './text-words.ts';
 import { jobBrief, jobTextOf } from './memory-lines.ts';
 import type { Answered } from './deliveries.ts';
 import { invalidParams, optionalBooleanParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
@@ -92,11 +91,15 @@ type MemoryQueueMethods = Pick<
 >;
 
 export interface MemoryQueueHostOptions extends BoardCallerSources {
-  agents: Pick<AgentHost, 'get' | 'fallbackOwner' | 'answer' | 'clearUnsent' | 'spawn' | 'delete' | 'stop'>;
+  agents: Pick<AgentHost, 'get' | 'fallbackOwner' | 'answer' | 'clearUnsent' | 'spawn' | 'stop'>;
   log?: (message: string) => void;
   db: DatabaseSync;
   /** The daemon's own methods: the cards are board items, made and changed through them. */
   call: DaemonCall;
+  /** Starts a drained agent with `start` where its tile goes in its queue's zone, as every new agent's goes: one at a time in a zone. */
+  placeAgent<T>(zoneId: string, start: (position: { x: number; y: number }) => Promise<T>): Promise<T>;
+  /** Closes a drained agent as every close goes, its helpers and reviewers first; refused, before any goes, by unsaved work of its own or its helpers'. */
+  close(sessionId: string, why: string): Promise<void>;
   /** Where a new card of the agent's goes: beside its tile. */
   place(sessionId: string, size: { width: number; height: number }): Promise<BoardPlace | undefined>;
   /** Tells the clients where the memory is that an agent read it (`memory.readBy`). */
@@ -117,8 +120,6 @@ const MAX_HISTORY_BYTES = 8 * 1024 * 1024;
 
 /** A drained agent's terminal, as a clock's fresh agent's. */
 const DRAIN_SIZE = { cols: 120, rows: 40 };
-/** How far below the queue its drained agents start. */
-const DRAIN_GAP = 24;
 /** The most characters of a job's first line a drained agent's name takes. */
 const MAX_DRAIN_NAME = 32;
 /** A queue's ref, as the CLI reads it: unique where its title may not be, and safe in a shell line. */
@@ -1026,17 +1027,18 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
       starting.add(next.id);
       let agent: Agent;
       try {
-        const tiles = (await options.call('agent.list', undefined)).filter((each) => each.zoneId === item.zoneId && each.position !== null).map((each) => ({ ...each.position!, ...AGENT_TILE_SIZE }));
-        agent = await options.agents.spawn({
-          zoneId: item.zoneId,
-          position: freeSpotFor({ x: item.x, y: item.y + item.height + DRAIN_GAP }, AGENT_TILE_SIZE, tiles),
-          harness: settings.harness,
-          model: settings.model ?? undefined,
-          role: settings.role ?? undefined,
-          name: cutText(next.text.split('\n', 1)[0]!.trim(), MAX_DRAIN_NAME),
-          prompt: jobBrief({ title: data.title, ref: itemRef(item) }, next.id, next.text, next.link, 'taken for you'),
-          ...DRAIN_SIZE,
-        });
+        agent = await options.placeAgent(item.zoneId, (position) =>
+          options.agents.spawn({
+            zoneId: item.zoneId,
+            position,
+            harness: settings.harness,
+            model: settings.model ?? undefined,
+            role: settings.role ?? undefined,
+            name: cutText(next.text.split('\n', 1)[0]!.trim(), MAX_DRAIN_NAME),
+            prompt: jobBrief({ title: data.title, ref: itemRef(item) }, next.id, next.text, next.link, 'taken for you'),
+            ...DRAIN_SIZE,
+          }),
+        );
         transaction(() => {
           const row = sql.job.get(next.id) as unknown as JobRow | undefined;
           if (row !== undefined && row.taken_by === null && row.done_at === null) putJob(item, { ...row, taken_by: JSON.stringify(agentWho(agent)), taken_at: now() }, agentWho(agent), 'take');
@@ -1058,7 +1060,7 @@ export function createMemoryQueueHost(options: MemoryQueueHostOptions): MemoryQu
       if ((sql.jobsTakenBy.all(sessionId) as unknown[]).length > 0) return;
       if (settings.closeWhenDone) {
         // Unsaved work is never thrown away: it is stopped instead, and stays for the user.
-        await options.agents.delete(sessionId, 'its queue job is done', false).catch(() => options.agents.stop(sessionId, 'its queue job is done').catch(() => {}));
+        await options.close(sessionId, 'its queue job is done').catch(() => options.agents.stop(sessionId, 'its queue job is done').catch(() => {}));
       }
       await drain(item.id);
       return;

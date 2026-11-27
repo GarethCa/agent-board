@@ -1,6 +1,7 @@
 import type {
   TicketWatchChange,
   Agent,
+  LaunchSettings,
   Crew,
   CrewPrefab,
   LibraryPrefab,
@@ -862,6 +863,7 @@ export const ITEM_IPC = {
   clocks: 'item:clocks',
   runClock: 'item:run-clock',
   addClock: 'item:add-clock',
+  setClockOnlyIf: 'item:set-clock-only-if',
   readMemory: 'item:read-memory',
   changeMemory: 'item:change-memory',
   memoryHistory: 'item:memory-history',
@@ -900,6 +902,8 @@ export interface ItemsApi {
   runClock(id: string): Promise<ClockStatus>;
   /** Adds a clock beside an agent's tile (joined to it) or at a place, with `data` over a new clock's. */
   addClock(data: Partial<ClockData>, place: ClockPlace): Promise<BoardItem>;
+  /** Sets the script a clock runs before each fire, in its agent's folder or else its zone's; null for none. */
+  setClockOnlyIf(id: string, command: string | null): Promise<BoardItem>;
   /** Calls `listener` with a clock's status whenever it changes. Returns the unsubscribe function. */
   onClockChanged(listener: (event: ClockUpdatedEvent) => void): () => void;
   /** Calls `listener` as an agent reads a memory (at most once a minute for each agent). Returns the unsubscribe function. */
@@ -984,6 +988,7 @@ export const AGENT_IPC = {
   pause: 'agent:pause',
   resume: 'agent:resume',
   restart: 'agent:restart',
+  restartWith: 'agent:restartWith',
   decidePermission: 'agent:decidePermission',
   decideRemove: 'agent:decideRemove',
   releasePermission: 'agent:releasePermission',
@@ -1085,13 +1090,24 @@ export interface AgentsApi {
   stop(sessionId: string): Promise<Agent>;
   /** Pauses the idle agent (hibernated), ending its session to free what it held; resolves with it paused. */
   pause(sessionId: string): Promise<Agent>;
-  /** Starts an agent stopped by restart or paused again, carrying on its conversation; resolves with it live. */
+  /**
+   * Starts an agent stopped by restart or paused again, carrying on its conversation; resolves with it live. Fails
+   * while the shell its pane dropped into runs something: `restart` answers that with `busy` instead, to ask about.
+   */
   resume(sessionId: string): Promise<Agent>;
   /**
-   * Starts an ended agent again, carrying on its conversation, ending the shell its pane dropped into; without `force`,
-   * stops short of ending that shell while it runs something.
+   * Wakes the agent, whatever stopped it, carrying on its conversation and ending the shell its pane dropped into;
+   * without `force`, stops short of ending that shell while it runs something (`busy`). Main runs one wake (this or
+   * `resume`) per agent at a time: one asked for while another is going, from any window, gets that one's answer.
    */
   restart(sessionId: string, force?: boolean): Promise<RestartAgentResult>;
+  /**
+   * Starts the agent again with these launch settings, carrying on its conversation: a part given replaces the one it
+   * kept, an empty one clears it, one left out stays, and the kept env vars `keepEnv` names stay under the env given.
+   * One still running is stopped first, mid-turn too (it carries on after). Without `force`, as `restart`, stops
+   * short of ending a shell running something: the settings are kept by then.
+   */
+  restartWith(sessionId: string, launchSettings: LaunchSettings, keepEnv?: string[], force?: boolean): Promise<RestartAgentResult>;
   /** Allows or denies the agent's permission prompt `requestId`, while the inbox can still answer it. */
   decidePermission(sessionId: string, requestId: string, decision: PermissionDecision): Promise<void>;
   /**
@@ -1460,7 +1476,7 @@ export type BoardRequest =
   | { kind: 'agent'; sessionId: string; action: BoardAgentAction };
 
 /** What a popped-out agent's menu asks the board to do for it, as its tile's menu would there. */
-export type BoardAgentAction = 'delete' | 'stop' | 'restart' | 'wake' | 'schedule' | 'link-issue' | 'save-prefab' | 'open-review' | 'ticket-board' | 'close-ticket';
+export type BoardAgentAction = 'delete' | 'stop' | 'restart' | 'restart-with' | 'wake' | 'schedule' | 'link-issue' | 'save-prefab' | 'open-review' | 'ticket-board' | 'close-ticket';
 
 /**
  * What switching a popped-out window did: it shows the session now, the session was out in another OS window already
@@ -1600,6 +1616,8 @@ export const VIEW_IPC = {
   measured: 'view:measured',
   /** Main to every window: a key was saved, with its value. */
   changed: 'view:changed',
+  /** Main to every window, `(OverlapsFreedEvent)`: the board's own layout moved these tiles and ended their overlaps. */
+  freed: 'view:freed',
   /** Main to every window as the app quits, `(id)`: send the saves waiting now. */
   flush: 'view:flush',
   /** A window to main, `(id)`: the saves it was waiting to send have been made. */
@@ -1614,6 +1632,11 @@ export interface ViewApi {
   set(key: string, value: unknown): Promise<void>;
   /** Calls `listener` when a key is saved, from any window, with the value saved. Returns the unsubscribe function. */
   onChanged(listener: (key: string, value: unknown) => void): () => void;
+  /**
+   * Calls `listener` with the tiles (node ids) an agent's arrange moved, whose overlaps and put-down marks it ended in
+   * the saved view: the window drops them from its own copy too. Returns the unsubscribe function.
+   */
+  onFreed(listener: (ids: string[]) => void): () => void;
   /**
    * What sends this window's saves waiting to be made: main asks for them as the app quits, and quits once `flush` has
    * settled (or after a short wait). One per window; returns the function that takes it back.

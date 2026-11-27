@@ -44,7 +44,7 @@ export const SCANNERS: ReadonlyArray<{ tests: readonly string[]; globs: readonly
   { tests: ['scripts/release-public/public-config.test.ts'], globs: 'release', why: 'release rules and the files they name' },
   { tests: ['scripts/release-public/leak-rules.test.ts'], globs: 'always', why: 'the release leak rules' },
   { tests: ['packages/daemon/src/import-meta-glob.test.ts'], globs: ['{apps,packages}/*/src/**/*.{ts,tsx}'], why: 'source files' },
-  { tests: ['scripts/worker-hooks/status-hook.test.ts', 'scripts/worker-hooks/test-budget.test.ts'], globs: ['.claude/worker-hooks/**'], why: 'the worker hooks it runs' },
+  { tests: ['scripts/worker-hooks/test-budget.test.ts'], globs: ['.claude/worker-hooks/**'], why: 'the worker hooks it runs' },
   { tests: ['packages/daemon/test/recorded-startup-screens.test.ts'], globs: ['fixtures/claude/tui/**'], why: "Claude Code's start-up screens it replays" },
   { tests: ['scripts/gate-stamp/stamp.test.ts'], globs: ['scripts/**/*.{ts,sh}'], why: 'the scripts it scans for a writer of green stamps' },
 ];

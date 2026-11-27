@@ -53,7 +53,7 @@ export function newlyAsked(seen: ReadonlyMap<string, number>, now: ReadonlyMap<s
  * what was asked before it opened is left to the window it was asked of.
  */
 export function useReviewTabAsked(ids: readonly string[], onAsked: (sessionId: string) => void): void {
-  const now = useSyncExternalStore(popUpAsks.subscribe, popUpAsks.now);
+  const now = useSyncExternalStore(popUpAsks.subscribe, popUpAsks.now, popUpAsks.now);
   const seen = useRef(now);
   const latest = useRef(onAsked);
   latest.current = onAsked;

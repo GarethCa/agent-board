@@ -1,3 +1,4 @@
+import { plural } from '@agent-board/daemon/text-words';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Bell, Bot, ChevronRight, Gauge, LayoutDashboard, Search, SlidersHorizontal, UserRound, Users, Wrench } from 'lucide-react';
 import { WINDOW_QUERY } from '../../../preload/api';
@@ -23,6 +24,7 @@ import { ChatThemeSetting } from './ChatThemeSetting';
 import { ClickableLinksSetting } from './ClickableLinksSetting';
 import { CliInstallSetting } from './CliInstallSetting';
 import { CompactWindowSetting } from './CompactWindowSetting';
+import { BoardToolsOnlySetting } from './BoardToolsOnlySetting';
 import { EffortSetting } from './EffortSetting';
 import { HarnessPathSettings } from './HarnessPathSettings';
 import { KeyboardSetting } from './KeyboardSetting';
@@ -149,7 +151,12 @@ function sectionBody(home: SettingsHome, onError: OnError): ReactNode {
     case 'agents.reasoning':
       return <EffortSetting onError={onError} />;
     case 'agents.context':
-      return <CompactWindowSetting onError={onError} />;
+      return (
+        <>
+          <CompactWindowSetting onError={onError} />
+          <BoardToolsOnlySetting onError={onError} />
+        </>
+      );
     case 'agents.links':
       return <ClickableLinksSetting onError={onError} />;
     case 'prefabs.library':
@@ -335,8 +342,6 @@ export function SettingsWindow({ initial }: { initial: string }) {
   );
 }
 
-const count = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
-
 /** The sidebar while searching: each group with a match, open on the sections that hold it, each with its count. */
 function FoundSections({ hits, query, onPick }: { hits: readonly SettingsHit[]; query: string; onPick(pane: SettingsPane): void }) {
   if (hits.length === 0) return <p className="settings-search-empty">No settings match.</p>;
@@ -370,7 +375,7 @@ function FoundPage({ hits, query, onError }: { hits: readonly SettingsHit[]; que
   return (
     <>
       <h2 className="settings-page-title">
-        {count(found, 'result')} for “{query}”
+        {plural(found, 'result')} for “{query}”
       </h2>
       {hits.map(({ group, section }) => {
         const id = `settings-found-${group.id}-${section.id}`;

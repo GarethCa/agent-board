@@ -182,12 +182,12 @@ test('a Claude agent tile expands in place with its details and live terminal, m
     await expect(tile(window)).toHaveCount(0);
     const branch = await branchOf(window);
     await expect(expandedTile(window).getByRole('heading', { name: 'Pick a database' })).toBeVisible();
-    // Its sidebar is its shelves, as in its window: open on its page, with its state button and ⋯ in the tile's header.
+    // Its sidebar is its shelves, as in its pop-up: open on its page, with ⋯ in the tile's header.
     // Under Classic their footer says the branch (under Simplified, once technical details show).
     await expect(expandedTile(window).getByTestId('agent-shelves')).toBeVisible();
     if (!simplified) await expect(expandedTile(window).getByTestId('shelves-footer')).toContainText(branch);
     await expect(expandedTile(window).getByRole('complementary', { name: 'Session details' })).toHaveCount(0);
-    await expandedTile(window).locator('.expanded-tile-head').getByTestId('shelf-controls').getByRole('button', { name: 'More controls' }).click();
+    await expandedTile(window).locator('.expanded-tile-head').getByRole('button', { name: 'More', exact: true }).click();
     await expect(window.getByRole('menuitem', { name: /^Stop/ })).toBeEnabled();
     await window.keyboard.press('Escape');
     await expect(expandedScreen(window)).toContainText('Which database should I use');
@@ -201,8 +201,9 @@ test('a Claude agent tile expands in place with its details and live terminal, m
     await window.keyboard.press('Escape');
     await expect(expandedTile(window)).toBeVisible();
 
-    // Its Delete asks as the tile's ⋯ menu does: a running agent's worktree and branch go with it. Cancelled here.
-    await expandedTile(window).getByRole('button', { name: 'Delete agent' }).click();
+    // Its Delete, in its ⋯, asks as the tile's ⋯ menu does: a running agent's worktree and branch go with it. Cancelled here.
+    await expandedTile(window).locator('.expanded-tile-head').getByRole('button', { name: 'More', exact: true }).click();
+    await window.getByRole('menuitem', { name: /^Delete agent/ }).click();
     const deleting = window.getByRole('alertdialog', { name: 'Delete agent?' });
     await expect(deleting).toContainText('worktree and branch are removed');
     await deleting.getByRole('button', { name: 'Cancel' }).click();

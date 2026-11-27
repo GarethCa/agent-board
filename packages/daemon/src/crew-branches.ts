@@ -2,15 +2,16 @@
 // crew worktree the crew owns, cut from its builder's branch as it starts. Each maker after the builder is cut from it;
 // where makers' work meets (a member that takes the work of two, the next maker, an end) each maker's branch is merged
 // into it with --no-ff. A merge that conflicts is aborted, with the files it was in, for the crew to send back. A ready
-// end opens one pull request, of the crew branch. Git is run without a shell, on branch names it resolves to commits, and with the repo's hooks off.
+// end opens one pull request, of the crew branch. Git is run without a shell, on branch names it resolves to commits, with the repo's hooks off,
+// and not at all when the repo's own config names a merge driver or filter.
 import { existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { createPullRequest, listPullRequests } from '@agent-board/tracker';
 import { changedFiles, samePath } from './crew-worktree.ts';
-import { pushLfsObjects, runGit } from './git.ts';
+import { checkCheckoutConfig, pushBranch, runGit } from './git.ts';
 import type { PrefabLine } from './protocol.ts';
 import { call as trackerCall } from './trackers.ts';
-import { addWorktree, agentWorktreePath, freeBranchName, freeWorktreePath, removeWorktree, unsavedWork } from './worktrees.ts';
+import { addCheckedWorktree, addWorktree, agentWorktreePath, freeBranchName, freeWorktreePath, neverCheckedOut, removeWorktree, unsavedWork } from './worktrees.ts';
 
 /**
  * Git with the repo's hooks off: a hooks path that isn't a folder runs none, so a hook a maker committed (husky's
@@ -88,16 +89,20 @@ export function gitCrewBranches(worktreesDir: string): CrewBranches {
       const crew = at ?? (await place(repoRoot, from));
       if (existsSync(crew.worktree)) {
         const head = await runGit(crew.worktree, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
-        if (head.ok && head.stdout === crew.branch) return crew;
-        throw new Error(`${crew.worktree} is there already, and isn't the crew branch ${crew.branch}`);
+        if (!head.ok || head.stdout !== crew.branch) throw new Error(`${crew.worktree} is there already, and isn't the crew branch ${crew.branch}`);
+        // One made but never checked out (the daemon stopped between the two) is checked out again, below, not taken up.
+        if (!(await neverCheckedOut(crew.worktree))) return crew;
+        const removed = await runGit(repoRoot, ['worktree', 'remove', '--force', crew.worktree]);
+        if (!removed.ok) throw new Error(`its crew worktree ${crew.worktree} was never checked out, and won't be removed: ${removed.stderr}`);
       }
       const cut = await runGit(repoRoot, ['rev-parse', '--verify', '--quiet', `refs/heads/${crew.branch}^{commit}`]);
       if (cut.ok) {
         await runGit(repoRoot, ['worktree', 'prune']);
         mkdirSync(dirname(crew.worktree), { recursive: true });
         // By its short name, a slug made here from a branch's (never an option), so git checks the branch out, not detached.
-        const added = await runGit(repoRoot, [...NO_HOOKS, 'worktree', 'add', crew.worktree, crew.branch]);
-        if (!added.ok) throw new Error(`could not check out its crew branch ${crew.branch} again: ${added.stderr}`);
+        await addCheckedWorktree(repoRoot, crew.worktree, [crew.worktree, crew.branch]).catch((error: Error) => {
+          throw new Error(`could not check out its crew branch ${crew.branch} again: ${error.message}`);
+        });
         return crew;
       }
       if (!(await addWorktree(repoRoot, crew.worktree, crew.branch, from))) throw new Error(`git is too old to cut a crew branch from ${from}`);
@@ -107,10 +112,15 @@ export function gitCrewBranches(worktreesDir: string): CrewBranches {
     async merge(crew, branch, message) {
       const tip = await runGit(crew.repoRoot, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}^{commit}`]);
       if (!tip.ok) return { error: `there is no branch ${branch} to merge` };
+      // A merge driver or filter the repo's own config names would run as the board, on files a maker's branch picks.
+      // Its git then runs with the pins the check gives, so a key written since can't name one either.
+      const checked = await checkCheckoutConfig(crew.worktree, 'merge', { trees: ['HEAD', tip.stdout], worktree: true });
+      if ('refused' in checked) return { error: checked.refused };
+      const { env } = checked;
       // A merge left half-done (the daemon stopped between a conflict and its abort) is no one's now: it goes first.
       const mergeHead = () => runGit(crew.worktree, ['rev-parse', '--verify', '--quiet', 'MERGE_HEAD']);
       if ((await mergeHead()).ok) {
-        const aborted = await runGit(crew.worktree, [...NO_HOOKS, 'merge', '--abort']);
+        const aborted = await runGit(crew.worktree, [...NO_HOOKS, 'merge', '--abort'], undefined, env);
         if (!aborted.ok) return { error: `its crew worktree is mid-merge, and that merge wouldn't abort: ${aborted.stderr}` };
       }
       const done = await runGit(crew.worktree, ['merge-base', '--is-ancestor', tip.stdout, 'HEAD']);
@@ -131,17 +141,22 @@ export function gitCrewBranches(worktreesDir: string): CrewBranches {
       // A merge refuses an index that differs from HEAD: what an agent staged is unstaged, its files left as they are.
       const staged = await runGit(crew.worktree, ['diff', '--cached', '--quiet']);
       if (!staged.ok) {
-        const unstaged = await runGit(crew.worktree, [...NO_HOOKS, 'reset', '--quiet']);
+        const unstaged = await runGit(crew.worktree, [...NO_HOOKS, 'reset', '--quiet'], undefined, env);
         if (!unstaged.ok) return { error: `could not unstage its crew worktree's index: ${unstaged.stderr}` };
       }
-      const merged = await runGit(crew.worktree, [...NO_HOOKS, 'merge', '--no-ff', '--no-edit', '--no-verify', '-m', message, tip.stdout]);
+      const merged = await runGit(crew.worktree, [...NO_HOOKS, 'merge', '--no-ff', '--no-edit', '--no-verify', '--no-gpg-sign', '-m', message, tip.stdout], undefined, env);
+      const changed = await checked.after();
+      if (changed !== undefined) {
+        if (!merged.ok && (await mergeHead()).ok) await runGit(crew.worktree, [...NO_HOOKS, 'merge', '--abort'], undefined, env);
+        return { error: merged.ok ? `${branch} merged, but ${changed}` : changed };
+      }
       if (merged.ok) return { merged: true, files };
       const why = merged.stderr || merged.stdout;
       // A merge git refused before it began (a file in the way) left nothing to abort.
       if (!(await mergeHead()).ok) return { error: why };
-      const unmerged = await runGit(crew.worktree, ['diff', '--name-only', '--diff-filter=U']);
+      const unmerged = await runGit(crew.worktree, ['diff', '--name-only', '--diff-filter=U'], undefined, env);
       const conflicts = unmerged.ok ? unmerged.stdout.split('\n').filter((file) => file !== '') : [];
-      const aborted = await runGit(crew.worktree, [...NO_HOOKS, 'merge', '--abort']);
+      const aborted = await runGit(crew.worktree, [...NO_HOOKS, 'merge', '--abort'], undefined, env);
       if (!aborted.ok) return { error: `the merge of ${branch} failed (${why}), and so did its abort: ${aborted.stderr}` };
       return conflicts.length > 0 ? { conflicts } : { error: why };
     },
@@ -168,9 +183,7 @@ export function gitCrewBranches(worktreesDir: string): CrewBranches {
  * that has moved on at origin is the user's to sort out.
  */
 export async function openCrewPullRequest(crew: CrewBranch, options: { gh: string; repo?: string; title: string; body: string }): Promise<string> {
-  const lfs = await pushLfsObjects(crew.worktree, 'origin', `refs/heads/${crew.branch}`);
-  if (!lfs.ok) throw new Error(`could not push ${crew.branch}'s Git LFS files: ${lfs.stderr}`);
-  const pushed = await runGit(crew.worktree, [...NO_HOOKS, 'push', '--no-verify', 'origin', `refs/heads/${crew.branch}:refs/heads/${crew.branch}`]);
+  const pushed = await pushBranch(crew.worktree, 'origin', `refs/heads/${crew.branch}`, crew.branch);
   if (!pushed.ok) throw new Error(`could not push ${crew.branch}: ${pushed.stderr}`);
   await runGit(crew.worktree, ['branch', `--set-upstream-to=origin/${crew.branch}`, crew.branch]);
   // One open of it already is the crew's: a daemon that stopped after opening it, before saving it, opened it.

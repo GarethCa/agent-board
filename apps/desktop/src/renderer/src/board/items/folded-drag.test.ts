@@ -30,10 +30,10 @@ describe('a folded list card has no nodrag over its face', () => {
     expect(noDrag(createElement(QueueIconView, { ...list, audience: 'agents' }))).toEqual([]);
   });
 
-  it('a to-do list folded to its pill: only its Open and Clear buttons are nodrag', () => {
+  it('a to-do list folded to its pill: only its Unfold and Clear buttons are nodrag, not its face', () => {
     const open: TodoData = { owner: { kind: 'user' }, lines: [{ id: 't1', text: 'A line', by: { kind: 'user' }, at: AT, done: null }] };
     const done: TodoData = { ...open, lines: [{ ...open.lines[0]!, done: { by: { kind: 'user' }, at: AT } }] };
-    const pill = (data: TodoData) => createElement(TodoPillView, { data, lookup: NO_LOOKUP, onOpen: () => {}, onClear: () => {} });
+    const pill = (data: TodoData) => createElement(TodoPillView, { data, lookup: NO_LOOKUP, onOpen: () => {}, onUnfold: () => {}, onClear: () => {} });
     expect(noDrag(pill(open))).toEqual(['todo-pill-open nodrag']);
     expect(noDrag(pill(done))).toEqual(['todo-pill-clear nodrag', 'todo-pill-open nodrag']);
   });

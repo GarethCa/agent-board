@@ -1,3 +1,4 @@
+import { plural } from '@agent-board/daemon/text-words';
 import type { Heading, Root, RootContent } from 'mdast';
 import { fromMarkdown } from 'mdast-util-from-markdown';
 import { gfmFromMarkdown } from 'mdast-util-gfm';
@@ -143,7 +144,6 @@ function severityCounts(findings: readonly OutlineFinding[]): { severity: Severi
   return SEVERITIES.map((severity) => ({ severity, count: findings.filter((finding) => finding.severity === severity).length })).filter(({ count }) => count > 0);
 }
 
-const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`;
 /** "2 blockers", "1 major", "4 minor": only a blocker is a noun with a plural. */
 const severityWord = ({ severity, count }: { severity: Severity; count: number }) => (severity === 'blocker' ? plural(count, 'blocker') : `${count} ${severity}`);
 

@@ -7,6 +7,7 @@ import {
   gridPoint,
   gridRowAtOrBelow,
   gridSpan,
+  intoSlots,
   MAX_SEARCH_STEPS,
   NORMAL_GRID,
   PERCH_ROOM,
@@ -30,7 +31,7 @@ import {
   type ArrangePlacement,
   type ArrangeSpacing,
 } from './protocol.ts';
-import { cutText } from './text-cut.ts';
+import { cutText } from './text-words.ts';
 
 /**
  * A tile to arrange (or a clock its crew made, which goes on the top row as a shell does, or an item of the zone's, which
@@ -486,27 +487,18 @@ const hull = (a: Rect, b: Rect): Rect => {
  */
 function gridFill(tiles: readonly ArrangeTile[], obstacles: readonly Rect[], width: number, grid: ZoneGrid, fromRow = 0): Map<string, Point> {
   const perRow = Math.max(1, Math.floor((width - 2 * grid.origin.x + grid.column - AGENT_TILE_SIZE.width) / grid.column));
-  const positions = new Map<string, Point>();
-  const taken = [...obstacles];
-  let index = fromRow * perRow;
-  for (const tile of tiles) {
-    const size = sizeOf(tile);
-    const { columns } = gridSpan(size, grid);
-    const start = index;
-    const fits = (at: number) => {
-      const column = at % perRow;
-      return (column === 0 || column + columns <= perRow) && clearOf(sizedFootprint(gridPoint(column, Math.floor(at / perRow), grid), size), taken, grid.gaps.tile);
-    };
-    while (index - start < MAX_SEARCH_STEPS && !fits(index)) index++;
-    // Past the cap, on the first row below everything placed: never on top of it.
-    const spot =
-      index - start < MAX_SEARCH_STEPS
-        ? gridPoint(index % perRow, Math.floor(index++ / perRow), grid)
-        : gridPoint(0, gridRowAtOrBelow(Math.max(...taken.map((rect) => rect.y + rect.height)) + grid.gaps.lane, grid), grid);
-    positions.set(tile.id, spot);
-    taken.push(sizedFootprint(spot, size));
-  }
-  return positions;
+  return intoSlots(
+    tiles.map((tile) => ({ id: tile.id, ...sizeOf(tile) })),
+    obstacles,
+    (index) => gridPoint(index % perRow, Math.floor(index / perRow), grid),
+    {
+      gap: grid.gaps.tile,
+      from: fromRow * perRow,
+      fits: (index, _spot, size) => index % perRow === 0 || (index % perRow) + gridSpan(size, grid).columns <= perRow,
+      // Past the cap, on the first row below everything placed: never on top of it.
+      past: (taken) => gridPoint(0, gridRowAtOrBelow(Math.max(...taken.map((rect) => rect.y + rect.height)) + grid.gaps.lane, grid), grid),
+    },
+  );
 }
 
 /**

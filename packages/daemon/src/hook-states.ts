@@ -6,7 +6,7 @@ import { STILL_WORKING, WAITING_FOR_YOU, type AgentState, type Harness, type Ses
 import { subagentsAfterHook, type SubagentStore } from './subagents.ts';
 import type { PromptNow } from './deliveries.ts';
 import { type Draft, draftAfter, oneLine, pressesEscape, submitsDraft } from './terminal-input.ts';
-import { cutText } from './text-cut.ts';
+import { cutText } from './text-words.ts';
 
 /**
  * Hooks of a turn's work, which a turn interrupted mid-hook can still deliver after the interrupt. Until the next

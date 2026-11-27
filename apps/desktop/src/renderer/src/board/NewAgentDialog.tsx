@@ -19,6 +19,7 @@ import { RepoField, repoParam, type RepoValue } from './RepoField';
 import { useCheckoutWarning } from './checkout-warning';
 import { keyText } from '../keys/registry';
 import { useTechnicalDetails } from '../technical';
+import { parseEnvLines } from './launch-env';
 
 const CHECKOUTS: readonly SegmentedOption<'main' | 'worktree'>[] = [
   { id: 'main', label: 'Main checkout' },
@@ -175,11 +176,15 @@ export function NewAgentDialog({ zone, agents, issue: initialIssue, issueZoneId,
   const [name, setName] = useState(initialName);
   const [issue, setIssue] = useState<PickedIssue | undefined>(initialIssue);
   const [bypass, setBypass] = useState(zone?.codexBypassHookTrust ?? true);
+  /** Its launch settings as typed: env vars, one NAME=value a line, under the technical details. */
+  const [envText, setEnvText] = useState('');
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string>();
   const [step, setStep] = useState<Step>({ kind: 'form' });
 
   const start = async (options: { bypassNoticeShown?: boolean } = {}) => {
+    const launchEnv = technicalShown ? parseEnvLines(envText) : { env: {} };
+    if ('error' in launchEnv) return setError(launchEnv.error);
     setStep({ kind: 'form' });
     setStarting(true);
     setError(undefined);
@@ -194,6 +199,7 @@ export function NewAgentDialog({ zone, agents, issue: initialIssue, issueZoneId,
         model: model || undefined,
         effort: effort || undefined,
         role: role ?? undefined,
+        ...(Object.keys(launchEnv.env).length > 0 ? { launchSettings: { env: launchEnv.env } } : {}),
         ...(group
           ? {
               repo: repoParam(repo),
@@ -409,6 +415,11 @@ export function NewAgentDialog({ zone, agents, issue: initialIssue, issueZoneId,
           onChange={(event) => setName(event.target.value)}
         />
       </Field>
+      {technicalShown && (
+        <Field label="Launch settings (optional)" hint="Env vars it starts with, kept through restarts. Only their names are shown.">
+          <Textarea rows={2} value={envText} spellCheck={false} placeholder="NAME=value, one a line" onChange={(event) => setEnvText(event.target.value)} />
+        </Field>
+      )}
       {reviews(role) && (
         <Field label="Reviews">
           <Select value={reviewed} onChange={(event) => setReviewed(event.target.value)}>

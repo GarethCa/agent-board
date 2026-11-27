@@ -14,6 +14,13 @@ export interface RowTab {
 
 const KIND_ORDER: Record<RowTabKind, number> = { view: 0, agent: 1, shell: 2 };
 
+/**
+ * What the row's tabs drag as, out of it: only its shells, and only where they are let out (an expanded tile's row);
+ * undefined, so every tab just moves along the row, anywhere else.
+ */
+export const shellDragOf = <Drag>(dragShells: boolean, shellKeys: readonly string[], dragOf: ((key: string) => Drag | undefined) | undefined) =>
+  dragShells && dragOf !== undefined ? (key: string) => (shellKeys.includes(key) ? dragOf(key) : undefined) : undefined;
+
 /** The row with nothing dragged: the view, then the agents, then the shells, each as listed. */
 const plainOrder = <T extends RowTab>(tabs: readonly T[]): T[] => [...tabs].sort((a, b) => KIND_ORDER[a.kind] - KIND_ORDER[b.kind]);
 

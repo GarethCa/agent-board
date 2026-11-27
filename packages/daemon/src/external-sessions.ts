@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { realpath } from 'node:fs/promises';
 import { basename, dirname, join, relative, sep } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
+import { AGENT_TILE_SIZE, freeZoneSpot, sizedFootprint, ZONE_GAP, type Point } from './board-layout.ts';
 import { stateAfterHook } from './harness-state.ts';
 import { keyedQueue } from './keyed-queue.ts';
 import { runGit } from './git.ts';
@@ -23,8 +24,7 @@ import type { RpcHandlers } from './rpc.ts';
 import { createSubagentStore, subagentsAfterExit, subagentsAfterHook } from './subagents.ts';
 import { moveParams, saveMove, tilePosition, type PositionColumns } from './tile-position.ts';
 
-/** Space between the Unsorted group and the zone it is put right of, and its neutral grey. */
-const UNSORTED_GAP = 40;
+/** The Unsorted group's neutral grey. */
 const UNSORTED_COLOR = '#868e96';
 
 /** How long an ended external session stays on the board, at most, across daemon restarts. */
@@ -210,12 +210,18 @@ export function createExternalSessionHost(options: ExternalSessionHostOptions): 
   const selectUnsorted = db.prepare('SELECT id FROM zones WHERE unsorted = 1 AND repo_root IS NULL ORDER BY rowid LIMIT 1');
   // The right edge of each zone as the board draws it: grown to hold the tiles saved in it, as `fitToTiles` does.
   const selectExtents = db.prepare(
-    `SELECT z.x, z.y, z.width,
+    `SELECT z.x, z.y, z.width, z.height,
        (SELECT max(x) FROM (
           SELECT x FROM agents WHERE zone_id = z.id AND x IS NOT NULL
           UNION ALL SELECT x FROM shells WHERE zone_id = z.id AND x IS NOT NULL
           UNION ALL SELECT x FROM external_sessions WHERE position_zone_id = z.id AND x IS NOT NULL)) AS tile_x
      FROM zones z`,
+  );
+  // The tiles loose on the board, which a new zone keeps clear of too.
+  const selectLooseTiles = db.prepare(
+    `SELECT x, y FROM agents WHERE zone_id IS NULL AND x IS NOT NULL AND y IS NOT NULL
+     UNION ALL SELECT x, y FROM shells WHERE zone_id IS NULL AND x IS NOT NULL AND y IS NOT NULL
+     UNION ALL SELECT x, y FROM external_sessions WHERE position_zone_id IS NULL AND x IS NOT NULL AND y IS NOT NULL`,
   );
   const markUnsorted = db.prepare('UPDATE zones SET unsorted = 1 WHERE id = ?');
   // It only makes the Unsorted group, which is bound to no repo, so which folders are managed clones doesn't matter.
@@ -294,20 +300,25 @@ export function createExternalSessionHost(options: ExternalSessionHostOptions): 
         zoneForPlace(zones, { worktree: row.worktree, repoRoot: row.repo_root, folder: row.folder, branch: row.branch }) === null,
     );
     if (unplaced.length === 0) return;
-    const extents = selectExtents.all() as unknown as { x: number; y: number; width: number; tile_x: number | null }[];
+    const extents = selectExtents.all() as unknown as { x: number; y: number; width: number; height: number; tile_x: number | null }[];
     const drawnRight = (extent: (typeof extents)[number]) =>
       extent.x + Math.max(extent.width, extent.tile_x === null ? 0 : extent.tile_x + TILE_SLOT.width + TILE_SLOT.padding);
     const right = extents.length === 0 ? null : Math.max(...extents.map(drawnRight));
     const top = extents.length === 0 ? null : Math.min(...extents.map((extent) => extent.y));
+    const size = { width: UNSORTED_GROUP_WIDTH, height: unsortedGroupHeight(unplaced.length) };
+    // Placed as any new zone is: right of the zones, a zone gap from the one beside it, and clear of the loose tiles.
+    const rooms = [
+      ...extents.map((extent) => ({ x: extent.x, y: extent.y, width: drawnRight(extent) - extent.x, height: extent.height })),
+      ...(selectLooseTiles.all() as unknown as Point[]).map((tile) => sizedFootprint(tile, AGENT_TILE_SIZE)),
+    ];
+    const at = freeZoneSpot({ x: right === null ? 0 : right + ZONE_GAP, y: top ?? 0 }, size, rooms);
     const zone = zoneTable.insert({
       repoRoot: null,
       folder: '',
       name: 'Unsorted',
       color: UNSORTED_COLOR,
-      x: right === null ? 0 : right + UNSORTED_GAP,
-      y: top ?? 0,
-      width: UNSORTED_GROUP_WIDTH,
-      height: unsortedGroupHeight(unplaced.length),
+      ...at,
+      ...size,
       tracker: null,
     });
     markUnsorted.run(zone.id);

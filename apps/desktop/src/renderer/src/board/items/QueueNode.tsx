@@ -2,7 +2,7 @@ import { memo, useCallback, useContext, useEffect, useMemo, useState } from 'rea
 import { useReactFlow, type NodeProps } from '@xyflow/react';
 import { Bot, Inbox, Ticket } from 'lucide-react';
 import { jobsFrom } from '@agent-board/daemon/memory-lines';
-import { QUEUE_CARD_SIZE, LIST_CARD_FOLDED_SIZE, LIST_CARD_MIN_SIZE, type QueueAudience, type QueueChange, type QueueJob } from '@agent-board/daemon/protocol';
+import { QUEUE_CARD_SIZE, LIST_CARD_FOLDED_SIZE, LIST_CARD_MIN_SIZE, type QueueAudience, type QueueChange, type QueueJob, type StepsWho } from '@agent-board/daemon/protocol';
 import { IconButton, useToast } from '../../ui';
 import { ItemActionsContext, useOnlySelected, type ItemNodeType } from './items';
 import { scopeText } from './memory-card';
@@ -11,19 +11,22 @@ import { useNeedsYouShows } from '../../needs-you-setting';
 import { goThrough, moveGoingThrough, openDrain, openHandOn, QueueBoardContext, stopGoingThrough, useGoingThrough } from './queue-board';
 import { lookCount, lookItems, needsInScope } from './to-look-at';
 import { QueueGoThrough } from './QueueGoThrough';
-import { QueueCardView, QueueIconView, QueuePeek, type AddJob } from './QueueCard';
+import { QueueCardView, QueueIconView, QueuePeek, type AddJob, type JobActions } from './QueueCard';
+import { QueueFull } from './QueueFull';
+import { useNow } from '../../inbox/use-now';
 import { agentLine, freshJob, jobLine, newestChange, nextJob, queueData, queueTitle } from './queue-card';
 import { CardResizer, FoldedPicture } from './CardSizing';
 import { foldTo } from './card-size';
-import { ListCardPeekPopover, ListCardToolbar, useFocusOnce, useFresh, useRows, useZone, why } from './ListCardNodeParts';
+import { ListCardPeekPopover, ListCardToolbar, useFocusOnce, useFresh, useFullKey, useRows, useZone, why } from './ListCardNodeParts';
 
 /** A queue's jobs and notes as the daemon lists them, for the user. */
 const readJobs = (id: string) => window.agentBoard.items.readQueue(id).then((view) => view.jobs);
 
 /**
  * A queue on the board: open, a card listing its jobs in order with a box to add one (C); folded, its ticket icon alone
- * (E), or the inbox for a queue that is the user's. Either opens the peek beside it, with every job to search, edit,
- * reorder, finish, put back or remove.
+ * (E), or the inbox for a queue that is the user's. A click on the icon opens the peek beside it, with every job to
+ * search, edit, reorder, finish, put back or remove; a double-click on either, or ⌘↵ while it is selected, opens it full
+ * screen, its jobs in groups beside the one picked.
  */
 export const QueueNode = memo(function QueueNode({ id: nodeId, data, selected: picked, dragging, width, height }: NodeProps<ItemNodeType>) {
   const selected = useOnlySelected(picked);
@@ -40,6 +43,13 @@ export const QueueNode = memo(function QueueNode({ id: nodeId, data, selected: p
   const focusAdd = useFocusOnce(nodeId, data.editing);
   const fresh = useFresh(jobs, freshJob, newestChange);
   const [peek, setPeek] = useState(false);
+  const [full, setFull] = useState(false);
+  const openFull = useCallback(() => {
+    setPeek(false);
+    setFull(true);
+  }, []);
+  useFullKey(selected, full, openFull);
+  const now = new Date(useNow(false));
   const shown = jobs ?? [];
   // The user's queue shows Needs-you rows too: its zone's agents', or every agent's when it is loose.
   const board = useContext(QueueBoardContext);
@@ -48,6 +58,7 @@ export const QueueNode = memo(function QueueNode({ id: nodeId, data, selected: p
   const { setNodes } = useReactFlow();
   const start = () => {
     setPeek(false);
+    setFull(false);
     goThrough(item.id);
     // Selected, so its keys work at once: the peek's button is outside the tile, and clicking it selects nothing.
     setNodes((nodes) => nodes.map((node) => ((node.selected === true) === (node.id === nodeId) ? node : { ...node, selected: node.id === nodeId })));
@@ -94,6 +105,31 @@ export const QueueNode = memo(function QueueNode({ id: nodeId, data, selected: p
       });
     });
   };
+  // What a row can have done to it, the same from the peek and from full screen.
+  const acts: JobActions = {
+    onAdd: add,
+    onEdit: (job, line) => void change({ action: 'edit', job: job.id, ...line }),
+    onMove: (job, before) => change({ action: 'move', job: job.id, before: before?.id ?? null }),
+    onDone: (job) => void change({ action: 'done', job: job.id }),
+    onDrop: (job) => void change({ action: 'drop', job: job.id }),
+    onLater: (job, later) => void change({ action: 'later', job: job.id, ...(later ? {} : { until: null }) }),
+    onRemove: removeJob,
+    onGone: (job, draft) =>
+      toast.show({
+        message: `“${jobLine(job)}” was removed while you edited it`,
+        ...(draft.trim() === '' ? {} : { persistent: true, action: { label: 'Add your text back', onClick: () => jobsFrom(draft).forEach((line) => add({ kind: job.kind, ...line })) } }),
+      }),
+    // A queue set to No agents gives its jobs to no agent: no Hand, as no drag.
+    onHand: queue.noAgents
+      ? undefined
+      : (job) => {
+          setPeek(false);
+          setFull(false);
+          openHandOn({ queueId: item.id, jobId: job.id });
+        },
+  };
+  const history = useCallback((job: QueueJob) => window.agentBoard.items.queueHistory(item.id, job.id), [item.id]);
+  const agentOf = (who: StepsWho) => (who.kind === 'agent' ? board.agents.find((agent) => agent.sessionId === who.sessionId) : undefined);
   const fold = (folded: boolean) => {
     if (folded) setPeek(false);
     const { size, kept } = foldTo(item, folded, { folded: LIST_CARD_FOLDED_SIZE, open: QUEUE_CARD_SIZE });
@@ -172,6 +208,7 @@ export const QueueNode = memo(function QueueNode({ id: nodeId, data, selected: p
       pulse={fresh !== undefined}
       sub={fresh === undefined ? undefined : agentLine(fresh)}
       onOpen={() => setPeek(true)}
+      onFull={openFull}
     >
       {toolbar}
     </QueueIconView>
@@ -187,6 +224,7 @@ export const QueueNode = memo(function QueueNode({ id: nodeId, data, selected: p
       loaded={jobs !== undefined}
       onAdd={add}
       onOpen={() => setPeek(true)}
+      onFull={openFull}
       onAudience={setAudience}
       needs={needs}
       onOpenAgent={board.openAgent}
@@ -228,32 +266,35 @@ export const QueueNode = memo(function QueueNode({ id: nodeId, data, selected: p
           onOpenAgent={board.openAgent}
           onStart={start}
           dragFrom={queue.noAgents ? undefined : { queueId: item.id, zoneId: item.zoneId }}
-          // A queue set to No agents gives its jobs to no agent: no Hand, as no drag.
-          onHand={queue.noAgents ? undefined : (job) => {
-            setPeek(false);
-            openHandOn({ queueId: item.id, jobId: job.id });
-          }}
+          {...acts}
           title={queue.title}
           scope={scope}
           zoneColor={zone.color}
           audience={queue.audience}
           jobs={shown}
           focusAdd={shown.length === 0}
-          onAdd={add}
-          onEdit={(job, line) => void change({ action: 'edit', job: job.id, ...line })}
-          onMove={(job, before) => change({ action: 'move', job: job.id, before: before?.id ?? null })}
-          onDone={(job) => void change({ action: 'done', job: job.id })}
-          onDrop={(job) => void change({ action: 'drop', job: job.id })}
-          onLater={(job, later) => void change({ action: 'later', job: job.id, ...(later ? {} : { until: null }) })}
-          onRemove={removeJob}
-          onGone={(job, draft) =>
-            toast.show({
-              message: `“${jobLine(job)}” was removed while you edited it`,
-              ...(draft.trim() === '' ? {} : { persistent: true, action: { label: 'Add your text back', onClick: () => jobsFrom(draft).forEach((line) => add({ kind: job.kind, ...line })) } }),
-            })
-          }
         />
       </ListCardPeekPopover>
+      {full && (
+        <QueueFull
+          title={queue.title}
+          scope={scope}
+          audience={queue.audience}
+          jobs={shown}
+          needs={needs}
+          now={now}
+          history={history}
+          agentOf={agentOf}
+          onOpenAgent={board.openAgent}
+          openLink={board.openLink}
+          onStart={forYou ? start : undefined}
+          drain={queue.drain}
+          onDrain={forYou ? undefined : () => openDrain(item.id)}
+          onClose={() => setFull(false)}
+          object={() => document.querySelector<HTMLElement>(`.react-flow__node[data-id="${CSS.escape(nodeId)}"]`)}
+          {...acts}
+        />
+      )}
     </>
   );
 });

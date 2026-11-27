@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it, onTestFinished } from 'vitest';
 import { migrate } from '../src/migrate.ts';
 import { COMPACT_WINDOW_RANGE } from '../src/protocol.ts';
-import { createSettings, defaultEffort } from '../src/settings.ts';
+import { boardToolsOnly, createSettings, defaultEffort } from '../src/settings.ts';
 
 function setup(env: NodeJS.ProcessEnv = {}) {
   const db = new DatabaseSync(':memory:');
@@ -139,6 +139,23 @@ describe('the reasoning effort new agents start at', () => {
     set({ defaultEffort: 'high', roleEfforts: { designer: 'max' } });
     set({ defaultEffort: null, roleEfforts: {} });
     expect(settings.get()).toMatchObject({ defaultEffort: null, roleEfforts: {} });
+  });
+
+  it("gives the listed roles' agents the board's tools alone, by name in any case, a follow-up reviewer as a reviewer", () => {
+    const { settings, set } = setup();
+    expect(settings.get().boardToolsOnly).toEqual([]);
+    expect(boardToolsOnly(settings.get(), 'reviewer')).toBe(false);
+
+    set({ boardToolsOnly: ['Reviewer', 'designer', 'reviewer'] });
+
+    expect(settings.get().boardToolsOnly).toEqual(['reviewer', 'designer']);
+    expect(boardToolsOnly(settings.get(), 'follow-up-reviewer')).toBe(true);
+    expect(boardToolsOnly(settings.get(), 'DESIGNER')).toBe(true);
+    expect(boardToolsOnly(settings.get(), 'implementer')).toBe(false);
+    expect(boardToolsOnly(settings.get(), null)).toBe(false);
+    expect(() => set({ boardToolsOnly: 'reviewer' })).toThrow('boardToolsOnly must be a list of role names');
+    expect(() => set({ boardToolsOnly: [' '] })).toThrow('boardToolsOnly takes each role by its name');
+    expect(settings.get().boardToolsOnly).toEqual(['reviewer', 'designer']);
   });
 
   it('refuses a level no harness takes, or a role with no name, and keeps what it was', () => {

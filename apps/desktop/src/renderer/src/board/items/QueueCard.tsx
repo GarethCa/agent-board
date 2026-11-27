@@ -10,7 +10,7 @@ import { itemKind, needsLine } from './to-look-at';
 import { JOB_DRAG, setJobDropOver, startJobDrag } from './queue-board';
 import { peekKeys, ScopeChip, ListCardAddBox, ListCardFace, ListCardIconView } from './ListCardParts';
 import { useScrollFade } from './CardSizing';
-import { countsText, DONE_SHOWN, doneJobs, isLaterRow, jobCorner, jobLine, jobState, matchingJobs, nextJob, openInCardOrder } from './queue-card';
+import { countsText, DONE_SHOWN, doneJobs, isLaterRow, jobCorner, jobLine, jobState, matchingJobs, moveTarget, nextJob, openInCardOrder, handable, puttable } from './queue-card';
 
 /** A job or note to add: its text, and its link when the line ends ` -> link`. */
 /** What the add box adds: the queue's own kind (a task, or backlog on the user's queue), or a note, read, never taken. */
@@ -19,7 +19,7 @@ export type AddKind = 'job' | 'note';
 export type AddJob = (job: { kind: AddKind | QueueRowKind; text: string; link: string | null }) => void;
 
 /** The ticket for agents' work, the inbox for the user's own queue. */
-function queueGlyph(audience: QueueAudience): ReactNode {
+export function queueGlyph(audience: QueueAudience): ReactNode {
   return audience === 'user' ? <Inbox className="listcard-glyph" /> : <Ticket className="listcard-glyph" />;
 }
 
@@ -31,7 +31,7 @@ const placeholderFor = (audience: QueueAudience, kind: AddKind) =>
   kind === 'note' ? 'Add a note…' : audience === 'user' ? 'Add something to look at…' : 'Add a job…';
 
 /** The box at a card's foot, and the peek's: ↵ queues a job, or a note with the switch; a paste of several lines, one each. */
-function QueueAddBox({ audience, onAdd, autoFocus }: { audience: QueueAudience; onAdd: AddJob; autoFocus?: boolean }) {
+export function QueueAddBox({ audience, onAdd, autoFocus }: { audience: QueueAudience; onAdd: AddJob; autoFocus?: boolean }) {
   const [kind, setKind] = useState<AddKind>('job');
   // What a row is called: a job for agents, an item in the user's own queue.
   const forYou = audience === 'user';
@@ -64,7 +64,7 @@ function QueueAddBox({ audience, onAdd, autoFocus }: { audience: QueueAudience; 
 }
 
 /** A row's chip: where a job is, in a work queue; what kind of thing it is (a pull request, a doc), in the user's. */
-function rowChip(job: QueueJob, next: QueueJob | undefined, audience: QueueAudience): { text: string; tone: string } {
+export function rowChip(job: QueueJob, next: QueueJob | undefined, audience: QueueAudience): { text: string; tone: string } {
   if (audience === 'user' && !isLaterRow(job)) return { text: itemKind(job).chip, tone: 'kind' };
   return jobState(job, next);
 }
@@ -134,11 +134,6 @@ export interface DragFrom {
   zoneId: string | null;
 }
 
-/** Whether a row can be handed to an agent: a waiting job of a queue for agents, not marked Later. */
-const handable = (job: QueueJob, audience: QueueAudience) => audience === 'agents' && isQueueWork(job.kind) && job.state === 'queued' && !isLaterRow(job);
-
-/** Whether a row can be marked Later: a waiting job, not yet put off. */
-const puttable = (job: QueueJob) => isQueueWork(job.kind) && job.state === 'queued' && !isLaterRow(job);
 
 /** A row's drag, for a job that can be handed on: dropped on an idle agent's tile, it opens Hand on. */
 function dragProps(queue: DragFrom | undefined, job: QueueJob, audience: QueueAudience) {
@@ -204,7 +199,10 @@ interface QueueCardViewProps {
   count?: number;
   loaded?: boolean;
   onAdd: AddJob;
+  /** Open ↗: the peek beside it. */
   onOpen(): void;
+  /** A double-click on it: full screen. Without it, the double-click opens the peek too. */
+  onFull?(): void;
   /** An empty one asks who it is for. */
   onAudience?(audience: QueueAudience): void;
   /** The row an agent just changed, which flashes once. */
@@ -230,13 +228,13 @@ interface QueueCardViewProps {
  * the foot with Move up, and a box to add one.
  */
 export function QueueCardView(props: QueueCardViewProps) {
-  const { title, scope, zoneColor, zoneName, audience, jobs, count, loaded = true, onAdd, onOpen, onAudience, fresh, focusAdd, needs = [], onOpenAgent, onStart, dragFrom, drain, onDrain, onMoveUp, children } = props;
+  const { title, scope, zoneColor, zoneName, audience, jobs, count, loaded = true, onAdd, onOpen, onFull = onOpen, onAudience, fresh, focusAdd, needs = [], onOpenAgent, onStart, dragFrom, drain, onDrain, onMoveUp, children } = props;
   const open = openInCardOrder(jobs);
   const next = nextJob(jobs);
   const fade = useScrollFade<HTMLUListElement>({ whole: true });
   const looking = audience === 'user' && open.length + needs.length > 0;
   return (
-    <div className="listcard listcard-unfolded" data-testid="queue-card" data-audience={audience} onDoubleClick={(event) => (event.stopPropagation(), onOpen())}>
+    <div className="listcard listcard-unfolded" data-testid="queue-card" data-audience={audience} onDoubleClick={(event) => (event.stopPropagation(), onFull())}>
       {children}
       <div className="listcard-head">
         <ListCardFace glyph={queueGlyph(audience)} count={(count ?? open.length) + needs.length} />
@@ -330,12 +328,8 @@ export function QueueIconView({ audience, next, sub, ...props }: Omit<ComponentP
   );
 }
 
-interface QueuePeekProps {
-  title: string;
-  scope: string;
-  zoneColor?: string;
-  audience: QueueAudience;
-  jobs: readonly QueueJob[];
+/** What can be done to a queue's jobs, from its peek and its full screen alike. */
+export interface JobActions {
   onAdd: AddJob;
   onEdit(job: QueueJob, line: { text: string; link: string | null }): void;
   /** Puts an open row just before another, or last for null: false when that fails. */
@@ -346,6 +340,18 @@ interface QueuePeekProps {
   onRemove(job: QueueJob): void;
   /** The row being edited went (an agent removed it): the user's draft, so it isn't lost. */
   onGone?(job: QueueJob, draft: string): void;
+  /** Hands a waiting job to an agent: Hand on, for it. With it, its rows drag onto a tile too. */
+  onHand?(job: QueueJob): void;
+  /** Marks a waiting job Later (`later` true): no take without a job starts it until it is moved up (false). */
+  onLater?(job: QueueJob, later: boolean): void;
+}
+
+interface QueuePeekProps extends JobActions {
+  title: string;
+  scope: string;
+  zoneColor?: string;
+  audience: QueueAudience;
+  jobs: readonly QueueJob[];
   search?: string;
   focusAdd?: boolean;
   autoFocus?: boolean;
@@ -353,15 +359,11 @@ interface QueuePeekProps {
   needs?: readonly NeedsYouEntry[];
   onOpenAgent?(agent: Agent): void;
   onStart?(): void;
-  /** Hands a waiting job to an agent: Hand on, for it. With it, its rows drag onto a tile too. */
-  onHand?(job: QueueJob): void;
   dragFrom?: DragFrom;
-  /** Marks a waiting job Later (`later` true): no take without a job starts it until it is moved up (false). */
-  onLater?(job: QueueJob, later: boolean): void;
 }
 
 /** A row's text as it is edited: its link after ` -> `, as it is typed. */
-const editText = (job: QueueJob) => (job.link === null ? job.text : `${job.text} -> ${job.link}`);
+export const editText = (job: QueueJob) => (job.link === null ? job.text : `${job.text} -> ${job.link}`);
 
 /**
  * Every job and note of a queue, in its order, searchable, over the board, with the last few done under them. A click
@@ -406,10 +408,10 @@ export function QueuePeek(props: QueuePeekProps) {
   const startEditing = (job: QueueJob) => setEditing({ job, text: editText(job) });
   /** ⌥↑ and ⌥↓: one place up or down among the open rows. */
   const moveBy = (job: QueueJob, by: -1 | 1) => {
-    const at = open.findIndex((each) => each.id === job.id);
-    if (at < 0 || at + by < 0 || at + by >= open.length) return;
-    moved.current = { id: job.id, from: at };
-    void Promise.resolve(onMove(job, by < 0 ? open[at - 1]! : (open[at + 2] ?? null))).then((done) => {
+    const target = moveTarget(open, job, by);
+    if (target === undefined) return;
+    moved.current = { id: job.id, from: open.findIndex((each) => each.id === job.id) };
+    void Promise.resolve(onMove(job, target.before)).then((done) => {
       if (done === false) moved.current = undefined;
     });
   };

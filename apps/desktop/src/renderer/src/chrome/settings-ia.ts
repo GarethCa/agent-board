@@ -124,6 +124,7 @@ export const SETTINGS_CONTROLS: readonly SettingsControl[] = [
   { id: 'defaultEffort', label: 'Reasoning for new agents', home: 'agents.reasoning', also: 'effort thinking think harder default level' },
   { id: 'roleEfforts', label: 'Reasoning per role', home: 'agents.reasoning', also: 'effort thinking role level' },
   { id: 'compactWindow', label: "Compact agents' context at", home: 'agents.context', also: 'context window tokens' },
+  { id: 'boardToolsOnly', label: 'Board tools only', home: 'agents.context', also: 'mcp servers connectors tools tokens cost strict role reviewer implementer' },
   { id: 'clickableLinks', label: 'Clickable links from Claude', home: 'agents.links', also: 'urls open browser' },
   { id: 'prefabs', label: 'Prefabs', home: 'prefabs.library', also: 'crew prefab team template make new import export duplicate delete built in' },
   { id: 'needsYouShows', label: 'Needs you shows', home: 'alerts.notifications', also: 'inbox turns' },

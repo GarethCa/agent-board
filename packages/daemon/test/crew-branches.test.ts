@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { createFakeGitHub, FAKE_GITHUB_STATE } from '@agent-board/tracker/testing';
 import { gitCrewBranches, openCrewPullRequest, upstreamMakers } from '../src/crew-branches.ts';
 import type { PrefabLine } from '../src/protocol.ts';
-import { git, tempDataDir, tempRepo } from './helpers.ts';
+import { git, gitWritesBefore, pushesTo, tempDataDir, tempRepo, userGitConfig } from './helpers.ts';
 
 /** A repo with a branch for each maker, `api` and `ui`, cut from its first commit, and a committer of its own. */
 function makersRepo() {
@@ -223,7 +223,7 @@ describe("a maker's own git hooks", () => {
     const origin = tempDataDir();
     execFileSync('git', ['init', '--quiet', '--bare', origin]);
     git(repo, 'remote', 'add', 'origin', 'https://github.com/acme/web.git');
-    git(repo, 'config', 'remote.origin.pushurl', origin);
+    pushesTo(origin, 'https://github.com/acme/web.git');
     const marks = tempDataDir();
     commitHooks(repo, 'api', marks);
     const branches = gitCrewBranches(tempDataDir());
@@ -236,13 +236,149 @@ describe("a maker's own git hooks", () => {
   });
 });
 
+describe("the programs the repo's own config names", () => {
+  /** A script that leaves `marker` when run: the program an agent could point the repo's config at. */
+  function evil(marker: string): string {
+    const path = join(tempDataDir(), 'evil');
+    writeFileSync(path, `#!/bin/sh\ntouch "${marker}"\nexit 1\n`);
+    chmodSync(path, 0o755);
+    return path;
+  }
+
+  it("never sign the crew's merge, so a gpg.program the repo names never runs", async () => {
+    const repo = makersRepo();
+    const marker = join(tempDataDir(), 'signed');
+    commit(repo, 'api', 'api.ts', 'export const api = 1;\n');
+    git(repo, 'config', 'commit.gpgSign', 'true');
+    git(repo, 'config', 'gpg.program', evil(marker));
+    const branches = gitCrewBranches(tempDataDir());
+    const crew = await branches.cut(repo, 'main');
+    expect(await branches.merge(crew, 'api', 'Merge api')).toEqual({ merged: true, files: ['api.ts'] });
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it("refuse the crew's push when the repo names its own ssh command, which never runs", async () => {
+    const repo = makersRepo();
+    const marker = join(tempDataDir(), 'ssh-ran');
+    git(repo, 'remote', 'add', 'origin', 'ssh://example.invalid/acme/web.git');
+    git(repo, 'config', 'core.sshCommand', evil(marker));
+    const crew = await gitCrewBranches(tempDataDir()).cut(repo, 'main');
+    const github = createFakeGitHub({ ...FAKE_GITHUB_STATE, repos: [{ nameWithOwner: 'acme/web', description: null }] });
+    await expect(openCrewPullRequest(crew, { gh: github.gh, repo: 'acme/web', title: 'Add a footer', body: 'Its branches' })).rejects.toThrow(
+      /could not push .*core\.sshcommand.*won't push/,
+    );
+    expect(existsSync(marker)).toBe(false);
+    expect(github.state().pullRequests).toHaveLength(0);
+  });
+
+  it("refuse the crew's merge when the repo names its own merge driver, which never runs on a conflict", async () => {
+    const repo = makersRepo();
+    const marker = join(tempDataDir(), 'driver-ran');
+    commit(repo, 'main', '.gitattributes', '* merge=evil\n');
+    git(repo, 'branch', '-f', 'api', 'main');
+    git(repo, 'branch', '-f', 'ui', 'main');
+    commit(repo, 'api', 'shared.ts', 'export const by = "api";\n');
+    commit(repo, 'ui', 'shared.ts', 'export const by = "ui";\n');
+    const branches = gitCrewBranches(tempDataDir());
+    const crew = await branches.cut(repo, 'api');
+    // Set after the cut, as an agent could from its worktree, in the config every worktree shares.
+    git(repo, 'config', 'merge.evil.driver', evil(marker));
+    expect(await branches.merge(crew, 'ui', 'Merge ui')).toEqual({ error: expect.stringMatching(/sets merge\.evil\.driver.*won't merge/) });
+    expect(existsSync(marker)).toBe(false);
+    expect(git(crew.worktree, 'rev-parse', 'HEAD')).toBe(git(repo, 'rev-parse', 'api'));
+  });
+
+  it('refuse to check the crew branch out again when the repo names its own filter, which never runs', async () => {
+    const repo = makersRepo();
+    const marker = join(tempDataDir(), 'smudged');
+    commit(repo, 'api', '.gitattributes', '* filter=evil\n');
+    const branches = gitCrewBranches(tempDataDir());
+    const crew = await branches.cut(repo, 'api');
+    git(repo, 'worktree', 'remove', '--force', crew.worktree);
+    git(repo, 'config', 'filter.evil.smudge', `touch '${marker}'; cat`);
+    await expect(branches.cut(repo, 'api', crew)).rejects.toThrow(/could not check out its crew branch .* again: .*filter\.evil\.smudge/);
+    expect(existsSync(crew.worktree)).toBe(false);
+    expect(existsSync(marker)).toBe(false);
+    expect(git(repo, 'rev-parse', crew.branch)).toBe(git(repo, 'rev-parse', 'api'));
+  });
+
+  it('is checked out again, not taken up, when its worktree was made but never checked out', async () => {
+    const repo = makersRepo();
+    const branches = gitCrewBranches(tempDataDir());
+    const crew = await branches.place(repo, 'api');
+    // As a daemon that stopped between the worktree's add and its checkout left it.
+    git(repo, 'worktree', 'add', '--quiet', '--no-checkout', '-b', crew.branch, crew.worktree, 'api');
+    expect(await branches.cut(repo, 'api', crew)).toEqual(crew);
+    expect(git(crew.worktree, 'status', '--porcelain')).toBe('');
+    // Its index is HEAD's, not missing: a worktree never checked out would show every file deleted.
+    expect(git(crew.worktree, 'diff', '--cached', '--name-only', 'HEAD')).toBe('');
+    expect(git(crew.worktree, 'ls-tree', '--name-only', 'HEAD')).not.toBe('');
+  });
+
+  it('is taken up as it is when its index was emptied, keeping the work in it', async () => {
+    const repo = makersRepo();
+    const branches = gitCrewBranches(tempDataDir());
+    const crew = await branches.cut(repo, 'api');
+    writeFileSync(join(crew.worktree, 'work.ts'), 'uncommitted\n');
+    git(crew.worktree, 'rm', '-r', '--cached', '--quiet', '.');
+    expect(await branches.cut(repo, 'api', crew)).toEqual(crew);
+    expect(readFileSync(join(crew.worktree, 'work.ts'), 'utf8')).toBe('uncommitted\n');
+  });
+
+  it('refuse to cut the crew branch when the repo names its own filter', async () => {
+    const repo = makersRepo();
+    git(repo, 'config', 'filter.evil.smudge', 'cat');
+    await expect(gitCrewBranches(tempDataDir()).cut(repo, 'api')).rejects.toThrow(/filter\.evil\.smudge.*won't make a worktree/);
+  });
+});
+
+describe("a key the repo's own config comes to set as the crew merges", () => {
+  /**
+   * A crew branch cut from `api`, and `ui` to merge into it, both changing `notes.txt`, which `merge=evil` picks, and
+   * `m.txt`, whose driver (`mark`, in the user's own config) runs `then` as it merges.
+   */
+  async function mergingCrew(then = 'true') {
+    const repo = makersRepo();
+    const driver = join(tempDataDir(), 'mark');
+    writeFileSync(driver, `#!/bin/sh\n${then}\nexec git merge-file "$2" "$1" "$3"\n`);
+    chmodSync(driver, 0o755);
+    git(repo, 'config', '--file', userGitConfig(), 'merge.mark.driver', `${driver} %O %A %B`);
+    const files = ['m.txt', 'notes.txt'];
+    commit(repo, 'main', '.gitattributes', 'm.txt merge=mark\nnotes.txt merge=evil\n');
+    for (const file of files) commit(repo, 'main', file, 'one\ntwo\nthree\n');
+    git(repo, 'branch', '-f', 'api', 'main');
+    git(repo, 'branch', '-f', 'ui', 'main');
+    for (const file of files) commit(repo, 'api', file, 'one, said api\ntwo\nthree\n');
+    for (const file of files) commit(repo, 'ui', file, 'one\ntwo\nthree, said ui\n');
+    const branches = gitCrewBranches(tempDataDir());
+    return { repo, branches, crew: await branches.cut(repo, 'api') };
+  }
+
+  it("merges with git's own merge, not a driver it names after the check", async () => {
+    const marker = join(tempDataDir(), 'driver-ran');
+    const evil = join(tempDataDir(), 'evil');
+    writeFileSync(evil, `#!/bin/sh\ntouch "${marker}"\nexit 0\n`);
+    chmodSync(evil, 0o755);
+    const { repo, branches, crew } = await mergingCrew();
+    gitWritesBefore('merge --no-ff', repo, 'merge.evil.driver', evil);
+    expect(await branches.merge(crew, 'ui', 'Merge ui')).toEqual({ merged: true, files: expect.any(Array) });
+    expect(existsSync(marker)).toBe(false);
+    expect(readFileSync(join(crew.worktree, 'notes.txt'), 'utf8')).toBe('one, said api\ntwo\nthree, said ui\n');
+  });
+
+  it('says so, merged, when the key is one no pin holds', async () => {
+    const { branches, crew } = await mergingCrew("git config merge.unpicked.driver /bin/evil");
+    expect(await branches.merge(crew, 'ui', 'Merge ui')).toEqual({ error: expect.stringMatching(/^ui merged, but .*came to set merge\.unpicked\.driver as the board went to merge/) });
+  });
+});
+
 describe("the crew's pull request", () => {
   it('is the one open already of the crew branch, as a daemon that stopped before saving it finds it again', async () => {
     const repo = makersRepo();
     const origin = tempDataDir();
     execFileSync('git', ['init', '--quiet', '--bare', origin]);
     git(repo, 'remote', 'add', 'origin', 'https://github.com/acme/web.git');
-    git(repo, 'config', 'remote.origin.pushurl', origin);
+    pushesTo(origin, 'https://github.com/acme/web.git');
     const crew = await gitCrewBranches(tempDataDir()).cut(repo, 'main');
     const github = createFakeGitHub({ ...FAKE_GITHUB_STATE, repos: [{ nameWithOwner: 'acme/web', description: null }] });
     const options = { gh: github.gh, repo: 'acme/web', title: 'Add a footer', body: 'Its branches' };

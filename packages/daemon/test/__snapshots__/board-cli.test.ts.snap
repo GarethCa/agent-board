@@ -564,6 +564,18 @@ agent-board: see \`agent-board help orchestrate\`. It prints the new agent's ref
                      from the tracker its key names, yours, or the one on the board.
   --description <text>  What it is for: one line, cut to 80 characters, kept as its description
                      from the start, as \`status set --description\` keeps it.
+  --env <KEY=VALUE>  An env var of its own (repeat for more), kept for its restarts. A Claude agent
+                     gets it in its --settings env block too, which beats your settings files: as
+                     --env CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=0. Only plain knobs: that one,
+                     MAX_THINKING_TOKENS, CLAUDE_CODE_MAX_OUTPUT_TOKENS, the BASH_ and MCP_
+                     timeouts and limits, and the switches DISABLE_TELEMETRY, DISABLE_ERROR_REPORTING, DISABLE_AUTOUPDATER,
+                     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC and
+                     CLAUDE_CODE_DISABLE_TERMINAL_TITLE; the user sets others in the app. Only
+                     the names are shown, never the values.
+  --settings <json>  Claude settings of its own, added to the board's --settings: as
+                     '{"outputStyle":"Explanatory"}'. Only alwaysThinkingEnabled, outputStyle,
+                     includeCoAuthoredBy, includeGitInstructions, spinnerTipsEnabled, language
+                     and env; --model and --effort set those. Claude only.
   --file <path>      Read the prompt from a file.
   --prefab <name>    Start a crew from a crew prefab (\`agent-board prefab ls\`) in place of one
                      agent: its member that starts on the prompt, its builder or its lead, gets
@@ -1019,7 +1031,7 @@ starting with [agent-board] is refused. Each rename is in the activity log.
 `;
 
 exports[`agent-board --help > has help for restart 1`] = `
-"usage: agent-board restart <ref> [--fresh [--] [<prompt>] | --file <path>] [--json]
+"usage: agent-board restart <ref> [--fresh [--] [<prompt>] | --file <path>] [--env <KEY=VALUE>...] [--settings <json>] [--json]
 
 Starts an ended agent again, as its tile's Restart does: in the same tile, worktree and branch,
 carrying on its conversation (Claude with --resume, Codex with codex resume, or a new
@@ -1033,6 +1045,11 @@ that is the user's to end.
             (--json: earlierConversations). Text after \`--\` (or --file) is its first message,
             held to the same rules as \`send\` and \`new\`; with none, it starts on its task, if it
             had one. Without --fresh a prompt is refused.
+  --env <KEY=VALUE>  Start it with these env vars of its own in place of the ones it had (repeat
+            for more; --env '' for none), as \`new --env\` gives them. A running agent is
+            stopped first, then carries on its conversation.
+  --settings <json>  The same for its Claude settings ('{}' for none). Each of the two left out
+            stays as it was.
   --json    Print the agent as JSON.
 "
 `;

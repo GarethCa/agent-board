@@ -4,8 +4,9 @@ import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
-import { runGit } from './git.ts';
+import { checkCheckoutConfig, checkRepoConfig, runGit } from './git.ts';
 import { nameSlug } from './work-units.ts';
+import { plural } from './text-words.ts';
 
 /** `<worktreesDir>/<repo name>-<hash of its path>/<branch>`: repos with the same name never collide. */
 export function agentWorktreePath(worktreesDir: string, repoRoot: string, branch: string): string {
@@ -120,7 +121,13 @@ export async function localBaseBranch(repoRoot: string, base: string, check?: (r
     const tracking = `refs/remotes/${remote}/${branch}`;
     // Never asks for a password: a remote that wants one is as good as none here.
     const timeout = named === undefined ? BASE_FETCH_TIMEOUT_MS.guessed : BASE_FETCH_TIMEOUT_MS.named;
-    await runGit(repoRoot, ['fetch', '--quiet', '--no-tags', remote, `+refs/heads/${branch}:${tracking}`], timeout, { GIT_TERMINAL_PROMPT: '0' });
+    // Refused, saying why, rather than started from what was last fetched: a start that is quietly stale is worse.
+    const checked = await checkRepoConfig(repoRoot, 'fetch', remote);
+    if ('refused' in checked) throw new Error(`could not fetch ${remote}/${branch}: ${checked.refused}`);
+    const fetch = ['fetch', '--quiet', '--no-tags', ...checked.args, remote, `+refs/heads/${branch}:${tracking}`];
+    await runGit(repoRoot, fetch, timeout, { GIT_TERMINAL_PROMPT: '0', ...checked.env });
+    const changed = await checked.after();
+    if (changed !== undefined) throw new Error(`could not fetch ${remote}/${branch}: ${changed}`);
     const tip = await runGit(repoRoot, ['rev-parse', '--verify', '--quiet', `${tracking}^{commit}`]);
     if (!tip.ok) throw new Error(await noBranchWhy(repoRoot, base));
     const head = `refs/heads/${branch}`;
@@ -151,6 +158,47 @@ export async function localBaseBranch(repoRoot: string, base: string, check?: (r
   });
 }
 
+/**
+ * Adds a worktree at `path` with `git worktree add <add>` (its options and where it goes, `path` among them), then
+ * checks its files out only when the config git reads there names no merge driver or filter (`checkCheckoutConfig`),
+ * with that check's pins, at the commit it checked. The config is read in the new worktree, not in `repoRoot`: a
+ * conditional include (`includeIf.gitdir:…`, `includeIf.onbranch:…`) can apply there alone. A refused worktree is
+ * removed, with `made`, the branch the add made, and throws saying why; so is one whose config named a program no pin
+ * held by the time it was checked out. A failed add throws with git's words.
+ */
+export async function addCheckedWorktree(repoRoot: string, path: string, add: string[], made?: string): Promise<void> {
+  const what = `could not create a worktree for ${basename(repoRoot)}`;
+  const added = await runGit(repoRoot, ['worktree', 'add', '--no-checkout', ...add]);
+  if (!added.ok) throw new Error(`${what}: ${added.stderr}`);
+  // A worktree that can't be checked out goes, branch and all, as a failed `worktree add` leaves nothing: one left half-made
+  // would be taken up again, its files missing, or leak one more on every retry.
+  const undo = async (why: string): Promise<never> => {
+    const removed = await runGit(repoRoot, ['worktree', 'remove', '--force', path]);
+    const deleted = made === undefined || !removed.ok ? undefined : await runGit(repoRoot, ['branch', '--quiet', '-D', '--end-of-options', made]);
+    const left = !removed.ok ? ` (and ${path} is left: ${removed.stderr})` : deleted?.ok === false ? ` (and its branch ${made} is left: ${deleted.stderr})` : '';
+    throw new Error(`${what}: ${why}${left}`);
+  };
+  // At its commit, not HEAD: the branch could move on before the checkout, to a tree whose attributes weren't read.
+  const head = await runGit(path, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']);
+  const commit = head.ok ? head.stdout : 'HEAD';
+  const checked = await checkCheckoutConfig(path, 'make a worktree', { trees: [commit] });
+  if ('refused' in checked) return undo(checked.refused);
+  const checkedOut = await runGit(path, ['reset', '--quiet', '--hard', commit], undefined, checked.env);
+  if (!checkedOut.ok) return undo(checkedOut.stderr);
+  const changed = await checked.after();
+  if (changed !== undefined) return undo(changed);
+}
+
+/**
+ * Whether the worktree at `path` was made but never checked out (`addCheckedWorktree` stopped between its add and its
+ * checkout): it has no index file at all, as `worktree add --no-checkout` leaves it. An index emptied since
+ * (`git rm -r --cached .`) is still a file, so a worktree that holds work is never taken for one.
+ */
+export async function neverCheckedOut(path: string): Promise<boolean> {
+  const index = await runGit(path, ['rev-parse', '--path-format=absolute', '--git-path', 'index']);
+  return index.ok && index.stdout !== '' && !existsSync(index.stdout);
+}
+
 /** The first git that can add a worktree on a branch with no commits (`git worktree add --orphan`). */
 const ORPHAN_WORKTREE_GIT = [2, 42];
 
@@ -167,7 +215,8 @@ async function canAddOrphanWorktree(dir: string): Promise<boolean> {
  * Creates `branch` at the tip of the repo's branch `base`, or at the commit `base.commit`, (its current HEAD without),
  * checked out in a new worktree at `path`. In a repo with no commits yet, given no base, the new branch has none either
  * (`--orphan`): nothing is committed for it. Resolves false, having made nothing, when git is too old for that (before
- * 2.42), so the caller can do without a worktree.
+ * 2.42), so the caller can do without a worktree. Refused, saying why, when the repo's own config names a merge driver
+ * or filter (`addCheckedWorktree`), which the checkout would run.
  */
 export async function addWorktree(repoRoot: string, path: string, branch: string, base?: string | { commit: string }): Promise<boolean> {
   let start = 'HEAD';
@@ -185,21 +234,19 @@ export async function addWorktree(repoRoot: string, path: string, branch: string
     return true;
   }
   mkdirSync(dirname(path), { recursive: true });
-  const added = await runGit(repoRoot, ['worktree', 'add', '-b', branch, path, start]);
-  if (!added.ok) throw new Error(`could not create a worktree for ${basename(repoRoot)}: ${added.stderr}`);
+  await addCheckedWorktree(repoRoot, path, ['-b', branch, path, start], branch);
   return true;
 }
 
 /**
  * Checks out the tip of the repo's branch `branch`, detached, in a new worktree at `path` (a reviewer's): no
- * branch of its own, so it can't push. Resolves to the commit it checked out.
+ * branch of its own, so it can't push. Resolves to the commit it checked out. Refused as `addWorktree` is.
  */
 export async function addDetachedWorktree(repoRoot: string, path: string, branch: string): Promise<string> {
   const found = await runGit(repoRoot, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}^{commit}`]);
   if (!found.ok) throw new Error(await noBranchWhy(repoRoot, branch));
   mkdirSync(dirname(path), { recursive: true });
-  const added = await runGit(repoRoot, ['worktree', 'add', '--detach', path, found.stdout]);
-  if (!added.ok) throw new Error(`could not create a worktree for ${basename(repoRoot)}: ${added.stderr}`);
+  await addCheckedWorktree(repoRoot, path, ['--detach', path, found.stdout]);
   return found.stdout;
 }
 
@@ -244,7 +291,9 @@ export async function defaultBranchOf(repoRoot: string): Promise<string | null> 
 export async function unsavedWork(repoRoot: string, worktree: string, branch: string, options: { ignoreBoardFiles?: boolean } = {}): Promise<string | undefined> {
   if (existsSync(worktree)) {
     // Untracked files one by one only to tell the board's own apart: else a whole untracked folder is one line, as before.
-    const status = await runGit(worktree, ['status', '--porcelain', ...(options.ignoreBoardFiles === true ? ['--untracked-files=all'] : [])]);
+    const status = await runGit(worktree, ['status', '--porcelain', ...(options.ignoreBoardFiles === true ? ['--untracked-files=all'] : [])], undefined, {}, {
+      repoFiltersOff: true,
+    });
     if (!status.ok) throw new Error(`could not check ${worktree} for changes: ${status.stderr}`);
     const changes = status.stdout.split('\n').filter(Boolean);
     // Each line is a status code and a path (`?? .agent-board/review.md`), however its leading space was trimmed.
@@ -253,7 +302,7 @@ export async function unsavedWork(repoRoot: string, worktree: string, branch: st
     if (kept.length > 0) return 'its worktree has uncommitted changes';
     const detached = await runGit(worktree, ['rev-list', '--count', 'HEAD', '--not', '--branches', '--remotes']);
     const count = detached.ok ? Number(detached.stdout) : 0;
-    if (count > 0) return `its worktree's HEAD has ${commits(count)} that no branch has`;
+    if (count > 0) return `its worktree's HEAD has ${plural(count, 'commit')} that no branch has`;
   }
   // `--exclude` patterns for `--branches` leave out the `refs/heads/` prefix. Branch names here are glob-free slugs.
   const unique = await runGit(repoRoot, [
@@ -267,11 +316,7 @@ export async function unsavedWork(repoRoot: string, worktree: string, branch: st
   ]);
   // A branch that is already gone has nothing to lose.
   const count = unique.ok ? Number(unique.stdout) : 0;
-  return count > 0 ? `its branch ${branch} has ${commits(count)} no other branch has` : undefined;
-}
-
-function commits(count: number): string {
-  return `${count} commit${count === 1 ? '' : 's'}`;
+  return count > 0 ? `its branch ${branch} has ${plural(count, 'commit')} no other branch has` : undefined;
 }
 
 /** Whether `path` is the folder of a worktree git lists for the repo; throws if git can't say. */

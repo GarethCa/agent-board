@@ -64,8 +64,16 @@ describe("an agent's menu", () => {
       'reasoning', 'reasoning/default', 'reasoning/low', 'reasoning/medium', 'reasoning/high', 'reasoning/xhigh', 'reasoning/max',
       'role', 'role/none', 'role/orchestrator', 'role/implementer', 'role/reviewer', 'role/follow-up-reviewer',
       'role/with-template', 'role/with-template/send-orchestrator', 'role/with-template/send-implementer', 'role/with-template/send-reviewer', 'role/with-template/send-follow-up-reviewer',
-      'start-review', 'run-gate', 'delete',
+      'restart-with', 'start-review', 'run-gate', 'delete',
     ]);
+  });
+
+  it('restarts with new launch settings any agent that restarts in place, not a reviewer', () => {
+    const actions = spies<AgentMenuInput['actions']>();
+    (row(agentMenu(agentInput(running, { actions })), 'restart-with') as { onSelect(): void }).onSelect();
+    expect(actions.calls).toEqual([['restartWith', [running]]]);
+    expect(menuIds(agentMenu(agentInput(ended)))).toContain('restart-with');
+    expect(menuIds(agentMenu(agentInput({ ...running, reviewOf: 'impl' })))).not.toContain('restart-with');
   });
 
   it("offers the reasoning levels its harness takes, its own ticked, and says when it takes a new one", () => {
@@ -220,6 +228,7 @@ describe("an agent's menu in its pop-up: its tab's ⋯, and a lone agent's heade
       'Interrupt',
       'Rename',
       'Restart agent',
+      'Restart with…',
       'Stop session',
       '---',
       'Schedule…',
@@ -903,6 +912,11 @@ describe("every row's fields", () => {
           "id": "role",
           "label": "Role",
         },
+        {
+          "hint": "Env vars it starts with; carries on its conversation",
+          "id": "restart-with",
+          "label": "Restart with…",
+        },
         "separator",
         {
           "disabled": false,
@@ -1047,6 +1061,11 @@ describe("every row's fields", () => {
           ],
           "id": "role",
           "label": "Role",
+        },
+        {
+          "hint": "Env vars it starts with; carries on its conversation",
+          "id": "restart-with",
+          "label": "Restart with…",
         },
         "separator",
         {
@@ -1205,6 +1224,11 @@ describe("every row's fields", () => {
           "id": "role",
           "label": "Role",
         },
+        {
+          "hint": "Env vars it starts with; carries on its conversation",
+          "id": "restart-with",
+          "label": "Restart with…",
+        },
         "separator",
         {
           "disabled": false,
@@ -1350,6 +1374,11 @@ describe("every row's fields", () => {
           ],
           "id": "role",
           "label": "Role",
+        },
+        {
+          "hint": "Env vars it starts with; carries on its conversation",
+          "id": "restart-with",
+          "label": "Restart with…",
         },
         "separator",
         {
@@ -2052,6 +2081,7 @@ describe("every row's handler", () => {
         "role/with-template/send-implementer → setRole("a1", "implementer", true)",
         "role/with-template/send-reviewer → setRole("a1", "reviewer", true)",
         "role/with-template/send-follow-up-reviewer → setRole("a1", "follow-up-reviewer", true)",
+        "restart-with → restartWith(#a1)",
         "open-review → openReview("a1")",
         "start-review → startReview(#a1)",
         "run-gate → openGate(#a1, true)",
@@ -2103,6 +2133,7 @@ describe("every row's handler", () => {
         "role/with-template/send-implementer → setRole("a2", "implementer", true)",
         "role/with-template/send-reviewer → setRole("a2", "reviewer", true)",
         "role/with-template/send-follow-up-reviewer → setRole("a2", "follow-up-reviewer", true)",
+        "restart-with → restartWith(#a2)",
         "start-review → startReview(#a2)",
         "run-gate → openGate(#a2, true)",
         "delete → deleteAgent("a2")",
@@ -2127,6 +2158,7 @@ describe("every row's handler", () => {
         "role/with-template/send-implementer → setRole("a3", "implementer", true)",
         "role/with-template/send-reviewer → setRole("a3", "reviewer", true)",
         "role/with-template/send-follow-up-reviewer → setRole("a3", "follow-up-reviewer", true)",
+        "restart-with → restartWith(#a3)",
         "start-review → startReview(#a3)",
         "run-gate → openGate(#a3, true)",
         "delete → deleteAgent("a3")",
@@ -2152,6 +2184,7 @@ describe("every row's handler", () => {
         "role/with-template/send-implementer → setRole("a4", "implementer", true)",
         "role/with-template/send-reviewer → setRole("a4", "reviewer", true)",
         "role/with-template/send-follow-up-reviewer → setRole("a4", "follow-up-reviewer", true)",
+        "restart-with → restartWith(#a4)",
         "start-review → startReview(#a4)",
         "run-gate → openGate(#a4, true)",
         "delete → deleteAgent("a4")",
@@ -2178,6 +2211,7 @@ describe("every row's handler", () => {
         "role/with-template/send-implementer → setRole("a5", "implementer", true)",
         "role/with-template/send-reviewer → setRole("a5", "reviewer", true)",
         "role/with-template/send-follow-up-reviewer → setRole("a5", "follow-up-reviewer", true)",
+        "restart-with → restartWith(#a5)",
         "start-review → startReview(#a5)",
         "run-gate → openGate(#a5, true)",
         "delete → deleteAgent("a5")",

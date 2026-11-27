@@ -9,6 +9,7 @@ import {
   jobState,
   linkText,
   matchingJobs,
+  moveTarget,
   newestChange,
   newQueueData,
   nextJob,
@@ -143,5 +144,18 @@ describe('a queue card', () => {
     expect(agentLine(taken)).toBe('impl-2 took Fix the login');
     expect(agentLine(job('f', { state: 'done', doneBy: agent, changedBy: agent, lastChange: 'done', text: 'Docs' }))).toBe('impl-2 finished Docs');
     expect(newestChange([job('a'), taken])).toBe(later);
+  });
+});
+
+describe('moveTarget', () => {
+  const open = [job('a'), job('b'), job('c')];
+  it('puts a row before the one it passes, or last', () => {
+    expect(moveTarget(open, open[1]!, -1)).toEqual({ before: open[0] });
+    expect(moveTarget(open, open[0]!, 1)).toEqual({ before: open[2] });
+    expect(moveTarget(open, open[1]!, 1)).toEqual({ before: null });
+  });
+  it('goes nowhere past either end', () => {
+    expect(moveTarget(open, open[0]!, -1)).toBeUndefined();
+    expect(moveTarget(open, open[2]!, 1)).toBeUndefined();
   });
 });

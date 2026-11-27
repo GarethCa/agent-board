@@ -10,6 +10,8 @@ const agentTile = (page: Page, id: string) => page.locator(`[data-testid="agent-
 const expandedAgent = (page: Page, id: string) => page.locator(`[data-testid="expanded-tile"][data-session-id="${id}"]`);
 const tabsOf = (scope: Locator) => scope.getByTestId('session-tab');
 const tabNamed = (scope: Locator, name: string) => tabsOf(scope).filter({ has: scope.page().getByRole('tab', { name, exact: true }) });
+/** Its shell tabs: in an expanded tile's tab row, which shows its one shell as "Shell", and in its panes' strips. */
+const shellTabsOf = (scope: Locator) => scope.locator('[data-testid="session-tab"][data-tab^="shell:"]');
 const shellTiles = (page: Page) => page.getByTestId('shell-tile');
 /** A window's panes, each with a strip of its own once there are several. */
 const panesOf = (scope: Locator) => scope.getByTestId('window-pane');
@@ -150,7 +152,7 @@ test("a shell tab drags onto another agent's tile, the board and another window'
     const implWindow = expandedAgent(window, impl!.sessionId);
     await implWindow.getByTestId('session-terminal').first().click();
     await window.keyboard.press(windowKey('t'));
-    await expect(tabsOf(implWindow)).toHaveCount(2);
+    await expect(shellTabsOf(implWindow)).toHaveCount(1);
     // An expanded tile's terminal waits to be clicked before it takes the keyboard.
     await implWindow.locator('[data-testid="session-tab-view"]:not([hidden])').getByTestId('session-terminal').click();
     await window.keyboard.type('echo moved-$((6 * 7))');
@@ -161,22 +163,22 @@ test("a shell tab drags onto another agent's tile, the board and another window'
     await zoomOutTo(window, implWindow, agentTile(window, review!.sessionId));
 
     // Onto the reviewer's tile: one of its tabs now, the same shell running.
-    await dragTo(tabNamed(implWindow, 'sh'), await middleOf(agentTile(window, review!.sessionId)));
-    await expect(tabsOf(implWindow)).toHaveCount(1);
+    await dragTo(shellTabsOf(implWindow), await middleOf(agentTile(window, review!.sessionId)));
+    await expect(shellTabsOf(implWindow)).toHaveCount(0);
     await expectShellsHeldBy(window, review!.sessionId, 1);
     expect(await holderOf(window, pane)).toEqual({ id: tab.id, owner: { kind: 'agent', id: review!.sessionId }, name: 'sh' });
     expect(await running(window, pane)).toBe(true);
 
     // ⌘Z puts it back in the implementer's tabs.
     await undo(window);
-    await expect(tabsOf(implWindow)).toHaveCount(2);
+    await expect(shellTabsOf(implWindow)).toHaveCount(1);
     await expectShellsHeldBy(window, review!.sessionId, 0);
 
     // Onto bare board: a shell tile of its own where it is dropped, named as the tab was.
-    await dragTo(tabNamed(implWindow, 'sh'), await bareBoard(window));
+    await dragTo(shellTabsOf(implWindow), await bareBoard(window));
     await expect(shellTiles(window)).toHaveCount(1);
     await expect(shellTiles(window)).toContainText('sh');
-    await expect(tabsOf(implWindow)).toHaveCount(1);
+    await expect(shellTabsOf(implWindow)).toHaveCount(0);
     expect((await holderOf(window, pane))?.owner).toBeNull();
     expect(await running(window, pane)).toBe(true);
 
@@ -190,26 +192,26 @@ test("a shell tab drags onto another agent's tile, the board and another window'
     await expect(implWindow.locator('.session-window-body')).toHaveAttribute('data-drop-over', 'true');
     await window.mouse.up();
     await expect(shellTiles(window)).toHaveCount(0);
-    await expect(tabsOf(implWindow)).toHaveCount(2);
+    await expect(shellTabsOf(implWindow)).toHaveCount(1);
     expect((await holderOf(window, pane))?.owner).toEqual({ kind: 'agent', id: impl!.sessionId });
 
     // ⌘Z: a tile again, where it was.
     await undo(window);
     await expect(shellTiles(window)).toHaveCount(1);
-    await expect(tabsOf(implWindow)).toHaveCount(1);
+    await expect(shellTabsOf(implWindow)).toHaveCount(0);
     await undo(window, true);
-    await expect(tabsOf(implWindow)).toHaveCount(2);
+    await expect(shellTabsOf(implWindow)).toHaveCount(1);
 
-    // Into the reviewer's own window's tabs, where an amber hint says whose worktree it runs in.
+    // Into the reviewer's own expanded tile, one of its tabs, where an amber hint says whose worktree it runs in.
     await agentTile(window, review!.sessionId).dblclick();
     const reviewWindow = expandedAgent(window, review!.sessionId);
-    await expect(tabsOf(reviewWindow)).toHaveCount(1);
+    await expect(shellTabsOf(reviewWindow)).toHaveCount(0);
     await settled(window, implWindow, reviewWindow);
-    await dragTo(tabNamed(implWindow, 'sh'), await middleOf(reviewWindow.getByTestId('session-tabs')));
-    await expect(tabsOf(reviewWindow)).toHaveCount(2);
-    await expect(tabsOf(implWindow)).toHaveCount(1);
+    await dragTo(shellTabsOf(implWindow), await middleOf(reviewWindow.getByTestId('session-terminal').first()));
+    await expect(shellTabsOf(reviewWindow)).toHaveCount(1);
+    await expect(shellTabsOf(implWindow)).toHaveCount(0);
+    await shellTabsOf(reviewWindow).getByRole('tab').click();
     await expect(reviewWindow.getByTestId('session-window-astray')).toHaveText(`sh runs in ${impl!.name}'s worktree`);
-    await tabNamed(reviewWindow, 'sh').getByRole('tab').click();
     await expect(reviewWindow.locator('[data-testid="session-tab-view"]:not([hidden]) .xterm-rows')).toContainText('moved-42');
     expect(await running(window, pane)).toBe(true);
   } finally {
@@ -425,7 +427,8 @@ test("a tab dropped on the edge of a pane in another agent's window splits it th
     await settled(window, implWindow, reviewWindow);
 
     // Onto the right edge of the reviewer's pane: a pane of its own there, the same shell running.
-    await dragTo(tabNamed(implWindow, 'sh'), await nearEdge(shownViews(reviewWindow), 'right'));
+    // Dragged from its pane's strip: split, the tile's tab row lists it too.
+    await dragTo(tabNamed(panesOf(implWindow).nth(1), 'sh'), await nearEdge(shownViews(reviewWindow), 'right'));
     await expect(panesOf(reviewWindow)).toHaveCount(2);
     await expect(panesOf(reviewWindow).nth(1).getByTestId('session-tab')).toHaveText(['sh']);
     await expect(panesOf(implWindow).nth(1).getByTestId('session-tab')).toHaveText(['sh 2']);

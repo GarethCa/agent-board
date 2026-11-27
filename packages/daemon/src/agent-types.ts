@@ -29,6 +29,8 @@ export interface AgentHostOptions {
   reviewsDir: string;
   /** Where an agent asked for a scratch repo gets one, named after it (ADR-0007). */
   scratchDir: string;
+  /** Where an agent with launch settings of its own has its `claude --settings` written, readable by the user alone. */
+  launchSettingsDir: string;
   /** Where groups' own folders are (`groupFolder`): an agent in a group with no repo runs in the group's. */
   groupsDir: string;
   /** Remembers a folder an agent was started from, so pickers offer it again. */
@@ -48,6 +50,8 @@ export interface AgentHostOptions {
   compactWindow: () => number;
   /** The reasoning effort Settings give a new agent not asked for one (`defaultEffort` in settings.ts), read as each starts. */
   defaultEffort: (harness: Harness, role: string | null) => Effort | null;
+  /** Whether Settings give a new Claude agent in this role the board's MCP tools alone (`boardToolsOnly` in settings.ts), read as each starts. */
+  boardToolsOnly: (role: string | null) => boolean;
   /** Whether Claude agents get `FORCE_HYPERLINK=1` (`DaemonSettings.clickableLinks`), read as each starts. */
   clickableLinks: () => boolean;
   /** The environment harness sessions start from. */
@@ -175,7 +179,7 @@ export interface AgentHost {
    * Runs a failed start again: one that failed before its agent was made, from the beginning; an agent whose harness
    * exited before its first hook, relaunched in its worktree with the first message it was started with.
    */
-  retryStart(sessionId: string, allowProjectCodexConfig: boolean): void;
+  retryStart(sessionId: string, allowProjectCodexConfig: boolean): Promise<void>;
   /** Renames or moves the tile of an agent being started; once it is an agent, the agent's. */
   updateStart(sessionId: string, change: StartChange): void;
   /** Takes a start off the board, stopping one still going before its session would run; a start not known is over. */
@@ -332,6 +336,15 @@ export interface AgentHost {
    */
   resume(sessionId: string, why: string, force: boolean, fresh?: { prompt?: string }, quiet?: boolean): Promise<Agent>;
   /**
+   * Gives the agent its own launch settings (`LaunchSettings`, checked for its harness; empty parts clear them) and
+   * starts it again with them, as `resume` does: carrying on its conversation, or with `fresh` a new one. A live agent
+   * is stopped first; one mid-turn only with `midTurn`, and its resume then tells it to carry on. Refused, with nothing
+   * stored or stopped, for a reviewer (its round would end), one whose harness runs in its shell, or one mid-turn without
+   * `midTurn`. `keepEnv` names env vars it kept to keep alongside the env given. The settings are kept even if it then
+   * can't start, for its next start.
+   */
+  restartWith(sessionId: string, launchSettings: unknown, why: string, force: boolean, fresh?: { prompt?: string }, options?: { midTurn?: boolean; keepEnv?: string[] }): Promise<Agent>;
+  /**
    * Types the continue line (`CONTINUE_LINE`) at the prompt of a live agent whose turn a restart cut off
    * (`cutOffMidTurn`), once it is ready for its next message, as `tell` does: the user's Carry on. Refuses one that
    * wasn't cut off, has ended, or isn't ready, saying why.
@@ -355,9 +368,12 @@ export interface AgentHost {
    * Starts a scheduled run. An agent sitting at its prompt (idle, or after a failed turn) gets `prompt` as its next
    * message. An ended agent is relaunched in its worktree with `prompt`: Claude resumes its conversation, Codex starts
    * a new one unless it was paused (a hand-off resumes it). The run is skipped, saying why, while the agent is still working, rate-limited, waiting for you (on a
-   * permission prompt, or its last message asks you something) or you are typing at its prompt.
+   * permission prompt, or its last message asks you something) or you are typing at its prompt. `label` names it where
+   * it is kept as not delivered (a ticket's news, say); a scheduled run without.
    */
-  runScheduled(sessionId: string, prompt: string, notTyped?: (reason: string) => void): RunStart;
+  runScheduled(sessionId: string, prompt: string, notTyped?: (reason: string) => void, label?: string): RunStart;
+  /** Whether the ended agent is being started again, its shell looked at first: a run started on it hasn't ended. */
+  isWaking(sessionId: string): boolean;
   /**
    * Delivers `text`, the payload `name` (`final message`, `plan.md`, `review, round 1`), from agent `from` to agent
    * `to` as `to`'s next message, headed with both, as a scheduled run does (relaunching an ended `to`, resuming its
@@ -502,6 +518,8 @@ export interface AgentRow extends PositionColumns {
   owns_worktree: number;
   /** 1 for an agent that may change nothing where it runs (`FolderPlace.readOnly`). */
   read_only: number;
+  /** Its own launch settings (`LaunchSettings` as JSON, migration 0109), or null for none. */
+  launch_settings: string | null;
   /** 1 for the Captain (migration 0060): at most one agent. */
   master: number;
   /** 1 for an agent started in a group's folder of the user's, outside git (migration 0065): `Agent.plainFolder`. */

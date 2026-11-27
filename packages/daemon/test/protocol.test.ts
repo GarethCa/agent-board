@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { continuesOnCredits, lineSplitter, normalisedAngle, parseRole, roleLabel, validZoneFillOpacity, ZONE_COLOR_NAMES, ZONE_COLORS } from '../src/protocol.ts';
+import { continuesOnCredits, envPair, launchSettingNames, lineSplitter, normalisedAngle, parseRole, roleLabel, validZoneFillOpacity, ZONE_COLOR_NAMES, ZONE_COLORS } from '../src/protocol.ts';
 
 function split(chunks: string[], maxLength?: number) {
   const lines: string[] = [];
@@ -106,5 +106,31 @@ describe('continuesOnCredits', () => {
     expect(continuesOnCredits({ harness: 'codex', state: 'rate-limited', endedAt: null })).toBe(false);
     expect(continuesOnCredits({ harness: 'claude', state: 'waiting', endedAt: null })).toBe(false);
     expect(continuesOnCredits({ harness: 'claude', state: 'rate-limited', endedAt: '2026-10-23T10:00:00Z' })).toBe(false);
+  });
+});
+
+describe('envPair', () => {
+  it('reads the name before the first = and keeps all after it, spaces too', () => {
+    expect(envPair('A=x=y ')).toEqual({ name: 'A', value: 'x=y ' });
+    expect(envPair('A=')).toEqual({ name: 'A', value: '' });
+  });
+
+  it('is nothing without an =, or with a name a shell refuses', () => {
+    expect(envPair('A')).toBeUndefined();
+    expect(envPair('=1')).toBeUndefined();
+    expect(envPair('A =1')).toBeUndefined();
+    expect(envPair('1A=1')).toBeUndefined();
+  });
+});
+
+describe('launchSettingNames', () => {
+  it('names the env vars and settings, never their values', () => {
+    expect(launchSettingNames({ env: ['A', 'B'], settings: ['outputStyle'] })).toBe('env A, B; settings outputStyle');
+    expect(launchSettingNames({ env: [], settings: ['outputStyle'] })).toBe('settings outputStyle');
+  });
+
+  it('is nothing for none', () => {
+    expect(launchSettingNames(null)).toBeUndefined();
+    expect(launchSettingNames({ env: [], settings: [] })).toBeUndefined();
   });
 });

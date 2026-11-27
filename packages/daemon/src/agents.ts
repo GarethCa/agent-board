@@ -14,6 +14,7 @@ import { readSender } from './sender-marker.ts';
 import { refOf } from './crew-flags.ts';
 import { draftLine, sendTrail } from './send-log.ts';
 import { createHookStates } from './hook-states.ts';
+import { launchSettingKeys, launchSettingsParam, MAX_LAUNCH_SETTINGS_LENGTH, readLaunchSettings, removeLaunchSettingsFile, storedLaunchSettings } from './launch-settings.ts';
 import { answerTrustScreen, readStartupScreen, screenTail, type StartupScreen } from './startup-screen.ts';
 import {
   dimensionParam,
@@ -219,6 +220,8 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   const updateMuted = db.prepare('UPDATE agents SET muted = ? WHERE session_id = ?');
   const updatePinnedExpanded = db.prepare('UPDATE agents SET pinned_expanded = ? WHERE session_id = ?');
   const updateEffort = db.prepare('UPDATE agents SET effort = ? WHERE session_id = ?');
+  const updateLaunchSettings = db.prepare('UPDATE agents SET launch_settings = ? WHERE session_id = ?');
+  const markCutOff = db.prepare('UPDATE agents SET turn_cut_off = 1, turn_cut_off_asking = ? WHERE session_id = ?');
   /** Per live Claude agent, the reasoning effort to type at its prompt (`/effort`) once it is between turns. */
   const effortAfterTurn = new Map<string, Effort>();
   /** When each agent's shown state began, for `Agent.stateSince`. */
@@ -894,7 +897,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     getRow: (sessionId) => getRow(sessionId),
     requireAgent: (sessionId) => requireAgent(sessionId),
     whyNotReady: hookStates.whyNotReady,
-    relaunch: (row, prompt, why, codexSessionId) => lifecycle.relaunch(row, prompt, why, codexSessionId),
+    wake: (row, prompt, why, codexSessionId) => lifecycle.wake(row, prompt, why, codexSessionId),
     pausing: (sessionId) => lifecycle.pausing(sessionId),
     promptNow(sessionId) {
       const row = getRow(sessionId);
@@ -1025,7 +1028,11 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     requireAgent: (sessionId) => requireAgent(sessionId),
     repoZone: (row) => repoZone(row),
     announce: (sessionId) => announce(sessionId),
-    settled: (sessionId) => dropPinIfClosed(sessionId),
+    settled: (sessionId) => {
+      // Its settings file is read as it starts: once it has ended, the file goes until its next launch writes it again.
+      if (getRow(sessionId)?.ended_at !== null) removeLaunchSettingsFile(options.launchSettingsDir, sessionId);
+      dropPinIfClosed(sessionId);
+    },
     setState: (sessionId, state) => update.run(state, sessionId),
     unsee: (sessionId) => updateSeen.run(0, sessionId),
     launch: spawns.launch,
@@ -1160,6 +1167,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       harness: row.harness,
       model: row.model,
       effort: row.effort,
+      launchSettings: launchSettingKeys(readLaunchSettings(row.launch_settings)),
       effortPending: !live ? null : effortAfterTurn.has(row.session_id) ? 'after-turn' : effortAtRestart.has(row.session_id) ? 'restart' : null,
       role: row.role,
       roleName: row.role_name,
@@ -1516,14 +1524,15 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
 
     starts: spawns.starts,
 
-    retryStart(sessionId, allowProjectCodexConfig) {
+    async retryStart(sessionId, allowProjectCodexConfig) {
       if (spawns.pending.has(sessionId)) return spawns.pending.retry(sessionId, allowProjectCodexConfig);
       const row = getRow(sessionId);
       if (row === undefined) throw invalidParams(`no agent being started as ${sessionId}`);
       if (row.ended_at === null || !hookStates.startFailed(sessionId)) throw invalidParams(`${row.name} did not fail to start`);
       // The same first message as it was started with: its role's template and issue too, not only its task.
       const first = spawns.firstMessage(sessionId) ?? (row.description || undefined);
-      const started = lifecycle.relaunch(row, first, 'to retry its start', null);
+      // Woken as Wake wakes it, never over a shell its pane dropped into that runs something; a reviewer too.
+      const started = await lifecycle.wake(row, first, 'to retry its start', null, true);
       if (!started.started) throw invalidParams(`${row.name} can't be started again: ${started.reason}`);
       startupLines.forget(sessionId);
       // Starting again, so a second exit before its first hook is a failed start as well.
@@ -1586,6 +1595,8 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
 
     runScheduled: deliveries.runScheduled,
 
+    isWaking: (sessionId) => lifecycle.isWaking(sessionId),
+
     deliver: deliveries.deliver,
     tell: deliveries.tell,
 
@@ -1625,7 +1636,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
         // Ended (not paused): started again, carrying on its conversation, with the first as its first message; the
         // rest wait until it is up. A paused one is woken by the first, as any message wakes it.
         if (row.ended_at !== null && row.hibernated_at === null) {
-          const started = lifecycle.relaunch(row, items[0]!.text, 'to resend what was not delivered', row.harness_session_id);
+          const started = await lifecycle.wake(row, items[0]!.text, 'to resend what was not delivered', row.harness_session_id);
           if (!started.started) throw invalidParams(`${agent.name} can't be started again: ${started.reason}`);
           sent = 1;
         }
@@ -1726,6 +1737,47 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     },
 
     resume: lifecycle.resume,
+
+    async restartWith(sessionId, launchSettings, why, force, fresh, { midTurn = false, keepEnv = [] as string[] } = {}) {
+      const row = requireRow(sessionId);
+      const agent = requireAgent(sessionId);
+      // Refused before anything is stored or stopped: a stop the restart then refused would only end it.
+      const live = agent.endedAt === null;
+      const working = live && isWorking(agent);
+      const refusal =
+        agent.reviewOf !== null && (live || (agent.state !== 'stopped-by-restart' && agent.state !== 'hibernated'))
+          ? live
+            ? 'it is a reviewer in its round, which a restart would end'
+            : 'it is a reviewer whose round is over'
+          : agent.shellHarness !== null
+            ? `${agent.shellHarness} is running in its shell: exit it first`
+            : working && !midTurn
+              ? 'it is mid-turn: restart it once its turn ends'
+              : undefined;
+      if (refusal !== undefined) throw invalidParams(`${agent.name} can't be restarted with new launch settings: ${refusal}`, refusal);
+      const given = launchSettingsParam(launchSettings, row.harness) ?? {};
+      // Each part given replaces that part; one left out is kept. `keepEnv` names kept env vars to keep under new ones.
+      const kept = readLaunchSettings(row.launch_settings) ?? {};
+      const next = { ...kept, ...given };
+      if (launchSettings !== null && typeof launchSettings === 'object') {
+        if ('env' in launchSettings && given.env === undefined) delete next.env;
+        if ('settings' in launchSettings && given.settings === undefined) delete next.settings;
+      }
+      const carried = Object.fromEntries(Object.entries(kept.env ?? {}).filter(([name]) => keepEnv.includes(name) && given.env?.[name] === undefined));
+      if (Object.keys(carried).length > 0) next.env = { ...carried, ...given.env };
+      const stored = storedLaunchSettings(next);
+      if (stored !== null && stored.length > MAX_LAUNCH_SETTINGS_LENGTH) throw invalidParams(`launch settings must be at most ${MAX_LAUNCH_SETTINGS_LENGTH} characters, with the ones it keeps`);
+      updateLaunchSettings.run(stored, sessionId);
+      // Only the names: the values may be secrets.
+      const keys = launchSettingKeys(next);
+      options.log(`${sessionId} launch settings now ${keys === null ? 'none' : JSON.stringify(keys)}, for ${why}`);
+      if (live) {
+        await lifecycle.stop(sessionId, `its restart with new launch settings, for ${why}`);
+        // Stopped mid-turn, as a daemon restart cuts a turn off: its resume tells it to carry on.
+        if (working) markCutOff.run(agent.state === 'needs-permission' ? 1 : 0, sessionId);
+      }
+      return lifecycle.resume(sessionId, why, force, fresh);
+    },
 
     async carryOn(sessionId) {
       const agent = requireAgent(sessionId);
@@ -2198,6 +2250,8 @@ function spawnParams(params: unknown): SpawnAgentParams {
     chatKind: optionalStringParam(p, 'chatKind') as TicketChatKind | undefined,
     ticket: optionalStringParam(p, 'ticket'),
     allowProjectCodexConfig: optionalBooleanParam(p, 'allowProjectCodexConfig'),
+    // Checked for its harness as the agent starts.
+    launchSettings: p.launchSettings as SpawnAgentParams['launchSettings'],
     prompt: optionalStringParam(p, 'prompt'),
     name: startNameParam(p, 'name'),
     issueId: optionalStringParam(p, 'issueId'),
@@ -2208,18 +2262,18 @@ function spawnParams(params: unknown): SpawnAgentParams {
   };
 }
 
-/** The `agent.*` RPC handlers. */
+/** The `agent.*` RPC handlers; `agent.delete` is served by the daemon's closer, with the agent's helpers and reviewers. */
 export function agentHandlers<Context>(
   agents: AgentHost,
-): RpcHandlers<Pick<DaemonMethods, Exclude<Extract<keyof DaemonMethods, `agent.${string}`>, 'agent.setSchedule'>>, Context> {
+): RpcHandlers<Pick<DaemonMethods, Exclude<Extract<keyof DaemonMethods, `agent.${string}`>, 'agent.setSchedule' | 'agent.delete'>>, Context> {
   return {
     ...recordHandlers<Context>({ records: agents.records, agents }),
     'agent.spawn': (params) => agents.spawn(spawnParams(params)),
     'agent.start': (params) => agents.start(spawnParams(params)),
     'agent.starts': () => agents.starts(),
-    'agent.retryStart': (params) => {
+    'agent.retryStart': async (params) => {
       const p = paramsObject(params);
-      agents.retryStart(stringParam(p, 'sessionId'), optionalBooleanParam(p, 'allowProjectCodexConfig') ?? false);
+      await agents.retryStart(stringParam(p, 'sessionId'), optionalBooleanParam(p, 'allowProjectCodexConfig') ?? false);
       return null;
     },
     'agent.updateStart': (params) => {
@@ -2246,13 +2300,6 @@ export function agentHandlers<Context>(
       return agents.subagentTranscript(stringParam(p, 'sessionId'), stringParam(p, 'toolUseId'), optionalStringParam(p, 'agentId'));
     },
     'agent.nextName': () => ({ name: agents.nextName() }),
-    'agent.delete': async (params) => {
-      const p = paramsObject(params);
-      if (p.force !== undefined && typeof p.force !== 'boolean') throw invalidParams('force must be a boolean');
-      if (p.keepWorktree !== undefined && typeof p.keepWorktree !== 'boolean') throw invalidParams('keepWorktree must be a boolean');
-      await agents.delete(stringParam(p, 'sessionId'), "the app's agent.delete", p.force === true, p.keepWorktree === true);
-      return null;
-    },
     'agent.answer': async (params) => {
       const p = paramsObject(params);
       const sessionId = stringParam(p, 'sessionId');
@@ -2275,6 +2322,13 @@ export function agentHandlers<Context>(
       const p = paramsObject(params);
       if (p.force !== undefined && typeof p.force !== 'boolean') throw invalidParams('force must be a boolean');
       return agents.resume(stringParam(p, 'sessionId'), "the app's agent.resume", p.force === true);
+    },
+    'agent.restartWith': (params) => {
+      const p = paramsObject(params);
+      if (p.force !== undefined && typeof p.force !== 'boolean') throw invalidParams('force must be a boolean');
+      if (p.keepEnv !== undefined && !(Array.isArray(p.keepEnv) && p.keepEnv.every((name) => typeof name === 'string'))) throw invalidParams('keepEnv must be an array of names');
+      // The user's own choice, after the dialog says a mid-turn agent is stopped now and carries on after.
+      return agents.restartWith(stringParam(p, 'sessionId'), p.launchSettings, "the app's agent.restartWith", p.force === true, undefined, { midTurn: true, keepEnv: p.keepEnv as string[] | undefined });
     },
     'agent.carryOn': (params) => agents.carryOn(stringParam(paramsObject(params), 'sessionId')),
     'agent.decidePermission': (params) => {

@@ -38,14 +38,14 @@ export function clamp(value: number, low: number, high: number): number {
   return Math.min(Math.max(value, low), high);
 }
 
-/** Space kept between a new zone and the zone it was stepped past. */
-const ZONE_GAP = 40;
+/** Space kept between a new zone and the zones round it: the one it was stepped past, or the one it was put beside. */
+export const ZONE_GAP = 40;
 
 /**
  * Where to put a new zone of `size` that the user wants at `wanted`: there if it overlaps no existing zone, otherwise
  * stepped right past whatever it overlaps until it is clear, so two zones never land on top of each other.
  */
-export function freeSpotFor(
+export function freeZoneSpot(
   wanted: { x: number; y: number },
   size: { width: number; height: number },
   existing: readonly ZoneLayout[],
@@ -193,12 +193,55 @@ export function zoneHeightFor(tileCount: number, zoneWidth: number, grid: ZoneGr
  */
 export function freeTileSlot(zoneWidth: number, taken: readonly ZoneLayout[], size: Size = AGENT_TILE_SIZE, grid: ZoneGrid = NORMAL_GRID): { x: number; y: number } {
   const { padding, lane } = grid.gaps;
-  for (let index = 0; index < MAX_SEARCH_STEPS; index++) {
-    const slot = tileSlot(index, zoneWidth, grid);
-    const fits = slot.x === padding || slot.x + size.width + padding <= zoneWidth;
-    if (fits && !taken.some((tile) => overlaps({ ...slot, width: size.width, height: size.height }, tile))) return slot;
+  const [spot] = intoSlots([{ id: '', ...size }], taken, (index) => tileSlot(index, zoneWidth, grid), {
+    fits: (_index, slot) => slot.x === padding || slot.x + size.width + padding <= zoneWidth,
+    clear: (slot, _size, others) => !others.some((tile) => overlaps({ ...slot, width: size.width, height: size.height }, tile)),
+    past: () => ({ x: padding, y: lowestOf(taken, 0) + lane }),
+  }).values();
+  return spot!;
+}
+
+/** How `intoSlots` picks each tile's slot. Without one of them, as a zone's tidy does. */
+export interface SlotRules {
+  /** The gap each tile keeps from what is taken and from the tiles before it: a tile gap without. */
+  gap?: number;
+  /** The slot the first tile is tried at: the first without. */
+  from?: number;
+  /** Whether a tile of `size` may take slot `index` at all, at `spot`: a wide tile only where the zone's width holds it. */
+  fits?: (index: number, spot: Point, size: Size) => boolean;
+  /** Whether a tile of `size` at `spot` is clear of `taken`: its footprint, the characters' room above it included, a gap clear, without. */
+  clear?: (spot: Point, size: Size, taken: readonly Rect[]) => boolean;
+  /** Where a tile goes when no slot within the search's cap is free: without, a tile gap and its characters' room below everything taken, level with the first slot. */
+  past?: (taken: readonly Rect[]) => Point;
+}
+
+/**
+ * The one way tiles are packed into slots: each of `tiles`, in the order given, at the next of `slot(from)`,
+ * `slot(from + 1)`, … that it `fits` and where it is `clear` of `obstacles` and of the tiles before it, each at its own
+ * size (a resized tile takes the room it has, and the slots it covers are skipped); past the search's cap, never on
+ * top of anything, where `past` says.
+ */
+export function intoSlots(tiles: readonly (Size & { id: string })[], obstacles: readonly Rect[], slot: (index: number) => Point, rules: SlotRules = {}): Map<string, Point> {
+  const gap = rules.gap ?? TILE_GAP;
+  const clear = rules.clear ?? ((spot: Point, size: Size, taken: readonly Rect[]) => clearOf(sizedFootprint(spot, size), taken, gap));
+  const fits = rules.fits ?? (() => true);
+  const past = rules.past ?? ((taken: readonly Rect[]) => ({ x: slot(0).x, y: Math.max(...taken.map((rect) => rect.y + rect.height)) + TILE_GAP + PERCH_ROOM }));
+  const positions = new Map<string, Point>();
+  const taken = [...obstacles];
+  let index = rules.from ?? 0;
+  for (const tile of tiles) {
+    const size = { width: tile.width, height: tile.height };
+    const start = index;
+    const free = (at: number) => {
+      const spot = slot(at);
+      return fits(at, spot, size) && clear(spot, size, taken);
+    };
+    while (index - start < MAX_SEARCH_STEPS && !free(index)) index++;
+    const spot = index - start < MAX_SEARCH_STEPS ? slot(index++) : past(taken);
+    positions.set(tile.id, spot);
+    taken.push(sizedFootprint(spot, size));
   }
-  return { x: padding, y: lowestOf(taken, 0) + lane };
+  return positions;
 }
 
 /**
@@ -271,6 +314,23 @@ export const EXPANDED_SIZES_VIEW_KEY = 'expandedTiles.sizes';
 /** An expanded tile's size when it first opens: room for a terminal to read and its details strip. */
 export const EXPANDED_TILE_SIZE: Size = { width: 960, height: 600 };
 
+/** The view state key the board keeps the tiles let overlap an expanded one under: pairs of node ids, dropped and onto. */
+export const OVERLAPS_VIEW_KEY = 'expandedTiles.overlaps';
+
+/** The view state key the board keeps the tiles put down while tiles were expanded under: each node id with those tiles. */
+export const PUT_DOWN_VIEW_KEY = 'expandedTiles.putDown';
+
+/**
+ * The one rule for which overlaps end when tiles are freed (moved by an arrange, say): overlaps (`OVERLAPS_VIEW_KEY`,
+ * `ends` `either`: a pair goes with either of its tiles) or put-downs (`PUT_DOWN_VIEW_KEY`, `first`: an entry goes with
+ * its tile) without the tiles `freed`; undefined when none of them is in it. The app's own copy and the saved one both
+ * go through it.
+ */
+export function withoutFreed<Entry>(entries: readonly Entry[], freed: ReadonlySet<string>, ends: 'either' | 'first'): Entry[] | undefined {
+  const kept = entries.filter((entry) => !(Array.isArray(entry) && (ends === 'first' ? entry.slice(0, 1) : entry.slice(0, 2)).some((id) => typeof id === 'string' && freed.has(id))));
+  return kept.length === entries.length ? undefined : kept;
+}
+
 /**
  * The room each expanded tile takes in a layout, by `tileSizeKey`: every tile open now (`expanded`) at its size; every
  * one whose session window took it (`hidden`), at the size it opens at again; and every one pinned expanded that is
@@ -302,14 +362,12 @@ export const ITEM_GAP = 16;
  */
 export function freeItemSpot(zoneWidth: number, size: { width: number; height: number }, taken: readonly ZoneLayout[]): { x: number; y: number } {
   const perRow = Math.max(1, Math.floor((zoneWidth - 2 * ITEM_INSET + ITEM_GAP) / (size.width + ITEM_GAP)));
-  for (let index = 0; index < MAX_SEARCH_STEPS; index++) {
-    const spot = {
-      x: ITEM_INSET + (index % perRow) * (size.width + ITEM_GAP),
-      y: ITEM_INSET + Math.floor(index / perRow) * (size.height + ITEM_GAP),
-    };
-    if (!taken.some((other) => overlaps({ ...spot, width: size.width, height: size.height }, other))) return spot;
-  }
-  return { x: ITEM_INSET, y: lowestOf(taken, 0) + ITEM_GAP };
+  const slot = (index: number) => ({ x: ITEM_INSET + (index % perRow) * (size.width + ITEM_GAP), y: ITEM_INSET + Math.floor(index / perRow) * (size.height + ITEM_GAP) });
+  const [spot] = intoSlots([{ id: '', ...size }], taken, slot, {
+    clear: (at, _size, others) => !others.some((other) => overlaps({ ...at, ...size }, other)),
+    past: () => ({ x: ITEM_INSET, y: lowestOf(taken, 0) + ITEM_GAP }),
+  }).values();
+  return spot!;
 }
 
 /**
@@ -519,7 +577,7 @@ export function slotUnplaced<T>(tiles: readonly T[], slotting: Slotting<T>): voi
       orchestrator &&
       crewSpot(placeOf(orchestrator)!, [...siblings.map(slotting.footprint), ...inTheWay, ...(zoneId === undefined ? slotting.zones : [])], slotting.footprint(orchestrator).width);
     if (besideIt !== undefined) slotting.place(tile, besideIt);
-    else if (zoneId === undefined) slotting.place(tile, freeSpotFor({ x: 0, y: 0 }, AGENT_TILE_SIZE, [...slotting.zones, ...siblings.map(slotting.rect)]));
+    else if (zoneId === undefined) slotting.place(tile, freeZoneSpot({ x: 0, y: 0 }, AGENT_TILE_SIZE, [...slotting.zones, ...siblings.map(slotting.rect)]));
     else slotting.place(tile, freeTileSlot(slotting.zoneWidth(zoneId), [...siblings.map(slotting.rect), ...inTheWay], AGENT_TILE_SIZE, slotting.zoneGrid?.(zoneId)));
   }
 }

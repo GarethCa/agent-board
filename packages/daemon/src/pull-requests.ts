@@ -65,9 +65,9 @@ const NONE = JSON.stringify({ own: [], pushed: [] } satisfies AgentPullRequests)
 /**
  * Keeps every agent's pull requests, asking for them one agent at a time, one round every `intervalMs`, the first
  * at once. An ended agent is asked until none of its pull requests is open (none at all counts): from then on it
- * is settled, so a board's history doesn't cost a gh call per agent per round. Only memory holds them: a new daemon
- * asks again, once for a settled agent. When asking fails it keeps what it last saw, and logs the failure once until
- * it changes.
+ * is settled, so a board's history doesn't cost a gh call per agent per round, until it runs again (resumed or
+ * relaunched). Only memory holds them: a new daemon asks again, once for a settled agent. When asking fails it keeps
+ * what it last saw, and logs the failure once until it changes.
  */
 export function watchPullRequests(options: PullRequestWatcherOptions): PullRequestWatcher {
   const seen = new Map<string, { pullRequests: AgentPullRequests; json: string }>();
@@ -119,6 +119,9 @@ export function watchPullRequests(options: PullRequestWatcherOptions): PullReque
     for (const sessionId of answered.keys()) if (!known.has(sessionId)) answered.delete(sessionId);
     for (const agent of agents) {
       if (stopped) return;
+      // A settled agent running again may open a pull request, or merge one. It may even have been settled by an ask
+      // that saw it ended, as a new daemon's first round does, just before it was resumed.
+      if (!agent.ended) settled.delete(agent.sessionId);
       if (!settled.has(agent.sessionId)) await ask(agent);
     }
   };

@@ -1,8 +1,9 @@
 // Arranging the board: whole zones laid out in tidy rows a gap apart, and the tiles loose on the board gathered in rows
 // below them. What is in a zone moves with it and is never laid out afresh (that is the zone's own arrange), and the
 // notes, shapes and text loose on the board stay where they are. Pure, so every case is unit-tested.
-import { AGENT_TILE_SIZE, MAX_SEARCH_STEPS, overlaps, PERCH_ROOM, ROW_STEP, sizedFootprint, sizeOfZoneTile, TILE_GAP, type Point, type Rect, type ZoneTile } from './board-layout.ts';
-import { inReadingOrder, settledSlots } from './board-tidy.ts';
+import { MAX_SEARCH_STEPS, overlaps, PERCH_ROOM, rotatedBounds, sizedFootprint, sizeOfZoneTile, TILE_GAP, type Point, type Rect, type ZoneTile } from './board-layout.ts';
+import { looseGrid } from './board-tidy.ts';
+import { drawnZoneSize, type Zone } from './protocol.ts';
 
 /** The gap between zones, and between the zones and the loose tiles, as the board's Roomy spacing has it. */
 export const BOARD_ARRANGE_GAP = 80;
@@ -12,10 +13,67 @@ export interface BoardZone extends Rect {
   id: string;
 }
 
-/** Where `arrangeBoard` puts the zones and the loose tiles that move, by id: only those that go elsewhere. */
+/**
+ * Where `arrangeBoard` puts the zones and the loose tiles that move, by id: only those that go elsewhere. `freed` are
+ * the tiles it moved, whose overlaps end: a tile let overlap an expanded one, or put down beside one so it isn't pushed
+ * with its row, is laid out clear of the rest now, and is pushed aside again as any tile is.
+ */
 export interface BoardArrangement {
   zones: Map<string, Point>;
   tiles: Map<string, Point>;
+  freed: string[];
+}
+
+/** A zone as arranging the board reads it: where it is, its saved size, and whether it is folded to a chip. */
+export type ArrangedZone = Pick<Zone, 'id' | 'x' | 'y' | 'width' | 'height' | 'folded'>;
+
+/** A session's tile as arranging the board reads it, at the size it takes (an expanded one its expanded size). */
+export interface ArrangedTile extends Rect {
+  /** Its key on the board (`tileSizeKey`): the app's node id for it too. */
+  id: string;
+  kind: 'agent' | 'shell' | 'external';
+  zoneId: string | null;
+  /** Pinned expanded: it stays where it is, and so does its zone. */
+  pinned: boolean;
+}
+
+/** A note, shape, text or card as arranging the board reads it: its box, its turn, and its zone. */
+export interface ArrangedItem extends Rect {
+  zoneId: string | null;
+  rotation: number;
+}
+
+/** What is on the board, as the app and the daemon both hand it to `arrangeBoard`. */
+export interface BoardToArrange {
+  zones: readonly ArrangedZone[];
+  tiles: readonly ArrangedTile[];
+  items: readonly ArrangedItem[];
+}
+
+/** The room a zone takes on the board: its own, or folded, its chip's, so its neighbours close up round it. */
+export const zoneRoom = (zone: ArrangedZone): BoardZone => ({ id: zone.id, x: zone.x, y: zone.y, ...drawnZoneSize(zone) });
+
+/**
+ * The one way the board is read for an arrange: the zones that move (every one but a zone holding a tile pinned
+ * expanded) by the room each takes, the agents and shells loose on the board (not pinned), and what stays where it is
+ * for the rest to keep clear of: the notes, shapes and text loose on it (a turned one by its upright box), the other
+ * loose tiles (external sessions', pinned ones) with the room above them for their characters, and the pinned tiles'
+ * zones.
+ */
+export function arrangeInput(board: BoardToArrange): { zones: BoardZone[]; tiles: ZoneTile[]; fixed: Rect[] } {
+  const pinnedZones = new Set(board.tiles.flatMap((tile) => (tile.pinned && tile.zoneId !== null ? [tile.zoneId] : [])));
+  const loose = board.tiles.filter((tile) => tile.zoneId === null);
+  const moving = loose.filter((tile) => tile.kind !== 'external' && !tile.pinned);
+  const rooms = board.zones.map(zoneRoom);
+  return {
+    zones: rooms.filter((room) => !pinnedZones.has(room.id)),
+    tiles: moving.map(({ id, x, y, width, height }) => ({ id, x, y, width, height })),
+    fixed: [
+      ...board.items.filter((item) => item.zoneId === null).map(({ x, y, width, height, rotation }) => rotatedBounds({ x, y, width, height }, rotation)),
+      ...loose.filter((tile) => !moving.includes(tile)).map((tile) => sizedFootprint(tile, tile)),
+      ...rooms.filter((room) => pinnedZones.has(room.id)),
+    ],
+  };
 }
 
 const byId = (a: { id: string }, b: { id: string }) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
@@ -79,6 +137,13 @@ function laidOutRow(zones: readonly BoardZone[], x: number, top: number, keepCle
   };
 }
 
+/** Where the zones and the loose tiles go when `board` is arranged (`arrangeInput`, `laidOut`), and the tiles it frees. */
+export function arrangeBoard(board: BoardToArrange): BoardArrangement {
+  const { zones, tiles, fixed } = arrangeInput(board);
+  const laid = laidOut(zones, tiles, fixed);
+  return { ...laid, freed: [...laid.tiles.keys()] };
+}
+
 /**
  * Where the zones and the loose tiles go when the board is arranged. Zones, at their own sizes, in reading order, in
  * rows of about one and a half times as many as there are rows, top-aligned and `BOARD_ARRANGE_GAP` apart, from the
@@ -87,7 +152,7 @@ function laidOutRow(zones: readonly BoardZone[], x: number, top: number, keepCle
  * stays where it is (the notes, shapes, text and other sessions' tiles loose on the board): a zone that would cover one
  * goes right past it, or its whole row goes down below it, whichever is nearer, so every row stays top-aligned.
  */
-export function arrangeBoard(zones: readonly BoardZone[], tiles: readonly ZoneTile[], fixed: readonly Rect[] = []): BoardArrangement {
+export function laidOut(zones: readonly BoardZone[], tiles: readonly ZoneTile[], fixed: readonly Rect[] = []): Omit<BoardArrangement, 'freed'> {
   const footprintOf = (tile: ZoneTile) => sizedFootprint(tile, sizeOfZoneTile(tile));
   // The zones' own top-left, whatever the strays; else the strays'.
   const moving = zones.length > 0 ? zones : tiles.map(footprintOf);
@@ -119,12 +184,10 @@ export function arrangeBoard(zones: readonly BoardZone[], tiles: readonly ZoneTi
     placedZones.length === 0
       ? { x: origin.x, y: origin.y + PERCH_ROOM }
       : { x: Math.min(...placedZones.map((rect) => rect.x)), y: rowTop + rowHeight + BOARD_ARRANGE_GAP + PERCH_ROOM };
-  const perTileRow = Math.ceil(Math.sqrt(tiles.length));
-  const tileSpots = settledSlots(
-    inReadingOrder(tiles),
+  const tileSpots = looseGrid(
+    tiles,
     [...placedZones, ...fixed].map((rect) => grown(rect, BOARD_ARRANGE_GAP - TILE_GAP)),
     tilesFrom,
-    (from, index) => ({ x: from.x + (index % perTileRow) * (AGENT_TILE_SIZE.width + TILE_GAP), y: from.y + Math.floor(index / perTileRow) * ROW_STEP }),
   );
 
   const movedOnly = (spots: Map<string, Point>, from: readonly { id: string; x: number; y: number }[]) =>

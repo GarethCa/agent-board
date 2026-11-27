@@ -10,11 +10,13 @@ import { CLOCK_RUNS_KEPT, type AgentSchedule, type ClockChange, type ClockData, 
 const MAX_TIMER_MS = 60_000;
 
 /**
- * How a run or a delivery went: started, or not and why; `busy` when only because the agent can't take it now.
- * `unsent` when it was typed at a live agent's prompt but no turn started: it is still there, unsent. `queued` when the
- * agent's session wasn't up yet: it is typed once it is, after its first prompt.
+ * How a run or a delivery went: started, or not and why. Started: `unsent` when it was typed at a live agent's prompt
+ * but no turn started (it is still there, unsent); `queued` when the agent's session wasn't up yet (it is typed once it
+ * is, after its first prompt). Not started: `busy` when only because the agent can't take it now, and it may go once
+ * the agent is free; `askUser` when only the user could start it now (its shell runs something), so a sender that
+ * can't ask them keeps it as undelivered.
  */
-export type RunStart = { started: true; unsent?: boolean; queued?: boolean } | { started: false; reason: string; busy?: boolean };
+export type RunStart = { started: true; unsent?: boolean; queued?: boolean } | { started: false; reason: string; busy?: boolean; askUser?: boolean };
 
 /** A clock as the scheduler fires it: its item id, its zone and its data. */
 export interface FiringClock {
@@ -43,6 +45,11 @@ export interface RunPatch {
   finishedAt?: string | null;
   result?: string | null;
   flag?: string | null;
+  /**
+   * Whether it waits for the turn its message started to end: set on a run that fired as `running` (its only-if script
+   * ran first) once its message is typed. The clock's earlier runs still waiting for a turn are settled then.
+   */
+  awaitsTurn?: boolean;
 }
 
 export interface ScheduleHostOptions {
@@ -185,7 +192,7 @@ export function createScheduleHost(options: ScheduleHostOptions): ScheduleHost {
      WHERE clock_id = ? AND awaits_turn = 1 AND finished_at IS NULL AND id < ?`,
   );
   const updateRunRow = db.prepare(
-    `UPDATE clock_runs SET outcome = coalesce(?, outcome), reason = ?, session_id = ?, agent_name = ?, finished_at = ?, result = ?, flag_reason = ? WHERE id = ?`,
+    `UPDATE clock_runs SET outcome = coalesce(?, outcome), reason = ?, session_id = ?, agent_name = ?, finished_at = ?, result = ?, flag_reason = ?, awaits_turn = coalesce(?, awaits_turn) WHERE id = ?`,
   );
 
   /** Each planned clock's cron, parsed, and next fire time. */
@@ -348,8 +355,10 @@ export function createScheduleHost(options: ScheduleHostOptions): ScheduleHost {
       pick('finishedAt', row.finished_at),
       pick('result', row.result),
       pick('flag', row.flag_reason),
+      patch.awaitsTurn === undefined ? null : patch.awaitsTurn ? 1 : 0,
       runId,
     );
+    if (patch.awaitsTurn === true) settleEarlier.run(new Date(clock.now()).toISOString(), row.clock_id, runId);
   }
 
   for (const row of selectAll.all() as unknown as ItemRow[]) plan(row, row.id);

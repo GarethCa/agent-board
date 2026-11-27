@@ -1,9 +1,8 @@
 // A memory full screen: every document and fact in a list, searchable and filtered, beside the one picked, to read,
 // write, pin, confirm or remove, with who changed it and when, and how many agents read it. It takes what to show and
 // what to do as props, so the gallery draws it as the board does.
-import { useEffect, useLayoutEffect, useRef, useState, type HTMLAttributes, type KeyboardEvent, type ReactNode, type Ref } from 'react';
-import * as RadixDialog from '@radix-ui/react-dialog';
-import { Bold, Brain, Code, FileText, Heading, Italic, Link, List, Pin, PinOff, Plus, Search, Trash2, X } from 'lucide-react';
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { Bold, Brain, Code, FileText, Heading, Italic, Link, List, Pin, PinOff, Plus, Search, Trash2 } from 'lucide-react';
 import { MAX_MEMORY_FILE_BYTES, MAX_MEMORY_KEY, MAX_MEMORY_VALUE, type HistoryVersion, type MemoryChange, type MemoryEntry, type MemoryView } from '@agent-board/daemon/protocol';
 import { Button, ErrorText, IconButton, Kbd, Segmented, Select, Tabs } from '../../ui';
 import { chordPressed, chordText, type Chord } from '../../keys/registry';
@@ -11,6 +10,7 @@ import { isTyping } from '../../keys/typing';
 import { renderMarkdown } from './StickyNode';
 import { ScopeChip } from './ListCardParts';
 import { MemoryReaderList } from './MemoryCard';
+import { FullScreen } from './FullScreen';
 import { agoText, ageText, entryBytes, entryLine, entryName, isStale, lastReaderText, readersOf, readersText, sizeText, staleCount, whoText } from './memory-card';
 import {
   docBlocks,
@@ -69,6 +69,8 @@ export interface MemoryFullProps {
   inline?: boolean;
   /** Where it starts, for the gallery: the entry picked, a document open to write, and the list's filter. */
   initial?: { selected?: string; editing?: boolean; filter?: Partial<FullFilter> };
+  /** The memory on the board, for the focus as it closes. */
+  object?(): HTMLElement | null | undefined;
 }
 
 /** A draft offered back: its entry's name, its text, and the change that saves it, when it can be saved as it is. */
@@ -78,51 +80,10 @@ export interface Unsaved {
   change?: MemoryChange;
 }
 
-/** A memory full screen, over the board: Esc, the close button or a click outside closes it, and a draft saves first. */
-export function MemoryFull(props: MemoryFullProps) {
-  const { inline = false, onClose } = props;
-  const [opener] = useState(() => (document.activeElement instanceof HTMLElement ? document.activeElement : null));
-  if (inline)
-    return (
-      <RadixDialog.Root open modal={false}>
-        <FullBody {...props} />
-      </RadixDialog.Root>
-    );
-  return (
-    <RadixDialog.Root open onOpenChange={(open) => !open && onClose()}>
-      <RadixDialog.Portal>
-        <RadixDialog.Overlay className="ui-scrim" />
-        <RadixDialog.Content
-          asChild
-          aria-describedby={undefined}
-          onOpenAutoFocus={(event) => {
-            event.preventDefault();
-            // The entry shown, in the list, so ↑↓ move at once; with none, the search. (One selector list would take
-            // the search, which comes first on the page.)
-            const root = event.target as HTMLElement | null;
-            (root?.querySelector<HTMLElement>('.memory-full-item[aria-current="true"]') ?? root?.querySelector<HTMLElement>('.memory-full-search input'))?.focus();
-          }}
-          // Esc in a search with text clears it, and in a new entry cancels it: not the whole view.
-          onEscapeKeyDown={(event) => escapeStays(document.activeElement) && event.preventDefault()}
-          onCloseAutoFocus={(event) => {
-            event.preventDefault();
-            if (opener?.isConnected) opener.focus({ preventScroll: true });
-          }}
-          onInteractOutside={(event) => event.target instanceof Element && event.target.closest('.ui-toasts') !== null && event.preventDefault()}
-        >
-          <FullBody {...props} />
-        </RadixDialog.Content>
-      </RadixDialog.Portal>
-    </RadixDialog.Root>
-  );
-}
-
 type Adding = 'fact' | 'doc';
 
-/** What the dialog's content puts on the card it wraps: its ref, for the focus trap, and its own attributes and keys. */
-type Frame = Omit<HTMLAttributes<HTMLDivElement>, keyof MemoryFullProps> & { ref?: Ref<HTMLDivElement> };
-
-function FullBody({ title, scope, zoneColor, entries, readers, now, onChange, history, onRemove, onGone, onUnsaved, onClose, openLink, inline = false, initial, ...frame }: MemoryFullProps & Frame) {
+/** A memory full screen, over the board: Esc, the close button or a click outside closes it, and a draft saves first. */
+export function MemoryFull({ title, scope, zoneColor, entries, readers, now, onChange, history, onRemove, onGone, onUnsaved, onClose, openLink, inline = false, initial, object }: MemoryFullProps) {
   const [filter, setFilter] = useState<FullFilter>({ ...NO_FILTER, ...initial?.filter });
   const [picked, setPicked] = useState(initial?.selected);
   const [adding, setAdding] = useState<Adding>();
@@ -212,102 +173,87 @@ function FullBody({ title, scope, zoneColor, entries, readers, now, onChange, hi
     );
 
   return (
-    <div
-      {...frame}
-      className="ui-card memory-full"
-      role="dialog"
-      aria-label={`${title}: full screen`}
-      data-inline={inline || undefined}
-      data-testid="memory-full"
-      onKeyDown={(event) => {
-        keys(event);
-        frame.onKeyDown?.(event);
-      }}
-    >
-      <div className="memory-full-head">
-        <span className="memory-full-face" aria-hidden="true">
-          <Brain />
-        </span>
-        <RadixDialog.Title className="memory-full-title">{title}</RadixDialog.Title>
-        <ScopeChip scope={scope} zoneColor={zoneColor} />
+    <FullScreen
+      className="memory-full"
+      testId="memory-full"
+      title={title}
+      face={<Brain />}
+      beside={<ScopeChip scope={scope} zoneColor={zoneColor} />}
+      headEnd={
         <Tabs<FullTab>
-          className="memory-full-tabs"
-          aria-label="Show"
-          value={filter.tab}
-          onChange={(tab) => set({ tab })}
-          tabs={[
-            { id: 'all', label: 'All', count: counts.all },
-            { id: 'docs', label: 'Docs', count: counts.docs },
-            { id: 'facts', label: 'Facts', count: counts.facts },
-            { id: 'history', label: 'History' },
-          ]}
-        />
-        {inline ? (
-          <IconButton icon={<X />} size="sm" aria-label="Close" onClick={onClose} />
-        ) : (
-          <RadixDialog.Close asChild>
-            <IconButton icon={<X />} size="sm" aria-label="Close" tooltip="Close · esc" />
-          </RadixDialog.Close>
-        )}
-      </div>
-      <div className="memory-full-bar">
-        <label className="listcard-search memory-full-search">
-          <Search className="listcard-search-mark" aria-hidden="true" />
-          <input
-            ref={search}
-            className="listcard-search-input"
-            value={filter.search}
-            placeholder="Search facts and documents"
-            aria-label="Search facts and documents"
-            onChange={(event) => set({ search: event.target.value })}
-            onKeyDown={(event) => event.key === 'Escape' && filter.search !== '' && (event.preventDefault(), event.stopPropagation(), set({ search: '' }))}
+            aria-label="Show"
+            value={filter.tab}
+            onChange={(tab) => set({ tab })}
+            tabs={[
+              { id: 'all', label: 'All', count: counts.all },
+              { id: 'docs', label: 'Docs', count: counts.docs },
+              { id: 'facts', label: 'Facts', count: counts.facts },
+              { id: 'history', label: 'History' },
+            ]}
           />
-          <Kbd>/</Kbd>
-        </label>
-        <button type="button" className="memory-full-chip" aria-pressed={filter.pinned} disabled={pinned === 0 && !filter.pinned} onClick={() => set({ pinned: !filter.pinned })}>
-          <Pin aria-hidden="true" /> Pinned {pinned}
-        </button>
-        <button type="button" className="memory-full-chip" data-tone="warn" aria-pressed={filter.stale} disabled={stale === 0 && !filter.stale} onClick={() => set({ stale: !filter.stale })}>
-          Stale {stale}
-        </button>
-        <Select size="sm" aria-label="Written by" value={filter.by ?? ''} onChange={(event) => set({ by: event.target.value === '' ? null : event.target.value })}>
-          <option value="">By anyone</option>
-          {names.map((name) => (
-            <option key={name} value={name}>
-              By {name}
-            </option>
-          ))}
-        </Select>
-        <span className="memory-full-bar-end">
-          <Button size="sm" icon={<Plus />} onClick={() => setAdding('fact')}>
-            Fact
-          </Button>
-          <Button size="sm" variant="primary" icon={<Plus />} onClick={() => setAdding('doc')}>
-            Document
-          </Button>
-        </span>
-      </div>
-      <div className="memory-full-body">
-        <div className="memory-full-side">
-        <ul ref={list} className="memory-full-list" aria-label="Entries" onKeyDown={listKeys}>
-          {grouped ? (
-            <>
-              {group('Docs', ordered.filter((entry) => entry.file))}
-              {group('Facts', ordered.filter((entry) => !entry.file))}
-            </>
-          ) : (
-            ordered.map(item)
+      }
+      bar={
+        <>
+          <label className="listcard-search memory-full-search">
+            <Search className="listcard-search-mark" aria-hidden="true" />
+            <input
+              ref={search}
+              className="listcard-search-input"
+              value={filter.search}
+              placeholder="Search facts and documents"
+              aria-label="Search facts and documents"
+              onChange={(event) => set({ search: event.target.value })}
+              onKeyDown={(event) => event.key === 'Escape' && filter.search !== '' && (event.preventDefault(), event.stopPropagation(), set({ search: '' }))}
+            />
+            <Kbd>/</Kbd>
+          </label>
+          <button type="button" className="memory-full-chip" aria-pressed={filter.pinned} disabled={pinned === 0 && !filter.pinned} onClick={() => set({ pinned: !filter.pinned })}>
+            <Pin aria-hidden="true" /> Pinned {pinned}
+          </button>
+          <button type="button" className="memory-full-chip" data-tone="warn" aria-pressed={filter.stale} disabled={stale === 0 && !filter.stale} onClick={() => set({ stale: !filter.stale })}>
+            Stale {stale}
+          </button>
+          <Select size="sm" aria-label="Written by" value={filter.by ?? ''} onChange={(event) => set({ by: event.target.value === '' ? null : event.target.value })}>
+            <option value="">By anyone</option>
+            {names.map((name) => (
+              <option key={name} value={name}>
+                By {name}
+              </option>
+            ))}
+          </Select>
+          <span className="full-screen-bar-end">
+            <Button size="sm" icon={<Plus />} onClick={() => setAdding('fact')}>
+              Fact
+            </Button>
+            <Button size="sm" variant="primary" icon={<Plus />} onClick={() => setAdding('doc')}>
+              Document
+            </Button>
+          </span>
+        </>
+      }
+      side={
+        <>
+          <ul ref={list} className="memory-full-list" aria-label="Entries" onKeyDown={listKeys}>
+            {grouped ? (
+              <>
+                {group('Docs', ordered.filter((entry) => entry.file))}
+                {group('Facts', ordered.filter((entry) => !entry.file))}
+              </>
+            ) : (
+              ordered.map(item)
+            )}
+            {ordered.length === 0 && <li className="memory-full-none">{entries.length === 0 ? 'Nothing remembered yet' : filter.search === '' ? 'Nothing here' : `Nothing matches “${filter.search}”`}</li>}
+          </ul>
+          {readers !== undefined && readers.memory.count > 0 && (
+            <section className="memory-full-who" data-testid="memory-full-readers">
+              <span className="ui-section-label">{readersText(readers.memory)}</span>
+              <MemoryReaderList readers={readers.list} count={readers.memory.count} now={now} />
+            </section>
           )}
-          {ordered.length === 0 && <li className="memory-full-none">{entries.length === 0 ? 'Nothing remembered yet' : filter.search === '' ? 'Nothing here' : `Nothing matches “${filter.search}”`}</li>}
-        </ul>
-        {readers !== undefined && readers.memory.count > 0 && (
-          <section className="memory-full-who" data-testid="memory-full-readers">
-            <span className="ui-section-label">{readersText(readers.memory)}</span>
-            <MemoryReaderList readers={readers.list} count={readers.memory.count} now={now} />
-          </section>
-        )}
-        </div>
-        <div className="memory-full-detail">
+        </>
+      }
+      detail={
+        <>
           {adding !== undefined ? (
             <NewEntry kind={adding} entries={entries} onChange={onChange} onAdded={added} onCancel={() => setAdding(undefined)} onUnsaved={onUnsaved} />
           ) : current === undefined ? (
@@ -332,9 +278,18 @@ function FullBody({ title, scope, zoneColor, entries, readers, now, onChange, hi
               openLink={openLink}
             />
           )}
-        </div>
-      </div>
-    </div>
+        </>
+      }
+      inline={inline}
+      onClose={onClose}
+      // The entry shown, in the list, so ↑↓ move at once; with none, the search. (One selector list would take the
+      // search, which comes first on the page.)
+      initialFocus={(root) => root.querySelector<HTMLElement>('.memory-full-item[aria-current="true"]') ?? root.querySelector<HTMLElement>('.memory-full-search input')}
+      // Esc in a search with text clears it, and in a new entry cancels it: not the whole view.
+      escapeStays={escapeStays}
+      object={object}
+      onKeyDown={keys}
+    />
   );
 }
 

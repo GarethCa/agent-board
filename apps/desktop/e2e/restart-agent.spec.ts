@@ -31,7 +31,7 @@ test('an agent that exits drops its pane into a shell in its worktree, and Wake 
     // Its pane drops into a shell, marked as such, under the agent's last output.
     const banner = expandedTile(window).getByTestId('agent-exit-banner');
     await expect(banner).toContainText('Done. Wake carries on this conversation.');
-    await expect(expandedTile(window).getByTestId('session-window-status')).toHaveText('ended · shell');
+    await expect(expandedTile(window).getByTestId('expanded-tile-shell')).toHaveText('ended · shell');
     await expect(expandedScreen(window)).toContainText('Which database should I use');
     // Typing works straight away, in the agent's worktree.
     await expandedTile(window).getByTestId('session-terminal').click();
@@ -64,7 +64,7 @@ test('an agent that exits drops its pane into a shell in its worktree, and Wake 
     expect((await liveSessions(window)).map((session) => session.id)).toContain(agent!.sessionId);
     await tile(window).dblclick();
     await expect(expandedTile(window).getByTestId('agent-exit-banner')).toBeHidden();
-    await expect(expandedTile(window).getByTestId('session-window-status')).not.toHaveText('ended · shell');
+    await expect(expandedTile(window).getByTestId('expanded-tile-shell')).toHaveCount(0);
     await expect(expandedScreen(window)).toContainText('Which database should I use');
   } finally {
     await app.close();

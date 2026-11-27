@@ -10,7 +10,7 @@ import type { ActivityEntry, OrchestratorAccess } from './orchestrator-types.ts'
 import { invalidParams, paramsObject, stringParam } from './params.ts';
 import { BOARD_ERROR, type AgentNoteAuthor, type BoardItem, type DaemonMethods, type DaemonCall } from './protocol.ts';
 import { RpcMethodError, type RpcHandlers } from './rpc.ts';
-import { cutText } from './text-cut.ts';
+import { cutText } from './text-words.ts';
 
 type ItemOwnerMethods = Pick<DaemonMethods, 'orchestrator.passItem'>;
 

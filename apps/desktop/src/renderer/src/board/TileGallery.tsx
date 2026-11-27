@@ -105,6 +105,7 @@ export const galleryAgent = (state: AgentState): Agent => ({
   model: null,
   effort: null,
   effortPending: null,
+  launchSettings: null,
   role: null,
   roleName: null,
   reviews: null,

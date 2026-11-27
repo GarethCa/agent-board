@@ -294,6 +294,7 @@ const TEXT_BOX = { width: 240, height: 120 };
 /** Cards the user has made taller: their titles show as many lines as they have room for. */
 const TALL_ISSUE = { width: ISSUE_CARD_SIZE.width, height: 240 };
 const TALL_LINK = { width: LINK_CARD_SIZE.width, height: 200 };
+const CLOCK_PROPS = itemProps('clock', { agent: 'long-clock-agent', prompt: NO_SPACES }, CLOCK_SIZE);
 const NODES = [
   { Node: IssueNode, props: itemProps('issue', { provider: 'linear', id: NO_SPACES, title: LONG_SENTENCE, url: LONG_URL, state: OTHER_SCRIPTS }, ISSUE_CARD_SIZE) },
   { Node: IssueNode, props: itemProps('issue', { provider: 'linear', id: NO_SPACES, title: NO_SPACES, url: LONG_URL, state: OTHER_SCRIPTS }, TALL_ISSUE, 'issue-tall') },
@@ -304,11 +305,13 @@ const NODES = [
     Node: DocumentNode,
     props: itemProps('document', { documentId: 'long-doc', agent: { sessionId: 'long-doc-agent', name: NO_SPACES, harness: 'claude', role: null }, title: NO_SPACES, format: 'markdown', collapsed: false }, DOCUMENT_CARD_SIZE),
   },
-  { Node: ClockNode, props: itemProps('clock', { agent: 'long-clock-agent', prompt: NO_SPACES }, CLOCK_SIZE) },
+  { Node: ClockNode, props: CLOCK_PROPS },
   { Node: LinkNode, props: itemProps('link', { url: LONG_URL, title: NO_SPACES, domain: OTHER_SCRIPTS }, LINK_CARD_SIZE) },
   { Node: LinkNode, props: itemProps('link', { url: LONG_URL, title: NO_SPACES, domain: OTHER_SCRIPTS }, TALL_LINK, 'link-tall') },
 ];
-const CLOCK_BOARD = { statuses: new Map(), agentName: () => NO_SPACES, edit: noop };
+/** The clock's next run, fixed and years off, so its face and its words don't move with the time the shot is taken. */
+const CLOCK_NEXT = new Date(2099, 0, 5, 9, 0).toISOString();
+const CLOCK_BOARD = { statuses: new Map([[CLOCK_PROPS.id, { id: CLOCK_PROPS.id, nextRunAt: CLOCK_NEXT, runs: [], skips: null, changes: [] }]]), agentName: () => NO_SPACES, edit: noop };
 
 /**
  * Every board item with long text in every field it shows: agent and shell tiles, a to-do list, a memory, a queue, a
@@ -341,7 +344,7 @@ export function LongTextGallery() {
             <TodoCardView data={TODO} lookup={TODO_LOOKUP} zoneName={NO_SPACES} steppedIn={false} actions={TODO_ACTIONS} />
           </div>
           <div className="long-text-box" style={TODO_PILL_SIZE} data-testid="long-text-box">
-            <TodoPillView data={TODO} lookup={TODO_LOOKUP} onOpen={noop} onClear={noop} />
+            <TodoPillView data={TODO} lookup={TODO_LOOKUP} onOpen={noop} onUnfold={noop} onClear={noop} />
           </div>
           <div className="long-text-box" style={MEMORY_CARD_SIZE} data-testid="long-text-box">
             <MemoryCardView title={NO_SPACES} scope={LONG_SENTENCE} zoneColor={ZONE} entries={MEMORY} now={NOW} onAdd={noop} onOpen={noop} />

@@ -3,7 +3,7 @@
 import { fittedSize, LANE_SLOTS, type Lanes } from './board-arrange.ts';
 import { overlaps, ROW_STEP, zoneGrid, type Point, type Rect, type ZoneGrid } from './board-layout.ts';
 import type { AgentState, ArrangeSettings, ArrangeSpacing, ZoneMap, ZoneMapLane, ZoneMapThing } from './protocol.ts';
-import { cutText } from './text-cut.ts';
+import { cutText } from './text-words.ts';
 
 /**
  * What a zone's map is read from: its lanes, everything in it, the parts an arrange made (by arrange key, the item's

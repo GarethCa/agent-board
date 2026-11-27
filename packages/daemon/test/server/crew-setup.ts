@@ -6,7 +6,7 @@ import { fakeHarnessEnv } from '@agent-board/fake-harness';
 import { createFakeGitHub, FAKE_GITHUB_STATE } from '@agent-board/tracker/testing';
 import type { Crew } from '../../src/protocol.ts';
 import type { FakeClock } from '../fake-clock.ts';
-import { connectTestClient, git, startTestDaemon, tempDataDir, tempRepo } from '../helpers.ts';
+import { connectTestClient, git, pushesTo, startTestDaemon, tempDataDir, tempRepo } from '../helpers.ts';
 
 /** A repo whose origin is GitHub's acme/web to `gh`, and pushes to a bare repo of the test's. */
 export function repoWithOrigin() {
@@ -14,7 +14,7 @@ export function repoWithOrigin() {
   const origin = tempDataDir();
   execFileSync('git', ['init', '--quiet', '--bare', origin]);
   git(repo, 'remote', 'add', 'origin', 'https://github.com/acme/web.git');
-  git(repo, 'config', 'remote.origin.pushurl', origin);
+  pushesTo(origin, 'https://github.com/acme/web.git');
   git(repo, 'config', 'user.name', 'Test');
   git(repo, 'config', 'user.email', 'test@example.com');
   return { repo, origin };

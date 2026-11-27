@@ -73,6 +73,8 @@ describe('the Settings window’s groups', () => {
       'tileDesign',
       // Added since: the crew prefabs, to open, duplicate, export or delete, and to make or import one.
       'prefabs',
+      // Added since: roles whose Claude agents get the board's MCP tools alone.
+      'boardToolsOnly',
     ];
     const ids = SETTINGS_CONTROLS.map((control) => control.id);
     expect(new Set(ids).size).toBe(ids.length);

@@ -49,6 +49,7 @@ import { followDock } from './dock';
 import { followExtendedShortcuts } from './keys/extended-shortcuts';
 import { followEscapeHatch } from './keys/escape-hatch';
 import { startMenuBar } from './keys/menu-bar-bridge';
+import { windowKeysFor } from './keys/menu-bar';
 import { ToastProvider, TooltipProvider } from './ui';
 import { ParkThought } from './keys/ParkThought';
 import { flushViewSaves } from '../../shared/view-saver';
@@ -95,7 +96,8 @@ followEscapeHatch();
 followViewSettings();
 
 // The menu bar's items press this window's keys, and it shows the menus of what is selected here (keys/menu-bar-bridge.ts).
-startMenuBar();
+// It greys the keys this kind of window has no handler for.
+startMenuBar(windowKeysFor(new URLSearchParams(location.search)));
 
 // The view saves this window is waiting to make (its session windows, the board's viewport) are sent at once as the app
 // quits, main waiting for them, so the next launch opens the board as it was left; and as the window itself goes.

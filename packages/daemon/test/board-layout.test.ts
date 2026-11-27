@@ -8,7 +8,7 @@ import {
   crewSpot,
   footprint,
   freeItemSpot,
-  freeSpotFor,
+  freeZoneSpot,
   ITEM_GAP,
   ITEM_INSET,
   freeTileSlot,
@@ -32,6 +32,8 @@ import {
   zoneMinSize,
   zoneGrid,
   SPACING_GAPS,
+  withoutFreed,
+  ZONE_GAP,
   type ZoneTile,
   type Rect,
 } from '../src/board-layout.ts';
@@ -39,19 +41,19 @@ import { ARRANGE_SPACINGS } from '../src/protocol.ts';
 
 const size = { width: 100, height: 50 };
 
-describe('freeSpotFor', () => {
+describe('freeZoneSpot', () => {
   it('keeps the wanted spot when nothing is there', () => {
-    expect(freeSpotFor({ x: 10, y: 20 }, size, [])).toEqual({ x: 10, y: 20 });
+    expect(freeZoneSpot({ x: 10, y: 20 }, size, [])).toEqual({ x: 10, y: 20 });
   });
 
   it('keeps the wanted spot when existing zones are clear of it', () => {
     const elsewhere = { x: 500, y: 500, width: 100, height: 50 };
-    expect(freeSpotFor({ x: 10, y: 20 }, size, [elsewhere])).toEqual({ x: 10, y: 20 });
+    expect(freeZoneSpot({ x: 10, y: 20 }, size, [elsewhere])).toEqual({ x: 10, y: 20 });
   });
 
   it('steps right past a zone that covers the wanted spot, leaving a gap', () => {
     const covering = { x: 0, y: 0, width: 200, height: 200 };
-    expect(freeSpotFor({ x: 10, y: 20 }, size, [covering])).toEqual({ x: 240, y: 20 });
+    expect(freeZoneSpot({ x: 10, y: 20 }, size, [covering])).toEqual({ x: 240, y: 20 });
   });
 
   it('keeps stepping until clear of a row of zones', () => {
@@ -59,7 +61,7 @@ describe('freeSpotFor', () => {
       { x: 0, y: 0, width: 200, height: 200 },
       { x: 230, y: 0, width: 200, height: 200 },
     ];
-    expect(freeSpotFor({ x: 10, y: 20 }, size, row)).toEqual({ x: 470, y: 20 });
+    expect(freeZoneSpot({ x: 10, y: 20 }, size, row)).toEqual({ x: 470, y: 20 });
   });
 });
 
@@ -122,6 +124,14 @@ describe("a zone's spacing, for what places and sizes its tiles", () => {
     const first = freeTileSlot(1000, [], AGENT_TILE_SIZE, grid);
     expect(first).toEqual({ x: padding, y: padding + 24 });
     expect(freeTileSlot(1000, [{ ...first, width, height }], AGENT_TILE_SIZE, grid)).toEqual({ x: padding + grid.column, y: padding + 24 });
+  });
+
+  it('slots a new tile right under an expanded tile whose room ends on a grid row, so it is drawn beside it', () => {
+    const grid = zoneGrid('roomy');
+    const { padding } = SPACING_GAPS.roomy;
+    const first = freeTileSlot(padding + width + padding, [], AGENT_TILE_SIZE, grid);
+    // Its 600 px room is three roomy rows: the next tile takes the fourth, touching the room, not a row further down.
+    expect(freeTileSlot(padding + width + padding, [{ ...first, ...EXPANDED_TILE_SIZE }], AGENT_TILE_SIZE, grid)).toEqual({ x: padding, y: first.y + EXPANDED_TILE_SIZE.height });
   });
 
   it.each(ARRANGE_SPACINGS)("%s: a zone holds its tiles with its spacing's padding and tile gap round them", (spacing) => {
@@ -503,7 +513,7 @@ describe('slotUnplaced', () => {
   it('keeps a slotted tile off the zone items, and a loose one clear of the zones', () => {
     const note = { ...tileSlot(0, 900), width: 200, height: 100 };
     expect(slot([{ id: 'a', zoneId: 'z' }], { z: [note] }).a).toEqual(tileSlot(1, 900));
-    expect(slot([{ id: 'loose' }]).loose).toEqual(freeSpotFor({ x: 0, y: 0 }, AGENT_TILE_SIZE, [{ x: 0, y: 0, width: 900, height: 600 }]));
+    expect(slot([{ id: 'loose' }]).loose).toEqual(freeZoneSpot({ x: 0, y: 0 }, AGENT_TILE_SIZE, [{ x: 0, y: 0, width: 900, height: 600 }]));
   });
 });
 
@@ -521,7 +531,7 @@ describe('a full or crowded zone', () => {
 
   it('steps a new zone past any number of zones in a row, and stops', () => {
     const row = Array.from({ length: 500 }, (_, index) => ({ x: index * 100, y: 0, width: 120, height: 100 }));
-    const spot = freeSpotFor({ x: 0, y: 0 }, size, row);
+    const spot = freeZoneSpot({ x: 0, y: 0 }, size, row);
     for (const zone of row) expect(spot.x >= zone.x + zone.width).toBe(true);
   });
 
@@ -598,5 +608,26 @@ describe('expandedRoomFrom', () => {
 
   it('is empty with nothing saved', () => {
     expect(expandedRoomFrom({ expanded: null, hidden: undefined, sizes: 'x', pinned: [] })).toEqual({});
+  });
+});
+
+describe('withoutFreed', () => {
+  const freed = new Set(['agent:a']);
+  it('drops a pair either of whose tiles is freed', () => {
+    expect(withoutFreed([['agent:a', 'agent:x'], ['agent:y', 'agent:a'], ['agent:y', 'agent:z']], freed, 'either')).toEqual([['agent:y', 'agent:z']]);
+  });
+  it('drops a put-down by its tile only, not by the tiles it was put down beside', () => {
+    expect(withoutFreed([['agent:a', ['agent:x']], ['agent:y', ['agent:a']]], freed, 'first')).toEqual([['agent:y', ['agent:a']]]);
+  });
+  it('is undefined when nothing changes, or nothing is saved', () => {
+    expect(withoutFreed([['agent:y', 'agent:z']], freed, 'either')).toBeUndefined();
+    expect(withoutFreed([], freed, 'either')).toBeUndefined();
+  });
+});
+
+describe('freeZoneSpot', () => {
+  it('steps a new zone past the one in its way, ZONE_GAP from it', () => {
+    const spot = freeZoneSpot({ x: 0, y: 0 }, { width: 400, height: 300 }, [{ x: 0, y: 0, width: 500, height: 500 }]);
+    expect(spot).toEqual({ x: 500 + ZONE_GAP, y: 0 });
   });
 });

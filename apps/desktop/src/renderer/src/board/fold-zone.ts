@@ -2,7 +2,7 @@
 // nothing of what is in it drawn. Only the nodes as drawn change; the zone keeps its saved size, and its tiles their
 // places, so unfolding puts it all back. The chip is the room it takes on the board meanwhile, so unfolding first moves
 // what has come to sit where it opens. Pure, so it is unit-tested.
-import { BOARD_ARRANGE_GAP } from '@agent-board/daemon/arrange-board';
+import { BOARD_ARRANGE_GAP, zoneRoom } from '@agent-board/daemon/arrange-board';
 import { overlaps, sizedFootprint, type Point, type Rect, type Size } from '@agent-board/daemon/board-layout';
 import { HUMAN_STATUS_BY_STATE } from '@agent-board/daemon/human-status';
 import { drawnZoneSize, type Agent, type ExternalSession, type Shell, type Zone, type ZoneFoldResult, type ZoneUnfoldResult } from '@agent-board/daemon/protocol';
@@ -16,7 +16,8 @@ import type { ZoneNodeType } from './ZoneNode';
  * saved, which keeps the zone's full size while it is folded.
  */
 export function roomOf(node: ZoneNodeType): Rect {
-  return { ...layoutOf(node), ...(node.data.zone.folded ? drawnZoneSize(node.data.zone) : {}) };
+  const { x, y, width, height } = zoneRoom({ id: node.id, ...layoutOf(node), folded: node.data.zone.folded });
+  return { x, y, width, height };
 }
 
 /**

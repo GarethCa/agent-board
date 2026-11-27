@@ -5,9 +5,10 @@ import { refOf } from './crew-flags.ts';
 import { invalidParams } from './params.ts';
 import { FIRST_PROMPT, questionPrompt, type Agent, type Harness, type PermissionPrompt } from './protocol.ts';
 import type { RunStart } from './schedules.ts';
+import { MESSAGE_RULES, planMessage, type MessageTarget } from './message-plan.ts';
 import { CONTINUE, readRateLimitScreen } from './rate-limit-screen.ts';
 import { answerInput, draftAfterInput, endsInEnter, oneLine, pastePieces, pressesKeys, promptRows, submittedText } from './terminal-input.ts';
-import { cutText } from './text-cut.ts';
+import { cutText } from './text-words.ts';
 import type { SendTrail } from './send-log.ts';
 
 /**
@@ -241,8 +242,12 @@ interface DeliveryOptions<Row extends DeliveryRow> {
   requireAgent(sessionId: string): Pick<Agent, 'name' | 'endedAt' | 'state' | 'lastMessage' | 'permissions'>;
   /** Why a run can't start in the live agent now, or undefined if it can (`evenAsking` as for a hand-off). */
   whyNotReady(row: Row, evenAsking?: boolean, lapsedDrafts?: boolean): string | undefined;
-  /** Relaunches the ended agent with `prompt` as its first message, carrying on Codex conversation `codexSessionId`. */
-  relaunch(row: Row, prompt: string | undefined, why: string, codexSessionId?: string | null): RunStart;
+  /**
+   * Starts the ended agent again with `prompt` as its first message, carrying on Codex conversation `codexSessionId`,
+   * as Wake does: never over a shell its pane dropped into that runs something, or a finished reviewer. A refusal only
+   * the user can clear (`askUser`) is theirs to see; it resolves once the shell is looked at, if there is one.
+   */
+  wake(row: Row, prompt: string | undefined, why: string, codexSessionId?: string | null): RunStart | Promise<RunStart>;
   /** Where the agent's prompt stands now. */
   promptNow(sessionId: string): PromptNow;
   /**
@@ -298,7 +303,7 @@ interface DeliveryOptions<Row extends DeliveryRow> {
  * still landing.
  */
 export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptions<Row>) {
-  const { getRow, requireAgent, whyNotReady, relaunch, announce } = options;
+  const { getRow, requireAgent, whyNotReady, wake, announce } = options;
   const clock = options.clock ?? systemClock;
   /** Set as the daemon closes (`close`): no timer of a delivery fires after, nor is a prompt read again. */
   let closed = false;
@@ -907,13 +912,23 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
     const pausing = options.pausing(sessionId);
     if (pausing !== undefined) await pausing;
     const agent = requireAgent(sessionId);
-    if (agent.state === 'hibernated') {
-      if (oneLine(text) === '') throw invalidParams('the answer must not be empty');
+    // Claude's question dialog is up: typed keys would pick its answers, which only the user does. Its state says
+    // needs-permission while any permission prompt, its own or a subagent's, is pending.
+    const asking = questionPrompt(agent);
+    const blocked =
+      agent.state === 'needs-permission' ? `${agent.name} needs permission first` : asking === undefined ? undefined : askingQuestions(agent.name, asking);
+    const plan = planMessage(
+      { name: agent.name, ended: agent.endedAt !== null, paused: agent.state === 'hibernated', blocked, notUp: notUp.get(sessionId)?.reason },
+      MESSAGE_RULES.answer,
+    );
+    if (plan.do === 'refuse') throw invalidParams(plan.reason);
+    if (oneLine(text) === '') throw invalidParams('the answer must not be empty');
+    if (plan.do === 'wake') {
       const row = getRow(sessionId)!;
       // Its first prompt, typed once its session is up, carries on this message's trail.
       if (trail !== undefined) wakeTrails.set(sessionId, trail);
       if (from !== undefined) wakeSenders.set(sessionId, from);
-      const woken = relaunch(row, text, 'to wake it for a message', row.harness_session_id);
+      const woken = await wake(row, text, 'to wake it for a message', row.harness_session_id);
       if (!woken.started) {
         wakeTrails.delete(sessionId);
         wakeSenders.delete(sessionId);
@@ -922,16 +937,9 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
       trail?.('waking it with it, to be typed once its session is up');
       return { queued: false, woken: true };
     }
-    if (agent.endedAt !== null) throw invalidParams(`${agent.name} has ended`);
-    // Its state says so while any permission prompt, its own or a subagent's, is pending.
-    if (agent.state === 'needs-permission') throw invalidParams(`${agent.name} needs permission first`);
-    // Claude's question dialog is up: typed keys would pick its answers, which only the user does.
-    const asking = questionPrompt(agent);
-    if (asking !== undefined) throw invalidParams(askingQuestions(agent.name, asking));
-    if (oneLine(text) === '') throw invalidParams('the answer must not be empty');
     // One with an image goes whole: a cut through its path would keep the harness from taking it as a dropped file.
     const line = paste ? answerInput(text, true) : inputFor(sessionId, answerInput(text));
-    if (notUp.has(sessionId)) {
+    if (plan.do === 'until-up') {
       trail?.('queued until its session is up');
       queueOrHandBack(sessionId, line, 'A message', text, trail, undefined, from);
       return { queued: true };
@@ -962,6 +970,24 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
 
   /** Whether the live agent is being paused: its session is going, so nothing is typed at it. */
   const beingPaused = (row: Row) => row.ended_at === null && row.hibernated_at !== null;
+
+  /** Where the agent `row` stands for a message to it (`planMessage`), with what stands in its way on this path. */
+  const targetOf = (row: Row, inWay: Pick<MessageTarget, 'blocked' | 'notUp' | 'busy'>): MessageTarget => ({
+    name: row.name,
+    ended: row.ended_at !== null,
+    paused: row.ended_at !== null && row.hibernated_at !== null,
+    ...inWay,
+  });
+
+  /**
+   * A wake refused for a reason only the user can clear (a busy shell), on a path with no one to ask: the message is
+   * kept as not delivered, with why, for them to see and resend once they have. Says what became of the wake.
+   */
+  const keptIfTheUsers = (sessionId: string, what: string, text: string, woken: RunStart): RunStart => {
+    if (woken.started || woken.askUser !== true) return woken;
+    options.undelivered(sessionId, what, text, woken.reason);
+    return { started: false, reason: `${woken.reason}: kept as not delivered` };
+  };
 
   /**
    * Hands back everything still queued for agents not up yet and not being typed (`undelivered`), as the daemon
@@ -1472,22 +1498,43 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
       }
     },
 
-    runScheduled(sessionId: string, prompt: string, notTyped?: (reason: string) => void): RunStart {
+    runScheduled(sessionId: string, prompt: string, notTyped?: (reason: string) => void, label = 'A scheduled run'): RunStart {
       const row = getRow(sessionId);
       if (row === undefined) return { started: false, reason: 'the agent has been deleted' };
-      // A paused agent carries on its conversation, Codex's too; an ended one starts Codex on a new one, as always.
-      if (row.ended_at !== null) return relaunch(row, prompt, 'for its scheduled run', row.hibernated_at === null ? undefined : row.harness_session_id);
-      if (beingPaused(row)) return { started: false, reason: 'it was being paused' };
-      if (notUp.has(sessionId)) {
-        queueOrHandBack(sessionId, inputFor(sessionId, answerInput(oneLine(prompt))), 'A scheduled run', prompt, undefined, notTyped);
+      // A line still being typed, an earlier run's or the user's, starts a turn this one would only queue behind.
+      const sendingNow = answering.has(sessionId) || sending.has(sessionId) ? 'a message is being sent to it' : undefined;
+      const plan = planMessage(
+        targetOf(row, {
+          blocked: beingPaused(row) ? 'it was being paused' : undefined,
+          notUp: notUp.get(sessionId)?.reason,
+          busy: unsent.has(sessionId)
+            ? UNSENT_REASON
+            : (whyNotReady(row) ?? sendingNow ?? (heldRuns.has(sessionId) ? 'a run waits for the user to stop typing' : undefined)),
+        }),
+        MESSAGE_RULES.scheduled,
+      );
+      if (plan.do === 'wake') {
+        // A paused agent carries on its conversation, Codex's too; an ended one starts Codex on a new one, as always.
+        const woken = wake(row, prompt, 'for its scheduled run', row.hibernated_at === null ? undefined : row.harness_session_id);
+        if (!(woken instanceof Promise)) return keptIfTheUsers(sessionId, label, prompt, woken);
+        // Started as far as its caller knows, until its shell is looked at: one refused then is told so.
+        void woken
+          .then((started) => {
+            // Its daemon closed meanwhile: its database with it.
+            if (started.started || closed) return;
+            // Its clock hears first, as the kept message's news would tell it the agent ended mid-run.
+            notTyped?.(started.reason);
+            keptIfTheUsers(sessionId, label, prompt, started);
+          })
+          .catch((error: unknown) => options.log(`a scheduled run of ${sessionId} wasn't started: ${(error as Error).message}`));
+        return { started: true };
+      }
+      // Its clock records it not started, busy or not.
+      if (plan.do === 'refuse') return { started: false, reason: plan.reason };
+      if (plan.do === 'until-up') {
+        queueOrHandBack(sessionId, inputFor(sessionId, answerInput(oneLine(prompt))), label, prompt, undefined, notTyped);
         return { started: true, queued: true };
       }
-      // A line still being typed, an earlier run's or the user's, starts a turn this one would only queue behind.
-      const busy = answering.has(sessionId) || sending.has(sessionId) ? 'a message is being sent to it' : undefined;
-      const reason = unsent.has(sessionId)
-        ? UNSENT_REASON
-        : (whyNotReady(row) ?? busy ?? (heldRuns.has(sessionId) ? 'a run waits for the user to stop typing' : undefined));
-      if (reason !== undefined) return { started: false, reason };
       // Started as far as its caller knows: one that turns out not typed is told so, as no turn of it will end.
       if (typedLately(sessionId)) {
         options.log(`a run of ${sessionId} waits for the user to stop typing at its prompt`);
@@ -1505,10 +1552,16 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
     async tell(to: string, text: string, what = 'A crew flag'): Promise<RunStart> {
       const row = getRow(to);
       if (row === undefined) return { started: false, reason: 'the agent has been deleted' };
-      if (row.ended_at !== null) return { started: false, reason: 'it has ended' };
-      if (beingPaused(row)) return { started: false, reason: 'it was being paused', busy: true };
-      const reason = unsent.has(to) ? UNSENT_REASON : whyNotReadyNow(to, row, true);
-      if (reason !== undefined) return { started: false, reason, busy: true };
+      const plan = planMessage(
+        targetOf(row, {
+          blocked: beingPaused(row) ? 'it was being paused' : undefined,
+          notUp: notUp.get(to)?.reason,
+          busy: unsent.has(to) ? UNSENT_REASON : whyNotReadyNow(to, row, true),
+        }),
+        MESSAGE_RULES.tell,
+      );
+      // Its rules wake nothing, keep nothing for later and type mid-turn nothing: refused, or typed now.
+      if (plan.do === 'refuse') return { started: false, reason: plan.reason, busy: plan.busy };
       const typed = await typeInput(to, inputFor(to, answerInput(text)), what, () => stillReady(to, true), true);
       if (!typed.typed) return { started: false, reason: typed.reason, busy: true };
       return typed.sent ? { started: true } : { started: true, unsent: true };
@@ -1521,17 +1574,23 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
       const row = getRow(to);
       if (row === undefined) return { started: false, reason: 'the agent has been deleted' };
       if (oneLine(text) === '') return { started: false, reason: 'there was nothing to send' };
-      // An agent not up yet is busy, at once (`whyNotReadyNow`): its edge keeps the hand-off and tries again, never
-      // holding `from` handing off for as long as the agent takes to come up.
-      const reason = row.ended_at !== null ? undefined : unsent.has(to) ? UNSENT_REASON : whyNotReadyNow(to, row, true);
-      if (reason !== undefined) return { started: false, reason, busy: true };
+      // An agent not up yet is busy, at once: its edge keeps the hand-off and tries again, never holding `from` handing
+      // off for as long as the agent takes to come up.
+      const plan = planMessage(
+        targetOf(row, { notUp: notUp.get(to)?.reason, busy: unsent.has(to) ? UNSENT_REASON : whyNotReadyNow(to, row, true) }),
+        MESSAGE_RULES.deliver,
+      );
+      if (plan.do === 'refuse') return { started: false, reason: plan.reason, busy: plan.busy };
       const fromName = getRow(from)?.name ?? 'another agent';
       const line = handOffMessage(fromName, refOf({ sessionId: from }), name, text);
       if (line === undefined) return { started: false, reason: 'there was nothing to send' };
       recount(handingOff, from, 1);
       announce(from);
       try {
-        if (row.ended_at !== null) return relaunch(row, line, `for a hand-off from ${from}`, row.harness_session_id);
+        if (plan.do === 'wake') {
+          const woken = await wake(row, line, `for a hand-off from ${from}`, row.harness_session_id);
+          return keptIfTheUsers(to, `Hand-off from ${fromName}`, line, woken);
+        }
         const typed = await typeLine(to, line, `Hand-off from ${fromName}`, () => stillReady(to, true));
         if (!typed.typed) return { started: false, reason: typed.reason, busy: true };
         return typed.sent ? { started: true } : { started: true, unsent: true };

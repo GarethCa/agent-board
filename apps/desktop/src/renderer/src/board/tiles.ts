@@ -16,7 +16,8 @@ import { inFreeArea } from '@agent-board/daemon/shelf-layout';
 import { isItemNode, type ItemNodeType } from './items/items';
 import { expandedRank, type ExpandedTiles } from './expanded';
 import { tileSizeOf, type TileSizes } from './tile-size';
-import { AGENT_TILE_SIZE, CHIP_SIZE, isFolded, PERCH_ROOM, rotatedBounds, slotUnplaced, tileSizeKey, zoneGrid, zoneMinSize } from '@agent-board/daemon/board-layout';
+import { AGENT_TILE_SIZE, CHIP_SIZE, isFolded, PERCH_ROOM, rotatedBounds, slotUnplaced, tileSizeKey, zoneGrid, zoneMinSize, type Size } from '@agent-board/daemon/board-layout';
+import type { BoardToArrange } from '@agent-board/daemon/arrange-board';
 import type { TileData, TileNodeType } from './tile';
 import type { ZoneCovers, ZoneNodeType } from './ZoneNode';
 import type { ShownStart } from './use-agent-starts';
@@ -93,8 +94,32 @@ export const isZone = (node: Node): node is ZoneNodeType => node.type === 'zone'
 export const isSessionTile = (node: Node): node is TileNodeType =>
   node.id.startsWith(AGENT_NODE_PREFIX) || node.id.startsWith(SHELL_NODE_PREFIX) || node.id.startsWith(EXTERNAL_NODE_PREFIX);
 
+/** Which kind of session a tile (`isSessionTile`) is for, by its node id. */
+const sessionTileKind = (node: Node): 'agent' | 'shell' | 'external' =>
+  node.id.startsWith(EXTERNAL_NODE_PREFIX) ? 'external' : node.id.startsWith(SHELL_NODE_PREFIX) ? 'shell' : 'agent';
+
 /** The tile of an agent being started, until it is an agent's. */
 export const isStartTile = (node: Node): node is TileNodeType => node.id.startsWith(START_NODE_PREFIX);
+
+/**
+ * The board as an arrange reads it (`arrangeBoard`), the same as the daemon reads it for an agent: each zone as drawn,
+ * folded or not; each session's tile in its zone or loose, at `sizeOf` its size, pinned expanded when `pinned` has it;
+ * and every board item.
+ */
+export function boardToArrange(nodes: readonly BoardNode[], pinned: ReadonlySet<string>, sizeOf: (node: TileNodeType) => Size): BoardToArrange {
+  return {
+    zones: nodes.filter(isZone).map((node) => ({ id: node.id, ...layoutOf(node), folded: node.data.zone.folded })),
+    tiles: nodes.filter(isSessionTile).map((node) => ({
+      id: node.id,
+      kind: sessionTileKind(node),
+      zoneId: node.parentId ?? null,
+      pinned: pinned.has(node.id),
+      ...node.position,
+      ...sizeOf(node),
+    })),
+    items: nodes.flatMap((node) => (isItemNode(node) ? [{ ...node.data.item, zoneId: node.parentId ?? null }] : [])),
+  };
+}
 
 export function layoutOf(node: ZoneNodeType): ZoneLayout {
   return {

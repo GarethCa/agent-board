@@ -17,7 +17,7 @@ import {
   restoreWork,
   throughSymlink,
 } from '../src/crew-worktree.ts';
-import { git, tempDataDir, tempRepo } from './helpers.ts';
+import { git, gitWritesBefore, tempDataDir, tempRepo, userGitConfig } from './helpers.ts';
 
 /** A repo on `main` with a committer of its own and three committed files beside the template's. */
 function crewRepo() {
@@ -33,6 +33,21 @@ function crewRepo() {
 }
 
 const write = (repo: string, file: string, text: string) => writeFileSync(join(repo, file), text);
+
+/**
+ * `crewRepo` with every `.md` file put through filter `evil`, whose clean and smudge programs the repo's own config
+ * names, as an agent could from its worktree: the repo and the files each program leaves when it runs.
+ */
+function filteredCrewRepo(): [repo: string, cleaned: string, smudged: string] {
+  const repo = crewRepo();
+  write(repo, '.gitattributes', '*.md filter=evil\n');
+  git(repo, 'add', '.gitattributes');
+  git(repo, 'commit', '--quiet', '-m', 'attributes');
+  const [cleaned, smudged] = [join(tempDataDir(), 'cleaned'), join(tempDataDir(), 'smudged')];
+  git(repo, 'config', 'filter.evil.clean', `touch '${cleaned}'; cat`);
+  git(repo, 'config', 'filter.evil.smudge', `touch '${smudged}'; cat`);
+  return [repo, cleaned, smudged];
+}
 
 describe('whose a path is', () => {
   it('holds a file equal to a file entry or under a folder entry, case-insensitively', () => {
@@ -113,6 +128,15 @@ describe("a member's commit", () => {
     // The shared index holds the commit's versions of those files, and the other change still staged.
     expect(git(repo, 'status', '--porcelain')).toBe('M  README.md');
     expect(git(repo, 'show', 'HEAD:docs/outline.md')).toBe('the design');
+  });
+
+  it("runs no clean filter the repo's own config names, hashing the files or setting the index after", async () => {
+    const [repo, cleaned] = filteredCrewRepo();
+    write(repo, 'docs/outline.md', 'the design\n');
+    const made = await commitPaths({ worktree: repo, branch: 'main', files: ['docs/outline.md'], author: 'designer', message: 'designer: design' });
+    expect(made).toMatchObject({ files: ['docs/outline.md'] });
+    expect(git(repo, 'show', 'HEAD:docs/outline.md')).toBe('the design');
+    expect(existsSync(cleaned)).toBe(false);
   });
 
   it('commits a new file, and a file made and deleted since adds nothing', async () => {
@@ -199,6 +223,41 @@ describe("a member's commit", () => {
   });
 });
 
+describe("a key the repo's own config comes to set as work is put back", () => {
+  /**
+   * `crewRepo` with uncommitted work recorded and then lost in `m.txt`, whose filter (`mark`, in the user's own config)
+   * runs `then` as it smudges, and in `notes.txt`, which `filter=evil` picks.
+   */
+  async function lostRecordedWork(then = 'true') {
+    const repo = crewRepo();
+    git(repo, 'config', '--file', userGitConfig(), 'filter.mark.smudge', `${then}; cat`);
+    git(repo, 'config', '--file', userGitConfig(), 'filter.mark.clean', 'cat');
+    write(repo, '.gitattributes', 'm.txt filter=mark\nnotes.txt filter=evil\n');
+    git(repo, 'add', '.gitattributes');
+    git(repo, 'commit', '--quiet', '-m', 'attributes');
+    const files = ['m.txt', 'notes.txt'];
+    for (const file of files) write(repo, file, 'unsaved\n');
+    const head = git(repo, 'rev-parse', 'HEAD');
+    const tree = await recordWork(repo);
+    for (const file of files) rmSync(join(repo, file));
+    return { repo, tree, head };
+  }
+
+  it('runs no filter it names after the check', async () => {
+    const marker = join(tempDataDir(), 'smudged');
+    const { repo, tree, head } = await lostRecordedWork();
+    gitWritesBefore('restore', repo, 'filter.evil.smudge', `touch '${marker}'; cat`);
+    expect(await restoreWork(repo, tree, head)).toEqual(['m.txt', 'notes.txt']);
+    expect(existsSync(marker)).toBe(false);
+    expect(readFileSync(join(repo, 'notes.txt'), 'utf8')).toBe('unsaved\n');
+  });
+
+  it('fails, saying so, when the key is one no pin holds', async () => {
+    const { repo, tree, head } = await lostRecordedWork('git config filter.unpicked.smudge /bin/evil');
+    await expect(restoreWork(repo, tree, head)).rejects.toThrow(/came to set filter\.unpicked\.smudge as the board went to put the work back/);
+  });
+});
+
 describe('recorded work', () => {
   it('is put back after a checkout and a stash wiped it, leaving files new since alone', async () => {
     const repo = crewRepo();
@@ -281,6 +340,21 @@ describe('recorded work', () => {
     symlinkSync(outside, join(repo, 'docs'));
     expect(await restoreWork(repo, tree, head)).toEqual([]);
     expect(existsSync(join(outside, 'design.md'))).toBe(false);
+  });
+
+  it("is read and recorded without the clean filter the repo's own config names, and never put back through its smudge", async () => {
+    const [repo, cleaned, smudged] = filteredCrewRepo();
+    // The same size as before, so git must hash the file again to tell it changed.
+    write(repo, 'docs/outline.md', 'unsaved design!\n');
+    const head = git(repo, 'rev-parse', 'HEAD');
+    expect(await changedFiles(repo)).toEqual(['docs/outline.md']);
+    const tree = await recordWork(repo);
+    expect(existsSync(cleaned)).toBe(false);
+
+    git(repo, '-c', 'filter.evil.clean=', '-c', 'filter.evil.smudge=', 'checkout', '--', 'docs/outline.md');
+    await expect(restoreWork(repo, tree, head)).rejects.toThrow(/sets filter\.evil\.(clean|smudge).*won't put the work back/);
+    expect(readFileSync(join(repo, 'docs/outline.md'), 'utf8')).toBe('docs/outline.md\n');
+    expect([existsSync(cleaned), existsSync(smudged)]).toEqual([false, false]);
   });
 });
 

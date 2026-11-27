@@ -93,9 +93,10 @@ export interface TileActions {
    * Opens the agent's pop-up over the dimmed board, collapsing it if expanded, asked by `path` ('popUp' unless given):
    * a double-click opens a pinned tile's pop-up, opening the tile (Enter, ⌘K ↵) brings a pinned one forward instead.
    * A ticket's opens on its chat's tab, or on the helper `on` names; a helper its ticket's tile holds opens its
-   * ticket's, on its own tab.
+   * ticket's, on its own tab. True once it is up, or the agent's popped-out window has come forward; false if nothing
+   * opened (no tile to pop up, or a pinned one brought forward instead).
    */
-  popUp(agent: Agent, path?: WindowPath, on?: string): void;
+  popUp(agent: Agent, path?: WindowPath, on?: string): boolean;
   /** Opens the shell tile's session window, with its panes, collapsing it if expanded. */
   openShell(shell: Shell): void;
   /** Opens the agent's session window in its own OS window, collapsing it if expanded. */
@@ -172,6 +173,8 @@ export interface TileActions {
   clearUndelivered(sessionId: string): Promise<void>;
   /** Restarts an ended agent, asking first if the shell its pane dropped into is running something. */
   restartAgent(sessionId: string): void;
+  /** Asks for the env vars the agent starts with from now on, then restarts it with them, carrying on its conversation. */
+  restartWith(agent: Agent): void;
   /**
    * Wake, by what the agent is (`wakeAct`): starts it again if it is asleep, restarts it in its worktree if it is done or
    * exited, or runs it now if it waits for its clock, whose next time stays as it was. Settles once sent (or said why).
@@ -233,7 +236,7 @@ export const NO_TILE_ACTIONS: TileActions = {
   resizeExpanded: () => {},
   maximise: () => {},
   openAgent: () => {},
-  popUp: () => {},
+  popUp: () => false,
   openShell: () => {},
   popOutAgent: () => {},
   popOutShell: () => {},
@@ -267,6 +270,7 @@ export const NO_TILE_ACTIONS: TileActions = {
   resendUndelivered: async () => {},
   clearUndelivered: async () => {},
   restartAgent: () => {},
+  restartWith: () => {},
   wakeAgent: async () => {},
   turnClockOff: () => {},
   resumeShell: async () => {},

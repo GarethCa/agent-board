@@ -2,13 +2,14 @@ import { randomUUID } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { CODEX_BYPASS_FLAG, reviewFile, type LaunchSpec } from './agent-spawns.ts';
+import { CODEX_BYPASS_FLAG, launchRole, reviewFile, type LaunchSpec } from './agent-spawns.ts';
 import type { AgentHost, AgentHostOptions, AgentRow, BranchReviewRow, ZoneRow } from './agent-types.ts';
 import { hasClaudeTranscript } from './claude-transcript.ts';
 import { guardCodexConfig, type CodexConfigGuard } from './codex-config-guard.ts';
 import type { createDeliveries } from './deliveries.ts';
 import { isRunningSomething as defaultIsRunningSomething } from './foreground.ts';
 import type { createHookStates } from './hook-states.ts';
+import { readLaunchSettings } from './launch-settings.ts';
 import { invalidParams } from './params.ts';
 import type { PermissionHolds } from './permissions.ts';
 import { AGENT_ERROR, INTERRUPTIBLE_STATES, type Agent, type Harness, type SessionState, type TerminalSize } from './protocol.ts';
@@ -19,6 +20,7 @@ import type { SessionHost } from './sessions.ts';
 import { RESET_MODES } from './shells.ts';
 import type { SubagentStore } from './subagents.ts';
 import type { TranscriptReader } from './transcripts.ts';
+import { removeLaunchSettingsFile } from './launch-settings.ts';
 import { removeWorktree, unsavedWork } from './worktrees.ts';
 
 /** The tile's notice for an agent that had turns, relaunched without the conversation to carry on; cleared once a turn begins. */
@@ -61,6 +63,16 @@ export function markTurnsCutOff(db: DatabaseSync): void {
   for (const row of live) if (cutOff(row.state, row.harness, row.transcript_path)) mark.run(asking(row.state), row.session_id);
 }
 
+/** Why an ended agent may not be started again now (`wakeRefusal`): the error Wake throws, and the reason a message's sender hears. */
+interface WakeRefusal {
+  message: string;
+  reason: string;
+  /** Its error code, when the app asks the user about it first (a busy shell). */
+  code?: number;
+  /** Only the user could clear it: a sender that can't ask them keeps the message as undelivered. */
+  askUser?: true;
+}
+
 /** The terminal a relaunched agent starts in, until a client attaches and sizes it. */
 const RELAUNCH_SIZE: TerminalSize = { cols: 120, rows: 40 };
 
@@ -70,6 +82,7 @@ interface AgentLifecycleOptions
     AgentHostOptions,
     | 'db'
     | 'reviewsDir'
+    | 'launchSettingsDir'
     | 'harnessPaths'
     | 'ensureHookShim'
     | 'env'
@@ -130,11 +143,14 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
    */
   pausing(sessionId: string): Promise<void> | undefined;
   /**
-   * Relaunches an ended agent in its worktree as a new session under the same id, back at `idle` until its
-   * SessionStart hook: for a scheduled run with its `prompt` (Codex afresh), or, with no prompt, to resume it where
-   * the restart stopped it. `codexSessionId` is the Codex conversation to carry on, if any.
+   * Starts the ended agent again with `prompt` as its first message, as a relaunch does, unless what Wake refuses
+   * stands in its way (`wakeRefusal`, never forced: nobody is there to ask). A refusal only the user could overrule
+   * says so (`askUser`). A promise only when its pane dropped into a shell, which it looks at first; one started
+   * meanwhile is busy.
    */
-  relaunch(row: AgentRow, prompt: string | undefined, why: string, codexSessionId?: string | null, fresh?: boolean): RunStart;
+  wake(row: AgentRow, prompt: string | undefined, why: string, codexSessionId?: string | null, retry?: boolean): RunStart | Promise<RunStart>;
+  /** Whether a wake is looking at the agent's shell before it starts it again: it shows ended until it has. */
+  isWaking(sessionId: string): boolean;
   /**
    * After a launch: watches a bypassed Codex agent's worktree for project config, and starts a Codex agent afresh if
    * `codex resume` can't carry on `codexSessionId`.
@@ -201,6 +217,8 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
   /** Per ended agent, the live login shell its pane dropped into; and per such shell, its agent. */
   const fallbackShells = new Map<string, string>();
   const fallbackOwners = new Map<string, string>();
+  /** Agents a wake is starting again, while it looks at the shell their pane dropped into first. */
+  const waking = new Set<string>();
   /** Agents being deleted, whose pane drops into no shell. */
   const deleting = new Set<string>();
   let closed = false;
@@ -234,6 +252,60 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
     return undefined;
   };
 
+  /**
+   * Why the ended agent may not be started again now, whoever asks (Wake, a message, a hand-off, a run), if so: a
+   * reviewer whose round is over (not one paused or stopped by a restart, nor, with `retry`, one whose start failed),
+   * its own harness running in the shell its pane dropped into (never, even with `force`: two harnesses never share its
+   * worktree), or that shell running a command (unless `force`, the user's answer to being asked). Read now, not as of
+   * the last quiet save; a promise only when there is such a shell to look at.
+   */
+  const wakeRefusal = (agent: Agent, force: boolean, retry = false): WakeRefusal | undefined | Promise<WakeRefusal | undefined> => {
+    if (!retry && agent.reviewOf !== null && agent.state !== 'stopped-by-restart' && agent.state !== 'hibernated') {
+      return { message: `${agent.name} is a reviewer whose round is over`, reason: 'it is a reviewer whose round is over' };
+    }
+    const shell = sessions.list().find((session) => session.id === agent.shellSessionId);
+    if (shell === undefined) return undefined;
+    return (async () => {
+      if ((await sessions.shellHarnessNow(shell.id)) === agent.harness) {
+        const reason = `${agent.harness} is running in its shell: exit it first`;
+        return { message: `${agent.name} can't be restarted: ${agent.harness} is running in its shell. Exit it first`, reason, askUser: true as const };
+      }
+      if (!force && (await isRunningSomething(shell.pid))) {
+        return { message: `${agent.name}'s shell is running something`, reason: 'its shell is running something', code: AGENT_ERROR.shellBusy, askUser: true as const };
+      }
+      return undefined;
+    })();
+  };
+
+  const wake = (row: AgentRow, prompt: string | undefined, why: string, codexSessionId?: string | null, retry = false): RunStart | Promise<RunStart> => {
+    const sessionId = row.session_id;
+    const agent = get(sessionId);
+    if (agent === undefined) return { started: false, reason: 'the agent has been deleted' };
+    // Another wake still looking at its shell starts it, or doesn't: this one waits its turn, as for a busy agent.
+    if (waking.has(sessionId)) return { started: false, reason: 'it is being started', busy: true };
+    const go = (refusal: WakeRefusal | undefined): RunStart => {
+      // Its daemon closed while its shell was looked at: nothing is launched after shutdown.
+      if (closed) return { started: false, reason: 'the daemon is closing' };
+      if (refusal !== undefined) return { started: false, reason: refusal.reason, ...(refusal.askUser === undefined ? {} : { askUser: true }) };
+      // Read again after a look at its shell: deleted, or started by another wake, meanwhile.
+      const now = getRow(sessionId);
+      if (now === undefined) return { started: false, reason: 'the agent has been deleted' };
+      if (now.ended_at === null) return { started: false, reason: 'it was started meanwhile', busy: true };
+      return relaunch(now, prompt, why, codexSessionId);
+    };
+    const refusal = wakeRefusal(agent, false, retry);
+    if (!(refusal instanceof Promise)) return go(refusal);
+    waking.add(sessionId);
+    return refusal.then(go).finally(() => waking.delete(sessionId));
+  };
+
+  /**
+   * Relaunches an ended agent in its worktree as a new session under the same id, back at `idle` until its
+   * SessionStart hook: with `prompt` as its first message (Codex afresh, unless `codexSessionId` names the Codex
+   * conversation to carry on), or, with no prompt, to resume it where it stopped. Checks only that it can be launched:
+   * its callers check `wakeRefusal` first (`wake`, `resume`), but a Codex agent started afresh as its `codex resume`
+   * failed, which left nothing in its pane.
+   */
   const relaunch = (
     row: AgentRow,
     prompt: string | undefined,
@@ -292,6 +364,8 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
         allowProjectCodexConfig: false,
         size: RELAUNCH_SIZE,
         ...(row.read_only === 1 ? { readOnly: true } : {}),
+        role: launchRole(row),
+        launchSettings: readLaunchSettings(row.launch_settings),
       });
     } catch (error) {
       if (error instanceof RpcMethodError && error.code === AGENT_ERROR.projectCodexConfig) {
@@ -431,7 +505,9 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
   };
 
   return {
-    relaunch,
+    wake,
+
+    isWaking: (sessionId) => waking.has(sessionId),
 
     watchLaunched,
 
@@ -523,6 +599,7 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
       deliveries.forget(sessionId);
       permissions.drop(sessionId);
       transcripts.forget(sessionId);
+      removeLaunchSettingsFile(options.launchSettingsDir, sessionId);
       options.log(`deleted agent ${sessionId}${agent.ownsWorktree ? ` and its worktree ${agent.worktree}` : ''} for ${why}`);
       options.broadcast({ type: 'agent.removed', sessionId });
     },
@@ -562,19 +639,12 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
       const agent = requireAgent(sessionId);
       if (agent.endedAt === null) throw invalidParams(`${agent.name} is still running`);
       // The daemon ends a reviewer once its review is in, and its round with it: a restart wouldn't reopen the round.
-      // A paused reviewer's round goes on: it was paused, not ended.
-      if (agent.reviewOf !== null && agent.state !== 'stopped-by-restart' && agent.state !== 'hibernated') {
-        throw invalidParams(`${agent.name} is a reviewer whose round is over`);
-      }
-      // Its session may still be finishing its exit, which a new one under the same id would collide with.
+      // A paused reviewer's round goes on: it was paused, not ended. What any wake checks (`wakeRefusal`), after its
+      // session, which may still be finishing its exit a new one under the same id would collide with, is ended.
       await sessions.kill(sessionId, `its restart for ${asked}`).catch(() => {});
-      const shell = sessions.list().find((session) => session.id === agent.shellSessionId);
-      // Two harness instances never share its worktree: not even with `force`. Read now, not as of the last quiet save.
-      if (shell !== undefined && (await sessions.shellHarnessNow(shell.id)) === agent.harness) {
-        throw invalidParams(`${agent.name} can't be restarted: ${agent.harness} is running in its shell. Exit it first`, `${agent.harness} is running in its shell: exit it first`);
-      }
-      if (shell !== undefined && !force && (await isRunningSomething(shell.pid))) {
-        throw new RpcMethodError(AGENT_ERROR.shellBusy, `${agent.name}'s shell is running something`, 'its shell is running something');
+      const refusal = await wakeRefusal(agent, force);
+      if (refusal !== undefined) {
+        throw refusal.code === undefined ? invalidParams(refusal.message, refusal.reason) : new RpcMethodError(refusal.code, refusal.message, refusal.reason);
       }
       await endFallbackShell(sessionId, `restart for ${asked}`);
       let row = getRow(sessionId);

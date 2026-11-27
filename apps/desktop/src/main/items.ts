@@ -23,6 +23,7 @@ export function registerItemIpc(daemon: DaemonLink, dataDir: string): void {
   passthrough(daemon, ITEM_IPC.clocks, 'clock.list');
   passthrough(daemon, ITEM_IPC.runClock, 'clock.runNow', (id: string) => ({ id }));
   passthrough(daemon, ITEM_IPC.addClock, 'clock.add', (data: Partial<ClockData>, place: ClockPlace) => ({ data, place }));
+  passthrough(daemon, ITEM_IPC.setClockOnlyIf, 'clock.setOnlyIf', (id: string, command: string | null) => ({ id, command }));
   passthrough(daemon, ITEM_IPC.readMemory, 'memory.read', (id: string, search?: string) => (search === undefined ? { id } : { id, search }));
   passthrough(daemon, ITEM_IPC.changeMemory, 'memory.change', (id: string, change: MemoryChange) => ({ id, change }));
   passthrough(daemon, ITEM_IPC.memoryHistory, 'memory.history', (id: string, entry: string) => ({ id, entry }));

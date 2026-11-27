@@ -1,6 +1,9 @@
 import type { StepsWho, TodoData, TodoLine } from '@agent-board/daemon/protocol';
 import { TODO_CARD_SIZE, TODO_PILL_SIZE } from '@agent-board/daemon/protocol';
 import { TodoCardView, TodoPillView, type TodoCardActions, type TodoEditing } from './TodoCard';
+import { TodoFull } from './TodoFull';
+import { TodoPeek } from './ZoneTodoPopover';
+import { PopoverPreview } from '../../ui';
 import type { TodoLook, TodoLookup } from './todo-view';
 
 const AT = '2026-01-01T00:00:00.000Z';
@@ -62,26 +65,38 @@ const PILLS: { name: string; data: TodoData }[] = [
   { name: 'Folded, empty', data: EMPTY },
 ];
 
-/** Every look of a to-do list, from data alone: for the visual shots, and to see them all at once. */
+/** Every look of a to-do list, from data alone: for the visual shots, and to see them all at once; then its peek and its full screen. */
 export function TodoGallery() {
   return (
-    <section className="gallery-todo" data-testid="todo-gallery">
-      {CARDS.map(({ name, data, initial, steppedIn = false, look }) => (
-        <figure key={name} className="gallery-todo-cell">
-          <div style={{ width: TODO_CARD_SIZE.width, height: TODO_CARD_SIZE.height }}>
-            <TodoCardView data={data} lookup={LOOKUP} zoneName="agent-board" look={look} steppedIn={steppedIn} actions={ACTIONS} initial={initial} />
-          </div>
-          <figcaption>{name}</figcaption>
-        </figure>
-      ))}
-      {PILLS.map(({ name, data }) => (
-        <figure key={name} className="gallery-todo-cell">
-          <div style={{ width: TODO_PILL_SIZE.width, height: TODO_PILL_SIZE.height }}>
-            <TodoPillView data={data} lookup={LOOKUP} onOpen={() => {}} onClear={() => {}} />
-          </div>
-          <figcaption>{name}</figcaption>
-        </figure>
-      ))}
-    </section>
+    <>
+      <section className="gallery-todo" data-testid="todo-gallery">
+        {CARDS.map(({ name, data, initial, steppedIn = false, look }) => (
+          <figure key={name} className="gallery-todo-cell">
+            <div style={{ width: TODO_CARD_SIZE.width, height: TODO_CARD_SIZE.height }}>
+              <TodoCardView data={data} lookup={LOOKUP} zoneName="agent-board" look={look} steppedIn={steppedIn} actions={ACTIONS} initial={initial} />
+            </div>
+            <figcaption>{name}</figcaption>
+          </figure>
+        ))}
+        {PILLS.map(({ name, data }) => (
+          <figure key={name} className="gallery-todo-cell">
+            <div style={{ width: TODO_PILL_SIZE.width, height: TODO_PILL_SIZE.height }}>
+              <TodoPillView data={data} lookup={LOOKUP} onOpen={() => {}} onUnfold={() => {}} onClear={() => {}} />
+            </div>
+            <figcaption>{name}</figcaption>
+          </figure>
+        ))}
+      </section>
+      <section className="gallery-todo-more">
+        <div className="listcard-gallery-full" data-testid="todo-gallery-peek">
+          <PopoverPreview aria-label="To do: its lines" className="todo-peek-popover">
+            <TodoPeek data={OPEN} changes={ACTIONS} onFull={() => {}} />
+          </PopoverPreview>
+        </div>
+        <div className="listcard-gallery-full" data-testid="todo-gallery-full">
+          <TodoFull data={OPEN} lookup={LOOKUP} zoneName="agent-board" now={new Date(AT)} actions={{ ...ACTIONS, openInWindow: () => {} }} onClose={() => {}} inline initial={{ picked: FIRST.id }} />
+        </div>
+      </section>
+    </>
   );
 }

@@ -353,7 +353,7 @@ describe('a paused tile is frosted', () => {
   it('frosts an expanded tile too, its terminal and chat included, which stay usable', () => {
     const source = readFileSync(join(import.meta.dirname, 'ExpandedTile.tsx'), 'utf8');
     expect(source).toContain("className={agent ? frostedClasses('expanded-tile', agent, shows) : 'expanded-tile'}");
-    expect(source).toContain('{agent && <FrostMark agent={agent} />}');
+    expect(source).toContain('<FrostMark agent={agent} />');
     const body = /\.expanded-tile\.tile-frosted \.expanded-tile-body::after \{([^}]*)\}/.exec(css)?.[1] ?? '';
     expect(body).toContain('pointer-events: none');
     expect(body).toContain('var(--frost)');

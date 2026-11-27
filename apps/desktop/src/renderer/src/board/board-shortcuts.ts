@@ -4,9 +4,21 @@ import { centreOf, type Point, type Rect } from '../geometry';
 import { pressed, type KeyId } from '../keys/registry';
 import type { ArmedTool } from './ToolOverlay';
 import { isTyping } from '../keys/typing';
+import { OVERLAYS } from '../keys';
 
 /** Where ⌫ belongs to what is shown, not to the selected tile: an expanded tile or a session window. */
 export const SESSION_SURFACES = '.expanded-tile, [data-testid="session-window"]';
+/**
+ * Where the app's own keys (⌘K, ⌘/, ⌘⇧P) reach though it is a dialog: every view an agent is open in, the pop-up
+ * too. Not where ⌫, a dropped tab or the board's blur go (`SESSION_SURFACES`), which leave the pop-up out.
+ */
+const APP_KEY_SURFACES = `${SESSION_SURFACES}, [data-testid="agent-popup"]`;
+
+/** Whether a key of the app's own, pressed with the focus on `active`, is the app's: off any dialog or menu, or in a view an agent is open in. */
+export function appKeysReach(active: Pick<Element, 'closest'> | null | undefined): boolean {
+  return active?.closest(OVERLAYS) == null || active.closest(APP_KEY_SURFACES) != null;
+}
+
 /** Open over the board, these take ⌫ for themselves: a dialog, or a session window. */
 export const KEY_BLOCKERS = '[role="dialog"], [role="alertdialog"], [data-testid="session-window"]';
 /** What a click on a node presses rather than the node itself: its buttons, fields and links, and what takes input. */

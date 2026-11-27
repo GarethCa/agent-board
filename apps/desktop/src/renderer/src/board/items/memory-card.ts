@@ -1,4 +1,5 @@
 // What a memory card shows, worked out from its data and entries: kept apart from React, so it is tested on its own.
+import { ago } from '@agent-board/daemon/text-words';
 import { MEMORY_OLD_DAYS, type MemoryData, type MemoryEntry, type MemoryReaders, type StepsWho } from '@agent-board/daemon/protocol';
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -138,18 +139,11 @@ export const turnedOpen = (turned: ReadonlyMap<MemorySectionKey, boolean>, key: 
 /** Where an entry typed in a card's add box goes: a fact, keyed or not, never pinned or a document. */
 export const ADDED_SECTION: MemorySectionKey = 'facts';
 
-const MINUTE = 60 * 1000;
-const HOUR = 60 * MINUTE;
-
 /** How long ago, short, as a row's corner says: "now", "5 min", "2 h", "3 d", else the day and month. */
 export function ageText(iso: string, now: Date): string {
   const at = new Date(iso);
   if (Number.isNaN(at.getTime())) return '';
-  const ago = now.getTime() - at.getTime();
-  if (ago < MINUTE) return 'now';
-  if (ago < HOUR) return `${Math.floor(ago / MINUTE)} min`;
-  if (ago < DAY) return `${Math.floor(ago / HOUR)} h`;
-  if (ago < MEMORY_OLD_DAYS * DAY) return `${Math.floor(ago / DAY)} d`;
+  if (now.getTime() - at.getTime() < MEMORY_OLD_DAYS * DAY) return ago(iso, now.getTime(), 'short');
   return at.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 }
 

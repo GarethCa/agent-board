@@ -182,7 +182,7 @@ export function createGateHost(options: GateHostOptions): GateHost {
       runGit(agent.worktree, ['rev-parse', '--verify', '--quiet', 'HEAD']),
       runGit(agent.worktree, ['symbolic-ref', '--quiet', '--short', 'HEAD']),
       // Not the agent's own notes, such as its handover, which are the user's to commit or not.
-      runGit(agent.worktree, ['status', '--porcelain', '--', '.', ':(exclude).agent-board']),
+      runGit(agent.worktree, ['status', '--porcelain', '--', '.', ':(exclude).agent-board'], undefined, {}, { repoFiltersOff: true }),
     ]);
     return {
       head: head.ok ? head.stdout : null,

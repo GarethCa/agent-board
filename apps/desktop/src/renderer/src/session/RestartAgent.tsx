@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { Agent } from '@agent-board/daemon/protocol';
 import { errorMessage } from '../../../shared/errors';
-import { restartsInPlace, WAKE_ENDED_HINT } from '../board/paused';
+import { restartsInPlace, WAKE_ENDED_HINT, wakeBusyText } from '../board/paused';
 import { WakeButton } from '../board/WakeButton';
 import { Button, ErrorText } from '../ui';
 
@@ -28,10 +28,40 @@ export const endedShellLabel = (agent: Pick<Agent, 'shellHarness'>): string =>
   agent.shellHarness === null ? ENDED_SHELL_LABEL : `${agent.shellHarness} running in this shell`;
 
 /**
- * Wake, for a done or exited agent: relaunches it in its worktree, carrying on its conversation. If the shell its
+ * What Wake asks, in place, while the shell an agent's pane dropped into runs something (`message`, the daemon's
+ * words): the board's own confirm, in a line, for the windows with no board to ask from.
+ */
+export function WakeBusyConfirm({ message, pending, onWake, onCancel, className }: { message: string; pending: boolean; onWake(): void; onCancel(): void; className?: string }) {
+  return (
+    <span className={`restart-agent ${className ?? ''}`} role="alert" data-testid="restart-agent-busy">
+      {wakeBusyText(message)} Wake it anyway?
+      <Button size="xs" variant="danger" disabled={pending} onClick={onWake}>
+        Wake anyway
+      </Button>
+      <Button size="xs" variant="ghost" onClick={onCancel}>
+        Cancel
+      </Button>
+    </span>
+  );
+}
+
+/**
+ * Wake, for an agent that is not running: relaunches it in its worktree, carrying on its conversation. If the shell its
  * pane dropped into is running something it asks first, in place, as a popped-out window has no board to ask from.
  */
-export function RestartAgent({ agent, className, label = 'Wake', testId = 'restart-agent' }: { agent: Agent; className?: string; label?: string; testId?: string }) {
+export function RestartAgent({
+  agent,
+  className,
+  label = 'Wake',
+  hint = WAKE_ENDED_HINT,
+  testId = 'restart-agent',
+}: {
+  agent: Agent;
+  className?: string;
+  label?: string;
+  hint?: string;
+  testId?: string;
+}) {
   const [pending, setPending] = useState(false);
   const [busy, setBusy] = useState<string>();
   const [problem, setProblem] = useState<string>();
@@ -47,21 +77,11 @@ export function RestartAgent({ agent, className, label = 'Wake', testId = 'resta
       .finally(() => setPending(false));
   };
   if (busy !== undefined) {
-    return (
-      <span className={`restart-agent ${className ?? ''}`} role="alert" data-testid="restart-agent-busy">
-        {busy}. Wake it anyway?
-        <Button size="xs" variant="danger" disabled={pending} onClick={() => void restart(true)}>
-          Wake anyway
-        </Button>
-        <Button size="xs" variant="ghost" onClick={() => setBusy(undefined)}>
-          Cancel
-        </Button>
-      </span>
-    );
+    return <WakeBusyConfirm message={busy} pending={pending} className={className} onWake={() => void restart(true)} onCancel={() => setBusy(undefined)} />;
   }
   return (
     <span className={`restart-agent ${className ?? ''}`}>
-      <WakeButton label={label} hint={WAKE_ENDED_HINT} testId={testId} onWake={() => restart(false)} />
+      <WakeButton label={label} hint={hint} testId={testId} onWake={() => restart(false)} />
       {problem && <ErrorText>{problem}</ErrorText>}
     </span>
   );

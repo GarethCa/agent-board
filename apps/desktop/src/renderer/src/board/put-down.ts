@@ -1,3 +1,5 @@
+import { withoutFreed } from '@agent-board/daemon/board-layout';
+
 /**
  * The tiles the user put down while tiles were expanded in place, by node id, each with the expanded tiles open then,
  * sorted. A drop saves where the tile was drawn, the push of those tiles already in it, so while any of them is still
@@ -18,9 +20,8 @@ export function puttingDown(putDown: PutDown, ids: readonly string[], open: read
 
 /** `putDown` without the tiles `ids`: moved any other way (nudged, undone, tidied, arranged) or gone, so pushed with their rows again. */
 export function withoutPutDown(putDown: PutDown, ids: Iterable<string>): PutDown {
-  const gone = new Set(ids);
-  const kept = [...putDown].filter(([id]) => !gone.has(id));
-  return kept.length === putDown.size ? putDown : new Map(kept);
+  const kept = withoutFreed([...putDown], new Set(ids), 'first');
+  return kept === undefined ? putDown : new Map(kept);
 }
 
 /**

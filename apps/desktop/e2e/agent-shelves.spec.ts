@@ -368,15 +368,12 @@ test("an expanded tile shows the shelves under Simplified: icons only when narro
     await spawnAgent(window, 'monorepo', 'Pick a database');
     await tile(window).dblclick();
 
-    // The shelves, on the agent's page, in place of the details strip, and no header toggle: the tile's header keeps
-    // its own buttons, with the state button and ⋯ among them.
+    // The shelves, on the agent's page, in place of the details strip: the tile's header is its pop-up's, with ⋯.
     await expect(expanded(window)).toBeVisible();
     await expect(tileShelves(window)).toBeVisible();
     await expect(expanded(window).locator('.session-details')).toHaveCount(0);
     await expect(tileShelves(window).getByTestId('page-status-line')).toContainText('started by you');
-    const controls = expanded(window).locator('.expanded-tile-head').getByTestId('shelf-controls');
-    await expect(controls.getByRole('button', { name: /^(Interrupt|Pause)$/ })).toBeVisible();
-    await controls.getByRole('button', { name: 'More controls' }).click();
+    await expanded(window).locator('.expanded-tile-head').getByRole('button', { name: 'More', exact: true }).click();
     await expect(window.getByRole('menuitem', { name: /^Stop/ })).toBeEnabled();
     await window.keyboard.press('Escape');
     await expect(expanded(window)).toBeVisible();
@@ -395,13 +392,10 @@ test("an expanded tile shows the shelves under Simplified: icons only when narro
     expect(await viewTransform(window)).toBe(board);
     expect(await settledBox(expanded(window))).toEqual(placed);
 
-    // The header's toggle collapses the shelves to the rail and opens them again, as in the window.
-    const tileToggle = expanded(window).locator('.expanded-tile-head').getByRole('button', { name: /^(Show|Hide) the shelves$/ });
-    await expect(tileToggle).toHaveAttribute('aria-pressed', 'true');
-    await tileToggle.click();
+    // Their footer collapses the shelves to the rail, and the rail opens them again, as in the pop-up.
+    await tileShelves(window).getByRole('button', { name: 'Collapse to the rail' }).click();
     await expect(tileRail(window)).toBeVisible();
-    await expect(tileToggle).toHaveAttribute('aria-pressed', 'false');
-    await tileToggle.click();
+    await tileRail(window).getByRole('button', { name: 'Show the shelves' }).click();
     await expect(tileShelves(window)).toBeVisible();
 
     // Narrow, as the strip is at its least, the tabs show their icons only; stepped below that it is the rail.
@@ -436,8 +430,8 @@ test("an expanded tile shows the shelves under Simplified: icons only when narro
     await expect(tileRail(window)).toBeVisible();
     await expect(expanded(window).getByTestId('agent-shelves-peek')).toHaveCount(0);
 
-    // ⌘I opens the shelves again, and the tile's header still drags it with the board.
-    await window.keyboard.press(windowKey('i'));
+    // The rail opens the shelves again, and the tile's header still drags it with the board.
+    await tileRail(window).getByRole('button', { name: 'Show the shelves' }).click();
     await expect(tileShelves(window)).toBeVisible();
     await expect.poll(() => tileWidth(window)).toBe(200);
     const head = await settledBox(expanded(window).locator('.expanded-tile-head'));
@@ -466,23 +460,17 @@ test("Classic's expanded tile opens on the shelves too", async () => {
     await spawnAgent(window, 'monorepo', 'Pick a database');
     await tile(window).dblclick();
 
-    // The shelves, with the state button and ⋯ in the tile's header.
+    // The shelves, with ⋯ in the tile's header.
     await expect(tileShelves(window)).toBeVisible();
     await expect(expanded(window).locator('.session-details-rail, .session-details')).toHaveCount(0);
-    await expect(expanded(window).locator('.expanded-tile-head').getByTestId('shelf-controls')).toBeVisible();
+    await expect(expanded(window).locator('.expanded-tile-head').getByRole('button', { name: 'More', exact: true })).toBeVisible();
     await expect(tileShelves(window).getByTestId('page-now')).toBeVisible();
 
-    // Its footer collapses it to the rail, which is every window's choice: ⌘I from the terminal brings it back.
+    // Its footer collapses it to the rail, which is every window's choice, and the rail brings it back.
     await tileShelves(window).getByRole('button', { name: 'Collapse to the rail' }).click();
     await expect(tileRail(window)).toBeVisible();
     await tileRail(window).getByRole('button', { name: 'Show the shelves' }).click();
     await expect(tileShelves(window)).toBeVisible();
-    await expanded(window).getByTestId('session-terminal').click();
-    await window.keyboard.press(windowKey('i'));
-    await expect(tileRail(window)).toBeVisible();
-    await window.keyboard.press(windowKey('i'));
-    await expect(tileShelves(window)).toBeVisible();
-
   } finally {
     await app.close();
     await removeDataDir(dataDir);
@@ -516,7 +504,7 @@ test("a section of the shelves folds to its heading by mouse or keyboard, and st
     await expect(where).toHaveAttribute('data-folded', 'true');
 
     // Through the rail and back, and through the tile collapsing and expanding again, it is as it was left.
-    await window.keyboard.press(windowKey('i'));
+    await tileShelves(window).getByRole('button', { name: 'Collapse to the rail' }).click();
     await expect(tileRail(window)).toBeVisible();
     await tileRail(window).getByRole('button', { name: 'Show the shelves' }).click();
     await tileShelves(window).getByRole('tab', { name: 'Setup' }).click();
@@ -544,7 +532,7 @@ test("a section of the shelves folds to its heading by mouse or keyboard, and st
   }
 });
 
-test("an expanded tile too narrow for the shelves opens them on the rail without changing every other's choice, and its header gives them the branch", async () => {
+test("an expanded tile too narrow for the shelves opens them on the rail without changing every other's choice", async () => {
   const { dir, repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env, [], { design: 'simplified' });
@@ -556,14 +544,10 @@ test("an expanded tile too narrow for the shelves opens them on the rail without
     await spawnAgent(window, 'monorepo', 'Pick a database');
     await tile(window).dblclick();
 
-    // Wide enough, the shelves are open and the header leaves what they say to them: the branch, issue and pull requests.
+    // Wide enough, the shelves are open, saying the branch, issue and pull requests: the header, the pop-up's, leaves them to them.
     await expect(tileShelves(window)).toBeVisible();
     await expect(tileShelves(window).getByTestId('shelves-footer')).toBeVisible();
     await expect(expanded(window).locator('.expanded-tile-head .session-window-where')).toHaveCount(0);
-    // The state button is an icon, with its name for a screen reader, so the header keeps the room for the name.
-    const state = expanded(window).locator('.expanded-tile-head').getByTestId('shelf-controls').getByRole('button', { name: /^(Interrupt|Pause)$/ });
-    await expect(state).toBeVisible();
-    expect((await state.boundingBox())!.width).toBeLessThan(40);
 
     // Resized to its least width, collapsed and expanded again at that size, it opens on its rail.
     const edge = (await settledBox(expanded(window).locator('.expanded-tile-resize.line.right')))!;
@@ -577,8 +561,6 @@ test("an expanded tile too narrow for the shelves opens them on the rail without
     await tile(window).dblclick();
     await expect(tileRail(window)).toBeVisible();
     await expect(tileShelves(window)).toHaveCount(0);
-    // Its header says the branch again, as the shelves are not there to.
-    await expect(expanded(window).locator('.expanded-tile-head .session-window-where')).toBeVisible();
     // The choice every window and tile shares is as it was: open.
     expect(await window.evaluate(() => localStorage.getItem('agent-board.shelves-rail'))).toBeNull();
 
