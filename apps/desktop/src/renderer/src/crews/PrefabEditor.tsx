@@ -1,7 +1,8 @@
 import { Check, Plus, Trash2 } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import {
-  EFFORTS,
+  effortOn,
+  effortsFor,
   MAX_PREFAB_MEMBERS,
   MAX_REVIEW_CAP,
   isOrchestratorRole,
@@ -372,7 +373,7 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 function Inspector({ member, draft, onChange, onRemove }: { member: PrefabMember; draft: CrewPrefab; onChange(fields: Partial<PrefabMember>): void; onRemove(): void }) {
   const named = !listedRole(member.role);
   const models = [...MODELS[member.harness], ...(member.model !== null && !MODELS[member.harness].includes(member.model) ? [member.model] : [])];
-  const efforts = EFFORTS.filter((effort) => member.harness === 'claude' || effort !== 'max');
+  const efforts = effortsFor(member.harness);
   const first = promptMember(draft);
   const ledBy = first !== undefined && first !== member && isOrchestratorRole(first.role);
   // Its other start is by the lead, under an orchestrator on the prompt; else after a hand-off. Its own is always offered.
@@ -420,7 +421,7 @@ function Inspector({ member, draft, onChange, onRemove }: { member: PrefabMember
             value={modelChoice(member.harness, member.model)}
             onChange={(event) => {
               const { harness, model } = readModelChoice(event.target.value);
-              onChange({ harness, model, effort: harness === 'codex' && member.effort === 'max' ? 'xhigh' : member.effort });
+              onChange({ harness, model, effort: effortOn(harness, member.effort) });
             }}
           >
             {(['claude', 'codex'] as const).map((harness) => (

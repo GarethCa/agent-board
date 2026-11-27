@@ -1,5 +1,5 @@
-// Documents an agent shows the user (`board.showDoc`): a Markdown or HTML file of its, shown as a Document tab in its window
-// or a card on the board. The file is the document: it is read each time it is shown, and looked at every 1.5 s, so a
+// Documents an agent shows the user (`board.showDoc`): a Markdown or HTML file of its, shown as a Document tab in its window,
+// and a card on the board only when it asks and Settings puts docs on the board (`placeDocTiles`). The file is the document: it is read each time it is shown, and looked at every 1.5 s, so a
 // rewrite by the agent is a new version. The user's edits to a Markdown document are written to the file, and the agent is told what
 // changed, typed at its prompt once it is ready for its next message, as a crew flag is (`crew-flags.ts`).
 import { createHash, randomUUID } from 'node:crypto';
@@ -46,6 +46,8 @@ export interface DocumentHostOptions {
   tell(sessionId: string, text: string): Promise<RunStart>;
   /** Puts a card for the document beside its agent's tile on the board. */
   addCard(document: DocumentSummary): Promise<void>;
+  /** Whether a document asked for on the board gets its card: Settings' `placeDocTiles`. Unset, it does. */
+  placesCards?(): boolean;
   /**
    * The folder a passed document's file is kept in (`<keptDir>/<document id>/`) when the worktree it is in goes with
    * its old holder. Unset, the file goes with that worktree.
@@ -434,8 +436,9 @@ export function createDocumentHost(options: DocumentHostOptions): DocumentHost {
             throw invalidParams("only a live agent shows a document, from its own session: not a shell, nor an ended agent's shell");
           }
           const shown = host.show(me.sessionId, { path: stringParam(p, 'path'), title: optionalStringParam(p, 'title'), worktree: me.worktree });
-          if (optionalBooleanParam(p, 'onBoard') === true) await options.addCard(shown);
-          return shown;
+          const onBoard = optionalBooleanParam(p, 'onBoard') === true && (options.placesCards?.() ?? true);
+          if (onBoard) await options.addCard(shown);
+          return { ...shown, onBoard };
         },
         'doc.read': (params) => host.read(stringParam(paramsObject(params), 'documentId')),
         'doc.save': (params) => {

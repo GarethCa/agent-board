@@ -3,7 +3,7 @@
 // machine reaches this machine. Its session's partition is its own. The one script it runs in a page, the passkey probe,
 // is in web-passkeys.ts.
 import type { Session, WebContents } from 'electron';
-import { isLocalUrl, isWebTabRequest, isWebTabUrl } from '@agent-board/daemon/web-url';
+import { isLocalUrl, isWebTabRequest, isWebTabUrl, isWebUrl } from '@agent-board/daemon/web-url';
 
 export interface LockDownOptions {
   /** A navigation or redirect to `url` was stopped, as the tab may not show it. */
@@ -113,7 +113,7 @@ export function lockDownContents(contents: WebContents, { onBlocked, onWindowOpe
     mayGo: (url, isMainFrame) => isWebTabUrl(url) || (!isMainFrame && EMPTY_FRAMES.has(url)),
     onBlocked,
     onWindowOpen: (url) => {
-      if (url.startsWith('https:') && isWebTabUrl(url)) onWindowOpen(url);
+      if (isWebUrl(url) && isWebTabUrl(url)) onWindowOpen(url);
     },
   });
 }

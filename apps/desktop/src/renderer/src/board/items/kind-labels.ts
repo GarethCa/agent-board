@@ -14,7 +14,6 @@ export const ITEM_KIND_LABELS: Record<BoardItemKind, string> = {
   plan: 'plan card',
   clock: 'clock',
   steps: 'steps card',
-  memory: 'memory',
   queue: 'queue',
   todo: 'to-do list',
   crew: 'crew card',

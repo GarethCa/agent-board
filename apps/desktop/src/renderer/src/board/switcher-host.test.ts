@@ -24,6 +24,14 @@ describe('whose window a pick on the board opens in', () => {
     expect(hostOf(pr, { agents: [pusher] })).toBe('p');
   });
 
+  it("opens a document in its agent's window, whatever is selected", () => {
+    const doc: Surface = { kind: 'document', sessionId: 'a', documentId: 'd1' };
+    expect(switcherPick(doc, board({ selected: 's' }))).toEqual({ host: owner, surface: doc });
+    expect(hostOf({ ...doc, sessionId: 'gone' })).toBeUndefined();
+    const handoff: Surface = { kind: 'doc', sessionId: 'a', path: '/wt/notes.md' };
+    expect(switcherPick(handoff, board({ selected: 's' }))).toEqual({ host: owner, surface: handoff });
+  });
+
   it("opens a pull request beside the agent selected, even one another agent opened, so a reviewer's findings sit beside it", () => {
     expect(switcherPick(pr, board({ selected: 's', beside: true }))).toEqual({ host: selected, surface: pr });
     expect(hostOf(pr, { selected: 'a', beside: true })).toBe('a');

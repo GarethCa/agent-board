@@ -106,6 +106,17 @@ describe('the keep web logins setting', () => {
   });
 });
 
+describe('the setting that puts docs agents show on the board', () => {
+  it('is off until it is turned on, and stays as it was set', () => {
+    const { settings, set } = setup();
+    expect(settings.get().placeDocTiles).toBe(false);
+    set({ placeDocTiles: true });
+    expect(settings.get().placeDocTiles).toBe(true);
+    expect(() => set({ placeDocTiles: 'yes' })).toThrow();
+    expect(settings.get().placeDocTiles).toBe(true);
+  });
+});
+
 describe('the reasoning effort new agents start at', () => {
   it("is the harness's own until it is set, for every new agent and for a role of its own", () => {
     const { settings, set } = setup();

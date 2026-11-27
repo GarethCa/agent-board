@@ -6,8 +6,8 @@ import { expect } from '@playwright/test';
 
 test.use({ viewport: null });
 
-// The creation toolbar's add menus, open: Classic's More to add (Steps, Memory, Queue) and the Simplified design's Draw
-// (its tools, a separator, then the same three). Each at the usual width, and at the narrowest width where its toolbar
+// The creation toolbar's add menus, open: Classic's More to add (Steps, Queue) and the Simplified design's Draw
+// (its tools, a separator, then the same two). Each at the usual width, and at the narrowest width where its toolbar
 // still shows every tool (narrower, Classic's drawing tools fold into Draw: the shots below).
 const DESIGNS = [
   { design: 'classic' as const, opener: 'More to add', shot: 'add-menu-classic', narrow: 1270 },

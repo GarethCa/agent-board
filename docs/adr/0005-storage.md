@@ -42,24 +42,24 @@ the one field that is the user's. No table or column ties a card to its crew: th
 `item.updated` to draw one, and an undo of a removal brings the card back as its crew is now. As the daemon starts,
 each card is brought up to date, a running crew without one gets one, and a card that names no crew is removed.
 
-**Memories and queues**: a memory or a queue is a board item (kind `memory`, `queue`) whose `data` holds only its
-title, maker, scope switch (`noAgents`), audience (a queue's) and a count for the card, as its contents would soon pass
-the 64 KiB cap: up to 500 entries and 8 MB a memory, files up to 1 MB, and 200 open jobs a queue. Its entries and jobs
-are rows of `memory_entries` and `queue_jobs`, and every change to one is a row of `board_history` holding the row as
-the change left it (the last 20 a row, 5 for a file), which is what `history` lists and `restore` puts back. A memory's
-or queue's history holds at most 8 MB of values besides: past that the oldest versions go, those of rows removed since
-first, so adding and removing files in a loop can't grow the database without end. A removed row keeps its remove. File
-entries are text kept in their row, not on disk as images are, so a file's versions and its restore go through the same
-table with nothing to sweep. Neither table has a foreign key to `board_items`: undoing an item's delete makes it again
-with the same id, and finds its rows still there. The daemon sweeps rows whose item is gone as it starts. A change runs in
-one transaction, and then updates the card's count, so `item.updated` tells the app of every change. Which agents read
-an entry is a row of `memory_reads` per entry and agent session, holding the agent's name as it read and when it last
-did: written when an agent's read returns that entry's whole text (a fact in a listing, a document only when it is
-named), never for the user's own reads. Readers are of the text they read: a change to an entry's text (an edit, its
-key set again, a restore) clears them, and a pin or a confirm keeps them. A memory's readers are those of the entries it
-holds now. It has no foreign key either, so a removed entry put back as it was keeps its readers, and the same sweep
-takes the rows of memories that are gone. A confirm is a `board_history` row with no value, the newest replacing one
-just before it, and the per-row trim counts only the others.
+**Queues**: a queue is a board item (kind `queue`) whose `data` holds only its title, maker, scope switch
+(`noAgents`), audience and a count for the card, as its contents would soon pass the 64 KiB cap: up to 200 open jobs a
+queue. Its jobs are rows of `queue_jobs`, and every change to one is a row of `board_history` holding the row as the
+change left it (the last 20 a row), which is what `history` lists and `restore` puts back. A queue's history holds at
+most 8 MB of values besides: past that the oldest versions go, those of rows removed since first. A removed row keeps its
+remove. The table has no foreign key to `board_items`: undoing an item's delete makes it again with the same id, and
+finds its rows still there. The daemon sweeps rows whose item is gone as it starts. A change runs in one transaction, and
+then updates the card's count, so `item.updated` tells the app of every change.
+
+**Memories, removed**: a memory was a board item too (kind `memory`, its entries in `memory_entries` and who read
+them in `memory_reads`, its versions in `board_history`). Agents read the instructions and their own repo for what to
+keep, so the board no longer holds a store of its own. The database is backed up first, as before every migration, and
+the migrations before the one that removes them run. Then, at the schema memories were last written for, the daemon
+writes every memory's entries, its title and scope with each, to `removed-memories-<date>.md` in the app's data folder
+(never over a different file already there; if it can't write it, it doesn't start). Only then are the memory items,
+their connectors, their history rows and both tables dropped. The daemon says where the file is on the start that drops
+them: a to-do list of the user's own, with that one line, right of the main board. That notice is not kept anywhere to
+retry: if the daemon stops before making it, the file is still in the data folder, unannounced.
 
 A queue row's `kind` depends on who its queue is for. An agents' queue holds `task`, `request` and `prompt`, which an
 agent takes and finishes, and `info`, which it reads and never takes. The user's queue holds `review`, `questions`,
@@ -75,7 +75,7 @@ user's queue never becomes work an agent takes, and info on an agents' queue bec
 A restore of a removed row does the same with the kind its version held. Take, drain and hand-on check the kind too,
 taking only an agents' `task`, `request` or `prompt`.
 
-Removing a zone still moves its items loose, but `board_items_leave_removed_zone` now also sets a memory's or queue's
+Removing a zone still moves its items loose, but `board_items_leave_removed_zone` now also sets a queue's
 `noAgents`: loose, it would otherwise widen from its zone's agents to every agent on the board. The user chooses its
 scope again from there. The trigger was dropped and made again for this, as the rule above asks.
 

@@ -29,7 +29,7 @@ export function RemoveAskRow({ agent, ask, now }: { agent: Agent; ask: RemoveAsk
   const decide = (allow: boolean) => run(() => window.agentBoard.agents.decideRemove(agent.sessionId, ask.id, allow, allow ? [...ticked] : []));
   return (
     <div className="inbox-prompt inbox-remove-ask" data-testid="inbox-remove-ask">
-      <p className="inbox-item-tool">{list.heading}, each with its worktree and branch:</p>
+      <p className="inbox-item-tool">{list.heading}{list.withEach}:</p>
       {list.shown.length > 0 && (
         <ul className="inbox-remove-tiles" aria-label="Removed on Allow">
           {list.shown.map((tile) => (
@@ -74,16 +74,16 @@ export function RemoveAskRow({ agent, ask, now }: { agent: Agent; ask: RemoveAsk
         </div>
       )}
       <div className="inbox-item-actions">
-        <Button size="sm" variant="danger" disabled={busy} aria-label={`Deny ${agent.name}'s ask to remove tiles`} onClick={() => decide(false)}>
+        <Button size="sm" variant="danger" disabled={busy} aria-label={`Deny ${agent.name}'s ask to ${ask.items === true ? 'delete board items' : 'remove tiles'}`} onClick={() => decide(false)}>
           Deny
         </Button>
-        <Button size="sm" variant="primary" disabled={busy} aria-label={`Allow ${agent.name} to remove them`} onClick={() => decide(true)}>
+        <Button size="sm" variant="primary" disabled={busy} aria-label={`Allow ${agent.name} to ${ask.items === true ? 'delete' : 'remove'} them`} onClick={() => decide(true)}>
           {allowWords(ask, ticked)}
         </Button>
       </div>
       <p className="inbox-ask-timer">
         <Timer aria-hidden />
-        <span>Waits {waitLeft(ask.expiresAt, now)}; no answer removes nothing</span>
+        <span>Waits {waitLeft(ask.expiresAt, now)}; no answer {ask.items === true ? 'deletes' : 'removes'} nothing</span>
       </p>
       {error && <ErrorText>{error}</ErrorText>}
     </div>

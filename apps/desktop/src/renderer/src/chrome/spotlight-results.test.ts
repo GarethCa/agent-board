@@ -28,6 +28,9 @@ const agent = (name: string, more: Partial<Agent> = {}): Agent =>
     purpose: null,
     status: null,
     pullRequests: [],
+    docs: [],
+    records: [],
+    guessedDoc: null,
     ...more,
   }) as Agent;
 
@@ -46,7 +49,7 @@ describe('spotlightGroups before anything is typed', () => {
 
     expect(groups.map((group) => group.label)).toEqual(['Needs you', 'Recent', 'Zones']);
     expect(names(groups[0]!.rows)).toEqual(['Review 202']);
-    expect(groups[0]!.rows[0]!.sub).toBe('asks: Approve the push?');
+    expect(groups[0]!.rows[0]!.sub).toBe('Question: Approve the push?');
     expect(names(groups[1]!.rows)).toEqual(['Master', 'Theme packs']);
     expect(names(groups[2]!.rows)).toEqual(['agent-board', 'website']);
   });
@@ -135,8 +138,8 @@ describe('what an agent says it is for', () => {
 
   it('gives way to what an agent asks while it needs you', () => {
     const asking = agent('Asking', { state: 'waiting', purpose: 'Something', ask: { question: 'Push?' } as Agent['ask'] });
-    expect(typed('', [asking])[0]!.rows[0]!.sub).toBe('asks: Push?');
-    expect(typed('push', [asking])[0]!.rows[0]!.sub).toBe('agent-board · asks: Push?');
+    expect(typed('', [asking])[0]!.rows[0]!.sub).toBe('Question: Push?');
+    expect(typed('push', [asking])[0]!.rows[0]!.sub).toBe('agent-board · Question: Push?');
   });
 });
 
@@ -161,7 +164,7 @@ describe('what a reviewer reviews', () => {
 
   it('gives way to what it asks while it needs you', () => {
     const asking = agent('Reviewer', { state: 'waiting', ask: { question: 'Post the findings?' } as Agent['ask'] });
-    expect(reviewedRows(3, [asking])[0]!.sub).toBe('asks: Post the findings?');
+    expect(reviewedRows(3, [asking])[0]!.sub).toBe('Question: Post the findings?');
   });
 });
 
@@ -401,6 +404,16 @@ describe('the Crews group', () => {
   it('lists none where no crew could start', () => {
     expect(crews('spike', { canStartAgent: false })).toBeUndefined();
   });
+
+  it('finds a draft an agent made by its name, or as a draft, wherever ⌘K is, to open it on its board', () => {
+    const drafts = [{ id: 'draft:a', name: 'Morning tickets', drafter: 'Captain' }];
+    expect(crews('morning', { drafts })).toEqual([{ kind: 'crew', prefab: null, draft: 'draft:a' }]);
+    expect(crews('morning', { drafts, canStartAgent: false })).toEqual([{ kind: 'crew', prefab: null, draft: 'draft:a' }]);
+    expect(crews('draft', { drafts, canStartAgent: false })).toEqual([{ kind: 'crew', prefab: null, draft: 'draft:a' }]);
+    const row = spotlightGroups('morning', { ...sources, drafts }).find((group) => group.label === CREWS_GROUP)!.rows[0]!;
+    expect(row).toMatchObject({ name: 'Morning tickets', sub: 'Draft by Captain, to review' });
+    expect(crews('')).toBeUndefined();
+  });
 });
 
 describe('spotlightGroups and actions', () => {
@@ -551,6 +564,22 @@ describe('spotlightGroups through the boards of tickets', () => {
     expect(item).toMatchObject({ key: 'item:n1', name: 'Make the dot 8 px on dark', sub: 'Sticky note · ENG-12', subject: { kind: 'item', item: { id: 'n1' }, ticket: 'chat' } });
     expect(spotlightGroups('mock', sources).flatMap((group) => group.rows).find((row) => row.subject.kind === 'item')).toMatchObject({ sub: 'Document · ENG-12' });
     expect(spotlightGroups('', sources).flatMap((group) => group.rows).some((row) => row.subject.kind === 'item')).toBe(false);
+  });
+
+  it('finds a document an agent showed by its title, once something is typed, saying whose it is and where', () => {
+    const doc = { id: 'doc-1', sessionId: 'builder', path: '/wt/findings.md', title: 'Login findings', format: 'markdown', version: 1, shownAt: '2026-10-23T10:00:00.000Z' } as Agent['docs'][number];
+    const sources = { agents: [chat, { ...builder, docs: [doc] }], shells: [], zones, shows: 'turns' as const };
+    const row = spotlightGroups('findings', sources).flatMap((group) => group.rows).find((each) => each.subject.kind === 'document');
+    expect(row).toMatchObject({ key: 'document:doc-1', name: 'Login findings', sub: 'Document · Builder · ENG-12', subject: { kind: 'document', surface: { kind: 'document', sessionId: 'builder', documentId: 'doc-1' }, agent: { sessionId: 'builder' } } });
+    expect(spotlightGroups('', sources).flatMap((group) => group.rows).some((each) => each.subject.kind === 'document')).toBe(false);
+  });
+
+  it('finds a hand-off doc an agent recorded by its file, opening it in a Doc tab of its window, and none it deleted', () => {
+    const record = (path: string, deleted = false) => ({ kind: 'doc', key: path, path, from: null, recordedAt: '2026-10-23T10:00:00.000Z', deletedAt: deleted ? '2026-10-23T11:00:00.000Z' : null }) as Agent['records'][number];
+    const sources = { agents: [chat, { ...builder, records: [record('/wt/review-notes.md'), record('/wt/old-notes.md', true)] }], shells: [], zones, shows: 'turns' as const };
+    const found = (query: string) => spotlightGroups(query, sources).flatMap((group) => group.rows).filter((each) => each.subject.kind === 'document');
+    expect(found('review-notes')).toMatchObject([{ key: 'doc:builder:/wt/review-notes.md', name: 'review-notes.md', sub: 'Hand-off doc · Builder · ENG-12', subject: { kind: 'document', surface: { kind: 'doc', sessionId: 'builder', path: '/wt/review-notes.md' } } }]);
+    expect(found('old-notes')).toEqual([]);
   });
 
   it('leaves out an item whose ticket’s chat is no longer on the board as one', () => {

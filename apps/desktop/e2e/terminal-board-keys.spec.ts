@@ -5,7 +5,7 @@ import { expect } from '@playwright/test';
 import { launch, screen, sessionWindow, SHELL_ENV } from './agent-helpers.ts';
 import { test, newShell, removeDataDir, tempDataDir } from './launch.ts';
 
-test("N, K, M and Q typed into a focused terminal reach it and add nothing to the board, though each adds an item with the board focused", async () => {
+test("N, K and Q typed into a focused terminal reach it and add nothing to the board, though each adds an item with the board focused", async () => {
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, SHELL_ENV);
   try {
@@ -14,20 +14,20 @@ test("N, K, M and Q typed into a focused terminal reach it and add nothing to th
     const nodes = window.locator('.react-flow__node');
     const before = await nodes.count();
 
-    // The four keys are pressed one at a time at the prompt, and only show up in the command's output if the terminal got them.
+    // The three keys are pressed one at a time at the prompt, and only show up in the command's output if the terminal got them.
     await window.getByTestId('session-terminal').click();
     await window.keyboard.type('echo x$((40 + 2))');
-    for (const key of ['k', 'm', 'q', 'n']) await window.keyboard.press(key);
+    for (const key of ['k', 'q', 'n']) await window.keyboard.press(key);
     await window.keyboard.press('Enter');
-    await expect(screen(window)).toContainText('x42kmqn');
+    await expect(screen(window)).toContainText('x42kqn');
     expect(await nodes.count()).toBe(before);
     await expect(window.getByTestId('queue-card')).toHaveCount(0);
 
-    // Control: with the board focused, each of the four adds an item, so the checks above could fail.
+    // Control: with the board focused, each of the three adds an item, so the checks above could fail.
     await sessionWindow(window).getByRole('button', { name: 'Close session window' }).click();
     const pane = (await window.locator('.react-flow__pane').boundingBox())!;
     await window.mouse.click(pane.x + 400, pane.y + 300);
-    for (const [index, key] of ['n', 'k', 'm', 'q'].entries()) {
+    for (const [index, key] of ['n', 'k', 'q'].entries()) {
       await window.mouse.move(pane.x + 200 + index * 260, pane.y + 150);
       await window.keyboard.press(key);
       await expect(nodes).toHaveCount(before + index + 1);

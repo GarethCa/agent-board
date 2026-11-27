@@ -81,14 +81,17 @@ function freshOf(options: Pick<ScheduleOptions, 'harness' | 'model' | 'role' | '
   };
 }
 
-/** A clock in a line: its ref, its schedule in words, what it does, when it next runs and how its last run went. */
-function clockLine(refs: BoardRefs, data: ClockData, status: ClockStatus | undefined, id: string): string {
+/** The most characters of a schedule's prompt a list line shows, unless the full text is asked for. */
+const LIST_PROMPT_CHARS = 80;
+
+/** A clock in a line: its ref, its schedule in words, what it does, when it next runs and how its last run went, and its prompt (cut to `LIST_PROMPT_CHARS` unless `full`). */
+function clockLine(refs: BoardRefs, data: ClockData, status: ClockStatus | undefined, id: string, full = false): string {
   const agentName = (sessionId: string | null) =>
     sessionId === null ? 'no agent' : `${refs.of('agent', sessionId)} ${refs.board.agents.find((each) => each.sessionId === sessionId)?.name ?? '(gone)'}`;
   const does = data.does === 'message' ? `messages ${agentName(data.agent)}${data.hibernate === true ? ', hibernating it after each run' : ''}` : `starts a fresh ${data.fresh.role ?? 'agent'}${data.result === 'handoff' ? `, handing its result to ${agentName(data.handoffTo)}` : ''}`;
   const next = !data.enabled ? 'off' : status?.nextRunAt == null ? 'not set' : `next ${status.nextRunAt}`;
   const last = status === undefined ? undefined : lastRunWords(status, new Date());
-  return `${refs.of('item', id)}  ${cronWords(data.cron)} (${data.cron})  ${does}  ${next}${last === undefined ? '' : `  ${last}`}\n    ${JSON.stringify(data.prompt)}`;
+  return `${refs.of('item', id)}  ${cronWords(data.cron)} (${data.cron})  ${does}  ${next}${last === undefined ? '' : `  ${last}`}\n    ${JSON.stringify(full || [...data.prompt].length <= LIST_PROMPT_CHARS ? data.prompt : `${[...data.prompt].slice(0, LIST_PROMPT_CHARS - 1).join('').trimEnd()}…`)}`;
 }
 
 /** `schedule add`: a clock that messages an agent, or starts a fresh one each run, marked as made by the caller; or one of the caller's own (`--self`), made by no one. */
@@ -141,11 +144,11 @@ async function addedView(session: BoardSession, item: BoardItem): Promise<BoardV
 }
 
 /** `schedule list`: every clock on the board. */
-export async function listSchedules(session: BoardSession): Promise<BoardView> {
+export async function listSchedules(session: BoardSession, full = false): Promise<BoardView> {
   const refs = new BoardRefs(await readBoard(session.client));
   const statuses = await session.client.call('clock.list');
   const clocks = refs.board.items.filter((item) => item.kind === 'clock');
-  const lines = clocks.map((item) => clockLine(refs, item.data as unknown as ClockData, statuses.find((status) => status.id === item.id), item.id));
+  const lines = clocks.map((item) => clockLine(refs, item.data as unknown as ClockData, statuses.find((status) => status.id === item.id), item.id, full));
   return {
     text: lines.length === 0 ? 'No schedules on the board. `agent-board schedule add` makes one.' : lines.join('\n'),
     json: clocks.map((item) => ({ item, status: statuses.find((status) => status.id === item.id) ?? null })),

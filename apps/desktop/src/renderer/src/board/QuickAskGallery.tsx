@@ -6,7 +6,7 @@ import { DialogNote } from './DialogQuickAsk';
 import { HybridTile } from './HybridTile';
 import { QuickAsk, type QuickAskActions } from './QuickAsk';
 import { dialogAsk, type DialogPrompt } from './quick-ask';
-import { galleryAgent } from './TileGallery';
+import { galleryAgent, JUST_NOW } from './TileGallery';
 
 const AT = '2026-01-01T00:00:00.000Z';
 
@@ -21,7 +21,7 @@ const ask = (questions: AskQuestion[], answers: (AskAnswer | null)[], fields: Pa
   question: questions[0]!.question,
   options: questions[0]!.options,
   freeText: questions[0]!.freeText,
-  askedAt: AT,
+  askedAt: JUST_NOW,
   expiresAt: AT,
   onBoard: false,
   questions,
@@ -116,7 +116,7 @@ const claudePrompt = (fields: Partial<PermissionPrompt>): PermissionPrompt => ({
   toolName: 'AskUserQuestion',
   toolInput: {},
   subagent: null,
-  requestedAt: AT,
+  requestedAt: JUST_NOW,
   heldUntil: AT,
   asksInTerminal: true,
   sessionGrant: null,

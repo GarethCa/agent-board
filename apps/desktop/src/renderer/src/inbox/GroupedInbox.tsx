@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent, type MutableRefObject, type ReactNode } from 'react';
-import { continuesOnCredits, planPending, pullRequestOfUrl, shortIssueId, waitsOnUser, type Agent, type AgentAsk, type AgentFlag, type PlanSummary, type PullRequestRef, type Zone } from '@agent-board/daemon/protocol';
+import { continuesOnCredits, planPending, pullRequestOfUrl, shortIssueId, type Agent, type AgentAsk, type AgentFlag, type PlanSummary, type PullRequestRef, type Zone } from '@agent-board/daemon/protocol';
 import { InboxQuickAsk } from './InboxQuickAsk';
 import { StepsWaitBody } from './StepsWaitBody';
 import { githubBlocked, isOpenPullRequest, mergeGateBlocked } from '@agent-board/daemon/gate-rules';
-import { ArrowUp, CircleCheck, ClipboardList, Clock, Coins, Flag, FolderCheck, GitMerge, GitPullRequest, ListTodo, MessageCircleQuestion, MessageSquare, Play, SendHorizontal, ShieldQuestion, TriangleAlert, Undo2 } from 'lucide-react';
+import { ArrowUp, CheckCheck, CircleCheck, ClipboardList, Clock, Coins, Flag, FolderCheck, GitMerge, GitPullRequest, ListTodo, MessageCircleQuestion, MessageSquare, Play, SendHorizontal, ShieldQuestion, TriangleAlert, Undo2 } from 'lucide-react';
 import { Button, EmptyState, ErrorText, IconButton, Input, Kbd, Truncate, useToast } from '../ui';
 import { useAction } from '../use-action';
 import { PermissionRow } from './PermissionRow';
 import { RemoveAskRow } from './RemoveAskRow';
-import { askAnsweredElsewhere, heldPrompts, needsYouSections, problemKey, sinceText, stepsWaitKey, stillReadyToAccept, waitLeft, type NeedsYouRow, type NeedsYouRowKind } from '../../../shared/needs-you';
+import { askAnsweredElsewhere, needsYouSections, rowTicks, problemKey, sinceText, stepsWaitKey, stillReadyToAccept, waitLeft, type NeedsYouRow, type NeedsYouRowKind } from '../../../shared/needs-you';
 import { errorMessage } from '../../../shared/errors';
 import { PlanDecisionBar } from '../plan/PlanTab';
 import { planSurfaceOf } from '../session/tabs';
@@ -24,6 +24,8 @@ import { useNow } from './use-now';
 import { acceptLater, undoAccept, usePendingAccept } from './accept-later';
 import { useDismissedProblems } from './dismissed-problems';
 import { useAskAnswer } from './use-ask-answer';
+import { AlertLine, OpenAlertLink, openAlerted } from './alert-parts';
+import { DraftsList, useDraftsToReview } from './DraftsList';
 
 interface GroupedInboxProps {
   agents: readonly Agent[];
@@ -31,6 +33,8 @@ interface GroupedInboxProps {
   onOpen(agent: Agent): void;
   onSettings?(): void;
   heading?: boolean;
+  /** A row opened something in another place (a draft on its board), for a popover to close. */
+  onLeave?(): void;
 }
 
 /** Each kind's glyph on its neutral tile, and its word, so the kind never rests on the glyph alone. */
@@ -44,6 +48,7 @@ const KINDS: Record<NeedsYouRowKind, { word: string; glyph: ReactNode }> = {
   turn: { word: 'Finished replying', glyph: <MessageSquare aria-hidden /> },
   accept: { word: 'Ready to accept', glyph: <GitPullRequest aria-hidden /> },
   problem: { word: 'Problem', glyph: <TriangleAlert aria-hidden /> },
+  done: { word: 'Done', glyph: <CheckCheck aria-hidden /> },
 };
 
 /**
@@ -53,11 +58,12 @@ const KINDS: Record<NeedsYouRowKind, { word: string; glyph: ReactNode }> = {
  * between rows, Return on a row opens its agent and never answers, and keys 1–9 answer only a question. Its requests are
  * Classic's list's; the changes and the problems are its own.
  */
-export function GroupedInbox({ agents, zones, onOpen, onSettings, heading = true }: GroupedInboxProps) {
+export function GroupedInbox({ agents, zones, onOpen, onSettings, onLeave, heading = true }: GroupedInboxProps) {
   const shows = useNeedsYouShows();
+  const drafts = useDraftsToReview();
   const [dismissed, dismiss] = useDismissedProblems();
   const sections = needsYouSections(agents, shows, dismissed);
-  const now = useNow(sections.some(({ rows }) => rows.some(({ agent }) => heldPrompts(agent).length > 0 || waitsOnUser(agent) || agent.flag !== null)));
+  const now = useNow(sections.some(({ rows }) => rows.some(({ agent }) => rowTicks(agent))));
   return (
     <section className="inbox" data-testid="needs-you-inbox" data-grouped aria-label="Needs you">
       {heading && (
@@ -66,15 +72,18 @@ export function GroupedInbox({ agents, zones, onOpen, onSettings, heading = true
         </header>
       )}
       {sections.length === 0 ? (
-        <EmptyState framed={false} title="All caught up">
-          Nothing needs you.
-        </EmptyState>
+        // Drafts waiting are something to look at, so it never says nothing is.
+        drafts.length === 0 && (
+          <EmptyState framed={false} title="All caught up">
+            Nothing needs you.
+          </EmptyState>
+        )
       ) : (
         sections.map((section) => (
           <section key={section.id} className="inbox-group" data-testid="inbox-group" data-section={section.id} aria-label={section.title}>
             <h3 className="inbox-group-head">
               <span className="inbox-group-name">{section.title}</span>
-              <span className="inbox-group-count" aria-label={`${section.rows.length} waiting`}>
+              <span className="inbox-group-count" aria-label={`${section.rows.length} ${section.id === 'done' ? 'done' : 'waiting'}`}>
                 {section.rows.length}
               </span>
             </h3>
@@ -86,6 +95,7 @@ export function GroupedInbox({ agents, zones, onOpen, onSettings, heading = true
           </section>
         ))
       )}
+      <DraftsList drafts={drafts} {...(onLeave === undefined ? {} : { onOpened: onLeave })} />
       <footer className="inbox-foot" data-testid="inbox-foot" data-technical-detail>
         <span>{shows === 'explicit' ? 'Explicit requests only' : 'Explicit requests and finished turns'}</span>
         {onSettings && (
@@ -144,7 +154,7 @@ function Row({
 }) {
   // A flag stands until its session is opened, so a row with one is never read while it is listed.
   const flag = agent.flag?.to === 'user' ? agent.flag : null;
-  const read = flag === null && agent.seen;
+  const read = kind !== 'done' && flag === null && agent.seen;
   const open = () => onOpen(agent);
   const askKeys: RowKeys = useRef(null);
   return (
@@ -180,6 +190,8 @@ function Row({
           <AcceptBody agent={agent} gated={zone?.gateCommand != null} onOpen={open} />
         ) : kind === 'problem' ? (
           <ProblemBody agent={agent} onOpen={open} onDismiss={onDismiss} />
+        ) : kind === 'done' ? (
+          <DoneBody agent={agent} onOpen={open} />
         ) : (
           <RequestBody agent={agent} kind={kind} flag={flag} now={now} viewKey={viewKey} open={open} rowKeys={askKeys} />
         )}
@@ -481,6 +493,25 @@ function AcceptActions({ agent, number, pullRef, gated, onOpen }: { agent: Agent
       <p className="inbox-row-meta" data-testid="inbox-accept-why">
         {why ?? mergePlanText({ ...cleanup, comment: cleanup.comment && issue !== undefined }, { agent: agent.name, branch: agent.branch, issue })}
       </p>
+    </>
+  );
+}
+
+/**
+ * An agent's alert that something is done: its line, how many unread alerts before it it stands in place of, its link
+ * (opened in the browser) and Open. Opening the agent reads it, and the row goes.
+ */
+function DoneBody({ agent, onOpen }: { agent: Agent; onOpen(): void }) {
+  const alert = agent.alert!;
+  return (
+    <>
+      <AlertLine alert={alert} className="inbox-row-what" />
+      <div className="inbox-item-actions">
+        {alert.link !== null && <OpenAlertLink link={alert.link} primary />}
+        <Button size="sm" variant={alert.link === null ? 'primary' : 'secondary'} onClick={() => openAlerted(agent.sessionId, onOpen)}>
+          Open
+        </Button>
+      </div>
     </>
   );
 }

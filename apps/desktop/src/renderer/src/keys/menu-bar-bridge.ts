@@ -30,21 +30,25 @@ export interface MenuBarWindow {
   /** Tells main the window's state. */
   report(state: MenuBarState): void;
   /** Presses a binding's key, where its handler hears it. */
-  press(entry: KeyBinding): void;
+  /** `byKey`: its accelerator was pressed, and the menu had it first; else its item was clicked. */
+  press(entry: KeyBinding, byKey: boolean): void;
   now(): number;
   /** Calls `run` soon, once however often it is asked before then. */
   later(run: () => void): void;
 }
 
-/** What a part of the window says it has, for the menu bar's items to follow: the board, a selection, an arrow selected. */
-export type MenuBarCondition = 'board' | 'selection' | 'arrows';
+/**
+ * What a part of the window says it has, for the menu bar's items to follow: the board, a selection, an arrow selected,
+ * a session window shown on the board.
+ */
+export type MenuBarCondition = 'board' | 'selection' | 'arrows' | 'sessionWindow';
 
 export function createMenuBarBridge(window: MenuBarWindow) {
   const sections: Record<MenuBarSection, Map<symbol, { entries: readonly ModelEntry[]; rows: string }>> = { agent: new Map(), project: new Map() };
   const actions = new Map<MenuBarAction, { owner: symbol; run(): void; checked?: boolean }>();
   // A key's own action, run when its item is clicked, by the part that has it; the newest is the one run.
   const runners = new Map<string, Map<symbol, () => void>>();
-  const conditions: Record<MenuBarCondition, Set<symbol>> = { board: new Set(), selection: new Set(), arrows: new Set() };
+  const conditions: Record<MenuBarCondition, Set<symbol>> = { board: new Set(), selection: new Set(), arrows: new Set(), sessionWindow: new Set() };
   // The last key press the window had from the user, and the last accelerator the menu ran before the window had it.
   let lastPress: { at: number; press: Press } | undefined;
   let menuPress: { at: number; entry: KeyBinding } | undefined;
@@ -63,6 +67,7 @@ export function createMenuBarBridge(window: MenuBarWindow) {
     selection: conditions.selection.size > 0,
     arrows: conditions.arrows.size > 0,
     session: window.inSession(),
+    sessionWindow: conditions.sessionWindow.size > 0,
   });
 
   const state = (): MenuBarState => ({
@@ -165,12 +170,12 @@ export function createMenuBarBridge(window: MenuBarWindow) {
         }
         // The menu had it first: it is pressed where the key goes, and the window's own keydown, if it follows, is dropped.
         menuPress = { at: window.now(), entry };
-        window.press(entry);
+        window.press(entry, true);
         return;
       }
       const run = [...(runners.get(entry.id)?.values() ?? [])].at(-1);
       if (run !== undefined) run();
-      else window.press(entry);
+      else window.press(entry, false);
     },
   };
 }
@@ -190,6 +195,13 @@ const isMac = navigator.platform.startsWith('Mac');
 const SESSION_WINDOW = '.session-window';
 const OWN_SESSION_WINDOW = '.session-window-own-window';
 let bridge: MenuBarBridge | undefined;
+/** Whether the press being heard now is one the menu passes on from its accelerator: a key that is down. */
+let menuKeyDown = false;
+
+/** Whether a key press is a key that is down, the user's own or the menu's from its accelerator, not a menu item's click. */
+export function heldKey(event: Event): boolean {
+  return event.isTrusted || menuKeyDown;
+}
 
 /** Starts the window's half of the menu bar, for a window with the app's preload that handles `handles`. */
 export function startMenuBar(handles: WindowKeys): void {
@@ -200,7 +212,14 @@ export function startMenuBar(handles: WindowKeys): void {
     keys: (where, runnable) => menuBarKeys(isMac, extendedShortcuts(), isSimplified(), where, runnable),
     inSession: () => document.activeElement?.closest(SESSION_WINDOW) != null || document.querySelector(OWN_SESSION_WINDOW) !== null,
     report: (state) => api.report(state),
-    press: (entry) => pressTarget(entry).dispatchEvent(new KeyboardEvent('keydown', pressOf(entry, isMac))),
+    press: (entry, byKey) => {
+      menuKeyDown = byKey;
+      try {
+        pressTarget(entry).dispatchEvent(new KeyboardEvent('keydown', pressOf(entry, isMac)));
+      } finally {
+        menuKeyDown = false;
+      }
+    },
     now: () => performance.now(),
     later: (run) => void setTimeout(run, 50),
   });
@@ -256,6 +275,11 @@ export function useMenuBarWhen(condition: MenuBarCondition, on: boolean): void {
     bridge?.setWhen(condition, owner, on);
   }, [condition, owner, on]);
   useEffect(() => () => bridge?.setWhen(condition, owner, false), [condition, owner]);
+}
+
+/** Says the window has `condition` while `owner` says so, from outside a component: for a hold that outlives one. */
+export function setMenuBarWhen(condition: MenuBarCondition, owner: symbol, on: boolean): void {
+  bridge?.setWhen(condition, owner, on);
 }
 
 /**

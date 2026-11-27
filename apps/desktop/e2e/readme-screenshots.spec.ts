@@ -12,6 +12,7 @@ import { demoReady, makeRepo, pinPaths, pinRandomLooks, scenarioPicker, seedBoar
 import { openAddZone, removeDataDir, tempDataDir, test, tabText } from './launch.ts';
 import { ignorePointer, RENDER_ARGS, RENDER_ENV, settle, VIEWPORT } from './render.ts';
 import { scratch } from './scratch.ts';
+import { putDocsOnBoard } from './settings-helpers.ts';
 
 // The README's screenshots, made by `pnpm readme:screenshots`. The app runs on the fake claude with a seeded demo
 // board, drawn the way the visual spec draws it (./render.ts: software rendering, one device pixel per CSS pixel, motion
@@ -345,6 +346,8 @@ test('the README screenshots: a board in use, with a question, a document, a clo
   await listFinishedTurns(page);
   try {
     await page.setViewportSize(VIEWPORT);
+    // The shot shows a document's card, which only Settings' switch puts on the board.
+    await putDocsOnBoard(page);
     const zone = await page.evaluate(async (path) => {
       const result = await window.agentBoard.zones.addFolder(path, { x: 0, y: 0, width: 1700, height: 700, color: '#4c6ef5' });
       if (result.status !== 'added') throw new Error(result.message);

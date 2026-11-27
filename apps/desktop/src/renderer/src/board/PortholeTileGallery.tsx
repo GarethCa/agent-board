@@ -3,7 +3,7 @@ import { AGENT_TILE_SIZE } from '@agent-board/daemon/board-layout';
 import { GLANCE_STATES, type GlanceState } from './glance-tile';
 import { PortholeTile } from './PortholeTile';
 import type { TileData } from './tile';
-import { galleryAgent } from './TileGallery';
+import { galleryAgent, JUST_NOW } from './TileGallery';
 
 const AT = '2026-01-01T00:00:00.000Z';
 
@@ -20,7 +20,7 @@ export const PORTHOLE_TILES: Record<GlanceState, { agent: Agent; implementer?: T
     agent: {
       ...galleryAgent('needs-permission'),
       name: 'Clean the build',
-      permissions: [{ id: 'ask', toolName: 'Bash', toolInput: { command: 'rm -rf apps/desktop/out && pnpm --filter desktop build && pnpm --filter daemon build' }, subagent: null, requestedAt: AT, heldUntil: null, asksInTerminal: false, sessionGrant: null, dialog: null, plan: null, questions: null }],
+      permissions: [{ id: 'ask', toolName: 'Bash', toolInput: { command: 'rm -rf apps/desktop/out && pnpm --filter desktop build && pnpm --filter daemon build' }, subagent: null, requestedAt: JUST_NOW, heldUntil: null, asksInTerminal: false, sessionGrant: null, dialog: null, plan: null, questions: null }],
     },
   },
   failed: { agent: { ...galleryAgent('failed'), name: 'Migrate the schema', notice: 'Stopped while running the migration.' } },

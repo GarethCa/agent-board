@@ -89,6 +89,8 @@ export interface MenuBarWhere {
   arrows: boolean;
   /** The focus is in a session window, or this window is one. */
   session: boolean;
+  /** A session window is shown on the board in this window, wherever the focus is: ⌘W closes it. */
+  sessionWindow: boolean;
 }
 
 // The board's keys that act on what is selected, and do nothing with nothing selected.
@@ -98,10 +100,12 @@ const ON_SELECTION = new Set(['edit.duplicate', 'edit.delete', 'edit.front', 'ed
  * Whether a binding's key does anything where the window is now: none the window has no handler for, a session window's keys only with the focus in one (a
  * session window on the board, or a window that is one), the board's only in a window with the board, and its keys for
  * the selection only with something selected. So a menu item for one is greyed where its key would do something else,
- * such as ⌘D, which duplicates on the board and splits in a session window.
+ * such as ⌘D, which duplicates on the board and splits in a session window. Close Tab is on too while a session window
+ * is shown on the board, the focus anywhere: ⌘W closes that window, never the board's.
  */
 export function keyAvailable(entry: KeyBinding, where: MenuBarWhere): boolean {
   if (where.handles !== undefined && !windowHandles(where.handles, entry)) return false;
+  if (entry.id === 'window.closeTab') return where.session || where.sessionWindow;
   if (entry.section === 'window') return where.session;
   if (entry.id === 'edit.swapDirection') return where.board && where.arrows && !where.session;
   // Not while a session window has focus, where ⌘D and ⌘[ ⌘] are its own (Split Beside, Previous and Next).

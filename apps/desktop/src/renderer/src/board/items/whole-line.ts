@@ -1,5 +1,5 @@
 /**
- * A line cut short on a memory, a queue or a steps card shows whole while it is pointed at or focused: its full text
+ * A line cut short on a queue or a steps card shows whole while it is pointed at or focused: its full text
  * is laid over it, wrapped to its width, so no row under it moves. The overlay sits in the card's own node, so it
  * pans and zooms with the board and no list's edge clips it. A selected card wraps its lines in place instead
  * (app.css), so nothing there is cut short.
@@ -7,7 +7,7 @@
 
 /** The cells that cut a long line short with an ellipsis: the text itself, not the icon before it, so none moves. */
 const CUT_CELLS = [
-  '.listcard-rows :is(.listcard-value, .memory-key-name, .memory-doc-title b)',
+  '.listcard-rows .listcard-value',
   '.steps-rows :is(.steps-row-text, .steps-answer)',
   '.steps-now-text > :is(b, span)',
 ].join(', ');

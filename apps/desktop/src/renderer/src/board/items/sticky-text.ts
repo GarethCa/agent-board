@@ -1,5 +1,7 @@
 // A sticky note's text: the little markdown it understands, and the font size that fits it in the note.
 
+import { isWebUrl } from '@agent-board/daemon/web-url';
+
 /** How wide `text` is, in px, set in the note's font at `size` px. */
 export type MeasureText = (text: string, size: number) => number;
 
@@ -16,7 +18,7 @@ export type Block =
 const BULLET = /^\s*[-*+]\s+(.*)$/;
 const NUMBERED = /^\s*(\d+)[.)]\s+(.*)$/;
 /** Only https links, the only ones the app opens: anything else (`http:`, `javascript:`, `file:`) stays text. */
-const LINK = /^\[([^\]]+)\]\((https:\/\/[^\s)]+)\)/;
+const LINK = /^\[([^\]]+)\]\(([^\s)]+)\)/;
 const WORD_CHARACTER = /\w/;
 
 /**
@@ -58,7 +60,7 @@ function parseInline(text: string): Inline[] {
   while (i < text.length) {
     const rest = text.slice(i);
     const link = LINK.exec(rest);
-    if (link) {
+    if (link && isWebUrl(link[2]!)) {
       out.push({ type: 'link', href: link[2]!, children: parseInline(link[1]!) });
       i += link[0].length;
       continue;

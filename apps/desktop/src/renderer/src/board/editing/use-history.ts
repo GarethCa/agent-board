@@ -89,6 +89,21 @@ export const itemChange = (item: BoardItem, patch: UpdateItemParams): Change => 
   { type: 'item', item: patched(item, patch) },
 ];
 
+/** An item's delete, with the connectors that went with it, for the undo history: undone, it is made again with them. */
+export const deleteChanges = (item: BoardItem, connectors: readonly Connector[]): Change[] => [
+  [historyKey.item(item.id), { type: 'item', item }, null],
+  ...connectors.map((connector): Change => [historyKey.connector(connector.id), { type: 'connector', connector }, null]),
+];
+
+/**
+ * The undo step for an item an agent deleted (`item.removed` with `undo`), on the main board: one step, as the user's
+ * own Delete is. None for any other removal, or one on a ticket's board, which has a history of its own.
+ */
+export function agentDeleteChanges(change: { type: string; undo?: { item: BoardItem; connectors: Connector[] } }): Change[] {
+  if (change.type !== 'item.removed' || change.undo === undefined || change.undo.item.ticket !== null) return [];
+  return deleteChanges(change.undo.item, change.undo.connectors);
+}
+
 export interface BoardHistory {
   /**
    * Records changes the user made. Everything recorded in one task (one drop, one delete of a selection) is one step;

@@ -80,9 +80,9 @@ export async function handOffWebTabs(target: WindowTarget): Promise<void> {
   await Promise.all(webIds.map((id) => window.agentBoard.webTabs.handOff(id).catch(() => {})));
 }
 
-/** Opening or focusing an agent's session counts as seeing what it asks. */
+/** Opening an agent's session counts as seeing what it asks, and reading its alert. */
 function markTargetSeen(target: WindowTarget) {
-  if (target.kind === 'session') markSeen(target.id);
+  if (target.kind === 'session') markSeen(target.id, true);
 }
 
 /** How long the windows must stay put before where they are gets saved. */

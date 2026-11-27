@@ -129,6 +129,7 @@ import {
   shapeOf,
   withConnector,
   withConnectorParams,
+  withoutConnectorsOn,
   createParamsOf,
 } from './connectors/endpoints';
 import { AddZonePopover } from './AddZonePopover';
@@ -172,7 +173,6 @@ import type { States } from './editing/history';
 import { SelectionBox, SnapGuides } from './editing/SelectionOverlays';
 import { useAskClaude } from './ask/AskClaude';
 import { SuggestionActionsContext, SuggestionGhosts, useSuggestionCommands } from './ask/SuggestionGhosts';
-import { MemoryReadPulses } from './items/MemoryReadPulses';
 import { DocumentCardsContext, type DocumentCards } from './items/DocumentNode';
 import { PlanCardsContext, type PlanCards } from './items/PlanNode';
 import { StepsLookupContext } from './items/StepsNode';
@@ -184,7 +184,7 @@ import { CREW_STOP_LINE, agentLine, externalEnded, externalLine, sameDelete, typ
 import { useEditing } from './editing/use-editing';
 import { renameDirect, renameKey, paneLabel, RenameRequestContext, type RenameTarget } from './rename';
 import { zoneDeleteText, type ZoneToDelete } from './editing/delete-zones';
-import { historyKey, itemChange, patched, useHistory, type BoardState, type Change, type DissolvedGroup } from './editing/use-history';
+import { agentDeleteChanges, deleteChanges, historyKey, itemChange, patched, useHistory, type BoardState, type Change, type DissolvedGroup } from './editing/use-history';
 import { cleanUpMessage, layoutChoiceStep, movedToDoneMessage, placedByHandPatch, placementStep, resizeMove, tileMoveStep, tileStepAction, zoneTidy } from './hand-moves';
 import { useSnapping } from './editing/use-snapping';
 import { keptOnBoard as keptOnBoardOf, tidySize, VIEW_FOLLOW_DELAY_MS } from './expanded';
@@ -794,6 +794,17 @@ function BoardView() {
     onShellChange,
     restoreView,
   });
+  // An agent's delete is one step the user can undo, as their own Delete is. The daemon deletes an item's connectors
+  // with it and says nothing of them, so they leave the board's list here: an undo then makes them again.
+  useEffect(
+    () =>
+      window.agentBoard.items.onChanged((change) => {
+        if (change.type === 'item.removed') setConnectors((current) => withoutConnectorsOn(current, change.id));
+        const changes = agentDeleteChanges(change);
+        if (changes.length > 0) history.record(changes);
+      }),
+    [history, setConnectors],
+  );
   /** The ticket's own board the window shows, zoomed into from its tile; null for the main board. */
   const boardLevel = useBoardLevel(loaded, agents);
   const levelRef = useRef(boardLevel.level);
@@ -943,7 +954,7 @@ function BoardView() {
   /** The board's layer, promoted while the camera moves (`moving-layer.ts`). */
   const [movingBoard] = useState(() => movingLayer(() => container.current));
   useEffect(() => () => movingBoard.dispose(), [movingBoard]);
-  // A line cut short on a memory, a queue or a steps card shows whole, laid over it, while it is pointed at or focused.
+  // A line cut short on a queue or a steps card shows whole, laid over it, while it is pointed at or focused.
   useEffect(() => (container.current === null ? undefined : installWholeLines(container.current)), []);
 
   // A notification's click opens its agent's session window, or brings it forward if it is popped out.
@@ -1066,9 +1077,11 @@ function BoardView() {
     () => ({
       expand(nodeId) {
         const subject = tileSubject(nodeId);
-        // Expanding it, or bringing it forward, is looking at the session.
-        if (subject?.kind === 'agent') markSeen(subject.id);
-        if (expandedRef.current.some((entry) => entry.id === nodeId)) return bringTileToFront(nodeId);
+        // Expanding it is opening the session, which reads its alert too. Bringing an expanded tile forward is a touch of
+        // what is shown already (a click in it, its terminal too): that reads none, as the alert shows only in the inbox.
+        const already = expandedRef.current.some((entry) => entry.id === nodeId);
+        if (subject?.kind === 'agent') markSeen(subject.id, !already);
+        if (already) return bringTileToFront(nodeId);
         // A chip has nothing to expand: it unfolds first.
         const chip = subject?.kind === 'agent' && agentsRef.current.some((agent) => agent.sessionId === subject.id && isFolded(agent, new Set(unfoldedRef.current)));
         if (chip) setUnfolded(nodeId, true);
@@ -1771,10 +1784,7 @@ function BoardView() {
       const joined = connectorsRef.current.filter((connector) => [connector.from, connector.to].some((end) => end.type === 'item' && end.id === id));
       // One abandoned as it was made (a text item left empty) leaves nothing to undo; any other delete is undoable.
       if (!abandoned || joined.length > 0 || !history.forgetCreation(historyKey.item(id))) {
-        history.record([
-          [historyKey.item(id), { type: 'item', item: known.data.item }, null],
-          ...joined.map((connector): Change => [historyKey.connector(connector.id), { type: 'connector', connector }, null]),
-        ]);
+        history.record(deleteChanges(known.data.item, joined));
       }
       const going = new Set(joined.map((connector) => connector.id));
       if (going.size > 0) setConnectors((current) => current.filter((connector) => !going.has(connector.id)));
@@ -2949,7 +2959,6 @@ function BoardView() {
       setClockEditing({ clockId, data: { ...clockData({}) } });
     },
     addSteps: (at) => void createItem('steps', screenToFlowPosition(at)),
-    addMemory: (at) => void createItem('memory', screenToFlowPosition(at)),
     addQueue: (at) => void createItem('queue', screenToFlowPosition(at)),
     addTodo: (at) => void createItem('todo', screenToFlowPosition(at)),
     startCrew: (name, at) => {
@@ -4083,7 +4092,6 @@ function BoardView() {
                               <ConnectorMarkers />
                               <SelectionBox onAsk={askClaude.open} />
                               <SuggestionGhosts />
-                              <MemoryReadPulses />
                               {askClaude.popover}
                               <SnapGuides guides={snapping.guides} />
                               {tool !== undefined && (
@@ -4134,7 +4142,22 @@ function BoardView() {
                                 }}
                               />
                             )}
-                            {prefabLevel !== undefined && <PrefabBoard key={prefabLevel.replaces ?? prefabLevel.prefab.name} start={prefabLevel} desk={desk} onEdited={prefabSaysEdited} onLeave={leavePrefab} />}
+                            {prefabLevel !== undefined && (
+                              <PrefabBoard
+                                key={prefabLevel.replaces ?? prefabLevel.prefab.name}
+                                start={prefabLevel}
+                                desk={desk}
+                                onEdited={prefabSaysEdited}
+                                onLeave={leavePrefab}
+                                onStart={(prefab, draft) => {
+                                  leavePrefab();
+                                  // Suggested in its drafter's zone, else the one in view, for the prompt box to show in its Zone.
+                                  const drafterZone = agentsRef.current.find((agent) => agent.sessionId === draft.drafterSession)?.zoneId;
+                                  const suggested = startableZones().find((zone) => zone.id === drafterZone) ?? zoneInView();
+                                  setCrewFlow({ kind: 'prompt', prefab, suggested });
+                                }}
+                              />
+                            )}
                             {handOffChoice !== undefined && (
                               <HandOffChooser
                                 at={handOffChoice.at}
@@ -4233,7 +4256,6 @@ function BoardView() {
             onDropTool={dropTool}
             onSticky={() => createItem('sticky', boardCentre())}
             onSteps={() => createItem('steps', boardCentre())}
-            onMemory={() => createItem('memory', boardCentre())}
             onQueue={() => createItem('queue', boardCentre())}
             onTodo={() => createItem('todo', boardCentre())}
             onRunInShell={startLooseShell}

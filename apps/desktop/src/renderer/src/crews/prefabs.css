@@ -1042,8 +1042,85 @@ body:has(.prefab-board) .ui-toasts {
   text-align: left;
 }
 
-button.prefab-draft-assumption:hover {
+button.prefab-draft-assumption:hover,
+.prefab-draft-agent:hover {
   background: var(--hover);
+}
+
+/* What the draft will start, folded away by Edit: its agents, its inputs, and its lines in words. */
+.prefab-draft-fold {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: var(--font-size-xs);
+  text-align: left;
+}
+
+.prefab-draft-fold > svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+}
+
+.prefab-draft-review {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1-5);
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--raised);
+  font-size: var(--font-size-sm);
+  line-height: var(--leading-snug);
+}
+
+.prefab-draft-agents,
+.prefab-draft-lines {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.prefab-draft-agent {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  padding: var(--space-1) var(--space-1-5);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+}
+
+.prefab-draft-agent > span,
+.prefab-draft-lines {
+  color: var(--text-soft);
+  font-size: var(--font-size-xs);
+}
+
+.prefab-draft-line {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: var(--font-size-xs);
+}
+
+.prefab-draft-label {
+  color: var(--muted);
+}
+
+.prefab-draft-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
 }
 
 /* Describe a crew: what the crew should do, and who drafts it. */

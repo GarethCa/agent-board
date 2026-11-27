@@ -96,7 +96,11 @@ export function registerNotifications(
     notify: (notification) =>
       notify(
         notification,
-        () => openAgent(notification.sessionId),
+        () => {
+          // A click on a Done banner reads its alert, wherever the agent is already shown.
+          if (notification.kind === 'done') void daemon.call('agent.markSeen', { sessionId: notification.sessionId, opened: true }).catch(() => {});
+          openAgent(notification.sessionId);
+        },
         (index) => answerBanner(notification, index, { answer: (params) => daemon.call('ask.answer', params), openAgent }),
       ),
     showState: (status) => appIcon.show(status),

@@ -28,7 +28,7 @@ Every channel answers only the app's own windows, with no check in the handler: 
 
 | Folder | What is in it |
 |---|---|
-| `board/` (about 210 files) | The canvas: tiles (`TileNode.tsx`, `tile*.ts`), zones (`ZoneNode.tsx`, `zone-*.ts`), shelves, folding, characters, flow edges, dialogs. `Board.tsx` puts it together; `use-board-data.ts` holds what it shows. Subfolders: `agent-view/` (an open agent's view: its header, tabs, panes and ⋯, the one its pop-up, expanded tile and own window draw), `items/` (notes, documents, memories, queues, steps, clocks, links), `connectors/`, `editing/`, `ask/`. |
+| `board/` (about 210 files) | The canvas: tiles (`TileNode.tsx`, `tile*.ts`), zones (`ZoneNode.tsx`, `zone-*.ts`), shelves, folding, characters, flow edges, dialogs. `Board.tsx` puts it together; `use-board-data.ts` holds what it shows. Subfolders: `agent-view/` (an open agent's view: its header, tabs, panes and ⋯, the one its pop-up, expanded tile and own window draw), `items/` (notes, documents, queues, steps, clocks, links), `connectors/`, `editing/`, `ask/`. |
 | `session/` (about 85 files) | An agent's session window: terminal, chat, sidebar, tabs. |
 | `chrome/` | The app around the board: toolbar, Settings (`settings-ia.ts` lists every setting and where it lives). |
 | `ui/` | Shared controls: buttons, menus, popovers, fields. |

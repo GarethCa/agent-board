@@ -6,7 +6,10 @@ import { ZoneName } from '../board/ZoneName';
 import { keyText } from '../keys/registry';
 import { useAction } from '../use-action';
 import type { HelperKind } from '../board/ticket-tile';
+import { useRecentFolders } from '../board/RecentFolders';
 import { sheetStart, ticketPresets } from './ticket-sheet';
+import { RepoField } from './RepoField';
+import { needsRepo, ticketLookupHint, ticketStartBlock, type StartBox } from './start-checks';
 
 const HELPER_ICONS: Record<HelperKind, ReactNode> = {
   design: <PenLine aria-hidden />,
@@ -52,9 +55,15 @@ export function NewTicketDialog({ prefabs, prefab: asked, zones, zone: inZone, s
   const [prompt, setPrompt] = useState('');
   const [zoneId, setZoneId] = useState(inZone?.id ?? suggested?.id ?? zones[0]?.id);
   const zone = zones.find((each) => each.id === zoneId);
-  const noRepo = zone !== undefined && zone.repoRoot === null && zone.defaultRepo === null;
+  const noRepo = needsRepo(zone);
+  const [repo, setRepo] = useState<string>();
+  const { folders = [] } = useRecentFolders((found) => setRepo((current) => current ?? found[0]?.path));
   const { busy, error, run } = useAction();
-  const ready = preset !== undefined && zone !== undefined && !noRepo && (issue.trim() !== '' || prompt.trim() !== '');
+  const blocked = ticketStartBlock({ zones, zone, repo: noRepo ? repo : undefined, prompt, ticket: issue, preset: preset !== undefined });
+  const ready = blocked === undefined && preset !== undefined && zone !== undefined;
+  /** Why Start ticket is greyed, said next to the box that holds it back. */
+  const why = (box: StartBox) => blocked?.box === box && <Hint data-testid="start-blocked">{blocked.reason}</Hint>;
+  const lookup = ticketLookupHint(zones, issue);
   /** One start at a time, however fast ⌘↵ is pressed: two would start two tickets. */
   const starting = useRef(false);
 
@@ -68,6 +77,7 @@ export function NewTicketDialog({ prefabs, prefab: asked, zones, zone: inZone, s
             name: preset.name,
             ...(prompt.trim() === '' ? {} : { prompt: prompt.trim() }),
             zoneId: zone.id,
+            ...(noRepo && repo !== undefined ? { repo } : {}),
             ...(issue.trim() === '' ? {} : { issueId: issue.trim() }),
             ...(kind === preset.ticketChat ? {} : { ticketChat: kind }),
           })
@@ -141,11 +151,15 @@ export function NewTicketDialog({ prefabs, prefab: asked, zones, zone: inZone, s
             </Select>
           </Field>
         )}
-        {noRepo && <Hint>A ticket works on a branch: start it in a zone with a repo.</Hint>}
+        {zones.length > 0 && why('zone')}
+        {noRepo && <RepoField repo={repo} folders={folders} onRepo={setRepo} browseTitle="Choose the repo for this ticket" />}
+        {why('repo')}
         <Field label="Ticket">
-          <Input aria-label="Ticket" placeholder="Its issue, such as ABC-12" value={issue} autoFocus={zones.length > 0} onChange={(event) => setIssue(event.target.value)} />
+          <Input aria-label="Ticket" placeholder="Its issue or its link, such as ABC-12" value={issue} autoFocus={zones.length > 0} onChange={(event) => setIssue(event.target.value)} />
         </Field>
+        {lookup !== undefined && <Hint>{lookup}</Hint>}
         <Textarea aria-label="Prompt" rows={3} placeholder="What should it do? Its issue says, if you leave this empty." value={prompt} onChange={(event) => setPrompt(event.target.value)} />
+        {zones.length > 0 && why('work')}
         <Fieldset legend="Ticket chat">
           <Choices aria-label="Ticket chat">
             <Choice
@@ -204,8 +218,8 @@ export function NewTicketDialog({ prefabs, prefab: asked, zones, zone: inZone, s
             ))}
           </div>
           {presets.length === 0 && <Hint>No prefab starts inside a ticket tile: make one in the crew library.</Hint>}
+          {presets.length > 0 && why('helpers')}
         </Fieldset>
-        {preset !== undefined && issue.trim() === '' && prompt.trim() === '' && <Hint>Give it its ticket, or say what it should do.</Hint>}
         {error && <ErrorText>{error}</ErrorText>}
       </div>
     </Dialog>

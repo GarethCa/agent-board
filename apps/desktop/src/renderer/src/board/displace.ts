@@ -529,7 +529,7 @@ export function displaced(
     };
     const bounds = { ...inside, right: room.width - padding, bottom: room.height - padding };
     // Only its tiles, crew frames and the notes and docs gathered to them are pushed as rows and columns. Any other
-    // item (a queue, a memory, one the user put down) moves only if the expanded tile is in its way, so one put down
+    // item (a queue, a to-do list, one the user put down) moves only if the expanded tile is in its way, so one put down
     // clear of it is drawn where it was put, and the tiles pushed make way for it.
     // So is a tile the user put down while the tile is open: it was saved where it was drawn, pushed already.
     const gridded = (id: string) => !wasPutDown(id) && (blockTiles.has(id) || isTile(id) || gathered(id));

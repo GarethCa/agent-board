@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { isAbsolute } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { finiteNumberParam, invalidParams, paramsObject, stringParam } from './params.ts';
+import { finiteNumberParam, invalidParams, optionalBooleanParam, paramsObject, stringParam } from './params.ts';
+import { itemConnectors } from './connectors.ts';
 import type { ImageStore } from './image-store.ts';
 import { imagesOf, type ImageSweeper } from './image-sweeper.ts';
 import { isObject } from './json.ts';
@@ -45,12 +46,13 @@ import {
 } from './protocol.ts';
 
 import type { RpcHandlers, RpcMethodError } from './rpc.ts';
-import { checkMemoryData, checkQueueData } from './memory-queue.ts';
+import { checkQueueData } from './queues.ts';
 import { checkStepsData } from './steps.ts';
 import { checkTodoData } from './todos.ts';
 import { STAGE_BOARD_KIND, stageBoardDataProblem } from './stage-board.ts';
 import { doneLineDataProblem } from './zone-clean-up.ts';
 import { zoneIdParam } from './tile-position.ts';
+import { isWebUrl } from './web-url.ts';
 
 type ItemMethods = Pick<DaemonMethods, Extract<keyof DaemonMethods, `item.${string}` | `image.${string}`>>;
 
@@ -156,7 +158,6 @@ const KIND_DATA: Record<BoardItemKind, (data: Record<string, unknown>) => void> 
     checkBoolean('a document card', data, 'collapsed');
   },
   steps: (data) => checkStepsData(data),
-  memory: (data) => checkMemoryData(data),
   queue: (data) => checkQueueData(data),
   todo: (data) => checkTodoData(data),
   stages: (data) => {
@@ -184,7 +185,7 @@ const KIND_DATA: Record<BoardItemKind, (data: Record<string, unknown>) => void> 
   },
   link: (data) => {
     const { url, title, domain, favicon, status } = data as Partial<Record<keyof LinkData, unknown>>;
-    if (typeof url !== 'string' || url.length > MAX_LINK_URL || !isHttpsUrl(url)) {
+    if (typeof url !== 'string' || url.length > MAX_LINK_URL || !isWebUrl(url)) {
       throw invalidParams(`a link card's url must be an https URL of at most ${MAX_LINK_URL} characters`);
     }
     for (const [name, value] of Object.entries({ title, domain })) {
@@ -284,14 +285,6 @@ const KIND_DATA: Record<BoardItemKind, (data: Record<string, unknown>) => void> 
   },
 };
 
-function isHttpsUrl(text: string): boolean {
-  try {
-    return new URL(text).protocol === 'https:';
-  } catch {
-    return false;
-  }
-}
-
 /** `data` as stored for an item of `kind`, once it passes the kind's check and the size cap; throws if it doesn't. */
 export function checkedData(kind: BoardItemKind, data: Record<string, unknown>): string {
   // A kind this daemon doesn't know (a newer app's) can be moved and deleted, but its data can't be checked, so not changed.
@@ -353,6 +346,7 @@ export function itemHandlers<Context>(
   const ticketChat = db.prepare('SELECT ticket_chat FROM agents WHERE session_id = ?');
   const connectorOn = db.prepare("SELECT 1 FROM connectors WHERE (from_type = 'item' AND from_id = ?1) OR (to_type = 'item' AND to_id = ?1) LIMIT 1");
   const remove = db.prepare('DELETE FROM board_items WHERE id = ?');
+  const connectorsOn = itemConnectors(db);
   const unenrichedLinks = db.prepare("SELECT id FROM board_items WHERE kind = 'link' AND json_extract(data, '$.domain') IS NULL");
   const zoneOrigin = db.prepare('SELECT x, y FROM zones WHERE id = ?');
   const stageBoardIn = db.prepare('SELECT id FROM board_items WHERE kind = ? AND zone_id = ? AND id != ?');
@@ -515,12 +509,15 @@ export function itemHandlers<Context>(
       return updated;
     },
     'item.delete': (params) => {
-      const id = stringParam(paramsObject(params), 'id');
+      const p = paramsObject(params);
+      const id = stringParam(p, 'id');
       const doomed = get(id);
+      // Read before it goes: the `connectors_leave_deleted_item` trigger takes its connectors with it.
+      const undo = optionalBooleanParam(p, 'undoable') === true ? { item: doomed, connectors: connectorsOn(id) } : undefined;
       // Its images stay through the grace period, so undoing the delete can make it again.
       for (const sha256 of imagesOf(doomed.data)) images.spare(sha256);
       remove.run(id);
-      broadcast({ type: 'item.removed', id, ticket: doomed.ticket }, doomed);
+      broadcast({ type: 'item.removed', id, ticket: doomed.ticket, ...(undo === undefined ? {} : { undo }) }, doomed);
       sweeper.sweep();
       return null;
     },

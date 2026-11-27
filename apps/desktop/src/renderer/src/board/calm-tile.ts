@@ -4,7 +4,7 @@
 import { continuesOnCredits, isOrchestratorRole, needsYouKind, permissionPrompt, planPending, questionPrompt, statusLine, type Agent, type ChecksState, type NeedsYouShows, type Shell } from '@agent-board/daemon/protocol';
 import { paneIds } from '@agent-board/daemon/pane-layout';
 import { inRepoCheckout } from '@agent-board/daemon/gate-rules';
-import { asksInWords, humanStatus, type HumanStatus, type ImplementerFacts } from '@agent-board/daemon/human-status';
+import { humanStatus, standsOut, TILE_CUE_WORDS, type HumanStatus, type HumanStatusReading, type ImplementerFacts } from '@agent-board/daemon/human-status';
 import { HARNESSES } from '../harness';
 import { stepsWaitLine, toolSummary } from '../../../shared/needs-you';
 import { panesLabel } from '../session/panes';
@@ -27,7 +27,7 @@ export interface CalmAction {
 /** An agent's calm tile: its status, a grey line of what it is doing or asks (null for nothing to say), and its button. */
 export interface CalmFace {
   status: HumanStatus;
-  /** Its status's word, when not the status's own: Stopped for one a restart stopped, which is Paused; Exited for one that exited on an error. */
+  /** Its status's word, when not the status's own: its cue's (Asks you, To review, Stopped), which nothing counts; Exited for one that exited on an error. */
   word?: string;
   line: string | null;
   action: CalmAction | null;
@@ -39,10 +39,13 @@ export interface CalmFace {
  */
 export function calmFace(agent: Agent, shows: NeedsYouShows, implementer?: ImplementerFacts | null): CalmFace {
   const reading = humanStatus(agent, shows, implementer);
+  // A cue that asks the user to look colours the tile as a need does, though nothing counts it.
+  const shown: HumanStatus = standsOut(reading) ? 'needs-you' : reading.status;
   // Its clock wakes it by itself, paused between runs or ended: Scheduled, as one at its prompt for its clock is.
-  const { status, detail } = reading.status !== 'needs-you' && clockWakes(agent) ? { status: 'scheduled' as const, detail: null } : reading;
-  const word = agent.state === 'stopped-by-restart' && status === 'paused' ? 'Stopped' : frozenKind(agent, shows) === 'exited' ? 'Exited' : undefined;
-  return { status, ...(word === undefined ? {} : { word }), line: lineOf(agent, detail), action: actionOf(agent, shows, status) };
+  const { status, detail } = shown !== 'needs-you' && clockWakes(agent) ? { status: 'scheduled' as const, detail: null } : { status: shown, detail: reading.detail };
+  const cue = status === shown ? reading.cue : null;
+  const word = cue !== null ? TILE_CUE_WORDS[cue].word : frozenKind(agent, shows) === 'exited' ? 'Exited' : undefined;
+  return { status, ...(word === undefined ? {} : { word }), line: lineOf(agent, detail), action: actionOf(agent, shows, { status, cue }) };
 }
 
 function lineOf(agent: Agent, detail: string | null): string | null {
@@ -66,15 +69,15 @@ function lineOf(agent: Agent, detail: string | null): string | null {
   return agent.status === null ? null : statusLine(agent.status);
 }
 
-function actionOf(agent: Agent, shows: NeedsYouShows, status: HumanStatus): CalmAction | null {
+function actionOf(agent: Agent, shows: NeedsYouShows, { status, cue }: Pick<HumanStatusReading, 'status' | 'cue'>): CalmAction | null {
+  if (cue === 'asks-in-words') return filled('open', 'Answer');
+  if (cue === 'pr-ready') return filled('pull-request', 'Review changes');
   if (status === 'needs-you') {
     const kind = needsYouKind(agent, shows);
     if (kind === 'permission') return filled('open', 'Review & allow');
     // Put on the board, it is answered on its card: the tile has no button for it.
     if (kind === 'asks') return agent.ask?.card != null ? null : filled('open', 'Answer');
     if (kind === 'plan') return filled('plan', 'Read the plan');
-    if (kind === null && agent.endedAt === null && agent.lastMessage !== null && asksInWords(agent.lastMessage)) return filled('open', 'Answer');
-    if (kind === null && agent.pullRequests.some((pr) => pr.state === 'open')) return filled('pull-request', 'Review changes');
     return filled('open', 'Open');
   }
   if (agent.startup?.failed === true) return bordered('retry', 'Try again');

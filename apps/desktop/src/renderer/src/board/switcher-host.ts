@@ -19,7 +19,7 @@ export interface SwitcherBoard {
  * The agent whose window the pick opens in, and what opens there:
  * - a reviewer opened beside (⇧↵), in its own window with the pull request it reviews beside it;
  * - else, opened beside, in the window of the agent selected;
- * - else a pull request, in the window of the agent whose it is.
+ * - else a pull request, in the window of the agent whose it is, and a document or hand-off doc in its agent's window.
  *
  * Undefined for none: a page opened alone, or with nothing to be beside, opens in a window of its own.
  */
@@ -31,6 +31,10 @@ export function switcherPick(surface: Surface, { agents, selected, beside, revie
     if (reviews !== undefined && reviewer !== undefined) return { host: reviewer, surface: reviews.surface };
     const host = picked === selected ? undefined : agents.find((agent) => agent.sessionId === selected);
     if (host !== undefined) return { host, surface };
+  }
+  if (surface.kind === 'document' || surface.kind === 'doc') {
+    const owner = agents.find((agent) => agent.sessionId === surface.sessionId);
+    if (owner !== undefined) return { host: owner, surface };
   }
   if (surface.kind === 'pr') {
     const key = pullRequestKey(surface);

@@ -1,4 +1,4 @@
-import type { NeedsYouKind } from '@agent-board/daemon/protocol';
+import { REQUEST_WORDS } from '@agent-board/daemon/protocol';
 import type { AppNotification } from './notifications-types';
 
 /** How many answers a banner lists under its Options: past that the question is for the agent's window. */
@@ -14,16 +14,6 @@ export interface Banner {
   answers: string[];
 }
 
-const KIND_WORDS: Record<NeedsYouKind, string> = {
-  permission: 'Permission',
-  asks: 'Question',
-  plan: 'Plan to review',
-  steps: 'Steps to answer',
-  todo: 'Your to-do',
-  flagged: 'Needs you',
-  turn: 'Finished',
-};
-
 /**
  * How a notification is drawn. Classic: its sentence and body, as ever. The Simplified design: as macOS draws a banner,
  * the agent, what kind of request, then the request, with a question's answers as its Options. A banner never allows:
@@ -36,7 +26,9 @@ export function bannerOf(notification: AppNotification, simplified: boolean): Ba
   // Past what a banner can list, none: the agent's window shows every choice, rather than a partial menu here.
   const answers = kind === 'asks' && ask !== undefined && ask.options.length <= MAX_ANSWERS ? ask.options : [];
   // The answers are buttons, so the question alone is the body.
-  return { title: name ?? title, subtitle: KIND_WORDS[kind], body: answers.length > 0 ? ask!.question : body, answers };
+  // An alert that something is done asks nothing: it is no request, and has no request's words.
+  const subtitle = kind === 'done' ? 'Done' : REQUEST_WORDS[kind].tag;
+  return { title: name ?? title, subtitle, body: answers.length > 0 ? ask!.question : body, answers };
 }
 
 /** What answering a banner needs of the daemon and the app. */

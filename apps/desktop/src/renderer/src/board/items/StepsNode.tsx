@@ -107,7 +107,7 @@ export const StepsNode = memo(function StepsNode({ id, data, selected: picked, d
 
   const [full, setFull] = useState(false);
   const openFull = useCallback(() => setFull(true), []);
-  // ⌘↵ on the selected card opens it in full, as on a memory.
+  // ⌘↵ on the selected card opens it in full, as on a queue.
   useEffect(() => {
     if (!selected || full || steppedIn || writing) return undefined;
     const onKey = (event: KeyboardEvent) => {

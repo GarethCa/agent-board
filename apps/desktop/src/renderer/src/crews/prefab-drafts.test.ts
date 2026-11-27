@@ -77,6 +77,17 @@ describe('a draft’s note on its board', () => {
     expect(html).toContain('It runs on weekdays only.');
   });
 
+  it('says what it will start, with Start, Edit and Discard, Save to library beside them', () => {
+    const summary = { agents: [{ id: 'm1', name: 'Builder', role: 'Builder', model: 'Claude · opus · high' }], inputs: ['Your prompt'], lines: ['Your prompt starts Builder.'] };
+    const html = renderToStaticMarkup(createElement(PrefabDraftNote, { assumptions: [], drafter: 'Captain', summary, onSave: () => undefined, onStart: () => undefined, onDiscard: () => undefined, onPick: () => undefined }));
+    expect(html).toContain('What it will start');
+    expect(html).toContain('Builder · Claude · opus · high');
+    expect(html).toContain('Your prompt starts Builder.');
+    for (const id of ['prefab-draft-start', 'prefab-draft-edit', 'prefab-draft-discard', 'prefab-draft-save']) expect(html).toContain(`data-testid="${id}"`);
+    // Discard asks first, so nothing is deleted on one click.
+    expect(html).not.toContain('Discard it for good?');
+  });
+
   it('shows no list when the drafter assumed nothing', () => {
     const html = renderToStaticMarkup(createElement(PrefabDraftNote, { assumptions: [], drafter: 'Captain', onSave: () => undefined, onPick: () => undefined }));
     expect(html).not.toContain('assumed');

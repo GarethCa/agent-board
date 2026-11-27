@@ -92,7 +92,7 @@ describe('the board MCP over HTTP', () => {
     // A live agent's own session may act on other agents: it is told so, and listed the control tools.
     expect((await mcp.initialize()).instructions).toBe(`${BOARD_MCP_INSTRUCTIONS} ${ORCHESTRATOR_INSTRUCTIONS}`);
     expect(await mcp.listTools()).toEqual([
-      'whoami', 'board', 'usage', 'connections', 'handoff', 'ask', 'present_plan', 'show_doc', 'set_status', 'needs_you', 'open_pr', 'record_pr', 'record_doc', 'pin', 'unpin', 'steps_new', 'steps_read', 'steps_update', 'memory_new', 'memory_read', 'memory_update', 'queue_new', 'queue_read', 'queue_update', 'remind', 'remind_read', 'remind_update', 'set_page', 'clock_add', 'clock_set', 'save_clock_template', 'list_clock_templates', 'remove_clock_template',
+      'whoami', 'board', 'usage', 'connections', 'handoff', 'ask', 'present_plan', 'show_doc', 'set_status', 'rest', 'needs_you', 'alert', 'open_pr', 'record_pr', 'record_doc', 'pin', 'unpin', 'steps_new', 'steps_read', 'steps_update', 'queue_new', 'queue_read', 'queue_update', 'remind', 'remind_read', 'remind_update', 'set_page', 'clock_add', 'clock_set', 'save_clock_template', 'list_clock_templates', 'remove_clock_template',
       ...ORCHESTRATOR_MCP_TOOLS.map((tool) => tool.name),
     ]);
     // It adds a clock of its own.
@@ -243,21 +243,5 @@ describe('the board MCP over HTTP', () => {
     answer();
     for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read()) seen += chunk.value;
     expect(seen).toMatch(/^(: keep-alive\n\n)+event: message\ndata: \{.*"text":"Redis".*\}\n\n$/);
-  });
-
-  it('keeps text whole as a document with memory_update, lists it by its title, and confirms an entry', async () => {
-    const { agentWithToken, mcpAs } = await httpDaemon();
-    const mcp = mcpAs((await agentWithToken('one')).token);
-    expect((await mcp.callTool('memory_new', { title: 'Handbook' })).isError).toBe(false);
-    await mcp.callTool('memory_update', { memory: 'Handbook', action: 'add', text: 'db-host: pg.internal' });
-    const added = await mcp.callTool('memory_update', { memory: 'Handbook', action: 'add', document: 'Runbook', text: 'Step one\nStep two' });
-    expect(added.text).toContain('Remembered Runbook in “Handbook”');
-    expect((await mcp.callTool('memory_update', { memory: 'Handbook', action: 'add', document: 'Runbook', key: 'x', text: 'y' })).text).toContain('a document is its title and text');
-
-    const listed = await mcp.callTool('memory_read', { memory: 'Handbook' });
-    expect(listed.text).toContain('document “Runbook”');
-    expect(listed.text).not.toContain('Step two');
-    expect((await mcp.callTool('memory_read', { memory: 'Handbook', entry: 'Runbook' })).text).toContain('Step two');
-    expect((await mcp.callTool('memory_update', { memory: 'Handbook', action: 'confirm', entry: 'db-host' })).text).toMatch(/^Confirmed db-host in “Handbook”/);
   });
 });

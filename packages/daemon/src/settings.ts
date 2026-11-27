@@ -10,6 +10,7 @@ import {
   HARNESS_EFFORTS,
   HELD_PAYLOAD_STORAGE,
   NEEDS_YOU_SHOWS,
+  NOTIFICATION_DEFAULTS,
   type DaemonMethods,
   type DaemonSettings,
   type Effort,
@@ -27,18 +28,18 @@ const DEFAULT_SETTINGS: DaemonSettings = {
   compactWindow: 0,
   clickableLinks: true,
   clickableLinksFromEnvironment: null,
-  needsYouShows: 'explicit',
-  notifications: true,
-  notifyInFront: false,
+  ...NOTIFICATION_DEFAULTS,
+  agentsRest: true,
   arrangeSpacing: DEFAULT_ARRANGE_SPACING,
   keepWebLogins: true,
+  placeDocTiles: false,
   defaultEffort: null,
   roleEfforts: {},
   boardToolsOnly: [],
 };
 
 /** The settings that are switches. */
-const SWITCHES = ['clickableLinks', 'notifications', 'notifyInFront', 'keepWebLogins'] as const;
+const SWITCHES = ['clickableLinks', 'agentsRest', 'notifications', 'notifyInFront', 'alertBanners', 'keepWebLogins', 'placeDocTiles'] as const;
 
 export interface SettingsHost {
   get(): DaemonSettings;

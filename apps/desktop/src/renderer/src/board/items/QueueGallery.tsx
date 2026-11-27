@@ -1,6 +1,6 @@
 import { QUEUE_CARD_SIZE, LIST_CARD_FOLDED_SIZE, LIST_CARD_MIN_SIZE, ZONE_COLORS, QUEUE_LATER, type QueueJob } from '@agent-board/daemon/protocol';
 import { PopoverPreview } from '../../ui';
-import { jobBrief } from '@agent-board/daemon/memory-lines';
+import { jobBrief } from '@agent-board/daemon/queue-lines';
 import type { Agent } from '@agent-board/daemon/protocol';
 import type { NeedsYouEntry } from '../../../../shared/needs-you';
 import { AGENT_TILE_SIZE } from '@agent-board/daemon/board-layout';

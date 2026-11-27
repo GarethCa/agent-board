@@ -13,6 +13,8 @@ export interface HeldGroup {
 /** The remove ask's row, as data: the heading, the held-back tiles to tick, and the rest, cut to a few. */
 export interface RemoveAskList {
   heading: string;
+  /** What goes with each, after the heading: a tile's worktree and branch; nothing more for a board item. */
+  withEach: string;
   /** Still running, with a live agent it started, or with a reviewer that stays: each stays unless the user ticks it. */
   held: HeldGroup[];
   /** How many tiles are held back, in all. */
@@ -31,14 +33,18 @@ const pastCut = (tiles: readonly RemoveAskTile[]) => (tiles.length <= REMOVE_ASK
 /** `tiles`, the first few unless `open`. */
 const cut = (tiles: RemoveAskTile[], open: boolean) => (open || pastCut(tiles) === 0 ? tiles : tiles.slice(0, REMOVE_ASK_SHOWN));
 
-export function removeAskList(ask: Pick<RemoveAsk, 'tiles'>, open: boolean, heldOpen = false): RemoveAskList {
+export function removeAskList(ask: Pick<RemoveAsk, 'tiles' | 'items'>, open: boolean, heldOpen = false): RemoveAskList {
   const going = ask.tiles.filter((tile) => tile.held === null);
   const byWhy = new Map<string, RemoveAskTile[]>();
   for (const tile of ask.tiles) if (tile.held !== null) byWhy.set(tile.held, [...(byWhy.get(tile.held) ?? []), tile]);
   const groups = [...byWhy];
   const count = ask.tiles.length;
   return {
-    heading: `Wants to remove ${count === 1 ? 'a tile' : `${count} tiles`} it didn't start`,
+    heading:
+      ask.items === true
+        ? `Wants to delete ${count === 1 ? 'a board item' : `${count} board items`} it didn't make`
+        : `Wants to remove ${count === 1 ? 'a tile' : `${count} tiles`} it didn't start`,
+    withEach: ask.items === true ? '' : ', each with its worktree and branch',
     held: groups.map(([why, tiles]) => ({ why, tiles: cut(tiles, heldOpen) })),
     heldCount: count - going.length,
     heldMore: groups.reduce((sum, [, tiles]) => sum + pastCut(tiles), 0),
@@ -51,7 +57,7 @@ export function removeAskList(ask: Pick<RemoveAsk, 'tiles'>, open: boolean, held
 export const heldIds = (ask: Pick<RemoveAsk, 'tiles'>): string[] => ask.tiles.filter((tile) => tile.held !== null).map((tile) => tile.sessionId);
 
 /** The Allow button's words: what pressing it removes, the ticked held-back tiles with the rest. */
-export function allowWords(ask: Pick<RemoveAsk, 'tiles'>, ticked: ReadonlySet<string>): string {
+export function allowWords(ask: Pick<RemoveAsk, 'tiles' | 'items'>, ticked: ReadonlySet<string>): string {
   const going = ask.tiles.filter((tile) => tile.held === null || ticked.has(tile.sessionId)).length;
-  return going === 0 ? 'Allow' : `Remove ${going}`;
+  return going === 0 ? 'Allow' : `${ask.items === true ? 'Delete' : 'Remove'} ${going}`;
 }

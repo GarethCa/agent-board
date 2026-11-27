@@ -16,7 +16,7 @@ export function readsItem(agent: Agent, item: Pick<BoardItem, 'zoneId' | 'ticket
   return item.zoneId === null || item.zoneId === agent.zoneId;
 }
 
-/** Why an agent doesn't read `item`, `what` naming it ("that memory"), when `readsItem` says it doesn't. */
+/** Why an agent doesn't read `item`, `what` naming it ("that queue"), when `readsItem` says it doesn't. */
 export function notReadBecause(what: string, item: Pick<BoardItem, 'ticket'>): string {
   return typeof item.ticket === 'string' ? `${what} is on a ticket's board you are not on` : `${what} is in a zone you are not in`;
 }

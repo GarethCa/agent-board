@@ -134,6 +134,12 @@ export function connectorRepointer(
   };
 }
 
+/** The connectors with an end on item `id`: what goes with it when it is deleted. */
+export function itemConnectors(db: DatabaseSync): (id: string) => Connector[] {
+  const on = db.prepare("SELECT * FROM connectors WHERE (from_type = 'item' AND from_id = ?1) OR (to_type = 'item' AND to_id = ?1) ORDER BY created_at, rowid");
+  return (id) => (on.all(id) as unknown as ConnectorRow[]).map(toConnector);
+}
+
 /**
  * The `connector.*` RPC handlers, backed by the `connectors` table. A connector goes with an object at either end
  * through the table's triggers, which don't announce it. Every other change is broadcast to every client.

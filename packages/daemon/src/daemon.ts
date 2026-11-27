@@ -9,6 +9,7 @@ import {
   createGitHubTracker,
   createKeychainStore,
   createLinearTracker,
+  keychainAvailability,
   ghLogin,
   mergePullRequest,
   pullRequestOfUrl,
@@ -32,6 +33,7 @@ import { createCaptureHost } from './zone-captures.ts';
 import { createLayoutMeasures } from './layout-measures.ts';
 import { layoutHandlers, newAgentPlacer, spotBesideAgent } from './orchestrator-layout.ts';
 import { createTodoHost } from './todos.ts';
+import { REMOVE_MEMORIES, saveRemovedMemories, tellRemovedMemories } from './removed-memories.ts';
 import { agentNoteAuthor } from './agent-notes.ts';
 import { createOrchestratorHost, type OrchestratorHost } from './orchestrators.ts';
 import { connectorHandlers } from './connectors.ts';
@@ -45,8 +47,9 @@ import { createAskHost } from './asks.ts';
 import { createRemoveAskStore } from './remove-asks.ts';
 import { createDocumentHost } from './documents.ts';
 import { createItemOwners } from './item-owners.ts';
+import { itemDeleteHandlers } from './item-deletes.ts';
 import { createStepsHost } from './steps.ts';
-import { createMemoryQueueHost, type MemoryQueueHost } from './memory-queue.ts';
+import { createQueueHost, type QueueHost } from './queues.ts';
 import { createCrewFlags } from './crew-flags.ts';
 import { runGit } from './git.ts';
 import { itemHandlers, itemsLeavingZone } from './items.ts';
@@ -55,7 +58,10 @@ import { hashToken, newToken } from './tokens.ts';
 import { acquireDaemonLock } from './lock.ts';
 import { createHarnessPaths } from './harness-path.ts';
 import { adoptLoginShellPath } from './login-path.ts';
-import { migrate, schemaVersion as readSchemaVersion } from './migrate.ts';
+import { createLaunchSettingsKeeper } from './launch-settings-keychain.ts';
+import { createLaunchSettingsStore } from './launch-settings-store.ts';
+import { MIGRATIONS, migrate, schemaVersion as readSchemaVersion } from './migrate.ts';
+import { scrubBackups } from './schema-rollback.ts';
 import { readTestOverrides } from './test-overrides.ts';
 import { NOTHING_AFTER_RESTART, resumeAfterRestart } from './resume-after-restart.ts';
 import { daemonPaths, listenOnSocket, prepareDataDir, prepareSocketDir } from './paths.ts';
@@ -215,8 +221,9 @@ export interface DaemonOptions {
    */
   hookShimPath?: string;
   /**
-   * Where tracker credentials live: the OS keychain by default, or the macOS keychain file
-   * `$AGENT_BOARD_KEYCHAIN` (for tests).
+   * Where tracker credentials and agents' launch settings live: the OS keychain by default, or the macOS keychain file
+   * `$AGENT_BOARD_KEYCHAIN` (for tests). Without it, launch settings go to files in the data dir where the system has
+   * no keychain (`launch-settings-store.ts`).
    */
   credentials?: CredentialStore;
   /**
@@ -341,7 +348,22 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
   let ingress: HookIngress | undefined;
   let external: ExternalSessionHost | undefined;
   try {
-    db = openDatabase(paths.database, log);
+    const opened = openDatabase(paths.database, paths.dataDir, log);
+    db = opened.db;
+    const credentials = options.credentials ?? createKeychainStore({ keychain: overrides.keychain });
+    // Before any agent launches: each launch reads its launch settings from what this read of the keychain kept.
+    const launchSettings = createLaunchSettingsKeeper({
+      db,
+      credentials:
+        options.credentials ??
+        createLaunchSettingsStore({
+          keychain: credentials,
+          availability: keychainAvailability({ keychain: overrides.keychain }),
+          dir: join(options.dataDir, 'launch-settings-values'),
+        }),
+      log,
+    });
+    await launchSettings.open();
     const liveSessions = db.prepare('SELECT count(*) AS n FROM sessions WHERE ended_at IS NULL');
     const sessionForToken = db.prepare('SELECT id FROM sessions WHERE hook_token_sha256 = ? AND ended_at IS NULL');
     // An ended agent's pane's shell is no session to the user: it neither keeps the daemon up nor stops it stopping.
@@ -358,16 +380,16 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     /** Who else hears each broadcast, in seq order, once they are made. */
     const toDevices: { send?: (entry: RingEntry) => void } = {};
     /** The kinds an agent reads only in its scope (ADR-0010): every other item is every connection's to hear. */
-    const SCOPED_KINDS: ReadonlySet<BoardItem['kind']> = new Set(['steps', 'memory', 'queue', 'crew', 'todo']);
+    const SCOPED_KINDS: ReadonlySet<BoardItem['kind']> = new Set(['steps', 'queue', 'crew', 'todo']);
     /**
-     * Whether `client` hears `event`. An item's change or removal of a scoped kind (or a memory's read) reaches it only if its `item.list`
-     * would list the item; a removal whose item isn't known, or one sent before the rule is set, reaches only a
+     * Whether `client` hears `event`. An item's change or removal of a scoped kind reaches it only if its `item.list` would
+     * list the item; a removal whose item isn't known, or one sent before the rule is set, reaches only a
      * connection that speaks for no agent.
      */
     const hears = (client: Socket, connection: BoardConnection, event: DaemonEvent, about: BoardItem | undefined): boolean => {
       if (client.destroyed) return false;
       if (event.type !== 'session.exited' && streamOnly.has(client)) return false;
-      if (event.type !== 'item.updated' && event.type !== 'item.removed' && event.type !== 'memory.readBy') return true;
+      if (event.type !== 'item.updated' && event.type !== 'item.removed') return true;
       if (connection.boardSession === undefined) return true;
       const item = event.type === 'item.updated' ? event.item : about;
       if (item !== undefined && !SCOPED_KINDS.has(item.kind)) return true;
@@ -437,16 +459,18 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         // After the agent reads as ended, so what it is told of a plan it left waits for it to be resumed. One coming
         // back keeps a plan it left waiting for the user.
         asks.end(session.id, keepsWork);
+        // The user can't answer the ask of an orchestrator that isn't live: it ends, and it is told so for its resume.
+        removeAsks.ended(session.id);
         reviews.onExit(session.id, keepsWork);
         // The jobs it took go back on their queues, unless it is coming back.
-        void late.memoryQueue?.sessionEnded(session.id, keepsWork).catch((error: unknown) => log(`could not put back the jobs ${session.id} held: ${(error as Error).message}`));
+        void late.queueHost?.sessionEnded(session.id, keepsWork).catch((error: unknown) => log(`could not put back the jobs ${session.id} held: ${(error as Error).message}`));
         shells.onSessionExit(session);
       },
     });
 
     // Late-bound: made once the daemon's methods are, and told of sessions ending from then on.
     const late: {
-      memoryQueue?: MemoryQueueHost;
+      queueHost?: QueueHost;
       crewCards?: CrewCards;
       /** The crews, told of files an agent's harness says it edited. */
       crewEdits?: (sessionId: string, files: string[]) => void;
@@ -520,8 +544,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     }
     const trackers = createTrackerHost({
       db,
-      credentials:
-        options.credentials ?? createKeychainStore({ keychain: overrides.keychain }),
+      credentials,
       providers: options.trackers ?? defaultTrackers(gh, overrides.linearApiUrl),
     });
     /** The tracker of the zone of the agent's own repo, wherever its tile sits. */
@@ -653,7 +676,9 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       changed: (sessionId, began) => agents.waitChanged(sessionId, began),
       touched: (sessionId) => agents.waitChanged(sessionId, false),
       worktree: (sessionId) => agents.get(sessionId)?.worktree,
+      // A plan reaches the user through the inbox: its card goes on the board only as Settings allows.
       addCard: (sessionId) => addPlanCard(sessionId),
+      placesCards: () => settings.get().placeDocTiles,
       wrote: (sessionId, path) => documents.userWrote(sessionId, path),
       // The decision on a plan left with the command line is typed at the agent's prompt as a document's edit is.
       told: (sessionId, text, typed) => documents.tell(sessionId, text, typed),
@@ -664,8 +689,12 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       },
       log,
     });
-    // The tiles orchestrators ask the user to remove: the orchestrator is `waiting` while one waits.
-    const removeAsks = createRemoveAskStore({ changed: (sessionId, began) => agents.waitChanged(sessionId, began) });
+    // The tiles orchestrators ask the user to remove: the orchestrator is `waiting` while a call waits on one.
+    // An answer no call waits on is typed at its prompt, as a left plan's decision is.
+    const removeAsks = createRemoveAskStore({
+      changed: (sessionId, began) => agents.waitChanged(sessionId, began),
+      told: (sessionId, text) => documents.tell(sessionId, text),
+    });
     // The documents agents show the user: a file each, read live, the user's edits told to the agent at its prompt.
     const documents = createDocumentHost({
       db,
@@ -673,6 +702,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       agent: (sessionId) => agents.get(sessionId),
       tell: (sessionId, text) => agents.tell(sessionId, text),
       addCard: (document) => addDocumentCard(document),
+      placesCards: () => settings.get().placeDocTiles,
       keptDir: join(options.dataDir, 'documents'),
       log,
     });
@@ -684,6 +714,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       worktreesDir: options.worktreesDir ?? defaultWorktreesDir(),
       reviewsDir: join(options.dataDir, 'reviews'),
       launchSettingsDir: join(options.dataDir, 'launch-settings'),
+      launchSettings,
       groupsDir,
       scratchDir: options.scratchDir ?? (process.env.AGENT_BOARD_SCRATCH_DIR || join(homedir(), '.agent-board', 'scratch')),
       // The zone table is made below; agents remember folders only once they spawn.
@@ -696,6 +727,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       defaultEffort: (harness, role) => defaultEffort(settings.get(), harness, role),
       boardToolsOnly: (role) => boardToolsOnly(settings.get(), role),
       clickableLinks: () => settings.get().clickableLinks,
+      agentsRest: () => settings.get().agentsRest,
       env: options.agentEnv ?? process.env,
       shell,
       shellArgs,
@@ -719,7 +751,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         const finalMessage = agents.finalMessage(sessionId);
         if (finalMessage !== undefined) void selectionAsks.finished(sessionId, finalMessage);
         clocks.turnEnded(sessionId);
-        late.memoryQueue?.turnEnded(sessionId);
+        late.queueHost?.turnEnded(sessionId);
         ticketChats.handedOff(sessionId);
       },
       onTurnCut: (sessionId, why) => clocks.turnCut(sessionId, why),
@@ -730,7 +762,8 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         flowEdges.turnBoundary(sessionId);
         // A new turn began, or its last one ended with no `Stop`: no call of its waits on the answer now.
         asks.drop(sessionId);
-        removeAsks.drop(sessionId);
+        // A remove ask stays up for the user, its answer told as a message.
+        removeAsks.leave(sessionId);
       },
       onRemoving: (sessionId) => {
         ticketChats.removed(sessionId);
@@ -973,8 +1006,8 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       waitChanged: (sessionId, began) => (began ? agents.waitChanged(sessionId, true) : agents.announce(sessionId)),
       askWaits: (sessionId, askId, cardId) => asks.waitsOnCard(sessionId, askId, cardId),
     });
-    // Memories and queues: their contents in their own tables, their scope as a steps card's.
-    const memoryQueue = createMemoryQueueHost({
+    // Queues: their jobs in their own table, their scope as a steps card's.
+    const queueHost = createQueueHost({
       sessions,
       agents,
       shells,
@@ -985,9 +1018,8 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       // As `agent.delete` without force: the agent's or its helpers' unsaved work refuses it before any goes.
       close: (sessionId, why) => closer.closeAgent(sessionId, { why, unsaved: 'refuse' }).then(() => {}),
       place: (sessionId, size) => spotBesideAgent(call, sessionId, size),
-      broadcast,
     });
-    late.memoryQueue = memoryQueue;
+    late.queueHost = queueHost;
     // A running crew's card: the crew loop's own record of it, as a board item.
     const crewCards = createCrewCards({
       sessions,
@@ -1009,7 +1041,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       call: (method, params) => call(method, params),
       place: (sessionId, size) => spotBesideAgent(call, sessionId, size, 'below'),
     });
-    late.visibleItems = (list, connection) => todos.visible(crewCards.visible(memoryQueue.visible(steps.visible(list, connection), connection), connection), connection);
+    late.visibleItems = (list, connection) => todos.visible(crewCards.visible(queueHost.visible(steps.visible(list, connection), connection), connection), connection);
     const captures = createCaptureHost({ ...(options.captureTimeoutMs === undefined ? {} : { timeoutMs: options.captureTimeoutMs }) });
     const measures = createLayoutMeasures({ mayReport: captures.serves, ...(options.measureWaitMs === undefined ? {} : { waitMs: options.measureWaitMs }) });
     // A steps card an ask was put on, taken off the board, gives the ask back to its agent's tile.
@@ -1108,16 +1140,16 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         if (params?.allBoards !== undefined && context !== DAEMON_ITSELF) throw invalidParams("allBoards is the daemon's own: list one board, or a ticket's");
         return late.visibleItems!(items['item.list'](params, context) as BoardItem[], context);
       },
-      // A memory's or queue's count is its rows': an undo that sends a card's whole data back may carry an older one. A
+      // A queue's count is its rows': an undo that sends a card's whole data back may carry an older one. A
       // crew card's data is its crew's, whoever makes or changes the card.
-      'item.create': async (params, context) => memoryQueue.recounted(await items['item.create'](crewCards.creating(params), context), true),
+      'item.create': async (params, context) => queueHost.recounted(await items['item.create'](crewCards.creating(params), context), true),
       // A queue an agent holds a job from stays the agents': the user's takes none.
       'item.update': async (params, context) => {
-        memoryQueue.checkUpdate(params);
+        queueHost.checkUpdate(params);
         // The agents a queue's drain started are the daemon's to keep: the user's drain sheet, or an undo, sends an old list.
-        memoryQueue.keepStarted(params);
+        queueHost.keepStarted(params);
         const data = (params as { data?: Record<string, unknown> } | null)?.data;
-        return memoryQueue.recounted(await items['item.update'](crewCards.updating(params), context), data !== undefined && ('count' in data || 'drain' in data));
+        return queueHost.recounted(await items['item.update'](crewCards.updating(params), context), data !== undefined && ('count' in data || 'drain' in data));
       },
       'item.delete': (params, context) => {
         crewCards.checkDelete(params);
@@ -1155,6 +1187,14 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         warn: log,
       }),
       ...itemOwners.handlers<SessionSubscriber & BoardConnection>(),
+      // An agent deletes a board item as the user's Delete does, asking the user for one it didn't make.
+      ...itemDeleteHandlers<SessionSubscriber & BoardConnection>({
+        db,
+        access: orchestrators.access,
+        call: async (method, params) => handlers[method](params as never, DAEMON_ITSELF) as never,
+        removeAsks,
+        visible: (list, connection) => late.visibleItems!(list, connection),
+      }),
       ...captures.handlers,
       ...measures.handlers,
       ...roleTemplates.defaultRoleHandlers<SessionSubscriber & BoardConnection>(orchestrators.access, () => zoneTable.list()),
@@ -1185,7 +1225,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       ...clocks.agentHandlers<SessionSubscriber & BoardConnection>({ sessions, agents, shells }),
       ...clockTemplates.handlers<SessionSubscriber & BoardConnection>({ sessions, agents, shells, logActivity: orchestrators.logActivity }),
       ...steps.handlers<SessionSubscriber & BoardConnection>(),
-      ...memoryQueue.handlers<SessionSubscriber & BoardConnection>(),
+      ...queueHost.handlers<SessionSubscriber & BoardConnection>(),
       ...todos.handlers<SessionSubscriber & BoardConnection>(),
       ...usage.handlers<SessionSubscriber & BoardConnection>(),
       // The user's Delete: forced, or keeping the worktree, its helpers go the same way; else unsaved work refuses it.
@@ -1285,12 +1325,15 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     void zoneRules.start().catch((error: unknown) => log(`could not lay out the zones by their rules: ${(error as Error).message}`));
     // A deleted agent's jobs go back: one paused or stopped by a restart kept them, and has no exit to come.
     listeners.push((event) => {
-      if (event.type === 'agent.removed') void memoryQueue.releaseGone(event.sessionId).catch((error: unknown) => log(`could not put back the jobs ${event.sessionId} held: ${(error as Error).message}`));
+      if (event.type === 'agent.removed') void queueHost.releaseGone(event.sessionId).catch((error: unknown) => log(`could not put back the jobs ${event.sessionId} held: ${(error as Error).message}`));
     });
     void itemOwners.sweep().catch((error: unknown) => log(`could not take the notes of agents gone off the board: ${(error as Error).message}`));
-    void memoryQueue.releaseGone().catch((error: unknown) => log(`could not put back the jobs of agents gone: ${(error as Error).message}`));
+    void queueHost.releaseGone().catch((error: unknown) => log(`could not put back the jobs of agents gone: ${(error as Error).message}`));
     void crewCards.load().catch((error: unknown) => log(`could not read the crews' cards: ${(error as Error).message}`));
     // No ask's call outlives the daemon: a card still marked as waited on says its ask stopped.
+    if (opened.removedMemories !== undefined) {
+      void tellRemovedMemories(db, call, opened.removedMemories, new Date()).catch((error: unknown) => log(`could not say where the memories were saved: ${(error as Error).message}`));
+    }
     void steps.endStaleAsks().catch((error: unknown) => log(`could not mark steps cards as no longer waited on: ${(error as Error).message}`));
     void steps.load().catch((error: unknown) => log(`could not read the steps cards agents wait on: ${(error as Error).message}`));
     // An agent ending, going or coming back (resumed): its waits follow, and so does whether its crew's sets are the user's.
@@ -1567,7 +1610,8 @@ function sessionHandlers(
   };
 }
 
-function openDatabase(path: string, log: (message: string) => void): DatabaseSync {
+/** Opens and migrates the database, and the path of the file the board's memories were saved to, if they were just now. */
+function openDatabase(path: string, dataDir: string, log: (message: string) => void): { db: DatabaseSync; removedMemories: string | undefined } {
   const db = new DatabaseSync(path);
   try {
     db.exec('PRAGMA journal_mode = WAL');
@@ -1575,12 +1619,21 @@ function openDatabase(path: string, log: (message: string) => void): DatabaseSyn
     db.exec('PRAGMA busy_timeout = 5000');
     // What is deleted is overwritten, so a held payload's copy, once delivered or dropped, doesn't linger in the file.
     db.exec('PRAGMA secure_delete = ON');
-    const { from, to, backup } = migrate(db);
+    // Just before the migration that drops them, at the schema they were written for: if this can't write the file,
+    // the daemon doesn't start, and nothing is lost.
+    let removedMemories: string | undefined;
+    const { from, to, backup } = migrate(db, MIGRATIONS, (migration) => {
+      if (migration.name !== REMOVE_MEMORIES) return;
+      removedMemories = saveRemovedMemories(db, dataDir, new Date());
+      if (removedMemories !== undefined) log(`saved the board's memories to ${removedMemories} before removing them`);
+    });
     if (backup !== undefined) log(`backed up the database at schema version ${from} to ${backup}, then migrated it to ${to}`);
+    const scrubbed = scrubBackups(db);
+    if (scrubbed > 0) log(`took the launch settings' values out of ${scrubbed} database backup${scrubbed === 1 ? '' : 's'}, keeping their names`);
     if (from > to) {
       log(`the database is at schema version ${from}, newer than this daemon knows (${to}); opening it, as every newer migration is marked backward-safe`);
     }
-    return db;
+    return { db, removedMemories };
   } catch (error) {
     db.close();
     throw error;

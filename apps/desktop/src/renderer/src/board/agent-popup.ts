@@ -2,6 +2,7 @@
 // and when it shows. Pure, so they are unit-tested.
 import type { Agent } from '@agent-board/daemon/protocol';
 import type { SessionWindows } from '../windows/session-windows';
+import type { WindowedTiles } from './expanded';
 import type { RowTab } from './popup-tab-row';
 import { drawnIn, drawsAsTicket, heldInCard, tileNodeId } from './tiles';
 import { popUpViewKey } from '../session/session-view';
@@ -184,4 +185,12 @@ export function poppedOutOf(agents: readonly Agent[], windows: SessionWindows): 
 export function windowedTiles(windows: SessionWindows, poppedUp: string | undefined): string[] {
   const ids = windows.map((entry) => tileNodeId(entry.kind === 'shell' ? 'shell' : 'agent', entry.id));
   return poppedUp === undefined ? ids : [...ids, tileNodeId('agent', poppedUp)];
+}
+
+/** Where the sessions of `windows` and the pop-up of `poppedUp` are, as `windowHolds` reads them: open, or docked too. */
+export function windowedOf(windows: SessionWindows, poppedUp: string | undefined): WindowedTiles {
+  return {
+    open: new Set(windowedTiles(windows.filter((entry) => entry.placement !== 'docked'), poppedUp)),
+    all: new Set(windowedTiles(windows, poppedUp)),
+  };
 }

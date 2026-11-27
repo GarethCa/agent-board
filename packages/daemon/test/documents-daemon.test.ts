@@ -8,9 +8,10 @@ import { connectTestClient, recordEvents, startTestDaemon, tempDataDir, tempRepo
 const SIZE = { cols: 120, rows: 40 };
 
 /** A daemon whose agents run the fake harnesses' `ask-plan` scenario, which shows documents by prompt. */
-async function docDaemon(dataDir = tempDataDir(), worktreesDir = tempDataDir()) {
+async function docDaemon(dataDir = tempDataDir(), worktreesDir = tempDataDir(), { placeDocTiles = false } = {}) {
   const daemon = await startTestDaemon({ dataDir, worktreesDir, agentEnv: fakeHarnessEnv({ scenario: 'ask-plan', home: tempDataDir() }) });
   const client = await connectTestClient(daemon);
+  if (placeDocTiles) await client.call('settings.set', { placeDocTiles: true });
   const recorder = recordEvents(client);
   const zone = await client.call('zone.add', { path: tempRepo(), x: 0, y: 0, name: 'storefront' });
   const start = async (prompt: string, harness: Harness = 'claude') => {
@@ -43,8 +44,16 @@ describe('documents an agent shows the user through the board MCP', () => {
     expect((await until(agent.sessionId, (seen) => seen.docs[0]?.version === 2)).docs[0]).toMatchObject({ writtenBy: 'user' });
   });
 
-  it('puts a card beside the agent’s tile for a document shown on the board, and takes it away with the agent', async () => {
+  it('puts no card on the board by default for a document asked for there: it is listed with its agent', async () => {
     const { client, recorder, start, until } = await docDaemon();
+    const agent = await start('Doc on the board: docs/release-plan.md');
+    await recorder.waitForText(agent.sessionId, 'listed under Made on your sidebar (the user keeps docs off the board');
+    expect((await until(agent.sessionId, (seen) => seen.docs.length === 1)).docs[0]).toMatchObject({ title: 'Release 1.4 plan' });
+    expect((await client.call('item.list')).filter((item) => item.kind === 'document')).toEqual([]);
+  });
+
+  it('puts a card beside the agent’s tile for a document shown on the board when Settings puts docs there, and takes it away with the agent', async () => {
+    const { client, recorder, start, until } = await docDaemon(undefined, undefined, { placeDocTiles: true });
     const agent = await start('Doc on the board: notes/bench.html');
     await recorder.waitForText(agent.sessionId, 'a Document tab in your window and a card beside your tile');
     const shown = (await until(agent.sessionId, (seen) => seen.docs.length === 1)).docs[0]!;
@@ -60,7 +69,7 @@ describe('documents an agent shows the user through the board MCP', () => {
 
   it('passes a document card to another agent: it outlives its first agent’s worktree, and goes with its new holder', async () => {
     const dataDir = tempDataDir();
-    const { client, recorder, start, until } = await docDaemon(dataDir);
+    const { client, recorder, start, until } = await docDaemon(dataDir, undefined, { placeDocTiles: true });
     const writer = await start('Doc on the board: docs/release-plan.md');
     await recorder.waitForText(writer.sessionId, 'a card beside your tile');
     const shown = (await until(writer.sessionId, (seen) => seen.docs.length === 1)).docs[0]!;
@@ -89,7 +98,7 @@ describe('documents an agent shows the user through the board MCP', () => {
   it('keeps a card collapsed to a bar, and the document when the card is taken off the board, across a daemon restart', async () => {
     const dataDir = tempDataDir();
     const worktreesDir = tempDataDir();
-    const first = await docDaemon(dataDir, worktreesDir);
+    const first = await docDaemon(dataDir, worktreesDir, { placeDocTiles: true });
     const agent = await first.start('Doc on the board: docs/release-plan.md');
     await first.recorder.waitForText(agent.sessionId, 'a card beside your tile');
     const shown = (await first.until(agent.sessionId, (seen) => seen.docs.length === 1)).docs[0]!;

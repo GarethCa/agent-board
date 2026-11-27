@@ -1,7 +1,7 @@
 // What the ⌘K switcher lists: grouped before anything is typed, one ranked fuzzy list after. Pure, so the
 // grouping and the ranking are unit-tested.
 import { plural } from '@agent-board/daemon/text-words';
-import { needsYouNow, permissionPrompt, planPending, pullRequestKey, pullRequestOfUrl, questionPrompt, type Agent, type BoardItem, type LibraryPrefab, type NeedsYouShows, type OpenPullRequest, type PullRequestRef, type Shell, type Zone } from '@agent-board/daemon/protocol';
+import { needsYouNow, permissionPrompt, planPending, pullRequestKey, pullRequestOfUrl, questionPrompt, REQUEST_WORDS, type Agent, type BoardItem, type LibraryPrefab, type NeedsYouShows, type OpenPullRequest, type PullRequestRef, type Shell, type Zone } from '@agent-board/daemon/protocol';
 import type { Placement, SessionWindows } from '../windows/session-windows';
 import { extendedShortcuts } from '../keys/extended-shortcuts';
 import { binding, isActive, keyText, type KeyId } from '../keys/registry';
@@ -9,6 +9,9 @@ import { SETTINGS_GROUPS } from './settings-ia';
 import { controlsIn, drawnSections, searchable } from './settings-search';
 import { itemKindTitle } from '../board/items/kind-labels';
 import type { ReviewedPullRequest } from '../review/reviews';
+import type { DocSurface, DocumentSurface } from '@agent-board/daemon/window-layout';
+import { docSection } from '../session/sidebar-records';
+import { docName, docSurfaceOf, documentSurfaceOf } from '../session/tabs';
 
 /** What a row of the switcher is about: a setting's row opens the Settings window at its section (`group.section`). */
 export type SpotlightSubject =
@@ -17,6 +20,8 @@ export type SpotlightSubject =
   | { kind: 'zone'; zone: Zone }
   /** A note or document on a ticket's own board, and that ticket's chat's session id: whose board it is. */
   | { kind: 'item'; item: BoardItem; ticket: string }
+  /** A document an agent showed, or a hand-off doc it recorded, to open as a tab of its window. */
+  | { kind: 'document'; surface: DocumentSurface | DocSurface; agent: Agent }
   /** A pull request, anyone's, to open in a PR tab. */
   | { kind: 'pr'; pr: SpotlightPullRequest }
   /** A web page, to open in a web tab. */
@@ -24,7 +29,7 @@ export type SpotlightSubject =
   | { kind: 'setting'; pane: string }
   | { kind: 'action'; action: SpotlightAction }
   /** A crew from the prefab named, the library with none, or with `describe`, Describe a crew. */
-  | { kind: 'crew'; prefab: string | null; describe?: true }
+  | { kind: 'crew'; prefab: string | null; describe?: true; draft?: string }
   | { kind: 'filter'; prefix: FilterPrefix };
 
 /** A pull request a row opens: by its repo and number, and its page. */
@@ -154,6 +159,8 @@ export interface SpotlightSources {
   canStartAgent?: boolean;
   /** The crew prefabs to find, yours first. */
   prefabs?: readonly Pick<LibraryPrefab, 'name' | 'purpose'>[];
+  /** The crews agents drafted for the user, found by name wherever ⌘K is, to open on their board; none if unset. */
+  drafts?: readonly { id: string; name: string; drafter: string }[];
   /** Whether the Simplified design is on, so the settings it alone draws are found; Classic's if unset. */
   simplified?: boolean;
   /** Whether the extended keyboard shortcuts work, so an action's key is shown only while it does; the setting's own by default. */
@@ -213,7 +220,7 @@ const ACTIONS: readonly { action: SpotlightAction; name: string; sub: string; al
  * Actions group, with New agent (where one can start) and Open Settings, comes above Settings. Classic has no Windows
  * group, and its Actions group holds Park a thought alone.
  */
-export function spotlightGroups(query: string, { agents, shells, zones, shows, windows = [], current, canStartAgent = false, prefabs = [], simplified = false, windowsListed = simplified, extended = extendedShortcuts(), ticketItems = [], openPullRequests = [], pastedPullRequest, reviewed }: SpotlightSources): SpotlightGroup[] {
+export function spotlightGroups(query: string, { agents, shells, zones, shows, windows = [], current, canStartAgent = false, prefabs = [], drafts = [], simplified = false, windowsListed = simplified, extended = extendedShortcuts(), ticketItems = [], openPullRequests = [], pastedPullRequest, reviewed }: SpotlightSources): SpotlightGroup[] {
   const zoneName = (zoneId: string | null) => (zoneId === null ? 'Loose' : (zones.find((zone) => zone.id === zoneId)?.name ?? 'Loose'));
   // A helper is on its ticket's board: its ticket is where it is, as a zone is another agent's.
   const placeOf = (agent: Agent) => (agent.ticket === null ? undefined : ticketName(agent.ticket, agents)) ?? zoneName(agent.zoneId);
@@ -291,6 +298,17 @@ export function spotlightGroups(query: string, { agents, shells, zones, shows, w
     consider(shell.name, [{ text: zoneName(shell.zoneId), weight: FIELD_WEIGHTS.zone, label: 'zone' }], (marks) => shellRow(shell, zoneName, marks));
   }
   for (const zone of zones) consider(zone.name, [], (marks) => zoneRow(zone, agents, tiles, marks));
+  // The documents agents showed, by title, and the hand-off docs they recorded, by file: listed with their agents, not
+  // on the board, so ⌘K finds them.
+  for (const agent of agents) {
+    for (const document of agent.docs) {
+      consider(document.title, [], (marks) => ({ key: `document:${document.id}`, subject: { kind: 'document', surface: documentSurfaceOf(document), agent }, name: document.title, sub: joined('Document', agent.name, placeOf(agent)), marks }));
+    }
+    for (const { item } of docSection(agent).rows) {
+      const name = docName(item.path);
+      consider(name, [], (marks) => ({ key: `doc:${agent.sessionId}:${item.path}`, subject: { kind: 'document', surface: docSurfaceOf(agent.sessionId, item.path), agent }, name, sub: joined('Hand-off doc', agent.name, placeOf(agent)), marks }));
+    }
+  }
   for (const item of ticketItems) {
     const ticket = typeof item.ticket === 'string' ? item.ticket : null;
     const where = ticket === null ? undefined : ticketName(ticket, agents);
@@ -299,7 +317,7 @@ export function spotlightGroups(query: string, { agents, shells, zones, shows, w
     consider(words, [], (marks) => ({ key: `item:${item.id}`, subject: { kind: 'item', item, ticket }, name: words, sub: joined(itemKindTitle(item.kind), where), marks }));
   }
   ranked.sort((a, b) => b.score - a.score || a.row.name.localeCompare(b.row.name));
-  const groups: SpotlightGroup[] = [{ label: matchedWindows.length > 0 ? WINDOWS_GROUP : undefined, rows: matchedWindows.map(({ row }) => row) }, { rows: ranked.map(({ row }) => row) }, { label: ACTIONS_GROUP, rows: actionRows(wanted, canStartAgent, simplified, extended) }, { label: CREWS_GROUP, rows: canStartAgent ? crewRows(wanted, prefabs) : [] }, { label: SETTINGS_GROUP, rows: settingRows(wanted, simplified) }];
+  const groups: SpotlightGroup[] = [{ label: matchedWindows.length > 0 ? WINDOWS_GROUP : undefined, rows: matchedWindows.map(({ row }) => row) }, { rows: ranked.map(({ row }) => row) }, { label: ACTIONS_GROUP, rows: actionRows(wanted, canStartAgent, simplified, extended) }, { label: CREWS_GROUP, rows: [...draftRows(wanted, drafts), ...(canStartAgent ? crewRows(wanted, prefabs) : [])] }, { label: SETTINGS_GROUP, rows: settingRows(wanted, simplified) }];
   return groups.filter((group) => group.rows.length > 0);
 }
 
@@ -321,6 +339,18 @@ function crewRows(wanted: string, prefabs: NonNullable<SpotlightSources['prefabs
   for (const { name, purpose } of prefabs) consider(`crew:${name}`, name, name, purpose, `crew prefab ${purpose}`);
   consider('crew-library', null, 'Crew library', 'Every crew prefab, to start, edit or make one', 'prefab team');
   consider('crew-describe', null, 'Describe a crew…', 'An agent drafts a crew prefab from what you say', 'prefab draft team write', true);
+  return found.sort((a, b) => b.score - a.score).map(({ row }) => row);
+}
+
+/** The drafts whose name holds `wanted`, or all of them for `draft`: picking one opens it on its board, to review. */
+function draftRows(wanted: string, drafts: NonNullable<SpotlightSources['drafts']>): SpotlightRow[] {
+  const found: { score: number; row: SpotlightRow }[] = [];
+  for (const { id, name, drafter } of drafts) {
+    const named = fuzzyMatch(wanted, name, true);
+    const other = fuzzyMatch(wanted, `crew prefab draft ${drafter}`, true);
+    const score = Math.max(named?.score ?? 0, (other?.score ?? 0) * FIELD_WEIGHTS.also);
+    if (score > 0) found.push({ score, row: { key: `crew-draft:${id}`, subject: { kind: 'crew', prefab: null, draft: id }, name, sub: `Draft by ${drafter}, to review`, marks: named?.positions ?? [] } });
+  }
   return found.sort((a, b) => b.score - a.score).map(({ row }) => row);
 }
 
@@ -638,11 +668,11 @@ function zoneRow(zone: Zone, agents: readonly Agent[], shells: readonly Shell[],
 function askOf(agent: Agent): string {
   // A permission comes before questions: it is what Needs you lists the agent for.
   const prompt = permissionPrompt(agent) ?? questionPrompt(agent);
-  if (prompt?.questions != null) return `asks: ${prompt.questions[0]?.question ?? 'questions'}`;
-  if (prompt !== undefined) return `permission: ${prompt.toolName}`;
-  if (agent.ask !== null) return `asks: ${agent.ask.question}`;
-  if (planPending(agent)) return 'plan to review';
-  if (agent.flag !== null) return `flagged: ${agent.flag.reason}`;
+  if (prompt?.questions != null) return `${REQUEST_WORDS.asks.tag}: ${prompt.questions[0]?.question ?? 'questions'}`;
+  if (prompt !== undefined) return `${REQUEST_WORDS.permission.tag}: ${prompt.toolName}`;
+  if (agent.ask !== null) return `${REQUEST_WORDS.asks.tag}: ${agent.ask.question}`;
+  if (planPending(agent)) return REQUEST_WORDS.plan.tag;
+  if (agent.flag !== null) return `${REQUEST_WORDS.flagged.tag}: ${agent.flag.reason}`;
   return agent.lastMessage?.replace(/\s+/g, ' ').trim() || 'waiting for you';
 }
 

@@ -3,6 +3,7 @@
 import { runGh, type GhOptions } from './gh.ts';
 import { listOf, objectOf, parseJson } from './shape.ts';
 import { TrackerError } from './tracker.ts';
+import { isWebUrl } from './web-link.ts';
 import type { PullRequestRef } from './pull-request-ref.ts';
 import { checksState, pullRequestState, type ChecksState, type PullRequestState } from './pull-requests.ts';
 
@@ -288,7 +289,7 @@ function checkOf(check: Record<string, unknown>): PullRequestCheck {
   const name = String((status ? check.context : check.name) ?? 'check');
   const link = String((status ? check.targetUrl : check.detailsUrl) ?? '');
   const state = SKIPPED_CONCLUSIONS.has(String(check.conclusion)) ? 'skipped' : checksState([check]);
-  return { name, state: state === 'none' ? 'passing' : state, ...(link.startsWith('https://') ? { url: link } : {}) };
+  return { name, state: state === 'none' ? 'passing' : state, ...(isWebUrl(link) ? { url: link } : {}) };
 }
 
 /**

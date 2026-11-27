@@ -56,7 +56,7 @@ test("an agent's shelves open at the window's leading edge, resize on their hand
     await expect.poll(async () => Math.abs(await offset()) < 0.5).toBe(true);
     // Its status line says who started it and, once its turn has ended, what the header's status word leaves out.
     await expect(shelves(window).getByTestId('page-status-line')).toContainText('started by you');
-    await expect(shelves(window).getByTestId('page-status-line')).toContainText('Asks you', { timeout: TURN_MS });
+    await expect(shelves(window).getByTestId('page-status-line')).toContainText('Its last message asks you', { timeout: TURN_MS });
     await expect(shelves(window).getByTestId('page-invite')).toBeVisible();
     // It has made nothing and started no one, and its Setup waits for the technical switch: with the page the one
     // shelf, there is no tab row.

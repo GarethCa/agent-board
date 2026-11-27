@@ -4,8 +4,8 @@ import { FitAddon } from '@xterm/addon-fit';
 import { UnicodeGraphemesAddon } from '@xterm/addon-unicode-graphemes';
 import { WebglAddon } from '@xterm/addon-webgl';
 import '@xterm/xterm/css/xterm.css';
-import { SCROLLBACK_LINES, type Harness, type SessionInfo } from '@agent-board/daemon/protocol';
-import { bufferLinks, hyperlinkAddress, hyperlinkHint, linkHint, linkTarget, type BufferRow } from './terminal-links';
+import { SCROLLBACK_LINES, prefabDraftOfLink, type Harness, type SessionInfo } from '@agent-board/daemon/protocol';
+import { DRAFT_LINK, bufferLinks, hyperlinkAddress, hyperlinkHint, linkHint, linkTarget, type BufferRow } from './terminal-links';
 import { commandKey, isMac } from '../keys';
 import { keyText } from '../keys/registry';
 import { token, tokenNumber } from '../theme';
@@ -254,7 +254,8 @@ export function TerminalPane({ sessionId, onStatus, focused = true, autoFocus = 
       const target = linkTarget(url, event.shiftKey, binding.openWeb.current !== undefined);
       // Shift-click extends the terminal's selection, which is not what a click on a link means.
       if (event.shiftKey) terminal.clearSelection();
-      if (target === 'web-tab') binding.openWeb.current?.(url);
+      if (target === DRAFT_LINK) void window.agentBoard.windows.requestBoard({ kind: 'prefabDraft', id: prefabDraftOfLink(url)! });
+      else if (target === 'web-tab') binding.openWeb.current?.(url);
       else if (target === 'browser') void window.agentBoard.trackers.openLink(url).catch(() => {});
     };
     const hint = (url: string) => (element.title = linkHint(url, binding.openWeb.current !== undefined, { open: keyText('window.openLink'), browser: keyText('window.openLinkBrowser') }));

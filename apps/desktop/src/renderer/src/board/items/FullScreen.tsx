@@ -1,4 +1,4 @@
-// The frame every full screen over the board shares (memory, queues, to-do lists): a head with a round face, the
+// The frame every full screen over the board shares (queues, to-do lists): a head with a round face, the
 // title, a line under it, a count, its own buttons and a close button; a bar for search and filters; a body of two
 // panes, a list beside the one picked (or one body of its own); and a line of keys at the foot. Esc, the close button
 // or a click on the dimmed board closes it, and the focus goes back to the object.

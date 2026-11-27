@@ -80,7 +80,7 @@ function inModal(): boolean {
  * Puts the focus back in the draft that keeps a window or tile from being left: in a tab not showing, it shows the tab
  * first, so the key is seen to do something, and focuses the draft once it is drawn.
  */
-function backToDraft(draft: Element) {
+export function backToDraft(draft: Element) {
   const into = () => draft.querySelector<HTMLElement>('textarea')?.focus({ preventScroll: true });
   if (shown(draft)) return into();
   const tab = draftTab(draft);

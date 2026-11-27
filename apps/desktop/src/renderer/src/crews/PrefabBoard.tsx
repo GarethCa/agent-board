@@ -49,7 +49,7 @@ import {
 import {
   defaultFresh,
   defaultWorks,
-  EFFORTS,
+  effortOn,
   isMakerRole,
   MAX_GATE_ROUNDS,
   MAX_NAME_LENGTH,
@@ -68,6 +68,7 @@ import {
   type PrefabLine,
   type PrefabMember,
   type PrefabPlaces,
+  type LibraryPrefab,
 } from '@agent-board/daemon/protocol';
 import { lineKey } from '@agent-board/daemon/prefab-graph-checks';
 import type { CharacterPose } from '@agent-board/daemon/character';
@@ -86,6 +87,7 @@ import { isTyping } from '../keys/typing';
 import { Button, Checkbox, Dialog, IconButton, Input, Island, IslandSeparator, Kbd, Menu, Segmented, Select, Tag, Textarea, useToast, type MenuEntry } from '../ui';
 import { CrewFaces, PrefabIcon, RoleIcon } from './icons';
 import { PrefabDraftNote } from './PrefabDraftNote';
+import { draftSummary } from './draft-review';
 import {
   addAgent,
   addGate,
@@ -106,6 +108,7 @@ import {
   CLOCK_SCHEDULES,
   GATE_SIZE,
   lineKind,
+  lineWords,
   nodeName,
   moved,
   pasted,
@@ -126,6 +129,7 @@ import {
   type BoardDraft,
   type BoardProblem,
   type LineKind,
+  sharedEfforts,
 } from './prefab-board';
 import { gateRule, gateWait, joinBadge, MAX_PREFAB_NAME, memberLabel, modelChoice, readModelChoice } from './prefab-flow';
 import { refreshPrefabs } from './prefab-store';
@@ -148,6 +152,8 @@ export interface PrefabBoardStart {
 export interface OpenedDraft {
   id: string;
   drafter: string;
+  /** The drafter's session, for the zone a crew started from it is suggested. */
+  drafterSession?: string;
   assumptions: PrefabAssumption[];
 }
 
@@ -158,6 +164,8 @@ interface PrefabBoardProps {
   /** Says whether it holds changes not saved yet, as that changes. */
   onEdited?(edited: boolean): void;
   onLeave(): void;
+  /** Starts a crew from it, once saved to the library: its prompt box opens, as the library's Start opens it. */
+  onStart?(prefab: LibraryPrefab, draft: OpenedDraft): void;
   /** False for a board that must not take the page's focus as it opens: the gallery's, beside other controls. */
   takesFocus?: boolean;
 }
@@ -305,24 +313,6 @@ function edgesOf(draft: BoardDraft, problems: readonly BoardProblem[], selected:
   });
 }
 
-/** The words for a line, as its panel says them. */
-function lineWords(draft: BoardDraft, line: PrefabLine): string {
-  const from = nodeName(draft, line.from);
-  const to = nodeName(draft, line.to);
-  const input = (id: string) => draft.inputs.find((each) => each.input.id === id)?.input;
-  const end = input(line.to);
-  if (end?.kind === 'end') return `${from} ends the crew here, ${end.as === 'ready' ? 'ready to merge' : 'done'}.`;
-  const source = input(line.from);
-  if (source?.kind === 'user') return `The crew waits for your OK, then ${to} starts.`;
-  if (source !== undefined) return `${from} starts ${to}.`;
-  if (line.way === 'again') return `The loop gate sends the work back to ${to} for another round.`;
-  if (line.way === 'done') return `When the loop is done, the work goes on to ${to}.`;
-  if (line.lead === true) return `${from} starts ${to} when it needs it.`;
-  if (line.carries === 'review') return `${from}’s review goes to the loop gate, which decides whether to go round again.`;
-  if (line.carries === 'handoff') return `${to} starts when ${from} hands off, on a checkout of its branch.`;
-  return `${to} starts after ${from}.`;
-}
-
 /** A member with `fields` changed, a field set to undefined taken off. */
 type MemberFields = { [K in keyof PrefabMember]?: PrefabMember[K] | undefined };
 function changedMember(member: PrefabMember, fields: MemberFields): PrefabMember {
@@ -355,7 +345,7 @@ interface History {
   field?: string;
 }
 
-function PrefabBoardShown({ start, desk, onEdited, onLeave, takesFocus = true }: PrefabBoardProps) {
+function PrefabBoardShown({ start, desk, onEdited, onLeave, onStart, takesFocus = true }: PrefabBoardProps) {
   const toasts = useToast();
   const { screenToFlowPosition, setViewport } = useReactFlow();
   const flow = useStoreApi();
@@ -486,7 +476,7 @@ function PrefabBoardShown({ start, desk, onEdited, onLeave, takesFocus = true }:
   const add = (kind: AgentKind) => added(addAgent(draft, kind, centred(AGENT_TILE)));
   const addPill = (kind: PrefabInputKind) => added(addInput(draft, kind, centred(pillSize(kind))));
 
-  const save = useCallback(async (): Promise<boolean> => {
+  const save = useCallback(async (): Promise<LibraryPrefab | false> => {
     if (problems.length > 0) {
       select([]);
       toasts.show({ id: 'prefab-save', tone: 'error', message: problems.length === 1 ? problems[0]!.text : `${problems[0]!.text} And ${problems.length - 1} more, in the panel.` });
@@ -502,7 +492,7 @@ function PrefabBoardShown({ start, desk, onEdited, onLeave, takesFocus = true }:
         setAgentDraft(undefined);
         dropDraft(agentDraft.id, `Saved ${done.name}, but`);
       }
-      return true;
+      return done;
     } catch (failure) {
       toasts.show({ id: 'prefab-save', tone: 'error', message: `Could not save it: ${errorMessage(failure)}` });
       return false;
@@ -700,7 +690,21 @@ function PrefabBoardShown({ start, desk, onEdited, onLeave, takesFocus = true }:
           </span>
         </p>
         </div>
-        {agentDraft !== undefined && <PrefabDraftNote ref={draftNote} assumptions={agentDraft.assumptions} drafter={agentDraft.drafter} onSave={() => void save()} onPick={(id) => select([id])} />}
+        {agentDraft !== undefined && (
+          <PrefabDraftNote
+            ref={draftNote}
+            assumptions={agentDraft.assumptions}
+            drafter={agentDraft.drafter}
+            summary={draftSummary(prefab, draft)}
+            onSave={() => void save()}
+            {...(onStart === undefined ? {} : { onStart: () => void save().then((done) => done !== false && onStart(done, agentDraft)) })}
+            onDiscard={() => {
+              dropDraft(agentDraft.id, 'Discarded, but');
+              onLeave();
+            }}
+            onPick={(id) => select([id])}
+          />
+        )}
       </div>
       <aside className="prefab-board-side nodrag nowheel" aria-label="Change it" data-testid="prefab-board-side">
         {agentsPicked.length === 1 && selectedIds.size === 1 ? (
@@ -1103,13 +1107,9 @@ function ModelSelect({ value, harness, model, onChange, mixed = false }: { value
   );
 }
 
-function EffortRow({ value, harness, onChange }: { value: Effort | null; harness: Harness | null; onChange(effort: Effort): void }) {
-  const efforts = EFFORTS.filter((effort) => harness !== 'codex' || effort !== 'max');
-  return <Segmented<Effort> className="prefab-efforts" aria-label="Reasoning" value={value ?? ('' as Effort)} onChange={onChange} options={efforts.map((effort) => ({ id: effort, label: EFFORT_SHORT[effort] }))} />;
+function EffortRow({ value, members, onChange }: { value: Effort | null; members: readonly PrefabMember[]; onChange(effort: Effort): void }) {
+  return <Segmented<Effort> className="prefab-efforts" aria-label="Reasoning" value={value ?? ('' as Effort)} onChange={onChange} options={sharedEfforts(members).map((effort) => ({ id: effort, label: EFFORT_SHORT[effort] }))} />;
 }
-
-/** A Codex agent has no `max`: it reasons at `xhigh` there. */
-const effortFor = (harness: Harness, effort: Effort | null): Effort | null => (harness === 'codex' && effort === 'max' ? 'xhigh' : effort);
 
 function AgentPanel({ agent, draft, onChange, onDuplicate, onDelete }: { agent: BoardAgent; draft: BoardDraft; onChange(fields: MemberFields, field: string): void; onDuplicate(): void; onDelete(): void }) {
   const { member } = agent;
@@ -1149,10 +1149,10 @@ function AgentPanel({ agent, draft, onChange, onDuplicate, onDelete }: { agent: 
         {own && <Input aria-label="Role name" placeholder="designer" value={member.role ?? ''} maxLength={24} onChange={(event) => onChange({ role: event.target.value.toLowerCase() }, 'role-name')} />}
       </Field>
       <Field label="AI and model">
-        <ModelSelect value={modelChoice(member.harness, member.model)} harness={member.harness} model={member.model} onChange={(harness, model) => onChange({ harness, model, effort: effortFor(harness, member.effort) }, 'model')} />
+        <ModelSelect value={modelChoice(member.harness, member.model)} harness={member.harness} model={member.model} onChange={(harness, model) => onChange({ harness, model, effort: effortOn(harness, member.effort) }, 'model')} />
       </Field>
       <Field label="Reasoning">
-        <EffortRow value={member.effort} harness={member.harness} onChange={(effort) => onChange({ effort }, 'effort')} />
+        <EffortRow value={member.effort} members={[member]} onChange={(effort) => onChange({ effort }, 'effort')} />
       </Field>
       <Field label="Brief">
         <Textarea
@@ -1235,7 +1235,6 @@ function AgentsPanel({ agents, onChange, onDuplicate, onDelete }: { agents: read
   const members = agents.map((agent) => agent.member);
   const choices = new Set(members.map((member) => modelChoice(member.harness, member.model)));
   const efforts = new Set(members.map((member) => member.effort));
-  const harnesses = new Set(members.map((member) => member.harness));
   const first = members[0]!;
   return (
     <>
@@ -1250,11 +1249,11 @@ function AgentsPanel({ agents, onChange, onDuplicate, onDelete }: { agents: read
           mixed={choices.size > 1}
           harness={first.harness}
           model={first.model}
-          onChange={(harness, model) => onChange((member) => ({ harness, model, effort: effortFor(harness, member.effort) }))}
+          onChange={(harness, model) => onChange((member) => ({ harness, model, effort: effortOn(harness, member.effort) }))}
         />
       </Field>
       <Field label="Reasoning">
-        <EffortRow value={efforts.size === 1 ? first.effort : null} harness={harnesses.size === 1 ? first.harness : null} onChange={(effort) => onChange((member) => ({ effort: effortFor(member.harness, effort) }))} />
+        <EffortRow value={efforts.size === 1 ? first.effort : null} members={members} onChange={(effort) => onChange((member) => ({ effort: effortOn(member.harness, effort) }))} />
       </Field>
       <div className="prefab-side-actions">
         <Button size="sm" variant="secondary" icon={<Copy />} onClick={onDuplicate}>

@@ -1,19 +1,17 @@
 import { Users } from 'lucide-react';
 import { useRef, useState, type KeyboardEvent } from 'react';
 import { isOrchestratorRole, MAX_REVIEW_CAP, type LibraryPrefab, type Zone } from '@agent-board/daemon/protocol';
-import { Button, Dialog, ErrorText, Field, Hint, Kbd, Select, Tag, Textarea, Truncate } from '../ui';
+import { Button, Dialog, ErrorText, Field, Hint, Input, Kbd, Select, Tag, Textarea, Truncate } from '../ui';
 import { ZoneName } from '../board/ZoneName';
 import { keyText } from '../keys/registry';
 import { useAction } from '../use-action';
 import { bypassNoticeSeen, CodexBypassExplanation, markBypassNoticeSeen } from '../board/codex-notice';
-import { folderLabel } from '../board/folders';
 import { useRecentFolders } from '../board/RecentFolders';
 import { useTechnicalDetails } from '../technical';
 import { RoleIcon } from './icons';
 import { memberLabel, memberRun, promptMember } from './prefab-flow';
-
-/** A zone that needs a repo named for the crew: a group with no default of its own. */
-const needsRepo = (zone: Zone | undefined) => zone !== undefined && zone.repoRoot === null && zone.defaultRepo === null;
+import { RepoField } from './RepoField';
+import { crewStartBlock, needsRepo, takesTicket, ticketLookupHint, type StartBox } from './start-checks';
 
 interface CrewPromptDialogProps {
   prefab: LibraryPrefab;
@@ -38,6 +36,7 @@ interface CrewPromptDialogProps {
 export function CrewPromptDialog({ prefab, zones, zone: asked, suggested, onAddZone, onStarted, onCancel, inline = false }: CrewPromptDialogProps) {
   const technical = useTechnicalDetails();
   const [prompt, setPrompt] = useState('');
+  const [issue, setIssue] = useState('');
   const [zoneId, setZoneId] = useState(asked?.id ?? suggested?.id ?? zones[0]?.id);
   const [roundLimit, setRoundLimit] = useState(prefab.roundLimit);
   const [repo, setRepo] = useState<string>();
@@ -47,7 +46,13 @@ export function CrewPromptDialog({ prefab, zones, zone: asked, suggested, onAddZ
   const repoWanted = needsRepo(zone);
   const looping = prefab.members.length > 1;
   const first = promptMember(prefab);
-  const ready = prompt.trim() !== '' && zone !== undefined && (!repoWanted || repo !== undefined);
+  // A prefab drafted with a ticket input asks for its ticket, which may stand in for the prompt.
+  const ticketWanted = takesTicket(prefab);
+  const blocked = crewStartBlock({ zones, zone, repo: repoWanted ? repo : undefined, prompt, ticket: ticketWanted ? issue : undefined });
+  const ready = blocked === undefined && zone !== undefined;
+  /** Why Start is greyed, said next to the box that holds it back. */
+  const why = (box: StartBox) => blocked?.box === box && <Hint data-testid="start-blocked">{blocked.reason}</Hint>;
+  const lookup = ticketWanted ? ticketLookupHint(zones, issue) : undefined;
 
   const led = first !== undefined && isOrchestratorRole(first.role);
   /** One start at a time, however fast ⌘↵ is pressed: two would start two crews. */
@@ -61,8 +66,9 @@ export function CrewPromptDialog({ prefab, zones, zone: asked, suggested, onAddZ
         window.agentBoard.orchestrators
           .startPrefab({
             name: prefab.name,
-            prompt: prompt.trim(),
+            ...(prompt.trim() === '' ? {} : { prompt: prompt.trim() }),
             zoneId: zone.id,
+            ...(ticketWanted && issue.trim() !== '' ? { issueId: issue.trim() } : {}),
             ...(repoWanted && repo !== undefined ? { repo } : {}),
             ...(roundLimit === prefab.roundLimit ? {} : { roundLimit }),
           })
@@ -91,9 +97,6 @@ export function CrewPromptDialog({ prefab, zones, zone: asked, suggested, onAddZ
     const codex = prefab.members.some((member) => member.harness === 'codex') && zone.codexBypassHookTrust !== false;
     if (codex && !bypassNoticeSeen()) setNotice(true);
     else start();
-  };
-  const browse = () => {
-    void window.agentBoard.zones.browseFolder('Choose the repo for this crew').then((path) => path !== undefined && setRepo(path));
   };
 
   if (notice) {
@@ -193,23 +196,15 @@ export function CrewPromptDialog({ prefab, zones, zone: asked, suggested, onAddZ
             </Select>
           </Field>
         )}
-        {repoWanted && (
-          <div className="ui-field">
-            <span className="ui-field-name">Repo</span>
-            <span className="crew-prompt-repo">
-              <Select aria-label="Repo" value={repo ?? ''} onChange={(event) => setRepo(event.target.value)}>
-                {repo === undefined && <option value="">Choose a repo</option>}
-                {repo !== undefined && !folders.some((folder) => folder.path === repo) && <option value={repo}>{folderLabel(repo, undefined)}</option>}
-                {folders.map((folder) => (
-                  <option key={folder.path} value={folder.path}>
-                    {folderLabel(folder.path, undefined)}
-                  </option>
-                ))}
-              </Select>
-              <Button onClick={browse}>Choose…</Button>
-            </span>
-          </div>
+        {zones.length > 0 && why('zone')}
+        {repoWanted && <RepoField repo={repo} folders={folders} onRepo={setRepo} browseTitle="Choose the repo for this crew" />}
+        {why('repo')}
+        {ticketWanted && (
+          <Field label="Ticket">
+            <Input aria-label="Ticket" placeholder="Its issue or its link, such as ABC-12" value={issue} disabled={zones.length === 0} onChange={(event) => setIssue(event.target.value)} />
+          </Field>
         )}
+        {lookup !== undefined && <Hint>{lookup}</Hint>}
         <Textarea
           aria-label="Prompt"
           rows={4}
@@ -220,6 +215,7 @@ export function CrewPromptDialog({ prefab, zones, zone: asked, suggested, onAddZ
           value={prompt}
           onChange={(event) => setPrompt(event.target.value)}
         />
+        {zones.length > 0 && why('work')}
         {looping && first !== undefined && (
           <Hint>
             {led

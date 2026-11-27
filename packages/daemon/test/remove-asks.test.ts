@@ -1,8 +1,8 @@
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { fakeHarnessEnv, McpClient } from '@agent-board/fake-harness';
-import { BOARD_ERROR, needsYouKind, RPC_ERROR, type Agent, type AgentUpdatedEvent, type DaemonEvent, type RemoveAsk } from '../src/protocol.ts';
+import { BOARD_ERROR, needsYouKind, RPC_ERROR, waitsOnUser, type Agent, type AgentUpdatedEvent, type DaemonEvent, type RemoveAsk, type RemoveAskLeft, type RemoveAskResult } from '../src/protocol.ts';
 import type { DaemonClient } from '../src/client.ts';
 import { BOARD_SOCKET_ENV, BOARD_TOKEN_ENV } from '../src/board-env.ts';
 import { runBoardCommand } from '../src/board-cli.ts';
@@ -71,6 +71,13 @@ async function askOf(setup: Setup, sessionId: string): Promise<RemoveAsk> {
   return ask;
 }
 
+/** The answer of a call that waited on its ask: never one left. */
+async function waited(call: Promise<RemoveAskResult | RemoveAskLeft>): Promise<RemoveAskResult> {
+  const result = await call;
+  if ('left' in result) throw new Error('the call stopped waiting on its ask');
+  return result;
+}
+
 /** A finished tile the user started, with a commit to review, and the reviewer the user started on it. */
 async function reviewed(setup: Setup, zoneId: string): Promise<{ impl: Agent; reviewer: Agent }> {
   const impl = await finishedAgent(setup, zoneId, 'impl');
@@ -106,7 +113,7 @@ describe('asking the user to remove tiles', () => {
     expect(await names(setup)).toEqual(expect.arrayContaining(['old-a', 'old-b']));
 
     const decided = await setup.client.call('removeAsk.decide', { sessionId: me.sessionId, askId: ask.id, allow: true });
-    const told = await answer;
+    const told = await waited(answer);
     expect(told).toEqual(decided);
     expect(told).toEqual({
       outcome: 'allowed',
@@ -162,7 +169,7 @@ describe('asking the user to remove tiles', () => {
     });
 
     await setup.client.call('removeAsk.decide', { sessionId: me.sessionId, askId: ask.id, allow: true, include: [live.sessionId] });
-    const told = await answer;
+    const told = await waited(answer);
     expect(told.removed.map((tile) => tile.name)).toEqual(['done', 'live']);
     expect(told.kept).toEqual([{ sessionId: lead.agent.sessionId, name: lead.agent.name, why: expect.stringMatching(/^held back: .*is still running$/) }]);
     expect(await names(setup)).toEqual(expect.arrayContaining([lead.agent.name, child.name]));
@@ -178,7 +185,7 @@ describe('asking the user to remove tiles', () => {
 
     const answer = connection.call('orchestrator.askRemove', { token, sessionIds: [messy.sessionId, clean.sessionId] });
     await setup.client.call('removeAsk.decide', { sessionId: me.sessionId, askId: (await askOf(setup, me.sessionId)).id, allow: true });
-    const told = await answer;
+    const told = await waited(answer);
     expect(told.removed).toEqual([{ sessionId: clean.sessionId, name: 'clean' }]);
     expect(told.kept).toEqual([{ sessionId: messy.sessionId, name: 'messy', why: expect.stringMatching(/unsaved|uncommitted/i) }]);
     expect(await names(setup)).toContain('messy');
@@ -197,7 +204,7 @@ describe('asking the user to remove tiles', () => {
     ]);
     // The user ticks the implementer and leaves its running reviewer out: a Delete of one would take the other.
     await setup.client.call('removeAsk.decide', { sessionId: me.sessionId, askId: ask.id, allow: true, include: [impl.sessionId] });
-    const told = await answer;
+    const told = await waited(answer);
     expect(told.removed).toEqual([]);
     expect(told.kept).toEqual([
       { sessionId: impl.sessionId, name: 'impl', why: `its reviewer ${reviewer.name} stays, and its Delete would take it` },
@@ -216,7 +223,7 @@ describe('asking the user to remove tiles', () => {
     const ask = await askOf(setup, me.sessionId);
     expect(ask.tiles.map((tile) => tile.held)).toEqual([null, null]);
     await setup.client.call('removeAsk.decide', { sessionId: me.sessionId, askId: ask.id, allow: true });
-    const told = await answer;
+    const told = await waited(answer);
     expect(told.removed).toEqual([]);
     expect(told.kept).toEqual([
       { sessionId: impl.sessionId, name: 'impl', why: `its reviewer ${reviewer.name} stays, and its Delete would take it` },
@@ -241,7 +248,7 @@ describe('asking the user to remove tiles', () => {
     const second = connection.call('orchestrator.askRemove', { token, sessionIds: [impl.sessionId] });
     const again = await askOf(setup, me.sessionId);
     await setup.client.call('removeAsk.decide', { sessionId: me.sessionId, askId: again.id, allow: true, include: [impl.sessionId] });
-    expect((await second).kept).toEqual([{ sessionId: impl.sessionId, name: 'impl', why: expect.stringMatching(/unsaved|uncommitted/i) }]);
+    expect((await waited(second)).kept).toEqual([{ sessionId: impl.sessionId, name: 'impl', why: expect.stringMatching(/unsaved|uncommitted/i) }]);
     expect(await names(setup)).toEqual(expect.arrayContaining(['impl', reviewer.name]));
 
     // With its work gone, ticked, both go, and the orchestrator is told of the reviewer too.
@@ -319,7 +326,7 @@ describe('asking the user to remove tiles', () => {
     expect(await names(setup)).toContain('old-a');
   });
 
-  it('withdraws the ask, removing nothing, when the orchestrator stops waiting', async () => {
+  it('keeps the ask up when the call waiting on it ends, and types the answer at the orchestrator\'s prompt', async () => {
     const setup = await setUp();
     const { agent: me, token, connection } = await orchestratorIn(setup, setup.zone.id);
     const a = await finishedAgent(setup, setup.zone.id, 'old-a');
@@ -327,12 +334,18 @@ describe('asking the user to remove tiles', () => {
     const ask = await askOf(setup, me.sessionId);
 
     connection.close();
-    await vi.waitFor(async () => expect((await setup.client.call('agent.list')).find((agent) => agent.sessionId === me.sessionId)!.removeAsk).toBeNull(), { timeout: 5_000 });
-    await expect(setup.client.call('removeAsk.decide', { sessionId: me.sessionId, askId: ask.id, allow: true })).rejects.toMatchObject({ code: RPC_ERROR.invalidParams });
-    expect(await names(setup)).toContain('old-a');
+    // Still up for the user, but no call waits on it: the orchestrator isn't waiting for it.
+    const left = await untilAgent(setup, me.sessionId, (seen) => seen.removeAsk?.left === true);
+    expect(left.removeAsk!.id).toBe(ask.id);
+    expect(waitsOnUser(left)).toBe(false);
+    expect(needsYouKind(left, 'explicit')).toBe('asks');
+
+    await setup.client.call('removeAsk.decide', { sessionId: me.sessionId, askId: ask.id, allow: true });
+    expect(await names(setup)).not.toContain('old-a');
+    await setup.recorder.waitForText(me.sessionId, 'The answer to your ask to remove old-a');
   });
 
-  it("withdraws the ask, removing nothing, once the orchestrator's next turn begins, and says that is why", async () => {
+  it("keeps the ask up once the orchestrator's next turn begins: the call returns at once, and the answer comes as a message", async () => {
     const setup = await setUp();
     const { agent: me, token, connection } = await orchestratorIn(setup, setup.zone.id);
     const a = await finishedAgent(setup, setup.zone.id, 'old-a');
@@ -340,7 +353,39 @@ describe('asking the user to remove tiles', () => {
     const ask = await askOf(setup, me.sessionId);
 
     await setup.client.call('session.write', { sessionId: me.sessionId, data: 'Print your board identity\r' });
-    expect(await answer).toEqual({ outcome: 'denied', removed: [], kept: [{ sessionId: a.sessionId, name: 'old-a', why: expect.stringMatching(/your next turn began/) }] });
+    expect(await answer).toEqual({ left: { ...ask, left: true } });
+    expect(await names(setup)).toContain('old-a');
+
+    await setup.client.call('removeAsk.decide', { sessionId: me.sessionId, askId: ask.id, allow: false });
+    await setup.recorder.waitForText(me.sessionId, 'The user denied removing old-a');
+    expect(await names(setup)).toContain('old-a');
+  });
+
+  it('asks without waiting when detached, the orchestrator told later', async () => {
+    const setup = await setUp();
+    const { agent: me, token, connection } = await orchestratorIn(setup, setup.zone.id);
+    const a = await finishedAgent(setup, setup.zone.id, 'old-a');
+    const answer = await connection.call('orchestrator.askRemove', { token, sessionIds: [a.sessionId], detached: true });
+    expect(answer).toEqual({ left: expect.objectContaining({ left: true, tiles: [{ sessionId: a.sessionId, name: 'old-a', held: null }] }) });
+    const asking = (await setup.client.call('agent.list')).find((agent) => agent.sessionId === me.sessionId)!;
+    expect(asking.removeAsk).toMatchObject({ left: true });
+    expect(waitsOnUser(asking)).toBe(false);
+    // One ask at a time, left or not.
+    await expect(connection.call('orchestrator.askRemove', { token, sessionIds: [a.sessionId] })).rejects.toMatchObject({ code: RPC_ERROR.invalidParams });
+  });
+
+  it('refuses to pause an orchestrator while its left ask is up, and ends the ask once its session ends', async () => {
+    const setup = await setUp();
+    const { agent: me, token, connection } = await orchestratorIn(setup, setup.zone.id);
+    const a = await finishedAgent(setup, setup.zone.id, 'old-a');
+    await connection.call('orchestrator.askRemove', { token, sessionIds: [a.sessionId], detached: true });
+    const ask = await askOf(setup, me.sessionId);
+    await expect(setup.client.call('agent.pause', { sessionId: me.sessionId })).rejects.toThrow(/waiting on you/);
+
+    // Stopped anyway: the user can't answer the ask of an orchestrator that isn't live, so nothing holds it hidden.
+    await setup.client.call('agent.stop', { sessionId: me.sessionId });
+    const stopped = await untilAgent(setup, me.sessionId, (seen) => seen.endedAt !== null);
+    expect(stopped.removeAsk).toBeNull();
     await expect(setup.client.call('removeAsk.decide', { sessionId: me.sessionId, askId: ask.id, allow: true })).rejects.toMatchObject({ code: RPC_ERROR.invalidParams });
     expect(await names(setup)).toContain('old-a');
   });
@@ -368,11 +413,13 @@ describe('the ask from the CLI and the MCP', () => {
       { command: TEST_CLI_LAUNCHER.command, args: [...TEST_CLI_LAUNCHER.args, 'mcp'], env: { ...process.env, AGENT_BOARD_SOCKET: setup.daemon.socketPath, AGENT_BOARD_IDENTITY: token } },
       tempDataDir(),
     );
-    const tool = mcp.callTool('ask_to_remove', { agents: ['old-a', 'old-b'] });
+    // The tool returns at once, so the client's time limit on a call never ends the ask; the answer comes as a message.
+    const tool = await mcp.callTool('ask_to_remove', { agents: ['old-a', 'old-b'] });
+    expect(tool).toMatchObject({ isError: false, text: expect.stringMatching(/^Asked the user to remove old-a and old-b.*comes to your prompt as a message/) });
     ask = await askOf(setup, me.sessionId);
     expect(ask.tiles.map((tile) => tile.sessionId)).toEqual([a.sessionId, b.sessionId]);
     await setup.client.call('removeAsk.decide', { sessionId: me.sessionId, askId: ask.id, allow: true });
-    expect(await tool).toMatchObject({ isError: false, text: expect.stringMatching(/^The user allowed it\. Removed old-a and old-b, with their worktrees and branches\./) });
+    await setup.recorder.waitForText(me.sessionId, 'Removed old-a and old-b');
     expect(await names(setup)).not.toContain('old-a');
   });
 });

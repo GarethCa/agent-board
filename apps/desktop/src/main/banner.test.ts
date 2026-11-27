@@ -20,6 +20,12 @@ describe('bannerOf', () => {
     expect(bannerOf(note({}), true)).toEqual({ title: 'Fix login redirect', subtitle: 'Needs you', body: 'PR #241 is ready for review.', answers: [] });
   });
 
+  it('draws an alert that something is done as Done, in either design', () => {
+    const done = note({ kind: 'done', title: 'Fix login redirect is done', body: 'PR #241 is merged.' });
+    expect(bannerOf(done, true)).toEqual({ title: 'Fix login redirect', subtitle: 'Done', body: 'PR #241 is merged.', answers: [] });
+    expect(bannerOf(done, false)).toEqual({ title: 'Fix login redirect is done', body: 'PR #241 is merged.', answers: [] });
+  });
+
   it('leaves the app’s own notifications as they are', () => {
     expect(bannerOf({ title: 'Test notification', body: 'Hello.' }, true)).toEqual({ title: 'Test notification', body: 'Hello.', answers: [] });
   });

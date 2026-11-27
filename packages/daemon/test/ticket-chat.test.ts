@@ -82,6 +82,10 @@ describe("a ticket's chat", () => {
     expect(agent.chatSwitch).toBeUndefined();
     const builder = (await builderOf(setup, chat))!;
     expect(builder).toMatchObject({ ticket: chat.sessionId, spawnedBy: chat.sessionId, worktree: chat.worktree, ownsWorktree: false, ticketChat: false });
+    // The chat is told as the board's notice, not as a message the user typed.
+    await expect
+      .poll(async () => (await setup.client.call('agent.transcript', { sessionId: chat.sessionId })).entries.find((entry) => entry.kind === 'user' && entry.text.startsWith("You are now this ticket's lead")), { timeout: 10_000 })
+      .toMatchObject({ from: { kind: 'board', name: 'agent-board', ref: 'board' } });
   });
 
   it('becomes the implementer again once its builder hands off: the builder closes and its work stays on the branch', async () => {

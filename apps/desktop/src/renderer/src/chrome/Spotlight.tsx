@@ -1,9 +1,10 @@
 import { Fragment, useEffect, useId, useImperativeHandle, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type Ref } from 'react';
 import * as RadixDialog from '@radix-ui/react-dialog';
 import { pullRequestOfUrl, type Agent, type BoardItem, type OpenPullRequest, type Shell, type Zone } from '@agent-board/daemon/protocol';
-import { CircleDot, FileText, GitPullRequest, Globe, Link, MessageCircleDashed, MessageSquareText, Plus, Search, Settings, LibraryBig, ListFilter, Shapes, StickyNote, type LucideIcon } from 'lucide-react';
+import { BookOpen, CircleDot, FileText, GitPullRequest, Globe, Link, MessageCircleDashed, MessageSquareText, Plus, Search, Settings, LibraryBig, ListFilter, Shapes, StickyNote, type LucideIcon } from 'lucide-react';
 import { CrewFaces } from '../crews/icons';
 import { usePrefabs } from '../crews/prefab-store';
+import { usePrefabDrafts } from '../crews/prefab-drafts';
 import { appKeysReach } from '../board/board-shortcuts';
 import { HarnessMark } from '../board/HarnessMark';
 import { agentTitle, shellTitle } from '../board/use-board-windows';
@@ -137,13 +138,15 @@ export function enterAsks(subject: SpotlightSubject, place: SpotlightPlace<unkno
   return { open: keys.metaKey || keys.ctrlKey || shiftOpens, beside: keys.shiftKey && opensBeside(subject, place) };
 }
 
-/** What a row opens as a tab of a window: a session shown there, a pull request's tab or a web tab; undefined for anything else. */
+/** What a row opens as a tab of a window: a session shown there, a document's, pull request's or web tab; undefined for anything else. */
 export function surfaceOfSubject(subject: SpotlightSubject): Surface | undefined {
   switch (subject.kind) {
     case 'agent':
       return { kind: 'session', target: { kind: 'agent', id: subject.agent.sessionId } };
     case 'shell':
       return { kind: 'session', target: { kind: 'shell', id: subject.shell.id } };
+    case 'document':
+      return subject.surface;
     case 'pr':
       return { kind: 'pr', repo: subject.pr.repo, number: subject.pr.number };
     case 'web':
@@ -176,6 +179,8 @@ export function focusKeeper(at: Element | null): () => void {
  */
 export function Spotlight<C>({ ref, agents, shells, zones, windows, ticketItems, placeOf, onPick, canStartAgent, onNewAgent, onCrew }: SpotlightProps<C>) {
   const prefabs = usePrefabs();
+  const waiting = usePrefabDrafts().drafts;
+  const drafts = useMemo(() => waiting.map((draft) => ({ id: draft.id, name: draft.prefab.name, drafter: draft.drafter.name })), [waiting]);
   const [opened, setOpened] = useState<Opened<C>>();
   const [query, setQuery] = useState('');
   const [activeKey, setActiveKey] = useState<string>();
@@ -223,8 +228,8 @@ export function Spotlight<C>({ ref, agents, shells, zones, windows, ticketItems,
   const reviewed = useMemo(() => reviewedPullRequests(rounds, agents), [rounds, agents]);
   const groups = useMemo(
     () =>
-      spotlightGroups(query, { agents, shells: shells ?? [], zones, shows, windows: listedWindows, current, canStartAgent, prefabs, simplified, windowsListed: simplified || dock !== 'all', ticketItems, openPullRequests, pastedPullRequest, reviewed }),
-    [query, agents, shells, zones, shows, listedWindows, current, canStartAgent, prefabs, simplified, dock, ticketItems, openPullRequests, pastedPullRequest, reviewed],
+      spotlightGroups(query, { agents, shells: shells ?? [], zones, shows, windows: listedWindows, current, canStartAgent, prefabs, drafts, simplified, windowsListed: simplified || dock !== 'all', ticketItems, openPullRequests, pastedPullRequest, reviewed }),
+    [query, agents, shells, zones, shows, listedWindows, current, canStartAgent, prefabs, drafts, simplified, dock, ticketItems, openPullRequests, pastedPullRequest, reviewed],
   );
   const rows = groups.flatMap((group) => group.rows);
   const place = opened?.place;
@@ -272,6 +277,8 @@ export function Spotlight<C>({ ref, agents, shells, zones, windows, ticketItems,
     if (subject.kind === 'action' && subject.action === 'newAgent') return onNewAgent(opened.place.context, '');
     // The field opens over where ⌘K was pressed, and gives the focus back there.
     if (subject.kind === 'action' && subject.action === 'parkThought') return openParkThought(opened.restore);
+    // A draft opens on its board, in the board's window, wherever ⌘K was pressed.
+    if (subject.kind === 'crew' && subject.draft !== undefined) return void window.agentBoard.windows.requestBoard({ kind: 'prefabDraft', id: subject.draft });
     if (subject.kind === 'crew') return onCrew(opened.place.context, subject.prefab, subject.describe === true);
     const shown =
       subject.kind === 'setting' || subject.kind === 'action'
@@ -328,7 +335,7 @@ export function Spotlight<C>({ ref, agents, shells, zones, windows, ticketItems,
   const shiftOpens = active !== undefined && shiftOpensTile(active.subject, place);
   // Short beside ⇧↵, for the pill to leave the field's placeholder whole; the foot still says what each key does.
   // A pull request or a page opens in a tab of its own, so ↵ opens it wherever ⌘K is.
-  const opensPage = active?.subject.kind === 'pr' || active?.subject.kind === 'web';
+  const opensPage = active?.subject.kind === 'pr' || active?.subject.kind === 'web' || active?.subject.kind === 'document';
   const where = filtering ? 'filter' : opensCrew || opensPage ? 'open' : showing ? (beside || shiftOpens ? 'show' : 'show on board') : beside ? 'switch' : 'switch here';
   const newAgentRow = offerNew && (
     <div
@@ -544,7 +551,7 @@ export function SpotlightResult({ id, row, active, compact = false, onHover, onP
   const { subject } = row;
   const shows = useNeedsYouShows();
   const prefabs = usePrefabs();
-  const crewMembers = subject.kind === 'crew' ? prefabs.find((prefab) => prefab.name === subject.prefab)?.members : undefined;
+  const crewMembers = subject.kind === 'crew' && subject.draft === undefined ? prefabs.find((prefab) => prefab.name === subject.prefab)?.members : undefined;
   return (
     <div
       id={id}
@@ -563,7 +570,9 @@ export function SpotlightResult({ id, row, active, compact = false, onHover, onP
         {subject.kind === 'filter' ? (
           <ListFilter />
         ) : subject.kind === 'crew' ? (
-          subject.describe === true ? (
+          subject.draft !== undefined ? (
+            <Shapes />
+          ) : subject.describe === true ? (
             <MessageSquareText />
           ) : crewMembers === undefined ? (
             <LibraryBig />
@@ -574,6 +583,8 @@ export function SpotlightResult({ id, row, active, compact = false, onHover, onP
           subject.kind === 'action' && subject.action === 'newAgent' ? <Plus /> : subject.kind === 'action' && subject.action === 'parkThought' ? <MessageCircleDashed /> : <Settings />
         ) : subject.kind === 'item' ? (
           <ItemIcon kind={subject.item.kind} />
+        ) : subject.kind === 'document' ? (
+          <BookOpen />
         ) : subject.kind === 'pr' ? (
           <GitPullRequest />
         ) : subject.kind === 'web' ? (
@@ -610,6 +621,8 @@ export function SpotlightResult({ id, row, active, compact = false, onHover, onP
         <span className="spotlight-act">show zone</span>
       ) : subject.kind === 'item' ? (
         <span className="spotlight-act">show</span>
+      ) : subject.kind === 'document' ? (
+        <span className="spotlight-act">open doc</span>
       ) : subject.kind === 'pr' ? (
         <span className="spotlight-act">open PR</span>
       ) : subject.kind === 'web' ? (

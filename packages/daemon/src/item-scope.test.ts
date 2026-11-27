@@ -24,7 +24,7 @@ describe('readsItem', () => {
 
 describe('notReadBecause', () => {
   it('says where the item is', () => {
-    expect(notReadBecause('that memory', { ticket: null })).toBe('that memory is in a zone you are not in');
-    expect(notReadBecause('that memory', { ticket: 'chat' })).toBe("that memory is on a ticket's board you are not on");
+    expect(notReadBecause('that queue', { ticket: null })).toBe('that queue is in a zone you are not in');
+    expect(notReadBecause('that queue', { ticket: 'chat' })).toBe("that queue is on a ticket's board you are not on");
   });
 });

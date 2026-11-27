@@ -21,7 +21,7 @@ const item = (id: string, kind: string, x: number, y: number, width: number, hei
 
 const FOLDED = { width: 64, height: 64 };
 const OPEN = { width: 280, height: 320 };
-const KINDS = ['queue', 'todo', 'memory'] as const;
+const KINDS = ['queue', 'todo'] as const;
 
 /** A seeded random number in [0, 1). */
 function random(seed: number): () => number {

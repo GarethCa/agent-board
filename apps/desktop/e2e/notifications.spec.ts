@@ -88,6 +88,42 @@ test('by default notifies once per explicit request, with its reason, and never 
   }, 'orchestrate');
 });
 
+test("raises a Done banner and a Done row for an agent's alert, apart from Needs you; the banner and the row's Open each open the agent, which reads it", async () => {
+  await withApp(async (page, app) => {
+    const alertOf = async (sessionId: string) => (await page.evaluate(() => window.agentBoard.agents.list())).find((agent) => agent.sessionId === sessionId)?.alert;
+    const merged = await spawn(page, 'Alert: PR #12 is merged. | https://example.com/pr/12');
+    await expect.poll(() => notifications(app)).toEqual([{ sessionId: merged.sessionId, title: `${merged.name} is done`, body: 'PR #12 is merged.' }]);
+    await expect.poll(async () => (await alertOf(merged.sessionId))?.link).toBe('https://example.com/pr/12');
+    const written = await spawn(page, 'Alert: The docs are written.');
+    await expect.poll(async () => (await notifications(app)).length).toBe(2);
+    // No request: nothing on the badge or the pill.
+    expect(await badge(app)).toBe(0);
+    await expect(page.getByTestId('inbox-count')).toHaveAttribute('data-count', '0');
+
+    // Both are rows under Done in the inbox, whatever touches the board meanwhile.
+    const inbox = page.getByTestId('needs-you-inbox');
+    const done = page.locator('[data-section="done"]');
+    await expect(async () => {
+      if (!(await inbox.isVisible())) await page.getByTestId('inbox-count').click();
+      await expect(done).toBeVisible({ timeout: 2_000 });
+    }).toPass({ timeout: 10_000 });
+    await expect(done.getByTestId('inbox-done-line')).toHaveText(['PR #12 is merged.', 'The docs are written.']);
+    await expect(done.locator(`[data-session-id="${merged.sessionId}"]`).getByRole('button', { name: 'Open link' })).toBeVisible();
+
+    // The row's Open opens its agent and reads its alert.
+    await done.locator(`[data-session-id="${written.sessionId}"]`).getByRole('button', { name: /^Open(?! link)/ }).click();
+    await expect(page.getByTestId('session-window')).toHaveAttribute('data-session-id', written.sessionId);
+    await expect.poll(() => alertOf(written.sessionId)).toBeUndefined();
+    // Looking at one agent reads no other's.
+    expect((await alertOf(merged.sessionId))?.line).toBe('PR #12 is merged.');
+
+    // So does a click on the banner.
+    await clickNotification(app, 0);
+    await expect(page.getByTestId('session-window')).toHaveAttribute('data-session-id', merged.sessionId);
+    await expect.poll(() => alertOf(merged.sessionId)).toBeUndefined();
+  }, 'orchestrate');
+});
+
 test('with finished turns listed, notifies once when an agent starts waiting, with the inbox size on the badge; clicking opens the agent', async () => {
   await withApp(async (page, app) => {
     expect(await badge(app)).toBe(0);

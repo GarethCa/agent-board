@@ -34,10 +34,21 @@ On the first line, not as a line of its own or a closing line:
 
 The brackets are U+27E8 and U+27E9: no harness reads them as markup (Claude's own `<command-name>` and the like start with `<`), nothing typed strips them, and a mark can't start a `/` or `!` command. A name in a mark has them, line breaks and control characters replaced by spaces, so no name ends the mark early; only a mark at the very start of a message (or of the block that starts it) counts, so one quoted inside a message is text.
 
+## A clock's run, and the board's own notices
+
+The board types at an agent's prompt for no agent too, and the chat drew those as the user's: a clock's run, a ticket's news of its pull request, a ticket's hand-over between its chat and its builder, and every `[agent-board] …` notice (steps, documents, asks, a crew member's flag, an undelivered message).
+
+- **A clock's run** is marked `⟨clock from Master check-in · item:c0ffee12-…⟩` (`markClock`): kind `clock`, the clock's ref (`item:` and its id), and a name from its prompt's first line, cut to 32 characters, as a clock has no name of its own. A `clock` mark is read only with an `item:` ref, and the agent kinds only with an `agent:` ref; any other pairing is text. Its wake, when the clock wakes a hibernated agent, types the same marked prompt, and a fresh agent a clock starts for its run gets it as its first prompt: a timer types it with nobody there, unlike an orchestrator's first prompt (below).
+- **A clock's prompt that is a command** (it starts with `/` or `!`) **is not marked.** It is the user's own words, set to run as that command; a mark first would turn it into text that only names the command. Its run shows in the chat as typed, as the user's.
+- **The board's notices** keep their `[agent-board]` lead (and the space after it), which already says whose they are, and gain no mark. Some relay the user's own words (a comment on a document, an edit the user kept, a plan's decision and its note, a Go on note), and those are shown as the board's too: each says it is the user's ("The user commented on …"), and the board typed it at the agent, not the user. The rest: `readSender` reads a message that starts with the lead as `{ kind: 'board', name: 'agent-board', ref: 'board' }`, dropping the lead from its text. A ticket's pull-request news and its hand-over now start with the lead too.
+- **In the chat** both are drawn as an agent's message is, apart from the user's: in a neutral grey, the kind's icon (a clock, the board) in place of a character, headed `Clock · <name>` or `agent-board`, with the pill `Scheduled run` or `Notice`.
+
+What it costs: a user who starts a message with the lead themselves is shown as the board in their own chat, as one who types a mark is shown as its sender (above). A name can't start with it (`params.ts`), so no agent's name brings it to the start of a line.
+
 ## Not marked
 
 - An orchestrator's first prompt to an agent it starts (`orchestrator.spawn`): the agent's prompt, not a message to it. A crew's member started for the work it is handed is different: the work in its first prompt is another agent's words, and so is the crew's prompt when an agent started the crew, so they are marked (below).
-- A crew member's flag told to its orchestrator (`[agent-board] … needs you`) and the board's own notices (`[agent-board] …`): they are the board's, already headed so.
+- A crew member's flag told to its orchestrator (`[agent-board] … needs you`) and the board's own notices (`[agent-board] …`): they are the board's, already headed so, and read as the board's by that lead (above).
 
 ## The board's line inside a crew's delivery
 

@@ -1,10 +1,14 @@
 import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { DatabaseSync } from 'node:sqlite';
 import { invalidParams } from './params.ts';
 import { ENV_NAME, envPair, type Harness, type LaunchSettingKeys, type LaunchSettings } from './protocol.ts';
 
-/** The most an agent's launch settings may take, as JSON. */
-export const MAX_LAUNCH_SETTINGS_LENGTH = 16_384;
+/**
+ * The most an agent's launch settings may take, in bytes of JSON: what fits in one keychain item, which `security -i`
+ * takes on one line of at most 4,000 bytes, as base64 (`launch-settings-keychain.ts`).
+ */
+export const MAX_LAUNCH_SETTINGS_BYTES = 2_048;
 
 /** The env the board sets for itself: an agent's own would cut it off from the board, or point it at another agent. */
 const BOARD_ENV_PREFIX = 'AGENT_BOARD_';
@@ -128,9 +132,7 @@ export function launchSettingsParam(value: unknown, harness: Harness): LaunchSet
     if (value.settings.env !== undefined) envParam(value.settings.env, 'launchSettings.settings.env');
     if (keys.length > 0) out.settings = value.settings;
   }
-  if (JSON.stringify(out).length > MAX_LAUNCH_SETTINGS_LENGTH) {
-    throw invalidParams(`launchSettings are too long: ${MAX_LAUNCH_SETTINGS_LENGTH} characters of JSON at most`);
-  }
+  if (tooLong(out)) throw invalidParams(`launchSettings are too long: ${MAX_LAUNCH_SETTINGS_BYTES} bytes of JSON at most`);
   return out;
 }
 
@@ -149,29 +151,82 @@ export function parseEnvPairs(pairs: readonly string[]): Record<string, string> 
   return env;
 }
 
-function isEmpty(settings: LaunchSettings | undefined): boolean {
+export function isEmptyLaunchSettings(settings: LaunchSettings | undefined): boolean {
   return settings === undefined || (Object.keys(settings.env ?? {}).length === 0 && Object.keys(settings.settings ?? {}).length === 0);
 }
 
-/** Launch settings for the `agents.launch_settings` column: null for none. */
-export function storedLaunchSettings(settings: LaunchSettings | undefined): string | null {
-  return isEmpty(settings) ? null : JSON.stringify(settings);
+/** Whether launch settings are past {@link MAX_LAUNCH_SETTINGS_BYTES}. */
+export function tooLong(settings: LaunchSettings): boolean {
+  return Buffer.byteLength(JSON.stringify(settings)) > MAX_LAUNCH_SETTINGS_BYTES;
 }
 
-/** An agent's launch settings from its column; a column that doesn't read as them is none. */
-export function readLaunchSettings(column: string | null): LaunchSettings | undefined {
+/*
+ * The `agents.launch_settings` column holds an agent's launch setting names alone, as `LaunchSettingKeys` JSON, or
+ * null for none: their values may be secrets, which the keychain keeps (`launch-settings-keychain.ts`). An older
+ * build kept the values there too, as `LaunchSettings` JSON: its env and settings are objects, where the names'
+ * are arrays. The daemon moves those to the keychain as it starts.
+ */
+
+function parseColumn(column: string | null): Record<string, unknown> | undefined {
   if (column === null) return undefined;
-  let value: unknown;
   try {
-    value = JSON.parse(column);
+    const value: unknown = JSON.parse(column);
+    return plainObject(value) ? value : undefined;
   } catch {
     return undefined;
   }
-  if (!plainObject(value)) return undefined;
-  return {
+}
+
+/** The column for an agent's launch settings: their names alone, or null for none. */
+export function launchSettingNamesColumn(settings: LaunchSettings | undefined): string | null {
+  const keys = launchSettingKeys(settings);
+  return keys === null ? null : JSON.stringify(keys);
+}
+
+/**
+ * The values an agent's column still holds, as an older build kept them, or undefined when it holds names alone, none,
+ * or what doesn't read as launch settings.
+ */
+export function heldLaunchSettings(column: string | null): LaunchSettings | undefined {
+  const value = parseColumn(column);
+  if (value === undefined) return undefined;
+  const settings: LaunchSettings = {
     ...(plainObject(value.env) ? { env: value.env as Record<string, string> } : {}),
     ...(plainObject(value.settings) ? { settings: value.settings } : {}),
   };
+  return isEmptyLaunchSettings(settings) ? undefined : settings;
+}
+
+/** The names of an agent's launch settings, from its column in either form. Null for none. */
+export function launchSettingNames(column: string | null): LaunchSettingKeys | null {
+  const held = heldLaunchSettings(column);
+  if (held !== undefined) return launchSettingKeys(held);
+  const value = parseColumn(column);
+  if (value === undefined) return null;
+  const names = (part: unknown) => (Array.isArray(part) ? part.filter((name): name is string => typeof name === 'string') : []);
+  const keys = { env: names(value.env), settings: names(value.settings) };
+  return keys.env.length === 0 && keys.settings.length === 0 ? null : keys;
+}
+
+/**
+ * Puts their names in place of the values any agent's column in `db` still holds, as an older build kept them: in a
+ * backup of the database, whose values the keychain may never have had. Returns how many agents it changed. A
+ * database from before agents had launch settings has nothing to change. The values are overwritten only if `db` has
+ * `secure_delete` on.
+ */
+export function keepLaunchSettingNamesOnly(db: DatabaseSync): number {
+  const columns = db.prepare('PRAGMA table_info(agents)').all() as { name: string }[];
+  if (!columns.some((column) => column.name === 'launch_settings')) return 0;
+  const rows = db.prepare('SELECT session_id, launch_settings FROM agents WHERE launch_settings IS NOT NULL').all() as { session_id: string; launch_settings: string }[];
+  const set = db.prepare('UPDATE agents SET launch_settings = ? WHERE session_id = ?');
+  let changed = 0;
+  for (const row of rows) {
+    const held = heldLaunchSettings(row.launch_settings);
+    if (held === undefined) continue;
+    set.run(launchSettingNamesColumn(held), row.session_id);
+    changed++;
+  }
+  return changed;
 }
 
 /**
@@ -189,7 +244,7 @@ export function withOwnSettings(base: Record<string, unknown>, own: LaunchSettin
 
 /** What may be shown of an agent's launch settings: the names alone, as values may be secrets. Null for none. */
 export function launchSettingKeys(settings: LaunchSettings | undefined): LaunchSettingKeys | null {
-  if (settings === undefined || isEmpty(settings)) return null;
+  if (settings === undefined || isEmptyLaunchSettings(settings)) return null;
   return { env: Object.keys(settings.env ?? {}), settings: Object.keys(settings.settings ?? {}) };
 }
 

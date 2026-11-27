@@ -51,6 +51,7 @@ import {
 import { useDirectoryAgents, useLiveShells } from './use-live-board';
 import { draggedWithin, givesUp, surfaceDrag, surfaceMoveInto } from './window-drags';
 import { ownTabNotice, windowPaneKey, type WindowPaneKey } from './window-keys';
+import { pressOwnTab, useShownWindowClose } from './close-key';
 
 /** One pane of the window as it is drawn: where it is, and its strip's surfaces, the one it shows among them. */
 export interface PaneView {
@@ -453,9 +454,14 @@ export function useWindowPanes(
     if (worst !== undefined) dots.set(tabKey(tab.id), worst);
   }
   const toasts = useToast();
-  /** ⌘W on an agent's own tab: it can't be closed, and must not close the app's window instead. */
+  const closeWindow = useShownWindowClose();
+  /**
+   * ⌘W on a tab that can't be closed. An agent's own tab, in the session window shown on the board, closes the window
+   * instead (its session keeps running); a shell's only tab keeps its window, with a notice; never the app's window.
+   */
   const keepOwnTab = (repeat: boolean) => {
-    if (!repeat) toasts.show({ tone: 'info', message: ownTabNotice(owner.kind === 'shell' ? 'shell' : 'agent') });
+    const kind = owner.kind === 'shell' ? 'shell' : 'agent';
+    pressOwnTab(kind, repeat, closeWindow, () => toasts.show({ tone: 'info', message: ownTabNotice(kind) }));
   };
   const closable = (surface: WindowSurface) => surface.kind !== 'tab' || surface.tab.id !== OWN_TAB || (owner.kind === 'shell' && tabs.length > 1);
   const close = (closeKey: string) => {
@@ -622,7 +628,7 @@ export function useWindowPanes(
       // Before the terminal, and the board, whose ⌘D duplicates its selection, and the app menu, whose ⌘W closes the OS window.
       event.preventDefault();
       event.stopPropagation();
-      // A tab with no ×, an agent's own, is not closed by ⌘W, nor is the window.
+      // A tab with no ×, an agent's own, is not closed by ⌘W: the window shown on the board is, and never the app's.
       if (pressed.kind === 'close' && !closable(focusedPane.active)) return keepOwnTab(event.repeat);
       // A held key opens one tab or split, and closes one tab.
       if (event.repeat && (pressed.kind === 'newTab' || pressed.kind === 'close' || pressed.kind === 'split')) return;

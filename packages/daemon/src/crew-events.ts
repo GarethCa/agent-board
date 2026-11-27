@@ -13,6 +13,7 @@ const AT_PROMPT: ReadonlySet<AgentState> = new Set<AgentState>(['idle', 'waiting
 /** Longest detail an event keeps: one line of what it asks, cut short. */
 const MAX_DETAIL_LENGTH = 200;
 
+
 /** Most events one answer carries; the rest follow from its cursor. */
 const MAX_EVENTS_PER_ANSWER = 100;
 
@@ -34,6 +35,8 @@ export interface CrewEventLogOptions {
   agent(sessionId: string): Agent | undefined;
   /** The agents above the agent in its crew: its `spawnedBy`, then theirs. */
   leads(agent: Agent): string[];
+  /** The line the agent rested with, while its rest has it paused (`AgentHost.restedWith`). */
+  restedWith?(sessionId: string): string | undefined;
   /** This run's name in cursors: a cursor of another run is from before a restart. */
   run?: string;
   now?: () => Date;
@@ -121,7 +124,9 @@ export function createCrewEventLog(options: CrewEventLogOptions): CrewEventLog {
       if (before.state !== kind && after.state === kind) found.push({ kind, detail: null });
     }
     // A pause is no end: the agent wakes on its next message, so its orchestrator hears who paused it.
-    if (after.endedAt !== null && after.hibernated !== null) found.push({ kind: 'paused', detail: `by ${after.hibernated.by ?? 'the user'}` });
+    // One that rested paused itself: its orchestrator hears what it waits for.
+    if (after.endedAt !== null && after.hibernated !== null && after.hibernated.byId === after.sessionId) found.push({ kind: 'resting', detail: options.restedWith?.(after.sessionId) ?? null });
+    else if (after.endedAt !== null && after.hibernated !== null) found.push({ kind: 'paused', detail: `by ${after.hibernated.by ?? 'the user'}` });
     else if (after.endedAt !== null) found.push({ kind: 'ended', detail: howEnded(after) });
     return found;
   };

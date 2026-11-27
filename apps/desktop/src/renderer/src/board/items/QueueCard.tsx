@@ -2,7 +2,7 @@
 // to do as props, so the gallery draws them as the board does.
 import { useEffect, useRef, useState, type ComponentProps, type DragEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { ArrowUpFromLine, ArrowUpToLine, Check, ClockArrowDown, Hand, Inbox, NotebookText, Search, Ticket, Trash2, Undo2 } from 'lucide-react';
-import { jobsFrom } from '@agent-board/daemon/memory-lines';
+import { jobsFrom } from '@agent-board/daemon/queue-lines';
 import { MAX_DRAIN_DROPS, MAX_JOB_TEXT, isQueueWork, type Agent, type QueueAudience, type QueueJob, type QueueRowKind } from '@agent-board/daemon/protocol';
 import { Button, IconButton, Segmented } from '../../ui';
 import type { NeedsYouEntry } from '../../../../shared/needs-you';
@@ -314,7 +314,7 @@ export function QueueIconView({ audience, next, sub, ...props }: Omit<ComponentP
       glyph={queueGlyph(audience)}
       empty={audience === 'user' ? 'All caught up' : 'Empty · click to add'}
       testId="queue-icon"
-      // The tab stands in the icon's top padding, so its face sits where a folded memory's does, tab or none.
+      // The tab stands in the icon's top padding, so its face sits where a folded list card's does, tab or none.
       tab={
         audience === 'user' || next === undefined ? undefined : (
           <span className="queue-next-tab" title={`next: ${jobLine(next)}`}>

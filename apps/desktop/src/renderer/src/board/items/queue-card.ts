@@ -1,6 +1,6 @@
 // What a queue card shows, worked out from its data and jobs: kept apart from React, so it is tested on its own.
 import { isPutOff, isQueueWork, type QueueAudience, type QueueData, type QueueJob, type QueueJobChange } from '@agent-board/daemon/protocol';
-import { whoText } from './memory-card';
+import { whoText } from './list-card-text';
 
 /** How many done jobs the peek shows, under the open ones. */
 export const DONE_SHOWN = 5;

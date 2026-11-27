@@ -1,11 +1,9 @@
 import { useEffect, useState } from 'react';
-import type { DaemonSettings } from '@agent-board/daemon/protocol';
+import { NOTIFICATION_DEFAULTS, type NotificationSettings } from '@agent-board/daemon/protocol';
 import { useSimplified } from '../design';
 import { mutedAgentsText, NOTIFY_WHEN, needsYouShowsFrom, showsInFrontSwitch } from './notify-when';
 import { useTechnicalDetails } from '../technical';
 import { Choice, Choices, Fieldset, Field, Hint, Readout, Select, Switch, Tag } from '../ui';
-
-type NotificationSettings = Pick<DaemonSettings, 'needsYouShows' | 'notifications' | 'notifyInFront'>;
 
 /**
  * Under the Simplified design, one pop-up in place of the three rows: what pings, as the inbox lists it (explicit requests
@@ -19,7 +17,7 @@ function NotifyMeWhen({ settings, disabled, change }: { settings: NotificationSe
       <Field label="Notify me when">
         <Select
           aria-label="Notify me when"
-          value={settings?.needsYouShows ?? 'explicit'}
+          value={settings?.needsYouShows ?? NOTIFICATION_DEFAULTS.needsYouShows}
           disabled={disabled}
           onChange={(event) => change({ needsYouShows: needsYouShowsFrom(event.target.value) })}
         >
@@ -32,11 +30,18 @@ function NotifyMeWhen({ settings, disabled, change }: { settings: NotificationSe
       </Field>
       {settings?.needsYouShows === 'turns' && <Hint>A finished turn shows in Needs you too.</Hint>}
       <Hint>To turn notifications off, use System Settings. Quiet hours follow your Mac’s Focus (System Settings › Focus).</Hint>
+      <Switch
+        label="Banners when an agent is done"
+        checked={settings?.alertBanners ?? NOTIFICATION_DEFAULTS.alertBanners}
+        disabled={disabled}
+        onChange={(event) => change({ alertBanners: event.target.checked })}
+      />
+      <Hint>An agent may tell you a task is done: a banner, at most one per agent every 5 minutes, and a row in the inbox’s Done list. Off: the row only.</Hint>
       {showsInFrontSwitch(technical) && (
         <>
           <Switch
             label="Also while agent-board is in front"
-            checked={settings?.notifyInFront ?? false}
+            checked={settings?.notifyInFront ?? NOTIFICATION_DEFAULTS.notifyInFront}
             disabled={disabled}
             onChange={(event) => change({ notifyInFront: event.target.checked })}
           />
@@ -49,7 +54,8 @@ function NotifyMeWhen({ settings, disabled, change }: { settings: NotificationSe
 
 /**
  * Settings › Alerts › Notifications: what the needs-you inbox lists (explicit requests only, the default, or every finished turn
- * too), whether a new request raises an OS notification, and whether it does so while the app is in front. How many
+ * too), whether a new request raises an OS notification, whether it does so while the app is in front, and whether an
+ * agent's alert that something is done raises a banner or only its row in the inbox's Done list. How many
  * agents are muted, which notify of nothing but still show in the list. The daemon keeps them, so every window agrees.
  */
 export function NotificationsSetting({ muted, onError }: { muted: number; onError: (action: string) => (error: unknown) => void }) {
@@ -96,7 +102,7 @@ export function NotificationsSetting({ muted, onError }: { muted: number; onErro
               </>
             }
             detail="Questions, permission prompts and agents that flag you."
-            checked={(settings?.needsYouShows ?? 'explicit') === 'explicit'}
+            checked={(settings?.needsYouShows ?? NOTIFICATION_DEFAULTS.needsYouShows) === 'explicit'}
             disabled={disabled}
             onChange={() => change({ needsYouShows: 'explicit' })}
           />
@@ -112,18 +118,25 @@ export function NotificationsSetting({ muted, onError }: { muted: number; onErro
       </Fieldset>
       <Switch
         label="OS notifications"
-        checked={settings?.notifications ?? true}
+        checked={settings?.notifications ?? NOTIFICATION_DEFAULTS.notifications}
         disabled={disabled}
         onChange={(event) => change({ notifications: event.target.checked })}
       />
       <Hint>One per new request, with its reason. Clicking it opens the agent.</Hint>
       <Switch
         label="Also while agent-board is in front"
-        checked={settings?.notifyInFront ?? false}
+        checked={settings?.notifyInFront ?? NOTIFICATION_DEFAULTS.notifyInFront}
         disabled={disabled || settings?.notifications === false}
         onChange={(event) => change({ notifyInFront: event.target.checked })}
       />
       <Hint>Off: only the pill changes while you are looking at the board.</Hint>
+      <Switch
+        label="Banners when an agent is done"
+        checked={settings?.alertBanners ?? NOTIFICATION_DEFAULTS.alertBanners}
+        disabled={disabled || settings?.notifications === false}
+        onChange={(event) => change({ alertBanners: event.target.checked })}
+      />
+      <Hint>An agent may tell you a task is done: a banner, at most one per agent every 5 minutes, and a row in the inbox’s Done list. Off: the row only.</Hint>
       {mutedHint}
     </>
   );

@@ -3,7 +3,6 @@ import type { BoardItemKind } from '@agent-board/daemon/protocol';
 import { covers } from '../../board-colors';
 import {
   AlarmClock,
-  Brain,
   SquareCheckBig,
   Ticket,
   AlignCenterVertical,
@@ -75,8 +74,6 @@ export interface ContextActions {
   addClock(): void;
   /** A new steps card where the menu was opened. */
   addSteps(): void;
-  /** A new memory where the menu was opened, its add box focused. */
-  addMemory(): void;
   /** A new queue for agents where the menu was opened, its add box focused. */
   addQueue(): void;
   /** A new to-do list of the user's where the menu was opened, its add field focused. */
@@ -192,7 +189,6 @@ export function boardEntries(actions: ContextActions): MenuEntry[] {
   return [
     { label: 'New steps', icon: <ListTodo />, shortcut: keyText('make.steps'), hint: 'Questions and to-dos, in order', onSelect: actions.addSteps },
     { label: 'Add a clock', icon: <AlarmClock />, hint: 'A schedule that messages an agent, or starts one', onSelect: actions.addClock },
-    { label: 'Add a memory', icon: <Brain />, shortcut: keyText('make.memory'), hint: 'Notes and decisions you and agents keep for each other', onSelect: actions.addMemory },
     { label: 'Add a queue', icon: <Ticket />, shortcut: keyText('make.queue'), hint: 'Jobs in order, for agents to take one at a time', onSelect: actions.addQueue },
     { label: 'Add a to-do list', icon: <SquareCheckBig />, hint: 'Things for you to do; agents add them with remind', onSelect: actions.addTodo },
     crewMenu(currentPrefabs(), (prefab) => (prefab === null ? actions.crewLibrary() : actions.startCrew(prefab))),

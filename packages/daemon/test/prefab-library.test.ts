@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import { fakeHarnessEnv, McpClient } from '@agent-board/fake-harness';
+import { createFakeTracker, createMemoryCredentialStore } from '@agent-board/tracker/testing';
 import { BUILT_IN_PREFABS, prefabFile } from '../src/crew-prefabs.ts';
 import { graphFromStarts } from '../src/prefab-graph.ts';
 import { MAX_PURPOSE_LENGTH, RPC_ERROR, type CrewPrefab, type DaemonEvent, type HookEvent } from '../src/protocol.ts';
@@ -12,11 +13,12 @@ import { connectTestClient, recordEvents, startTestDaemon, TEST_CLI_LAUNCHER, te
 
 const SIZE = { cols: 120, rows: 40 };
 
-async function prefabDaemon(dataDir = tempDataDir()) {
+async function prefabDaemon(dataDir = tempDataDir(), trackers: Pick<NonNullable<Parameters<typeof startTestDaemon>[0]>, 'credentials' | 'trackers'> = {}) {
   const daemon = await startTestDaemon({
     dataDir,
     worktreesDir: tempDataDir(),
     agentEnv: fakeHarnessEnv({ scenario: 'orchestrate', home: tempDataDir(), idleNotifyMs: 200 }),
+    ...trackers,
   });
   const client = await connectTestClient(daemon);
   const recorder = recordEvents(client);
@@ -43,6 +45,11 @@ async function firstPrompt(setup: Setup, sessionId: string): Promise<string> {
     (e: DaemonEvent): e is HookEvent => e.type === 'hook' && e.sessionId === sessionId && e.event === 'UserPromptSubmit',
   );
   return String(event.payload.prompt);
+}
+
+/** An agent as the daemon lists it now. */
+async function agentOf(setup: Setup, sessionId: string) {
+  return (await setup.client.call('agent.list')).find((agent) => agent.sessionId === sessionId)!;
 }
 
 const pair = (fields: Partial<CrewPrefab> = {}): CrewPrefab => ({
@@ -183,6 +190,117 @@ describe('starting a crew from a prefab', () => {
     expect(crew.started[0]).toMatchObject({ member: 'impl', role: 'implementer', harness: 'claude', model: 'opus', zoneId: setup.zone.id, spawnedBy: null });
     expect(crew.later).toEqual([{ member: 'review', starts: 'handoff', command: "agent-board new --base <impl's ref> --role reviewer --harness codex -- '<its task>'" }]);
     expect(await firstPrompt(setup, crew.started[0]!.sessionId)).toMatch(/Add a footer$/);
+  });
+
+  it('starts a drafted prefab with a ticket input on a ticket no linked tracker can read: the agent gets the ticket as typed, to look up itself', async () => {
+    const setup = await prefabDaemon();
+    const drafted = pair({
+      name: 'Drafted',
+      members: [pair().members[0]!],
+      inputs: [
+        { id: 'prompt', kind: 'prompt' },
+        { id: 'ticket', kind: 'ticket' },
+        { id: 'end', kind: 'end', as: 'ready' },
+      ],
+      gates: [],
+      lines: [
+        { from: 'prompt', to: 'impl' },
+        { from: 'ticket', to: 'impl' },
+        { from: 'impl', to: 'end' },
+      ],
+    });
+    await setup.client.call('orchestrator.savePrefab', { text: prefabFile(drafted) });
+
+    const crew = await setup.client.call('orchestrator.startPrefab', { name: 'Drafted', issueId: 'ABC-12', zoneId: setup.zone.id });
+
+    const prompt = await firstPrompt(setup, crew.started[0]!.sessionId);
+    expect(prompt).toContain('ABC-12');
+    expect(prompt).toMatch(/look it up/i);
+    // Named and branched after its ticket, linked to none.
+    const agent = await agentOf(setup, crew.started[0]!.sessionId);
+    expect(agent).toMatchObject({ name: 'ABC-12', issue: null });
+    expect(agent.branch).toMatch(/^abc-12-[0-9a-f]+$/);
+
+    // With a prompt too, named after both.
+    const asked = await setup.client.call('orchestrator.startPrefab', { name: 'Drafted', issueId: 'ABC-13', prompt: 'Add a footer', zoneId: setup.zone.id });
+    await firstPrompt(setup, asked.started[0]!.sessionId);
+    const both = await agentOf(setup, asked.started[0]!.sessionId);
+    expect(both.name).toBe('ABC-13: Add a footer');
+    expect(both.branch).toMatch(/^abc-13-add-a-footer-[0-9a-f]+$/);
+  });
+
+  it("passes a ticket's link on as typed too, when no linked tracker can read it", async () => {
+    const setup = await prefabDaemon();
+    const drafted = pair({
+      name: 'Drafted',
+      members: [pair().members[0]!],
+      inputs: [
+        { id: 'prompt', kind: 'prompt' },
+        { id: 'ticket', kind: 'ticket' },
+        { id: 'end', kind: 'end', as: 'ready' },
+      ],
+      gates: [],
+      lines: [
+        { from: 'prompt', to: 'impl' },
+        { from: 'ticket', to: 'impl' },
+        { from: 'impl', to: 'end' },
+      ],
+    });
+    await setup.client.call('orchestrator.savePrefab', { text: prefabFile(drafted) });
+
+    const crew = await setup.client.call('orchestrator.startPrefab', { name: 'Drafted', issueId: 'https://linear.app/acme/issue/ABC-12/add-a-footer', zoneId: setup.zone.id });
+
+    const prompt = await firstPrompt(setup, crew.started[0]!.sessionId);
+    expect(prompt).toContain('https://linear.app/acme/issue/ABC-12/add-a-footer');
+    expect(prompt).toMatch(/look it up/i);
+    // A link names it by its issue's key.
+    expect((await agentOf(setup, crew.started[0]!.sessionId)).name).toBe('ABC-12');
+  });
+
+  it('starts a ticket on a ticket no linked tracker can read: its chat gets the ticket as typed', async () => {
+    const setup = await prefabDaemon();
+
+    const ticket = await setup.client.call('orchestrator.startPrefab', { name: 'Just the chat', issueId: 'https://github.com/acme/app-2/issues/34', zoneId: setup.zone.id });
+
+    const prompt = await firstPrompt(setup, ticket.started[0]!.sessionId);
+    expect(prompt).toContain('https://github.com/acme/app-2/issues/34');
+    expect(prompt).toMatch(/look it up/i);
+    const chat = await agentOf(setup, ticket.started[0]!.sessionId);
+    expect(chat.name).toBe('#34');
+    expect(chat.branch).toMatch(/^34-[0-9a-f]+$/);
+  });
+
+  it('starts a ticket in a zone bound to a tracker that is no longer connected: its chat gets the ticket as typed', async () => {
+    const setup = await prefabDaemon(tempDataDir(), { credentials: createMemoryCredentialStore(), trackers: { linear: () => createFakeTracker() } });
+    await setup.client.call('tracker.connect', { provider: 'linear', credential: 'lin_api_good' });
+    await setup.client.call('zone.setTracker', { id: setup.zone.id, tracker: { provider: 'linear', scope: 'ACME' } });
+    await setup.client.call('tracker.disconnect', { provider: 'linear' });
+
+    const ticket = await setup.client.call('orchestrator.startPrefab', { name: 'Just the chat', issueId: 'ACME-12', zoneId: setup.zone.id });
+
+    expect(await firstPrompt(setup, ticket.started[0]!.sessionId)).toMatch(/ACME-12[\s\S]*look it up/i);
+    expect(await agentOf(setup, ticket.started[0]!.sessionId)).toMatchObject({ name: 'ACME-12', issue: null });
+  });
+
+  it("starts a ticket as typed when the tracker's key can't be read from its store", async () => {
+    const store = createMemoryCredentialStore();
+    let unreadable = false;
+    const credentials = {
+      get: (account: string) => (unreadable ? Promise.reject(new Error('no keychain at /nowhere')) : store.get(account)),
+      set: (account: string, secret: string) => store.set(account, secret),
+      delete: (account: string) => store.delete(account),
+    };
+    const setup = await prefabDaemon(tempDataDir(), { credentials, trackers: { linear: () => createFakeTracker() } });
+    await setup.client.call('tracker.connect', { provider: 'linear', credential: 'lin_api_good' });
+    await setup.client.call('zone.setTracker', { id: setup.zone.id, tracker: { provider: 'linear', scope: 'ACME' } });
+    unreadable = true;
+
+    const ticket = await setup.client.call('orchestrator.startPrefab', { name: 'Just the chat', issueId: 'ACME-12', zoneId: setup.zone.id });
+
+    expect(await firstPrompt(setup, ticket.started[0]!.sessionId)).toMatch(/ACME-12[\s\S]*look it up/i);
+    expect(await agentOf(setup, ticket.started[0]!.sessionId)).toMatchObject({ name: 'ACME-12', issue: null });
+    // A plain start on that ticket, not asked to take it as typed, still fails on the store.
+    await expect(setup.client.call('agent.spawn', { zoneId: setup.zone.id, issueId: 'ACME-12', prompt: 'Go', cols: 80, rows: 24 })).rejects.toThrow(/no keychain/);
   });
 
   it('runs a crew for a prefab with reviewers at the hand-off: its builder handing over starts its reviewer on its branch', async () => {

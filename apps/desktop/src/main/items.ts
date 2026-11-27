@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import { ipcMain, net, protocol } from 'electron';
 import { pathToFileURL } from 'node:url';
 import type { DaemonLink } from '@agent-board/daemon/client';
-import { IMAGE_EXTENSIONS, type ClockData, type ClockPlace, type CreateItemParams, type MemoryChange, type QueueChange, type TodoChange, type UpdateItemParams } from '@agent-board/daemon/protocol';
+import { IMAGE_EXTENSIONS, type ClockData, type ClockPlace, type CreateItemParams, type QueueChange, type TodoChange, type UpdateItemParams } from '@agent-board/daemon/protocol';
 import { ITEM_IPC } from '../preload/api';
 import { IMAGE_SCHEME } from '../shared/image-url';
 import { forwardEvents } from './broadcast';
@@ -13,7 +13,6 @@ import { passthrough, passthroughVoid } from './passthrough';
 export function registerItemIpc(daemon: DaemonLink, dataDir: string): void {
   forwardEvents(daemon, ['item.updated', 'item.removed'], ITEM_IPC.changed);
   forwardEvents(daemon, ['clock.updated'], ITEM_IPC.clockChanged);
-  forwardEvents(daemon, ['memory.readBy'], ITEM_IPC.memoryReadBy);
 
   passthrough(daemon, ITEM_IPC.list, 'item.list', (ticket?: string) => (ticket === undefined ? undefined : { ticket }));
   passthrough(daemon, ITEM_IPC.create, 'item.create', (params: CreateItemParams) => params);
@@ -24,9 +23,6 @@ export function registerItemIpc(daemon: DaemonLink, dataDir: string): void {
   passthrough(daemon, ITEM_IPC.runClock, 'clock.runNow', (id: string) => ({ id }));
   passthrough(daemon, ITEM_IPC.addClock, 'clock.add', (data: Partial<ClockData>, place: ClockPlace) => ({ data, place }));
   passthrough(daemon, ITEM_IPC.setClockOnlyIf, 'clock.setOnlyIf', (id: string, command: string | null) => ({ id, command }));
-  passthrough(daemon, ITEM_IPC.readMemory, 'memory.read', (id: string, search?: string) => (search === undefined ? { id } : { id, search }));
-  passthrough(daemon, ITEM_IPC.changeMemory, 'memory.change', (id: string, change: MemoryChange) => ({ id, change }));
-  passthrough(daemon, ITEM_IPC.memoryHistory, 'memory.history', (id: string, entry: string) => ({ id, entry }));
   passthrough(daemon, ITEM_IPC.readQueue, 'queue.read', (id: string) => ({ id }));
   passthrough(daemon, ITEM_IPC.changeQueue, 'queue.change', (id: string, change: QueueChange) => ({ id, change }));
   passthrough(daemon, ITEM_IPC.queueHistory, 'queue.history', (id: string, job: string) => ({ id, job }));

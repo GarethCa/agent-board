@@ -2,9 +2,10 @@
 // ran and which an older daemon may ignore, and, when it may not, the command that puts the backup back. See
 // docs/rolling-back.md.
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs';
+import { chmodSync, existsSync, readdirSync, renameSync, rmSync, statSync, utimesSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { keepLaunchSettingNamesOnly } from './launch-settings.ts';
 import { shellQuote } from './shell-words.ts';
 
 export interface Migration {
@@ -186,7 +187,7 @@ export function backUp(db: DatabaseSync, version: number): string | undefined {
     // A consistent copy of what is committed, the write-ahead log's pages included, from the open connection.
     db.prepare('VACUUM INTO ?').run(partial);
     chmodSync(partial, 0o600);
-    dropHeldCopies(partial);
+    dropSecrets(partial);
     // So a backup that a crash cuts short is never the one the restore command names.
     renameSync(partial, path);
   } catch (error) {
@@ -198,24 +199,63 @@ export function backUp(db: DatabaseSync, version: number): string | undefined {
 }
 
 /**
- * Clears, in the backup at `path`, the copies of held and queued hand-off files, as the "Path only" setting does: a
- * copy is meant to last only until its hand-off is delivered or dropped, and a backup would keep it on. A restored
- * board reads the file again at delivery. A final message is kept anyway (on its agent), so its copy stays.
+ * Opens the backup at `path` to clear what it must not keep: with no journal file to hold the old pages, and what is
+ * cleared overwritten in the file. Returns what `clear` returns.
  */
-function dropHeldCopies(path: string): void {
+function clearInCopy<T>(path: string, clear: (copy: DatabaseSync) => T): T {
   const copy = new DatabaseSync(path);
   try {
-    // No journal file to hold the old pages, and what is cleared is overwritten in the file.
     copy.exec('PRAGMA journal_mode = MEMORY');
     copy.exec('PRAGMA secure_delete = ON');
-    const columns = new Set((copy.prepare('PRAGMA table_info(flow_edges)').all() as { name: string }[]).map((column) => column.name));
-    const cleared = ['held_text', 'queued_text'].filter((column) => columns.has(column));
-    if (cleared.length === 0) return;
-    const where = columns.has('payload') ? " WHERE payload != 'final-message'" : '';
-    copy.exec(`UPDATE flow_edges SET ${cleared.map((column) => `${column} = NULL`).join(', ')}${where}`);
+    return clear(copy);
   } finally {
     copy.close();
   }
+}
+
+/** Clears, in a new backup at `path`, what no backup keeps: held hand-off copies, and launch settings' values. */
+function dropSecrets(path: string): void {
+  clearInCopy(path, (copy) => {
+    dropHeldCopies(copy);
+    keepLaunchSettingNamesOnly(copy);
+  });
+}
+
+/**
+ * Takes out of every backup beside the database the launch settings' values an older build kept in it, keeping their
+ * names: the keychain keeps the values (`launch-settings-keychain.ts`), and a backup must not. A board restored
+ * from one starts those agents with the values the keychain has, or none. Each backup keeps its time, by which the
+ * newest are kept. Returns how many it changed; a backup it can't open is left as it is.
+ */
+export function scrubBackups(db: DatabaseSync): number {
+  const file = databaseFile(db);
+  if (file === undefined) return 0;
+  let changed = 0;
+  for (const backup of backups(file)) {
+    try {
+      const { atime, mtime } = statSync(backup.path);
+      // Opening it can write to it too (its journal mode), so its time is put back either way.
+      const cleared = clearInCopy(backup.path, keepLaunchSettingNamesOnly);
+      utimesSync(backup.path, atime, mtime);
+      if (cleared > 0) changed++;
+    } catch {
+      // Not a database this build can open: nothing it wrote.
+    }
+  }
+  return changed;
+}
+
+/**
+ * Clears, in a backup, the copies of held and queued hand-off files, as the "Path only" setting does: a copy is meant
+ * to last only until its hand-off is delivered or dropped, and a backup would keep it on. A restored board reads the
+ * file again at delivery. A final message is kept anyway (on its agent), so its copy stays.
+ */
+function dropHeldCopies(copy: DatabaseSync): void {
+  const columns = new Set((copy.prepare('PRAGMA table_info(flow_edges)').all() as { name: string }[]).map((column) => column.name));
+  const cleared = ['held_text', 'queued_text'].filter((column) => columns.has(column));
+  if (cleared.length === 0) return;
+  const where = columns.has('payload') ? " WHERE payload != 'final-message'" : '';
+  copy.exec(`UPDATE flow_edges SET ${cleared.map((column) => `${column} = NULL`).join(', ')}${where}`);
 }
 
 interface Backup {

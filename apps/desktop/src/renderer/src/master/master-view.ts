@@ -1,7 +1,7 @@
 // What the Captain's panel and tile show (ADR-0019): which agent is the master, the zones' leads it watches, the
 // rails to them, what needs the user, and its latest digest. Derived from the board's lists, never stored.
 import type { Edge } from '@xyflow/react';
-import { isOrchestratorRole, permissionPrompt, questionPrompt, type Agent, type BoardItem, type NeedsYouKind, type Zone } from '@agent-board/daemon/protocol';
+import { isOrchestratorRole, permissionPrompt, questionPrompt, REQUEST_WORDS, type Agent, type BoardItem, type NeedsYouKind, type Zone } from '@agent-board/daemon/protocol';
 import { tileNodeId } from '../board/tiles';
 import { agentNoteData } from '../board/items/agent-note';
 import { TETHER_EDGE_TYPE } from '../board/items/agent-note-tethers';
@@ -117,11 +117,11 @@ export function askLine(agent: Agent, kind: NeedsYouKind): string {
     case 'asks':
       return agent.ask?.question ?? questionPrompt(agent)?.questions[0]?.question ?? '';
     case 'plan':
-      return agent.plan === null ? '' : `Plan to review: ${agent.plan.title}`;
+      return agent.plan === null ? '' : `${REQUEST_WORDS.plan.tag}: ${agent.plan.title}`;
     case 'steps':
-      return agent.stepsWait === null ? '' : `Steps to answer: ${agent.stepsWait.title}`;
+      return agent.stepsWait === null ? '' : `${REQUEST_WORDS.steps.tag}: ${agent.stepsWait.title}`;
     case 'todo':
-      return agent.stepsWait === null ? '' : `Waits on your to-do: ${agent.stepsWait.text}`;
+      return agent.stepsWait === null ? '' : `${REQUEST_WORDS.todo.tag}: ${agent.stepsWait.text}`;
     case 'permission': {
       const tool = permissionPrompt(agent)?.toolName;
       return tool === undefined ? 'Asking for permission in its terminal' : `Asks to use ${tool}`;

@@ -23,7 +23,6 @@ const NAMES: Record<BoardItemKind | 'item' | 'zone' | 'agent' | 'shell' | 'exter
   document: ['document', 'documents'],
   plan: ['plan card', 'plan cards'],
   steps: ['steps card', 'steps cards'],
-  memory: ['memory', 'memories'],
   queue: ['queue', 'queues'],
   todo: ['to-do list', 'to-do lists'],
   crew: ['crew card', 'crew cards'],

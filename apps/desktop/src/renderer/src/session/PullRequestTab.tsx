@@ -14,6 +14,7 @@ import { Markdown } from './Markdown';
 import { diffLines } from './pr-diff';
 import { usePullRequest } from './use-pull-request';
 import { pastGateWhy } from '@agent-board/daemon/gate-rules';
+import { pullRequestUrl } from '@agent-board/tracker/pull-request-ref';
 
 const openLink = (url: string) => void window.agentBoard.trackers.openLink(url).catch(() => {});
 
@@ -71,7 +72,7 @@ export function PullRequestTab({ pr, visible }: { pr: PullRequestRef; visible: b
             <Button size="xs" variant="ghost" icon={<RefreshCw />} disabled={state.busy} onClick={state.refresh} data-testid="pr-refresh" tooltip="Read it from GitHub again">
               Refresh
             </Button>
-            <Button size="xs" variant="ghost" icon={<ExternalLink />} onClick={() => openLink(details?.url ?? `https://github.com/${pr.repo}/pull/${pr.number}`)} tooltip="Open it in the browser">
+            <Button size="xs" variant="ghost" icon={<ExternalLink />} onClick={() => openLink(details?.url ?? pullRequestUrl(pr))} tooltip="Open it in the browser">
               GitHub
             </Button>
           </span>

@@ -27,16 +27,12 @@ import type {
   ClockPlace,
   ClockStatus,
   HistoryVersion,
-  MemoryChange,
   TodoChange,
-  MemoryEntry,
-  MemoryView,
   QueueChange,
   QueueJob,
   QueueView,
   TakenJob,
   ClockUpdatedEvent,
-  MemoryReadByEvent,
   Connector,
   ConnectorRemovedEvent,
   ConnectorUpdatedEvent,
@@ -864,9 +860,6 @@ export const ITEM_IPC = {
   runClock: 'item:run-clock',
   addClock: 'item:add-clock',
   setClockOnlyIf: 'item:set-clock-only-if',
-  readMemory: 'item:read-memory',
-  changeMemory: 'item:change-memory',
-  memoryHistory: 'item:memory-history',
   readQueue: 'item:read-queue',
   changeQueue: 'item:change-queue',
   queueHistory: 'item:queue-history',
@@ -877,8 +870,6 @@ export const ITEM_IPC = {
   changed: 'item:changed',
   /** main → renderer: `(ClockUpdatedEvent)` whenever a clock is planned again, fires or a run of it ends. */
   clockChanged: 'item:clock-changed',
-  /** main → renderer: `(MemoryReadByEvent)` as an agent reads a memory, at most once a minute for each. */
-  memoryReadBy: 'item:memory-read-by',
 } as const;
 
 export interface ItemsApi {
@@ -906,14 +897,6 @@ export interface ItemsApi {
   setClockOnlyIf(id: string, command: string | null): Promise<BoardItem>;
   /** Calls `listener` with a clock's status whenever it changes. Returns the unsubscribe function. */
   onClockChanged(listener: (event: ClockUpdatedEvent) => void): () => void;
-  /** Calls `listener` as an agent reads a memory (at most once a minute for each agent). Returns the unsubscribe function. */
-  onMemoryReadBy(listener: (event: MemoryReadByEvent) => void): () => void;
-  /** A memory with its entries, those matching `search` if given. */
-  readMemory(id: string, search?: string): Promise<MemoryView>;
-  /** Adds, edits, removes or restores one of a memory's entries, as the user. */
-  changeMemory(id: string, change: MemoryChange): Promise<{ item: BoardItem; entry: MemoryEntry | null }>;
-  /** An entry's past versions, newest first. */
-  memoryHistory(id: string, entry: string): Promise<HistoryVersion<MemoryEntry>[]>;
   /** A queue with its jobs and notes: open ones in order, then those done. */
   readQueue(id: string): Promise<QueueView>;
   /** Adds, edits, moves, finishes, drops back, removes or restores one of a queue's jobs or notes, as the user. */
@@ -1125,8 +1108,11 @@ export interface AgentsApi {
   link(sessionId: string, issueId: string | null): Promise<Agent>;
   /** Gives the agent a cron schedule, replacing any it had, or takes it away with null. */
   setSchedule(sessionId: string, schedule: ScheduleSpec | null): Promise<Agent>;
-  /** Marks the agent's current ask seen, because its session was opened: it stops needing the user until it asks again. */
-  markSeen(sessionId: string): Promise<Agent>;
+  /**
+   * Marks the agent's current ask seen, because its session was opened or touched: it stops needing the user until it
+   * asks again. `opened`: the user opened it (not a touch or a focus of it shown already), which reads its alert too.
+   */
+  markSeen(sessionId: string, opened?: boolean): Promise<Agent>;
   /** Mutes the agent's OS notifications, or unmutes them. */
   setMuted(sessionId: string, muted: boolean): Promise<Agent>;
   /** Pins the agent's tile expanded, or unpins it: pinned, it stays open where it is, at its size, until unpinned. */
@@ -1896,8 +1882,6 @@ export const CAPTURE_READS: ReadonlySet<string> = new Set([
   ZONE_IPC.list,
   ITEM_IPC.list,
   ITEM_IPC.clocks,
-  ITEM_IPC.readMemory,
-  ITEM_IPC.memoryHistory,
   ITEM_IPC.readQueue,
   ITEM_IPC.queueHistory,
   ITEM_IPC.takenJobs,

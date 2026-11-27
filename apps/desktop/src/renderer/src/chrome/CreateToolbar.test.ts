@@ -17,7 +17,6 @@ const props: CreateToolbarProps = {
   onTool: noop,
   onSticky: noop,
   onSteps: noop,
-  onMemory: noop,
   onQueue: noop,
   onTodo: noop,
   ghostSize: { width: 256, height: 120 },

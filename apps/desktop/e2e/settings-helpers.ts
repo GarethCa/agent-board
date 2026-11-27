@@ -32,6 +32,11 @@ export const settingsSection = (settings: Page, name: string): Locator => settin
  * Turns `parts` of the Classic tile back on in Settings › Board › Agent tiles, then closes Settings, for a spec about a
  * part the quiet tile leaves off (its chips, its pill, its bubble). The board hears the change as from another window.
  */
+/** Puts the docs and plans agents ask to show on the board there as cards, as Settings' switch does: off by default. */
+export async function putDocsOnBoard(page: Page): Promise<void> {
+  await page.evaluate(() => window.agentBoard.flowEdges.setSettings({ placeDocTiles: true }));
+}
+
 export async function showTileParts(window: Page, parts: (keyof TileShows)[]): Promise<void> {
   // The Simplified tile has no such parts: its specs read it as it is.
   if (runDesign() === 'simplified') return;

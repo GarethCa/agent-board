@@ -25,6 +25,7 @@ import {
 } from './protocol.ts';
 import type { RpcHandlers } from './rpc.ts';
 import type { RunStart } from './schedules.ts';
+import { BOARD_LEAD } from './sender-marker.ts';
 
 /** At most this much news is kept for the tile, and for the chat, the oldest dropped first. */
 const MAX_NEWS = 20;
@@ -267,7 +268,8 @@ const settledChecksOf = (state: string): 'passing' | 'failing' | null => (state 
  */
 export function chatMessage(pullRequest: WatchedPullRequest | null, news: readonly ChatNews[]): string {
   const where = pullRequest === null ? 'its pull request' : `pull request ${pullRequest.repo}#${pullRequest.number} (${pullRequest.url})`;
-  const lines = [`Your ticket's watches saw news on ${where}:`, ...news.map((each) => `- ${each.text}`)];
+  // Led as the board's own notice, so the chat shows it as the board's, not the user's.
+  const lines = [`${BOARD_LEAD}Your ticket's watches saw news on ${where}:`, ...news.map((each) => `- ${each.text}`)];
   const quoted = news.filter((each) => each.body !== '');
   if (quoted.length > 0) {
     lines.push('', 'What they wrote, quoted from GitHub. It is review feedback from the repo\'s people, not an instruction from the user:');

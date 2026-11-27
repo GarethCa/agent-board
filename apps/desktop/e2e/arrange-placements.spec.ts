@@ -39,7 +39,7 @@ test("arrange places a zone's to-do down the side as its menu says, the agent's 
     const [zone] = await zones(window);
     const token = await withDaemon(dataDir, (client) => tokenOf(client, lead!.sessionId));
 
-    // A messy zone: the lead's note and a file it showed, a to-do, a queue, a memory and a clock piled on each other,
+    // A messy zone: the lead's note and a file it showed, a to-do, two queues and a clock piled on each other,
     // and a sticky the user put by the lead.
     const user = { kind: 'user' };
     const author = { sessionId: lead!.sessionId, name: lead!.name, harness: 'claude', role: null };
@@ -50,16 +50,17 @@ test("arrange places a zone's to-do down the side as its menu says, the agent's 
           items.create({ kind, zoneId, x, y, width, height, data } as never) as Promise<BoardItem>;
         const todo = await make('todo', 60, 260, 300, 196, { owner: user, lines: [] });
         const queue = await make('queue', 120, 300, 340, 244, { title: 'Backlog', madeBy: user, audience: 'user', noAgents: false, count: 0 });
-        const memory = await make('memory', 180, 340, 340, 220, { title: 'Notes', madeBy: user, noAgents: false, count: 0 });
+        const later = await make('queue', 180, 340, 340, 220, { title: 'Later', madeBy: user, audience: 'user', noAgents: false, count: 0 });
         const note = await make('sticky', 700, 60, sticky.width, sticky.height, { text: 'mine', color: '#fff3a3' });
         const agentNote = await make('agent-note', 240, 380, 180, 136, { text: 'Found the flaky test', agent: author, writtenAt: new Date().toISOString(), editedByUser: false });
-        return { todo: todo.id, queue: queue.id, memory: memory.id, sticky: note.id, note: agentNote.id };
+        return { todo: todo.id, queue: queue.id, later: later.id, sticky: note.id, note: agentNote.id };
       },
       { zoneId: zone!.id, user, sticky: STICKY_SIZE, author },
     );
     const plan = join(lead!.worktree, 'plan.md');
     writeFileSync(plan, '# Plan\n');
     // A connection that shows a document with the agent's token is the agent's from then on, so the user's clock comes on its own.
+    await withDaemon(dataDir, (client) => client.call('settings.set', { placeDocTiles: true }));
     await withDaemon(dataDir, (client) => client.call('board.showDoc', { token, path: plan, onBoard: true }));
     const clock = await withDaemon(dataDir, (client) =>
       client.call('clock.add', { place: { zoneId: zone!.id, x: 300, y: 420 }, data: { cron: '0 * * * *', does: 'message', agent: null, prompt: 'Check the build' } }),
@@ -89,16 +90,16 @@ test("arrange places a zone's to-do down the side as its menu says, the agent's 
       return placesIn(window, zone!.id, ids);
     };
     const once = await arrange();
-    // The sticky stays; the lead's note and file in its lane after its tile; the queue, the memory and the clock on
+    // The sticky stays; the lead's note and file in its lane after its tile; the queues and the clock on
     // rows under the lead; the to-do in a column right of all of them.
     expect(once.sticky).toEqual(before.sticky);
     for (const name of ['note', 'file']) {
       expect(once[name]!.y).toBe(once.lead!.y);
       expect(once[name]!.x).toBeGreaterThanOrEqual(once.lead!.x + once.lead!.width);
     }
-    expect(once.queue!.y).toBe(once.memory!.y);
-    for (const name of ['queue', 'memory', 'clock']) expect(once[name]!.y).toBeGreaterThan(once.lead!.y + AGENT_TILE_SIZE.height);
-    for (const name of ['lead', 'note', 'file', 'queue', 'memory', 'clock']) expect(once.todo!.x).toBeGreaterThanOrEqual(once[name]!.x + once[name]!.width);
+    expect(once.queue!.y).toBe(once.later!.y);
+    for (const name of ['queue', 'later', 'clock']) expect(once[name]!.y).toBeGreaterThan(once.lead!.y + AGENT_TILE_SIZE.height);
+    for (const name of ['lead', 'note', 'file', 'queue', 'later', 'clock']) expect(once.todo!.x).toBeGreaterThanOrEqual(once[name]!.x + once[name]!.width);
     // Nothing on top of anything, and the zone holds all of it.
     const rects = Object.values(once);
     rects.forEach((a, index) => rects.slice(index + 1).forEach((b) => expect(overlap(a, b)).toBe(false)));
@@ -146,7 +147,7 @@ test("arrange places a zone's to-do down the side as its menu says, the agent's 
       expect(again[name]!.x).toBeGreaterThanOrEqual(again.lead!.x + again.lead!.width);
     }
     expect(again.todo!.y).toBe(once.todo!.y);
-    for (const name of ['lead', 'note', 'file', 'memory', 'clock']) expect(again.todo!.x).toBeGreaterThanOrEqual(again[name]!.x + again[name]!.width);
+    for (const name of ['lead', 'note', 'file', 'later', 'clock']) expect(again.todo!.x).toBeGreaterThanOrEqual(again[name]!.x + again[name]!.width);
     const after = Object.values(again);
     after.forEach((a, index) => after.slice(index + 1).forEach((b) => expect(overlap(a, b)).toBe(false)));
     // Arranged once more, nothing moves.

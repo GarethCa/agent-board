@@ -1,14 +1,12 @@
 import {
   crewCardSize,
   LIST_CARD_FOLDED_SIZE,
-  MEMORY_CARD_SIZE,
   QUEUE_CARD_SIZE,
   TODO_CARD_SIZE,
   TODO_PILL_SIZE,
   ZONE_COLORS,
   type Agent,
   type CrewCardData,
-  type MemoryEntry,
   type QueueJob,
   type Step,
   type StepsData,
@@ -22,11 +20,10 @@ import {
 import { AGENT_TILE_SIZE } from '@agent-board/daemon/board-layout';
 import { ReactFlowProvider, type NodeProps } from '@xyflow/react';
 import { HybridTile } from './HybridTile';
-import { galleryAgent, SHELL } from './TileGallery';
+import { galleryAgent, JUST_NOW, SHELL } from './TileGallery';
 import { TileShowsOverride } from './view-settings';
 import { EMOJI, LONG_PATH, LONG_SENTENCE, LONG_URL, NO_SPACES, OTHER_SCRIPTS } from './long-text';
 import { TodoCardView, TodoPillView, type TodoCardActions } from './items/TodoCard';
-import { MemoryCardView, MemoryIconView } from './items/MemoryCard';
 import { QueueCardView, QueueIconView } from './items/QueueCard';
 import { nextJob } from './items/queue-card';
 import { StepsCard, type StepsCardActions } from './items/StepsCard';
@@ -108,6 +105,7 @@ const AGENTS: Agent[] = [
   {
     ...longAgent('waiting', LONG_SENTENCE),
     state: 'waiting',
+    finishedAt: JUST_NOW,
     notice: LONG_SENTENCE,
   },
   { ...longAgent('failed', NO_SPACES), state: 'failed', notice: NO_SPACES },
@@ -153,20 +151,6 @@ const TODO_ACTIONS: TodoCardActions = {
   leave: noop,
 };
 
-const NOW = new Date(2026, 10, 5, 15, 0);
-const memo = (id: string, key: string | null, text: string): MemoryEntry => ({
-  id,
-  memoryId: 'long',
-  key,
-  file: false,
-  text,
-  pinned: id === 'm0',
-  madeBy: WRITER,
-  changedBy: WRITER,
-  createdAt: AT,
-  updatedAt: AT,
-});
-const MEMORY: MemoryEntry[] = LINES.map((text, at) => memo(`m${at}`, at % 2 === 0 ? text : null, text));
 
 const job = (id: string, text: string, more: Partial<QueueJob> = {}): QueueJob => ({
   id,
@@ -314,7 +298,7 @@ const CLOCK_NEXT = new Date(2099, 0, 5, 9, 0).toISOString();
 const CLOCK_BOARD = { statuses: new Map([[CLOCK_PROPS.id, { id: CLOCK_PROPS.id, nextRunAt: CLOCK_NEXT, runs: [], skips: null, changes: [] }]]), agentName: () => NO_SPACES, edit: noop };
 
 /**
- * Every board item with long text in every field it shows: agent and shell tiles, a to-do list, a memory, a queue, a
+ * Every board item with long text in every field it shows: agent and shell tiles, a to-do list, a queue, a
  * steps card and a crew card, open and folded; and the canvas's own nodes: an issue, a sticky note, text, a shape, a
  * document, a clock and a link. Nothing in it may run past its box. The app shows it at `#gallery-long-text`.
  */
@@ -345,12 +329,6 @@ export function LongTextGallery() {
           </div>
           <div className="long-text-box" style={TODO_PILL_SIZE} data-testid="long-text-box">
             <TodoPillView data={TODO} lookup={TODO_LOOKUP} onOpen={noop} onUnfold={noop} onClear={noop} />
-          </div>
-          <div className="long-text-box" style={MEMORY_CARD_SIZE} data-testid="long-text-box">
-            <MemoryCardView title={NO_SPACES} scope={LONG_SENTENCE} zoneColor={ZONE} entries={MEMORY} now={NOW} onAdd={noop} onOpen={noop} />
-          </div>
-          <div className="long-text-box" style={LIST_CARD_FOLDED_SIZE} data-testid="long-text-box">
-            <MemoryIconView title={NO_SPACES} scope={LONG_SENTENCE} zoneColor={ZONE} count={MEMORY.length} sub={LONG_URL} onOpen={noop} />
           </div>
           <div className="long-text-box" style={QUEUE_CARD_SIZE} data-testid="long-text-box">
             <QueueCardView

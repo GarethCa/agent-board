@@ -1,6 +1,8 @@
 // What a web tab may show: https anywhere, and plain http only from this machine (a dev server). Pure,
 // so the daemon (which keeps a tab's URL), the main process (which loads it) and the app (its address row) share it.
 
+export { isWebUrl } from '@agent-board/tracker/web-link';
+
 /** The hosts of this machine a web tab may load over plain http, as `URL` writes them. */
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 

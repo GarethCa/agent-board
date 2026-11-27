@@ -6,7 +6,7 @@ import { launch, screen, sessionWindow, spawnAgent, tile, windowKey } from './ag
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test, tabText } from './launch.ts';
 import { scratch } from './scratch.ts';
 import { serveWebPages } from './web-server.ts';
-import { showTileParts } from './settings-helpers.ts';
+import { putDocsOnBoard, showTileParts } from './settings-helpers.ts';
 
 // An agent asks the user and presents plans through the board MCP, and the user answers from the inbox and
 // the Plan tab. The fake claude's `ask-plan` scenario does the asking; nothing here answers for the user.
@@ -168,6 +168,7 @@ test('a plan opens in a Plan tab from the inbox, changes requested there come ba
 
 test('a plan shown on the board is a card beside its agent, decided from Review plan, and an edit in its Plan tab is approved as the user’s version', async () => {
   await withApp(async (window, app) => {
+    await putDocsOnBoard(window);
     const agent = await spawn(window, 'Plan doc on the board: docs/migration.md');
 
     const card = window.getByTestId('plan-card');
@@ -232,6 +233,7 @@ test('a plan shown on the board is a card beside its agent, decided from Review 
 
 test('an unsaved edit in a popped-out Plan tab holds the decision on the board’s plan card until it is cancelled', async () => {
   await withApp(async (window, app) => {
+    await putDocsOnBoard(window);
     const agent = await spawn(window, 'Plan doc on the board: docs/migration.md');
     const card = window.getByTestId('plan-card');
     await expect(card.getByTestId('plan-card-stamp')).toHaveText('waiting on you');

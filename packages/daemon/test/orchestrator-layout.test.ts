@@ -1000,7 +1000,7 @@ describe('orchestrator.arrange', () => {
   describe("a zone's items", () => {
     /**
      * A lead and its implementer, with a scatter of items about the zone: a note and a link card the implementer made,
-     * the user's clock, to-do list, queue and memory, and the user's sticky.
+     * the user's clock, to-do list and queue, and the user's sticky.
      */
     async function messyItems() {
       const setup = await layoutDaemon();
@@ -1021,9 +1021,8 @@ describe('orchestrator.arrange', () => {
       const clock = await setup.client.call('clock.add', { place: { zoneId, x: 820, y: 40 }, data: { prompt: 'Mine' } });
       const todo = await make('todo', 500, 700, 300, 196, { owner: user, lines: [] });
       const queue = await make('queue', 40, 400, 340, 244, { title: 'Backlog', madeBy: user, audience: 'user', noAgents: false, count: 0 });
-      const memory = await make('memory', 900, 300, 340, 220, { title: 'Notes', madeBy: user, noAgents: false, count: 0 });
       const sticky = await make('sticky', 1100, 60, STICKY_SIZE.width, STICKY_SIZE.height, { text: 'user note', color: '#fff3a3' });
-      const ids = { note: note.id, link: link.id, clock: clock.id, todo: todo.id, queue: queue.id, memory: memory.id, sticky: sticky.id };
+      const ids = { note: note.id, link: link.id, clock: clock.id, todo: todo.id, queue: queue.id, sticky: sticky.id };
       /** Every tile and item in the zone, by name (an item by the name `ids` gives it). */
       const rects = async (): Promise<Record<string, Rect>> => {
         const [agents, items] = await Promise.all([setup.client.call('agent.list'), setup.client.call('item.list')]);
@@ -1041,8 +1040,8 @@ describe('orchestrator.arrange', () => {
       await me.connection.call('orchestrator.arrange', { token: me.token });
       const once = await rects();
       expect(once.sticky).toMatchObject({ x: 1100, y: 60 });
-      // On the row under the top row, side by side, by kind: the clock, the to-do list, the queue, the memory.
-      const top = ['clock', 'todo', 'queue', 'memory'].map((name) => once[name]!);
+      // On the row under the top row, side by side, by kind: the clock, the to-do list, then the queue.
+      const top = ['clock', 'todo', 'queue'].map((name) => once[name]!);
       expect(new Set(top.map((rect) => rect.y)).size).toBe(1);
       expect(top[0]!.y).toBeGreaterThan(once.lead!.y + AGENT_TILE_SIZE.height);
       expect(top.map((rect) => rect.x)).toEqual(top.map((rect) => rect.x).toSorted((a, b) => a - b));
@@ -1144,7 +1143,7 @@ describe('orchestrator.arrange', () => {
       await setup.client.call('zone.configure', { id: setup.zone.id, layoutRule: 'lanes' });
       await setup.client.call('orchestrator.arrange', { zoneId: setup.zone.id });
       const once = await rects();
-      const top = ['clock', 'todo', 'queue', 'memory'].map((name) => once[name]!);
+      const top = ['clock', 'todo', 'queue'].map((name) => once[name]!);
       expect(new Set(top.map((rect) => rect.y)).size).toBe(1);
       expect(once.note!.y).toBe(once.impl!.y);
       expectNoOverlap(new Map(Object.entries(once).map(([name, rect]) => [['lead', 'impl'].includes(name) ? name : `item:${name}`, rect])));

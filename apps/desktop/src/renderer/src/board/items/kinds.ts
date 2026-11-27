@@ -8,7 +8,6 @@ import {
   DOCUMENT_CARD_SIZE,
   PLAN_CARD_SIZE,
   STEPS_CARD_SIZE,
-  MEMORY_CARD_SIZE,
   QUEUE_CARD_SIZE,
   TODO_CARD_SIZE,
   STICKY_COLORS,
@@ -33,8 +32,6 @@ import { PlanNode } from './PlanNode';
 import { ImageNode, imageData } from './ImageNode';
 import { ISSUE_CARD_SIZE, IssueNode } from './IssueNode';
 import { LINK_CARD_SIZE, LinkNode } from './LinkNode';
-import { newMemoryData } from './memory-card';
-import { MemoryNode } from './MemoryNode';
 import { newQueueData } from './queue-card';
 import { QueueNode } from './QueueNode';
 import { ShapeNode, SHAPE_SIZE } from './ShapeNode';
@@ -190,15 +187,6 @@ export const ITEM_KINDS: Record<BoardItemKind, ItemKind> = {
     newData: () => ({ ...newStepsData() }),
     editOnCreate: true,
     minimapColor: () => 'var(--steps)',
-  },
-  // Made from the board's menu (or M), named after its zone, or by an agent's `memory new`.
-  memory: {
-    label: ITEM_KIND_LABELS.memory,
-    node: MemoryNode,
-    size: MEMORY_CARD_SIZE,
-    newData: ({ zoneName }) => ({ ...newMemoryData(zoneName) }),
-    editOnCreate: true,
-    minimapColor: () => 'var(--raised)',
   },
   // Made from the board's menu (or Q), for agents and named after its zone, or by an agent's `queue new`.
   queue: {

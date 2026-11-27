@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { continuesOnCredits, envPair, launchSettingNames, lineSplitter, normalisedAngle, parseRole, roleLabel, validZoneFillOpacity, ZONE_COLOR_NAMES, ZONE_COLORS } from '../src/protocol.ts';
+import { continuesOnCredits, effortOn, effortsFor, envPair, launchSettingNames, lineSplitter, normalisedAngle, parseRole, roleLabel, validZoneFillOpacity, ZONE_COLOR_NAMES, ZONE_COLORS } from '../src/protocol.ts';
 
 function split(chunks: string[], maxLength?: number) {
   const lines: string[] = [];
@@ -132,5 +132,20 @@ describe('launchSettingNames', () => {
   it('is nothing for none', () => {
     expect(launchSettingNames(null)).toBeUndefined();
     expect(launchSettingNames({ env: [], settings: [] })).toBeUndefined();
+  });
+});
+
+describe('the efforts a harness takes', () => {
+  it('lists each harness its own, and with no harness only the ones every harness takes', () => {
+    expect(effortsFor('claude')).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+    expect(effortsFor('codex')).toEqual(['low', 'medium', 'high', 'xhigh']);
+    expect(effortsFor(null)).toEqual(['low', 'medium', 'high', 'xhigh']);
+  });
+
+  it('keeps an effort a harness takes, and runs one it does not at its highest', () => {
+    expect(effortOn('codex', 'max')).toBe('xhigh');
+    expect(effortOn('codex', 'high')).toBe('high');
+    expect(effortOn('claude', 'max')).toBe('max');
+    expect(effortOn('codex', null)).toBe(null);
   });
 });

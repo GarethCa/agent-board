@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.7.4 (2026-11-27)
+
+**Rolling back:** this release changes the database in a way older versions can't read (`0111_remove_memories`). It backs the database up first. To go back to an older version afterwards, restore that backup: see [Rolling back](https://github.com/GarethCa/agent-board/blob/main/docs/rolling-back.md).
+
+- Trim three MCP results: list_schedules prompts, set_status's character line, whoami's 'you may' line
+- The board tool shows your own zone by default, quiet agents folded into a count line
+- The board MCP refuses arguments a tool does not have, naming the valid ones
+- queue_read shows open jobs short, with one job whole and the done history on request
+- Remove agent memories, saving their text to removed-memories-\<date>.md first
+- A crew an agent drafts is one click away from Needs you, the crew library and ⌘K, and shows what it will start
+- Main's e2e and visual checks pass again: ⌘W on a shell's only tab keeps its window, and tests and baselines follow the merges since v0.7.3
+- Agents can alert the user that something is done
+- Launch settings' values live in the keychain; the database and its backups keep only their names
+- Main's markdownlint and orchestrators tools test pass
+- An ask to remove tiles stays up until the user answers, and the answer comes as a message
+- Prefab efforts follow the harness list, and web links, pull request URLs and notification defaults each have one rule
+- Agents can delete a board item they made, and ask to delete one they didn't
+- A clock's run and the board's own notices show as theirs, not the user's, in the chat
+- Agents can rest: the board pauses them as their turn ends
+- Docs agents show are listed with their agent, not placed on the board; a Settings switch brings cards back
+- A crew starts once every box is filled: Repo in the ticket sheet, a drafted crew's ticket, unlinked tickets passed on, and why Start is greyed
+- A pinned tile is back at its place and size however its agent's full screen is left
+- The badge, inbox, banners, tile and Overview read one rule for when an agent needs you
+- ⌘W closes the session window shown on the board, wherever the focus is
+
 ## v0.7.3 (2026-11-27)
 
 - A repo-config key written after the board's check can't name a program its git runs

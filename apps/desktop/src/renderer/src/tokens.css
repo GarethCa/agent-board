@@ -404,7 +404,7 @@
   --clock-hand-minute-folded: 8px;
   --clock-hand-width: 2px;
   --clock-run: 8px; /* one run's square in a clock's strip */
-  --listcard-face: 30px; /* a memory's or queue's round face, at its card's head's left */
+  --listcard-face: 30px; /* a queue's round face, at its card's head's left */
   --listcard-face-big: 64px; /* one folded: its face alone */
   --listcard-face-edge: 2px;
   --listcard-face-ring: var(--clock-face-ring); /* the face's rim, as the clock's */
@@ -417,12 +417,11 @@
   --listcard-zone-dot: 7px; /* the zone's colour in the scope chip */
   --listcard-zone: var(--muted); /* the dot's colour: its zone's, set on the chip */
   --listcard-who-width: 88px; /* the most a card row's corner (who wrote it, and when) takes: the fact is what the card is for */
-  --listcard-who-mark: 7px; /* the mark before who wrote a row, in a memory's peek: a dot for an agent, a ring for you */
+  --listcard-who-mark: 7px; /* the mark before who wrote a row, in a list's peek: a dot for an agent, a ring for you */
   --listcard-who-ring: 1.5px;
   --listcard-fresh: var(--hover); /* a row an agent just changed, as it flashes */
   --listcard-peek-width: 400px;
   --listcard-peek-rows: 320px; /* the peek's list before it scrolls */
-  --listcard-file-text: 180px; /* a file's first lines, opened in the peek */
   --queue-state-dot: 8px; /* the shape before a job's state: a ring queued, filled taken, a square done, dashed back */
   --queue-state-ring: 1.5px;
   --queue-taken: var(--text);
@@ -436,7 +435,7 @@
   --queue-corner-width: 88px; /* the most a row's corner (its taker, its link) takes: the job is what the card is for */
   --queue-tab-width: 40px; /* the NEXT tab peeking out above a folded queue's face */
   --queue-tab-height: 14px;
-  --queue-tab-rise: 8px; /* how far the tab stands above the face: within the icon's top padding, so a folded queue lines up with a folded memory */
+  --queue-tab-rise: 8px; /* how far the tab stands above the face: within the icon's top padding, so a folded queue lines up with a folded to-do list */
   --queue-tab-tilt: -4deg;
   --clock-run-ok: var(--success);
   --clock-run-fail: var(--state-failed);

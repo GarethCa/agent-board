@@ -111,10 +111,9 @@ describe('RoleTemplates.describe', () => {
   };
   const implementer = { role: 'implementer', name: null } as const;
 
-  it('tells an implementer to read the memory first and add to it last, and an orchestrator to take from the queue', () => {
+  it('tells an implementer to write its handover before it finishes, and an orchestrator to take from the queue', () => {
     const implementer = roleSeed(null, 'implementer').body;
-    expect(implementer).toContain('`agent-board memory ls`, then `memory read <memory>`');
-    expect(implementer).toMatch(/Before you finish, also add[^.]*`agent-board memory add <memory> "key: value"`/);
+    expect(implementer).toMatch(/in `\.agent-board\/handover\.md` before you finish/);
     const orchestrator = templates().roles.body('z1', tempDataDir(), { role: 'custom', name: 'orchestrator' });
     expect(orchestrator).toContain('agent-board queue take');
     expect(orchestrator).toContain('queue done');

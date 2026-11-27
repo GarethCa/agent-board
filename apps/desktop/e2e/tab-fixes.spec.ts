@@ -69,7 +69,7 @@ test('a shell tab closes by ⌘W, a middle-click or its ×, asking first while i
     await openAgent(window, app, repo);
     const ask = window.getByRole('alertdialog', { name: 'Close tab?' });
 
-    // The agent's own tab has no close, and ⌘W there closes nothing.
+    // The agent's own tab has no close.
     await expect(tabNamed(window, tabText('claude')).getByRole('button', { name: /^Close/ })).toHaveCount(0);
 
     // ⌘W on a live shell asks; Cancel keeps it.
@@ -92,9 +92,13 @@ test('a shell tab closes by ⌘W, a middle-click or its ×, asking first while i
     // The keyboard goes to the tab now showing, so the window's shortcuts still work.
     await expect(paneInput(window)).toBeFocused();
 
-    // ⌘W with the agent's own tab showing closes nothing.
+    // ⌘W with the agent's own tab showing closes the session window, never the agent, and asks nothing.
     await window.keyboard.press(windowKey('w'));
     await expect(ask).toHaveCount(0);
+    await expect(sessionWindow(window)).toHaveCount(0);
+    expect(window.isClosed()).toBe(false);
+    await expect(tile(window)).toHaveCount(1);
+    await tile(window).dblclick();
     await expect(tabs(window)).toHaveCount(1);
 
     // A middle-click asks too.

@@ -130,7 +130,7 @@ describe("a ticket's board", () => {
 });
 
 describe("who reads a ticket's board", () => {
-  it('is its chat and its helpers: a memory and a queue on it are found by them, and by no other agent in the zone', async () => {
+  it('is its chat and its helpers: a queue on it is found by them, and by no other agent in the zone', async () => {
     const setup = await setUp();
     const spawn = async (fields: { name: string; ticketChat?: boolean; ticket?: string }) => {
       const agent = await setup.client.call('agent.spawn', { zoneId: setup.zone.id, prompt: 'Print your board identity', ...fields, ...SIZE });
@@ -140,16 +140,6 @@ describe("who reads a ticket's board", () => {
     const helper = await spawn({ name: 'builder', ticket: chat.agent.sessionId });
     const other = await spawn({ name: 'other' });
     const madeBy = { kind: 'user' };
-    const memory = await setup.client.call('item.create', {
-      kind: 'memory',
-      zoneId: null,
-      ticket: chat.agent.sessionId,
-      x: 0,
-      y: 0,
-      width: 340,
-      height: 220,
-      data: { title: 'Ticket notes', madeBy, noAgents: false, count: 0 },
-    });
     const queue = await setup.client.call('item.create', {
       kind: 'queue',
       zoneId: null,
@@ -160,40 +150,35 @@ describe("who reads a ticket's board", () => {
       height: 244,
       data: { title: 'Ticket jobs', madeBy, noAgents: false, count: 0, audience: 'agents' },
     });
-    await setup.client.call('memory.change', { id: memory.id, change: { action: 'add', key: 'api', text: 'v2' } });
     await setup.client.call('queue.change', { id: queue.id, change: { action: 'add', text: 'Write the migration' } });
 
     for (const { token } of [chat, helper]) {
       const as = await connectTestClient(setup.daemon);
-      expect((await as.call('board.listMemories', { token })).map((item) => item.id)).toEqual([memory.id]);
-      expect((await as.call('board.readMemory', { token, id: memory.id })).entries.map((entry) => entry.text)).toEqual(['v2']);
       expect((await as.call('board.listQueues', { token })).map((item) => item.id)).toEqual([queue.id]);
       expect((await as.call('board.readQueue', { token, id: queue.id })).jobs.map((job) => job.text)).toEqual(['Write the migration']);
     }
     // The commands find them by title or ref for the ticket's agents, and say where they are.
-    const ref = `item:${memory.id}`;
+    const ref = `item:${queue.id}`;
     for (const { token } of [chat, helper]) {
-      const listed = await cli(setup, token, 'memory', 'ls');
+      const listed = await cli(setup, token, 'queue', 'ls');
       expect(listed.code).toBe(0);
-      expect(listed.out).toMatch(/“Ticket notes”.*\(on agent:\S+ chat's ticket board\)/);
+      expect(listed.out).toMatch(/“Ticket jobs”.*\(on agent:\S+ chat's ticket board\)/);
       expect(listed.out).not.toContain('(loose)');
-      for (const named of ['Ticket notes', ref]) {
-        const read = await cli(setup, token, 'memory', 'read', named);
+      for (const named of ['Ticket jobs', ref]) {
+        const read = await cli(setup, token, 'queue', 'read', named);
         expect(read.err).toBe('');
-        expect(read.out).toContain('v2');
+        expect(read.out).toContain('Write the migration');
       }
-      expect((await cli(setup, token, 'queue', 'read', 'Ticket jobs')).out).toContain('Write the migration');
       expect((await cli(setup, token, 'show', ref)).out).toMatch(/zone\s+\(on agent:\S+ chat's ticket board\)/);
     }
-    for (const named of ['Ticket notes', ref]) {
-      const refused = await cli(setup, other.token, 'memory', 'read', named);
+    for (const named of ['Ticket jobs', ref]) {
+      const refused = await cli(setup, other.token, 'queue', 'read', named);
       expect(refused.code).not.toBe(0);
-      expect(refused.out).not.toContain('v2');
+      expect(refused.out).not.toContain('Write the migration');
     }
     const { token } = other;
     const as = await connectTestClient(setup.daemon);
-    expect(await as.call('board.listMemories', { token })).toEqual([]);
-    await expect(as.call('board.readMemory', { token, id: memory.id })).rejects.toThrow(/on a ticket's board you are not on/);
+    expect(await as.call('board.listQueues', { token })).toEqual([]);
     await expect(as.call('board.readQueue', { token, id: queue.id })).rejects.toThrow(/on a ticket's board you are not on/);
   });
 });

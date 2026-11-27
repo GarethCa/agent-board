@@ -1146,6 +1146,19 @@ describe('claude MCP servers', () => {
   });
 });
 
+describe('orchestrate: the answer to an ask to remove', () => {
+  it('says the answer typed at its prompt back, as it was told, and writes no handover', async () => {
+    const repo = tempDir('fake-told-repo-');
+    const told = 'The answer to your ask to remove old-a: The user allowed it. Removed old-a, with their worktrees and branches.';
+    const result = await runFake('claude', { scenario: 'orchestrate', cwd: repo, args: [told] });
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain(told);
+    expect(result.stdout).not.toContain('Handover written.');
+    expect(existsSync(join(repo, '.agent-board'))).toBe(false);
+  });
+});
+
 describe('orchestrate: a maker that commits', () => {
   it('writes and commits the file a "Commit <path>: <text>" line names, then hands over', async () => {
     const repo = tempDir('fake-commit-repo-');

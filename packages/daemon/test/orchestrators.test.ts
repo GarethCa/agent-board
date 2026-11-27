@@ -1469,8 +1469,8 @@ describe('an orchestrator agent, over the board MCP and CLI', () => {
 describe('agent-board mcp for an orchestrator', () => {
   /** What the board MCP offers an agent's live session: every tool, the control tools among them. */
   const ALL_TOOLS = [
-    'whoami', 'board', 'usage', 'connections', 'handoff', 'ask', 'present_plan', 'show_doc', 'set_status', 'needs_you', 'open_pr', 'record_pr', 'record_doc', 'pin', 'unpin', 'steps_new', 'steps_read', 'steps_update', 'memory_new', 'memory_read', 'memory_update', 'queue_new', 'queue_read', 'queue_update', 'remind', 'remind_read', 'remind_update', 'set_page', 'clock_add', 'clock_set', 'save_clock_template', 'list_clock_templates', 'remove_clock_template', 'new_agent', 'send', 'wait', 'read', 'interrupt', 'set_effort', 'rename', 'pin_expanded', 'ticket_watches', 'give_role', 'continue_on_credits', 'restart', 'pause', 'wake', 'add_edge', 'list_edges', 'remove_edge', 'move', 'arrange', 'zone_layout', 'map', 'zone_screenshot', 'add_note',
-    'edit_note', 'remove_note', 'pass_note', 'add_shape', 'add_diagram', 'export_diagram', 'edit_shape', 'remove_shape', 'connect', 'edit_connector', 'remove_connector', 'add_schedule', 'list_schedules', 'remove_schedule', 'prefabs', 'prefab_draft', 'roles', 'set_role', 'remove_role', 'close', 'ask_to_remove', 'handover',
+    'whoami', 'board', 'usage', 'connections', 'handoff', 'ask', 'present_plan', 'show_doc', 'set_status', 'rest', 'needs_you', 'alert', 'open_pr', 'record_pr', 'record_doc', 'pin', 'unpin', 'steps_new', 'steps_read', 'steps_update', 'queue_new', 'queue_read', 'queue_update', 'remind', 'remind_read', 'remind_update', 'set_page', 'clock_add', 'clock_set', 'save_clock_template', 'list_clock_templates', 'remove_clock_template', 'new_agent', 'send', 'wait', 'read', 'interrupt', 'set_effort', 'rename', 'pin_expanded', 'ticket_watches', 'give_role', 'continue_on_credits', 'restart', 'pause', 'wake', 'add_edge', 'list_edges', 'remove_edge', 'move', 'arrange', 'zone_layout', 'map', 'zone_screenshot', 'add_note',
+    'edit_note', 'remove_note', 'delete_item', 'pass_note', 'add_shape', 'add_diagram', 'export_diagram', 'edit_shape', 'remove_shape', 'connect', 'edit_connector', 'remove_connector', 'add_schedule', 'list_schedules', 'remove_schedule', 'prefabs', 'prefab_draft', 'roles', 'set_role', 'remove_role', 'close', 'ask_to_remove', 'handover',
   ];
 
   it('tells every live agent it may act on the board, and lists the control tools to each', async () => {
@@ -3151,9 +3151,45 @@ describe('agents setting their characters’ poses', () => {
     const mcp = mcpAs(setup, lead.token);
     const answer = await mcp.callTool('set_status', { character: { pose: 'reading', face: 'focused', prop: 'book' } });
     expect(answer).toMatchObject({ isError: false });
-    expect(answer.text.split('\n').at(-1)).toBe(JSON.stringify({ ok: true, shown: 'reading', yours: 'reading', expires: 'at turn end, or 20 minutes after this set' }));
+    expect(answer.text).toMatch(/^Your character: [^\n]*\.$/);
+    expect(answer.text.split('\n').some((line) => line.startsWith('{'))).toBe(false);
     expect(await mcp.callTool('set_status', { character: { pose: 'dancing' } })).toMatchObject({ isError: true, text: expect.stringMatching(/unknown pose 'dancing'/) });
     expect(await mcp.callTool('set_status', {})).toMatchObject({ isError: true, text: expect.stringMatching(/a summary, a character, a category, a description, or more/) });
+  });
+
+  it('cuts each prompt in the schedule list to 80 characters, and gives it whole with full (MCP) or --full (CLI)', async () => {
+    const setup = await orchestrateDaemon({ repeat: true });
+    const lead = await agentSide(setup, setup.zone.id);
+    const worker = await lead.connection.call('orchestrator.spawn', { token: lead.token, name: 'worker' });
+    const to = `agent:${worker.sessionId.slice(0, 4)}`;
+    const env = { [BOARD_SOCKET_ENV]: setup.daemon.socketPath, [BOARD_TOKEN_ENV]: lead.token };
+    const mcp = mcpAs(setup, lead.token);
+    const long = 'Check the open pull requests and report which ones have gone quiet. '.repeat(2).trim();
+    const exact = 'x'.repeat(80);
+    expect(long.length).toBeGreaterThan(80);
+    expect(await mcp.callTool('add_schedule', { cron: '@daily', to, prompt: long })).toMatchObject({ isError: false });
+    expect(await mcp.callTool('add_schedule', { cron: '@hourly', to, prompt: exact })).toMatchObject({ isError: false });
+
+    const promptLines = (text: string) => text.split('\n').filter((line) => line.startsWith('    "'));
+    const cut = promptLines((await mcp.callTool('list_schedules', {})).text);
+    expect(cut).toHaveLength(2);
+    const [shortened] = cut.filter((line) => line.endsWith('…"'));
+    expect(shortened).toBeDefined();
+    expect(JSON.parse(shortened!.trim()).length).toBeLessThanOrEqual(80);
+    expect(long.startsWith(JSON.parse(shortened!.trim()).slice(0, -1))).toBe(true);
+    expect(cut).toContain(`    ${JSON.stringify(exact)}`);
+
+    const whole = promptLines((await mcp.callTool('list_schedules', { full: true })).text);
+    expect(whole).toContain(`    ${JSON.stringify(long)}`);
+    expect(whole).toContain(`    ${JSON.stringify(exact)}`);
+
+    const cli = async (args: string[]) => {
+      let out = '';
+      await runBoardCommand('schedule', args, { out: (text) => (out += text), err: (text) => (out += text), env });
+      return promptLines(out);
+    };
+    expect(await cli(['list'])).toEqual(cut);
+    expect(await cli(['list', '--full'])).toEqual(whole);
   });
 });
 

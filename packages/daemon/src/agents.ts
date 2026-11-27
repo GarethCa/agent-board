@@ -14,7 +14,7 @@ import { readSender } from './sender-marker.ts';
 import { refOf } from './crew-flags.ts';
 import { draftLine, sendTrail } from './send-log.ts';
 import { createHookStates } from './hook-states.ts';
-import { launchSettingKeys, launchSettingsParam, MAX_LAUNCH_SETTINGS_LENGTH, readLaunchSettings, removeLaunchSettingsFile, storedLaunchSettings } from './launch-settings.ts';
+import { launchSettingKeys, launchSettingNames, launchSettingsParam, MAX_LAUNCH_SETTINGS_BYTES, removeLaunchSettingsFile, tooLong } from './launch-settings.ts';
 import { answerTrustScreen, readStartupScreen, screenTail, type StartupScreen } from './startup-screen.ts';
 import {
   dimensionParam,
@@ -39,9 +39,15 @@ import {
   INTERRUPT_KEY,
   isMidTurn,
   pauseRefusal,
+  planPending,
+  MAX_REST_LENGTH,
+  RESTING_PREFIX,
   waitsOnUser,
   isStatusProgress,
   MAX_FLAG_LENGTH,
+  MAX_ALERT_LENGTH,
+  ALERT_INTERVAL_MS,
+  type AgentAlert,
   parseRole,
   MAX_PURPOSE_LENGTH,
   MAX_STATUS_LENGTH,
@@ -54,6 +60,7 @@ import {
   type AgentRepo,
   type Effort,
   type Harness,
+  type LaunchSettings,
   type TicketBoardPlace,
   type TicketChatKind,
   type TileChange,
@@ -137,6 +144,9 @@ const EFFORT_ECHO_MS = 60_000;
 /** How long after Claude's question dialog closed, each look after the last, its transcript is read for a decline. */
 const DECLINE_LOOKS_MS = [200, 800, 2000];
 
+/** The states of an agent in a turn of its own, which a rest it asks for waits for the end of. */
+const MID_TURN: ReadonlySet<string> = new Set(['running', 'thinking', 'handing-off']);
+
 /** The agent's own hooks that begin a turn, or end one with no `Stop` after them (`onTurnBoundary`). */
 const TURN_BOUNDARIES: ReadonlySet<unknown> = new Set(['UserPromptSubmit', 'StopFailure', 'Interrupt', 'SessionEnd']);
 
@@ -190,6 +200,15 @@ const AT_WORK: ReadonlySet<SessionState> = new Set(['running', 'thinking']);
 /** The states an agent's turn leaves it in once over, however it ended: no `waiting`, which a question in its turn is too. */
 const TURN_OVER: ReadonlySet<SessionState> = new Set(['idle', 'failed', 'rate-limited', 'done']);
 
+/** Whether `link` may go with an alert: an https URL, the only kind the app opens in the browser. */
+function isAlertLink(link: string): boolean {
+  try {
+    return new URL(link).protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Owns agents: a worktree and branch per agent, its harness session, and the state its hooks put it in. Agent rows
  * outlive their sessions, so ended agents keep their tiles until deleted. An agent whose session ended because its
@@ -197,6 +216,7 @@ const TURN_OVER: ReadonlySet<SessionState> = new Set(['idle', 'failed', 'rate-li
  * resumed. Subagents, last messages and permission prompts live only in memory: they can't outlive the daemon, as
  * their agent's session can't.
  */
+
 export function createAgentHost(options: AgentHostOptions): AgentHost {
   const { db, sessions } = options;
   const select = `SELECT a.*, s.harness, s.cwd, s.created_at, s.ended_at, s.exit_code, s.stopped_by_restart
@@ -220,10 +240,13 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   const updateMuted = db.prepare('UPDATE agents SET muted = ? WHERE session_id = ?');
   const updatePinnedExpanded = db.prepare('UPDATE agents SET pinned_expanded = ? WHERE session_id = ?');
   const updateEffort = db.prepare('UPDATE agents SET effort = ? WHERE session_id = ?');
-  const updateLaunchSettings = db.prepare('UPDATE agents SET launch_settings = ? WHERE session_id = ?');
   const markCutOff = db.prepare('UPDATE agents SET turn_cut_off = 1, turn_cut_off_asking = ? WHERE session_id = ?');
   /** Per live Claude agent, the reasoning effort to type at its prompt (`/effort`) once it is between turns. */
   const effortAfterTurn = new Map<string, Effort>();
+  /** Per agent that rested (`rest`), the line it waits on: it is paused as its turn ends. */
+  const restingAfterTurn = new Map<string, string>();
+  /** Per agent paused by its rest, the line it rested with, until it wakes: what its lead hears it waits for. */
+  const restedWith = new Map<string, string>();
   /** When each agent's shown state began, for `Agent.stateSince`. */
   const stateTimes = stateClock();
   /** Agents whose `effortAfterTurn` is being typed now. */
@@ -551,6 +574,12 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   };
   /** The last flag's id: each new one is the next. */
   let lastFlagId = 0;
+  /** Each agent's alert to the user (`Agent.alert`), in memory, until the user opens its session or it is deleted. */
+  const alerts = new Map<string, AgentAlert>();
+  /** When each agent's last alert raised a banner, for `ALERT_INTERVAL_MS`. */
+  const lastBanners = new Map<string, number>();
+  /** The last alert's id: each new one is the next. */
+  let lastAlertId = 0;
   /** Per agent, the flag that says what was typed at its prompt was never sent (`flagNotSent`, a `Folding`). */
   const notSentFlags = new Map<string, Folding>();
   // What was never delivered before the daemon last closed is flagged again, as it was: once every folding's state is
@@ -848,6 +877,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     recordFinal: (sessionId, finalMessage) => void updateFinalMessage.run(finalMessage, sessionId),
     finished(sessionId) {
       options.onHandoff(sessionId);
+      restAfterTurn(sessionId);
     },
   });
   const backgroundCommands = createBackgroundCommands({
@@ -973,6 +1003,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     options.asks?.drop(sessionId);
     hookStates.interrupted(sessionId);
     deliveries.turnEnded(sessionId, false);
+    restingAfterTurn.delete(sessionId);
     options.onTurnCut?.(sessionId, 'its turn was interrupted');
     save(getRow(sessionId)!, 'idle', subagentsAfterExit(subagents.of(sessionId), 'idle', new Date()), true);
   };
@@ -1054,6 +1085,8 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
         notSentFlags.delete(sessionId);
         undelivered.delete(sessionId);
         flags.delete(sessionId);
+        alerts.delete(sessionId);
+        lastBanners.delete(sessionId);
         stateTimes.forget(sessionId);
         hookStates.deleted(sessionId);
       },
@@ -1167,7 +1200,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       harness: row.harness,
       model: row.model,
       effort: row.effort,
-      launchSettings: launchSettingKeys(readLaunchSettings(row.launch_settings)),
+      launchSettings: launchSettingNames(row.launch_settings),
       effortPending: !live ? null : effortAfterTurn.has(row.session_id) ? 'after-turn' : effortAtRestart.has(row.session_id) ? 'restart' : null,
       role: row.role,
       roleName: row.role_name,
@@ -1269,6 +1302,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       startup,
       hooksSilent: live && hookStates.hooksSilent(row.session_id),
       flag: flagOf(row),
+      ...(alerts.has(row.session_id) ? { alert: alerts.get(row.session_id)! } : {}),
       unsent: live ? (deliveries.unsent(row.session_id) ?? null) : null,
       untypedPrompt: untypedPromptOf(row.session_id),
       trustFolder: live && firstPrompts.get(row.session_id)?.trust === true ? row.cwd : null,
@@ -1515,6 +1549,57 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     return agent;
   };
 
+  /**
+   * Why the agent may not rest now, if it may not: the user's answer is pending, a background command of its runs, or a
+   * message waits for it. Checked as it asks, and again as its turn ends, for what that turn did after it asked.
+   */
+  const restRefusal = (agent: Agent): string | undefined => {
+    if (agent.endedAt !== null) return 'you have ended';
+    if (agent.state === 'needs-permission' || agent.permissions.length > 0 || waitsOnUser(agent) || planPending(agent)) {
+      return "the user's answer to your permission prompt, question or plan is pending";
+    }
+    if (agent.flag !== null) return 'your needs_you flag is up: the user may answer it (clear it if you no longer need a look)';
+    if (backgroundCommands.of(agent.sessionId).length > 0) return 'a command you started in the background still runs';
+    if (deliveries.unsent(agent.sessionId) !== undefined || deliveries.waitingAfterTurn(agent.sessionId) > 0) return 'a message waits at your prompt: read it first';
+    return undefined;
+  };
+
+  /** Its tile line without "Resting · ", while it still says it rests: it is no longer resting. */
+  const stopResting = (sessionId: string) => {
+    const summary = get(sessionId)?.status?.summary;
+    if (summary?.startsWith(RESTING_PREFIX)) host.setStatus(sessionId, { summary: summary.slice(RESTING_PREFIX.length) });
+  };
+
+  /**
+   * An agent that rested is paused as its turn ends (or at once, asked at its prompt), as `pause` pauses it, by itself.
+   * One that may not rest by then (it flagged you, a message came), or that `pause` refuses, is left running, its line
+   * without "Resting".
+   */
+  const restAfterTurn = (sessionId: string) => {
+    const line = restingAfterTurn.get(sessionId);
+    if (line === undefined) return;
+    restingAfterTurn.delete(sessionId);
+    const notPaused = (why: string) => {
+      options.log(`agent ${sessionId} rested but was not paused: ${why}`);
+      restedWith.delete(sessionId);
+      if (getRow(sessionId) !== undefined) stopResting(sessionId);
+    };
+    // After what else its turn's end does (its hand-offs, a clock's run): the checks see the agent as it is then.
+    void Promise.resolve()
+      .then(() => {
+        const agent = get(sessionId);
+        if (agent === undefined) return;
+        const refusal = restRefusal(agent);
+        if (refusal !== undefined) return notPaused(refusal);
+        restedWith.set(sessionId, line);
+        return host.pause(sessionId, sessionId, `it rested: ${line}`).then(
+          () => options.log(`agent ${sessionId} rested: ${line}`),
+          (error: unknown) => notPaused((error as Error).message),
+        );
+      })
+      .catch((error: unknown) => options.log(`agent ${sessionId} rested, and its pause failed: ${(error as Error).message}`));
+  };
+
   const host: AgentHost = {
     nextName: spawns.nextName,
 
@@ -1736,7 +1821,33 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       return lifecycle.hibernate(sessionId, by, why, fold ?? null);
     },
 
-    resume: lifecycle.resume,
+    rest(sessionId, line) {
+      const agent = requireAgent(sessionId);
+      const text = oneLine(line);
+      if (text === '') throw invalidParams("say what you wait for, in a line: \"waiting for the review of PR #12\"");
+      if (text.length > MAX_REST_LENGTH) throw invalidParams(`Not resting: your line is ${text.length} characters, and a resting tile shows ${MAX_REST_LENGTH}. Shorten it.`);
+      const refusal = restRefusal(agent);
+      if (refusal !== undefined) throw invalidParams(`Not resting: ${refusal}.`, refusal);
+      const pauses = options.agentsRest?.() ?? true;
+      restingAfterTurn.delete(sessionId);
+      const rested = host.setStatus(sessionId, { summary: pauses ? `${RESTING_PREFIX}${text}` : text });
+      if (pauses) {
+        restingAfterTurn.set(sessionId, text);
+        // Asked at its prompt, not in a turn: no turn of its is there to end, so it pauses now.
+        if (!MID_TURN.has(rested.state)) restAfterTurn(sessionId);
+      }
+      return { agent: rested, pauses };
+    },
+
+    restedWith: (sessionId) => restedWith.get(sessionId),
+
+    async resume(sessionId, why, force, fresh, quiet) {
+      const woken = await lifecycle.resume(sessionId, why, force, fresh, quiet);
+      // Woken, it rests no more; a resume refused leaves it resting.
+      if (!restedWith.delete(sessionId)) return woken;
+      stopResting(sessionId);
+      return get(sessionId) ?? woken;
+    },
 
     async restartWith(sessionId, launchSettings, why, force, fresh, { midTurn = false, keepEnv = [] as string[] } = {}) {
       const row = requireRow(sessionId);
@@ -1757,7 +1868,15 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       if (refusal !== undefined) throw invalidParams(`${agent.name} can't be restarted with new launch settings: ${refusal}`, refusal);
       const given = launchSettingsParam(launchSettings, row.harness) ?? {};
       // Each part given replaces that part; one left out is kept. `keepEnv` names kept env vars to keep under new ones.
-      const kept = readLaunchSettings(row.launch_settings) ?? {};
+      // Read only when something of it stays: new settings for both parts, or none, need none of the keychain.
+      const replacesBoth =
+        launchSettings !== null && typeof launchSettings === 'object' && 'env' in launchSettings && 'settings' in launchSettings && keepEnv.length === 0;
+      let kept: LaunchSettings;
+      try {
+        kept = replacesBoth ? {} : (options.launchSettings.get(sessionId) ?? {});
+      } catch (error) {
+        throw invalidParams(`${agent.name} can't be restarted with new launch settings: ${(error as Error).message}`, (error as Error).message);
+      }
       const next = { ...kept, ...given };
       if (launchSettings !== null && typeof launchSettings === 'object') {
         if ('env' in launchSettings && given.env === undefined) delete next.env;
@@ -1765,9 +1884,8 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       }
       const carried = Object.fromEntries(Object.entries(kept.env ?? {}).filter(([name]) => keepEnv.includes(name) && given.env?.[name] === undefined));
       if (Object.keys(carried).length > 0) next.env = { ...carried, ...given.env };
-      const stored = storedLaunchSettings(next);
-      if (stored !== null && stored.length > MAX_LAUNCH_SETTINGS_LENGTH) throw invalidParams(`launch settings must be at most ${MAX_LAUNCH_SETTINGS_LENGTH} characters, with the ones it keeps`);
-      updateLaunchSettings.run(stored, sessionId);
+      if (tooLong(next)) throw invalidParams(`launch settings must be at most ${MAX_LAUNCH_SETTINGS_BYTES} bytes of JSON, with the ones it keeps`);
+      await options.launchSettings.put(sessionId, next);
       // Only the names: the values may be secrets.
       const keys = launchSettingKeys(next);
       options.log(`${sessionId} launch settings now ${keys === null ? 'none' : JSON.stringify(keys)}, for ${why}`);
@@ -1891,7 +2009,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       return placed;
     },
 
-    markSeen(sessionId) {
+    markSeen(sessionId, opened = false) {
       const row = requireRow(sessionId);
       // Claude's trust screen stays flagged until it is answered, what was never delivered until it is resent or
       // cleared, and what sits unsent at its prompt until it is sent or cleared: looking at any answers nothing.
@@ -1899,14 +2017,33 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       const kept = flags.get(sessionId);
       const stays =
         kept !== undefined && ((entry?.trust === true && kept.id === entry.flagId) || kept.keepsEnded === true || kept.id === notSentFlags.get(sessionId)?.id);
+      // Opened, what it said is done is read. A touch or a focus is not: the alert shows in the inbox, not in its session.
+      const unalerted = opened && alerts.delete(sessionId);
       const unflagged = stays ? false : flags.delete(sessionId);
       // What still waits on the user under the flag read away stands again.
       if (unflagged) resurface(sessionId);
       // Seen is the user having looked, whatever Needs you lists: a finished turn too, so listing those later shows it read.
       const seeing = row.seen === 0 && waitsForYou({ ...toAgent(row), ledBy: null }, 'turns');
       if (seeing) updateSeen.run(1, sessionId);
-      if (seeing || unflagged) options.broadcast({ type: 'agent.updated', agent: get(sessionId)! });
+      if (seeing || unflagged || unalerted) options.broadcast({ type: 'agent.updated', agent: get(sessionId)! });
       return get(sessionId)!;
+    },
+
+    alert(sessionId, line, link) {
+      requireRow(sessionId);
+      const text = oneLine(line);
+      if (text === '') throw invalidParams('say what is done: the line must not be blank');
+      if (text.length > MAX_ALERT_LENGTH) throw invalidParams(`the line is ${text.length} characters; at most ${MAX_ALERT_LENGTH}`);
+      if (link !== null && !isAlertLink(link)) throw invalidParams(`the link must be an https URL: ${link}`);
+      const now = clock.now();
+      const last = lastBanners.get(sessionId);
+      const banner = last === undefined || now - last >= ALERT_INTERVAL_MS;
+      if (banner) lastBanners.set(sessionId, now);
+      // It stands in place of the alert before it in its Done row, counting every one still unread, banner or none.
+      const before = alerts.get(sessionId);
+      const folded = before === undefined ? 0 : before.folded + 1;
+      alerts.set(sessionId, { id: ++lastAlertId, line: text, link, at: new Date(now).toISOString(), banner, folded });
+      return announced(sessionId);
     },
 
     flag(sessionId, reason, via) {
@@ -2100,7 +2237,12 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       // Its own turn started or ran, so what was typed at its prompt has been taken; never a stale hook of a turn interrupted.
       if (payload.agent_id === undefined && TURN_HOOKS.has(payload.hook_event_name) && !hookStates.isStale(sessionId, payload)) {
         updateHadTurn.run(sessionId);
-        if (payload.hook_event_name === 'UserPromptSubmit') deliveries.promptSubmitted(sessionId, payload.prompt);
+        if (payload.hook_event_name === 'UserPromptSubmit') {
+          deliveries.promptSubmitted(sessionId, payload.prompt);
+          // A prompt taken: a rest asked before it was for a turn that has ended, and one woken by it rests no more.
+          restingAfterTurn.delete(sessionId);
+          if (restedWith.delete(sessionId)) stopResting(sessionId);
+        }
         deliveries.turnSeen(sessionId, TURN_ENDS.has(payload.hook_event_name));
       }
       // Its own turn ended: what was queued in it is due to start a turn of its own.
@@ -2108,6 +2250,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
         const limited = payload.hook_event_name === 'StopFailure' && payload.error === 'rate_limit';
         deliveries.turnEnded(sessionId, payload.hook_event_name !== 'Interrupt' && !limited, limited ? 'rate-limited' : 'interrupted');
         if (payload.hook_event_name !== 'Stop') {
+          restingAfterTurn.delete(sessionId);
           options.onTurnCut?.(sessionId, payload.hook_event_name === 'Interrupt' ? 'its turn was interrupted' : limited ? 'its turn was rate-limited' : 'its turn failed');
         }
       }
@@ -2173,6 +2316,8 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       deliveries.ended(session.id, session.stoppedByRestart);
       // Its next start takes the effort it was last set to.
       effortAfterTurn.delete(session.id);
+      // A rest is for the turn it was asked in: an agent stopped or exited before that turn ended rests no later turn.
+      restingAfterTurn.delete(session.id);
       effortAtRestart.delete(session.id);
       backAfterRestart.delete(session.id);
       lifecycle.stopGuard(session.id);
@@ -2377,7 +2522,10 @@ export function agentHandlers<Context>(
       const p = paramsObject(params);
       return agents.setRole(stringParam(p, 'sessionId'), p.role === null ? null : stringParam(p, 'role'));
     },
-    'agent.markSeen': (params) => agents.markSeen(stringParam(paramsObject(params), 'sessionId')),
+    'agent.markSeen': (params) => {
+      const object = paramsObject(params);
+      return agents.markSeen(stringParam(object, 'sessionId'), optionalBooleanParam(object, 'opened') === true);
+    },
     'agent.setEffort': (params) => {
       const p = paramsObject(params);
       return agents.setEffort(stringParam(p, 'sessionId'), p.effort === null ? null : oneOf(p, 'effort', EFFORTS));

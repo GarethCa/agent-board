@@ -95,7 +95,6 @@ import {
   type ArrangeItemKind,
   type ArrangePlacement,
   type Agent,
-  type AgentState,
   type Effort,
   type ArrangeSpacing,
   type ExternalSession,
@@ -109,6 +108,7 @@ import {
   type ZoneLayoutChoice,
   waitsForYou,
 } from '@agent-board/daemon/protocol';
+import { WORKING_STATES } from '@agent-board/daemon/human-status';
 import { isClosed, SPACING_GAPS } from '@agent-board/daemon/board-layout';
 import { startBlocked } from '@agent-board/daemon/review-doc';
 import type { MenuAction, MenuHeading, SliderRow, Submenu, SwatchRow } from '../ui/Menu';
@@ -586,8 +586,6 @@ export function agentTileMenu(input: AgentTileMenuInput): ModelEntry[] {
 /** What an agent tile's menu is shaped by under Classic: the six states, and Failed and Stopped, which lead with their own. */
 type TileMenuState = 'thinking' | 'needs-you' | 'waiting' | 'idle' | 'done' | 'paused' | 'failed';
 
-const THINKING_STATES: ReadonlySet<AgentState> = new Set<AgentState>(['running', 'thinking', 'starting', 'handing-off', 'on-command']);
-
 /**
  * What an agent that waits on something other than you waits on: the hint that names it, what shows it (absent, the
  * agent itself opens), and the id of the body row that does the same, which the menu then leaves out.
@@ -620,7 +618,7 @@ function tileMenuState(input: AgentTileMenuInput): TileMenuState {
   if (asleep(agent)) return 'paused';
   if (agent.endedAt !== null) return agent.state === 'failed' ? 'failed' : 'done';
   if (needsYou(input)) return 'needs-you';
-  if (THINKING_STATES.has(agent.state)) return 'thinking';
+  if (WORKING_STATES.has(agent.state)) return 'thinking';
   if (agent.state === 'failed') return 'failed';
   if (agent.workFinishedAt !== null) return 'done';
   return waitsOn(input) === undefined ? 'idle' : 'waiting';
@@ -1063,7 +1061,6 @@ const ITEM_KIND_LABELS: Record<ArrangeItemKind, string> = {
   clocks: 'Clocks',
   todos: 'To-dos',
   queues: 'Queues',
-  memory: 'Memory',
   steps: 'Steps',
   stickies: 'Stickies',
   shapes: 'Shapes',

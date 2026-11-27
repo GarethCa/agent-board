@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent, AgentRecord, PullRequest, Subagent } from '@agent-board/daemon/protocol';
-import { crewSection, docSection, documentSection, pinSection, pullRequestSection, subagentSection } from './sidebar-records';
+import { crewSection, docSection, documentSection, helperDocRows, pinSection, pullRequestSection, subagentSection } from './sidebar-records';
 
 const AT = '2026-10-23T10:12:00.000Z';
 
@@ -189,5 +189,26 @@ describe("an agent's Documents section", () => {
       ['document', 'Findings', 2],
     ]);
     expect(documentSection(agent({ docs: [], plan: null }))).toEqual([]);
+  });
+
+  it("lists on a ticket's chat the documents its helpers showed, by helper, and on no one else's", () => {
+    const doc = (id: string, sessionId: string, shownAt: string) => ({ id, sessionId, path: `/wt/${id}.md`, title: id, format: 'markdown', version: 1, shownAt }) as Agent['docs'][number];
+    const chat = agent({ sessionId: 'chat', ticketChat: true, docs: [doc('own', 'chat', '2026-10-23T10:00:00.000Z')], plan: null });
+    const helper = agent({ sessionId: 'helper', name: 'Fix the login', ticket: 'chat', docs: [doc('findings', 'helper', '2026-10-23T09:00:00.000Z')], plan: null });
+    const elsewhere = agent({ sessionId: 'other', ticket: 'another', docs: [doc('theirs', 'other', '2026-10-23T09:30:00.000Z')], plan: null });
+    expect(documentSection(chat, [chat, helper, elsewhere]).map((row) => [row.name, row.kind === 'document' ? row.by : null])).toEqual([
+      ['findings', 'Fix the login'],
+      ['own', undefined],
+    ]);
+    expect(documentSection({ ...chat, ticketChat: false }, [helper]).map((row) => row.name)).toEqual(['own']);
+  });
+
+  it("lists on a ticket's chat the hand-off docs its helpers recorded, each opening in its helper's window, and none deleted", () => {
+    const record = (path: string, deleted = false): AgentRecord => ({ kind: 'doc', key: path, path, from: null, recordedAt: AT, deletedAt: deleted ? AT : null });
+    const chat = agent({ sessionId: 'chat', ticketChat: true });
+    const helper = agent({ sessionId: 'helper', name: 'Fix the login', ticket: 'chat', records: [record('/wt/findings.md'), record('/wt/old.md', true)] });
+    const elsewhere = agent({ sessionId: 'other', name: 'Other', ticket: 'another', records: [record('/o/theirs.md')] });
+    expect(helperDocRows(chat, [chat, helper, elsewhere])).toEqual([{ key: 'helper:/wt/findings.md', path: '/wt/findings.md', sessionId: 'helper', by: 'Fix the login' }]);
+    expect(helperDocRows({ ...chat, ticketChat: false }, [helper])).toEqual([]);
   });
 });

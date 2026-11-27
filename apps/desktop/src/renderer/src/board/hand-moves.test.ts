@@ -137,7 +137,7 @@ const itemOf = (kind: BoardItemKind, data: Record<string, unknown> = {}) => ({ i
 
 describe('an item the user drags', () => {
   it('is marked placed by hand, of every kind an arrange places, so the next arrange leaves it', () => {
-    for (const kind of ['agent-note', 'document', 'plan', 'image', 'link', 'issue', 'clock', 'todo', 'queue', 'memory', 'steps', 'sticky', 'shape', 'text'] satisfies BoardItemKind[]) {
+    for (const kind of ['agent-note', 'document', 'plan', 'image', 'link', 'issue', 'clock', 'todo', 'queue', 'steps', 'sticky', 'shape', 'text'] satisfies BoardItemKind[]) {
       expect(placedByHandPatch(itemOf(kind))).toEqual({ data: { placedByHand: true } });
     }
   });

@@ -23,16 +23,16 @@ import type { SessionHost } from './sessions.ts';
 import type { ShellHost } from './shells.ts';
 import { flagLeadOf } from './ticket-tiles.ts';
 
-/** The memories' and queues' methods, `memory-queue.ts`'s. */
-type MemoryQueueMethod = `board.${'new' | 'list' | 'read' | 'change'}${'Memory' | 'Memories' | 'Queue' | 'Queues'}` | 'board.memoryHistory' | 'board.queueHistory' | 'board.drainQueue';
+/** The queues' methods, `queues.ts`'s. */
+type QueueMethod = `board.${'new' | 'list' | 'read' | 'change'}${'Queue' | 'Queues'}` | 'board.queueHistory' | 'board.drainQueue';
 
 /**
  * The `board.*` methods here; a question and a plan wait on the user, so `asks.ts` has them, `gate-actions.ts` opening a
- * pull request, `steps.ts` the steps cards, `memory-queue.ts` the memories and queues, and `prefab-drafts.ts` a prefab's draft.
+ * pull request, `steps.ts` the steps cards, `queues.ts` the queues, and `prefab-drafts.ts` a prefab's draft.
  */
 type BoardMethods = Pick<
   DaemonMethods,
-  Exclude<Extract<keyof DaemonMethods, `board.${string}`>, 'board.ask' | 'board.presentPlan' | 'board.showDoc' | 'board.openPullRequest' | 'board.newSteps' | 'board.readSteps' | 'board.updateSteps' | MemoryQueueMethod | 'board.remind' | 'board.readTodos' | 'board.changeTodo' | 'board.draftPrefab'>
+  Exclude<Extract<keyof DaemonMethods, `board.${string}`>, 'board.ask' | 'board.presentPlan' | 'board.showDoc' | 'board.openPullRequest' | 'board.newSteps' | 'board.readSteps' | 'board.updateSteps' | QueueMethod | 'board.remind' | 'board.readTodos' | 'board.changeTodo' | 'board.draftPrefab'>
 >;
 
 /**
@@ -166,7 +166,7 @@ export type ActivityLogger = (
  */
 export function boardHandlers<Context extends BoardConnection>(
   options: BoardCallerSources & {
-    agents: Pick<AgentHost, 'setStatus' | 'markFinished' | 'get' | 'flag' | 'clearFlag' | 'records' | 'pages' | 'announce'>;
+    agents: Pick<AgentHost, 'setStatus' | 'markFinished' | 'get' | 'flag' | 'clearFlag' | 'alert' | 'rest' | 'records' | 'pages' | 'announce'>;
     flowEdges: Pick<FlowEdgeHost, 'handOffExplicitly'>;
     logActivity: ActivityLogger;
     /** Throws unless the agent may name `to` in a hand-off with no edge to it (`OrchestratorHost.checkHandoffTarget`). */
@@ -269,6 +269,24 @@ export function boardHandlers<Context extends BoardConnection>(
       if (optionalBooleanParam(p, 'clear') === true) return agents.clearFlag(me.sessionId);
       const via = optionalStringParam(p, 'via');
       return agents.flag(me.sessionId, stringParam(p, 'reason'), via === undefined ? null : viaName(me.sessionId, via));
+    },
+    'board.alert': (params, connection) => {
+      const p = paramsObject(params);
+      const who = caller(p, connection);
+      const me = who.kind === 'agent' ? agents.get(who.tileId) : undefined;
+      if (me === undefined || !isOwnLiveSession(me, who.sessionId)) {
+        throw invalidParams("only a live agent alerts the user, from its own session: not a shell, nor an ended agent's shell");
+      }
+      return agents.alert(me.sessionId, stringParam(p, 'line'), optionalStringParam(p, 'link') ?? null);
+    },
+    'board.rest': (params, connection) => {
+      const p = paramsObject(params);
+      const who = caller(p, connection);
+      const me = who.kind === 'agent' ? agents.get(who.tileId) : undefined;
+      if (me === undefined || !isOwnLiveSession(me, who.sessionId)) {
+        throw invalidParams("only a live agent rests, from its own session: not a shell, nor an ended agent's shell");
+      }
+      return agents.rest(me.sessionId, stringParam(p, 'line'));
     },
     'board.handoff': async (params, connection) => {
       const p = paramsObject(params);

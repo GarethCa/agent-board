@@ -81,7 +81,7 @@ export function registerAgentIpc(daemon: DaemonLink, dataDir: string): void {
   passthrough(daemon, AGENT_IPC.link, 'agent.link', (sessionId: string, issueId: string | null) => ({ sessionId, issueId }));
   passthrough(daemon, AGENT_IPC.setSchedule, 'agent.setSchedule', (sessionId: string, schedule: ScheduleSpec | null) => ({ sessionId, schedule }));
   passthrough(daemon, AGENT_IPC.setName, 'agent.setName', (sessionId: string, name: string) => ({ sessionId, name }));
-  passthrough(daemon, AGENT_IPC.markSeen, 'agent.markSeen', (sessionId: string) => ({ sessionId }));
+  passthrough(daemon, AGENT_IPC.markSeen, 'agent.markSeen', (sessionId: string, opened: boolean) => ({ sessionId, opened }));
   passthrough(daemon, AGENT_IPC.setMuted, 'agent.setMuted', (sessionId: string, muted: boolean) => ({ sessionId, muted }));
   passthrough(daemon, AGENT_IPC.setPinnedExpanded, 'agent.setPinnedExpanded', (sessionId: string, pinned: boolean) => ({ sessionId, pinned }));
   passthrough(daemon, AGENT_IPC.setEffort, 'agent.setEffort', (sessionId: string, effort: Effort | null) => ({ sessionId, effort }));

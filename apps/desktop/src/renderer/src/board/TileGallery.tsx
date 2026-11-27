@@ -10,6 +10,11 @@ import { StatusPill } from '../ui';
 const AT = '2026-01-01T00:00:00.000Z';
 /** Far enough ahead that the clock badge reads the same date whenever the gallery is shown. */
 const NEXT_RUN = new Date(2099, 0, 1, 9, 0).toISOString();
+/**
+ * Three minutes ago, read when the gallery draws it: when each agent entered its state and made its request, so a tile
+ * that needs you says "just now" whenever the shot is taken.
+ */
+export const JUST_NOW = new Date(Date.now() - 3 * 60_000).toISOString();
 /** Half a minute into "22 min", so the command's time reads the same while the gallery is looked at. */
 const GATE_STARTED = new Date(Date.now() - 22.5 * 60_000).toISOString();
 
@@ -43,7 +48,7 @@ const EXTRAS: Record<GalleryState, { harness: Harness; name: string } & Partial<
     harness: 'claude',
     name: 'Clean the build',
     muted: true,
-    permissions: [{ id: 'ask', toolName: 'Bash', toolInput: { command: 'rm -rf dist' }, subagent: null, requestedAt: AT, heldUntil: null, asksInTerminal: false, sessionGrant: null, dialog: null, plan: null, questions: null }],
+    permissions: [{ id: 'ask', toolName: 'Bash', toolInput: { command: 'rm -rf dist' }, subagent: null, requestedAt: JUST_NOW, heldUntil: null, asksInTerminal: false, sessionGrant: null, dialog: null, plan: null, questions: null }],
   },
   idle: {
     harness: 'codex',
@@ -139,9 +144,9 @@ export const galleryAgent = (state: AgentState): Agent => ({
   commands: [],
   lastMessage: null,
   compactingSince: null,
-  // Three minutes in its state, read when the gallery draws it, so its pill says "3m" whenever the shot is taken.
-  stateSince: new Date(Date.now() - 3 * 60_000).toISOString(),
-  finishedAt: null,
+  // Three minutes in its state, so its pill says "3m" whenever the shot is taken; one waiting ended its turn then.
+  stateSince: JUST_NOW,
+  finishedAt: state === 'waiting' ? JUST_NOW : null,
   permissions: [],
   ask: null,
   stepsWait: null,
@@ -217,7 +222,7 @@ const CROWDED_ORCHESTRATOR: Agent = {
     { number: 216, title: 'Movable sessions, part three', url: '', state: 'draft', checks: 'pending' },
   ],
   schedule: { clockId: 'clock-1', cron: '0 9 * * 2', prompt: 'Follow up', enabled: true, nextRunAt: NEXT_RUN, lastRun: null, hibernates: false },
-  plan: { id: 'plan', version: 3, title: 'Cut the release', format: 'markdown', presentedAt: AT, expiresAt: null, left: true, decision: null, author: 'agent' } as PlanSummary,
+  plan: { id: 'plan', version: 3, title: 'Cut the release', format: 'markdown', presentedAt: JUST_NOW, expiresAt: null, left: true, decision: null, author: 'agent' } as PlanSummary,
   docs: [
     { id: 'doc-1', sessionId: 'gallery-crowded-orchestrator', path: '/docs/a.md', title: 'Status', format: 'markdown', version: 1, writtenAt: AT, writtenBy: 'agent' },
     { id: 'doc-2', sessionId: 'gallery-crowded-orchestrator', path: '/docs/b.md', title: 'Handoff', format: 'markdown', version: 1, writtenAt: AT, writtenBy: 'agent' },

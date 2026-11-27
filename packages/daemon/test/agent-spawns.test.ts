@@ -3,11 +3,13 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync,
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it, onTestFinished } from 'vitest';
+import { createMemoryCredentialStore } from '@agent-board/tracker/testing';
 import type { AgentHostOptions, ZoneRow } from '../src/agents.ts';
 import { claudeSettings, codexLaunch, createAgentSpawns, defaultName, harnessLaunch, type LaunchSpec } from '../src/agent-spawns.ts';
 import { projectCodexConfig } from '../src/codex-config-guard.ts';
 import { CODEX_HOOK_TIMEOUTS, HOOK_TOKEN_ENV, HOOK_URL_ENV } from '../src/hook-forwarder.ts';
 import { FORCED_HYPERLINK_ENV } from '../src/hyperlink-env.ts';
+import { createLaunchSettingsKeeper } from '../src/launch-settings-keychain.ts';
 import { migrate } from '../src/migrate.ts';
 import { ASKING_PERMISSION_HOLD_MS } from '../src/permissions.ts';
 import { AGENT_ERROR, type SessionInfo } from '../src/protocol.ts';
@@ -44,6 +46,7 @@ function setup(zone: Partial<ZoneRow> = {}, compactWindow = 0, { clickableLinks 
     scratchDir: '/scratch',
     groupsDir: '/groups',
     launchSettingsDir,
+    launchSettings: createLaunchSettingsKeeper({ db, credentials: createMemoryCredentialStore(), log: () => {} }),
     rememberFolder: unused,
     harnessPaths: {
       path: (harness) => (harness === 'codex' ? '/bin/codex' : '/bin/claude'),
@@ -65,7 +68,7 @@ function setup(zone: Partial<ZoneRow> = {}, compactWindow = 0, { clickableLinks 
     hookUrl: () => HOOK_URL,
     boardMcpUrl: () => MCP_URL,
     permissionHoldMs: 60_000,
-    trackers: { issue: unused, issueFrom: unused } as AgentHostOptions['trackers'],
+    trackers: { issue: unused, issueFrom: unused, zoneTracker: unused, connected: unused } as AgentHostOptions['trackers'],
     roleTemplates: { body: unused, describe: unused },
     broadcast: unused,
     log() {},

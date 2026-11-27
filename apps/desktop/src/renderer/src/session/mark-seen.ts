@@ -31,10 +31,12 @@ export function throttleTrailing(run: () => void, interval: number): { call(): v
 
 /**
  * Opening or focusing an agent's session counts as seeing what it asks: the daemon stops it needing the user until it
- * asks again. Best effort: with the daemon down there is nothing to mark, and the user sees the ask as before.
+ * asks again. `opened`: the user opened it (expanded it, opened its window), which reads its alert too; a focus or a
+ * touch of a session shown already doesn't, as the alert shows only in the inbox. Best effort: with the daemon down
+ * there is nothing to mark, and the user sees the ask as before.
  */
-export function markSeen(sessionId: string): void {
-  window.agentBoard.agents.markSeen(sessionId).catch(() => {});
+export function markSeen(sessionId: string, opened = false): void {
+  window.agentBoard.agents.markSeen(sessionId, opened).catch(() => {});
 }
 
 /**

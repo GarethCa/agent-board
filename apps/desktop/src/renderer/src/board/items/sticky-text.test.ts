@@ -114,6 +114,10 @@ describe('parseMarkdown', () => {
     ]);
   });
 
+  it('reads an https link in any case', () => {
+    expect(parseMarkdown('[a](HTTPS://Example.com/x)')).toEqual([{ type: 'paragraph', lines: [[{ type: 'link', href: 'HTTPS://Example.com/x', children: [{ type: 'text', text: 'a' }] }]] }]);
+  });
+
   it('only reads https links as links: http stays text', () => {
     expect(parseMarkdown('[a](http://example.com/x)')).toEqual([
       { type: 'paragraph', lines: [[{ type: 'text', text: '[a](http://example.com/x)' }]] },

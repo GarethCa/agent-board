@@ -1,12 +1,12 @@
-import { needsYouKind, permissionPrompt, planPending, questionPrompt, type Agent, type DaemonSettings, type NeedsYouKind } from '@agent-board/daemon/protocol';
+import { needsYouKind, permissionPrompt, planPending, questionPrompt, REQUEST_WORDS, NOTIFICATION_DEFAULTS, type Agent, type NeedsYouKind, type NotificationSettings } from '@agent-board/daemon/protocol';
 import { askAnsweredElsewhere, stepsLeftWords, stepsWaitKey, toolSummary } from '../shared/needs-you';
 import { appStateOf, type AppStatus } from './app-state';
 
 /** An OS notification about one agent. Clicking it opens that agent. */
 export interface AgentNotification {
   sessionId: string;
-  /** Why the agent is in the needs-you inbox. */
-  kind: NeedsYouKind;
+  /** Why the agent is in the needs-you inbox, or `done`: its alert that something is done, which asks nothing. */
+  kind: NeedsYouKind | 'done';
   /** The agent's name. */
   name: string;
   title: string;
@@ -14,12 +14,6 @@ export interface AgentNotification {
   /** For a question, which it is and the answers it offers, so a banner can list them. */
   ask?: { askId: string; question: string; options: string[] };
 }
-
-/** The settings alerts follow: what Needs you lists, and whether and when it notifies. */
-export type AlertSettings = Pick<DaemonSettings, 'needsYouShows' | 'notifications' | 'notifyInFront'>;
-
-/** The settings until the daemon's are read: its defaults. */
-export const DEFAULT_ALERT_SETTINGS: AlertSettings = { needsYouShows: 'explicit', notifications: true, notifyInFront: false };
 
 export interface AgentAlertsOptions {
   /** Raises the OS notification. */
@@ -46,22 +40,26 @@ export interface AgentAlerts {
    * Takes a full listing of the agents, and the settings as they are. Agents heard of before are compared with what
    * they were, as for `updated`; agents new to it are taken as they are, without a notification.
    */
-  reset(agents: readonly Agent[], settings?: AlertSettings): void;
+  reset(agents: readonly Agent[], settings?: NotificationSettings): void;
   /** Notifies if the agent has just made a new request, unless it is muted. Agents new to it never notify. */
   updated(agent: Agent): void;
   /** Forgets a deleted agent. */
   removed(sessionId: string): void;
   /** Takes the settings as they are now. */
-  settingsChanged(settings: AlertSettings): void;
+  settingsChanged(settings: NotificationSettings): void;
 }
 
 /**
- * Every request of the agent's that the inbox lists it for, most pressing first, each by its kind and what names it:
- * its permission prompts (one request however many), a question, a remove ask, a plan version, a flag to the user, or (with
- * `turns`, and nothing else asked) its turn ended. Each new one notifies once.
+ * Every request of the agent's that the inbox lists it for (`needsYouKind`), most pressing first, each by its kind and
+ * what names it: its permission prompts (one request however many), a question, a remove ask, a plan version, a steps
+ * card, a flag to the user, or (with `turns`, and nothing else asked) its turn ended. Each new one notifies once. An
+ * ended agent's only request is its flag, which notifies as any flag does.
  */
-function requestsOf(agent: Agent, settings: AlertSettings): { kind: NeedsYouKind; key: string }[] {
-  if (agent.endedAt !== null) return [];
+function requestsOf(agent: Agent, settings: NotificationSettings): { kind: NeedsYouKind; key: string }[] {
+  const kind = needsYouKind(agent, settings.needsYouShows);
+  if (kind === null) return [];
+  if (agent.endedAt !== null) return agent.flag === null ? [] : [{ kind: 'flagged', key: `flagged:${agent.flag.id}` }];
+  if (kind === 'turn') return [{ kind, key: 'turn' }];
   const requests: { kind: NeedsYouKind; key: string }[] = [];
   if (agent.state === 'needs-permission' || permissionPrompt(agent) !== undefined) requests.push({ kind: 'permission', key: 'permission' });
   if (agent.ask !== null) requests.push({ kind: 'asks', key: `asks:${agent.ask.id}` });
@@ -75,61 +73,62 @@ function requestsOf(agent: Agent, settings: AlertSettings): { kind: NeedsYouKind
   // A steps card it waits on: by the step that matters, so a new one is news and an answer to the last isn't.
   if (agent.stepsWait !== null) requests.push({ kind: agent.stepsWait.kind, key: stepsWaitKey(agent.stepsWait) });
   if (agent.flag?.to === 'user') requests.push({ kind: 'flagged', key: `flagged:${agent.flag.id}` });
-  if (requests.length === 0 && needsYouKind(agent, settings.needsYouShows) === 'turn') requests.push({ kind: 'turn', key: 'turn' });
   return requests;
 }
 
 /** How many tiles a remove ask's banner names before "and N more". */
 const REMOVE_NAMES_SHOWN = 3;
 
-/** A remove ask's banner: how many tiles, the first few by name, and no Allow, which only the inbox row has. */
+/** A remove ask's banner: how many tiles (or board items), the first few by name, and no Allow, which only the inbox row has. */
 function removeNotification(agent: Agent): AgentNotification {
   const { sessionId, name } = agent;
   const tiles = agent.removeAsk!.tiles;
   const shown = tiles.slice(0, REMOVE_NAMES_SHOWN).map((tile) => tile.name);
   const more = tiles.length - shown.length;
   const names = more === 0 ? shown.join(', ') : `${shown.join(', ')} and ${more} more`;
-  const count = `${tiles.length} tile${tiles.length === 1 ? '' : 's'}`;
-  return { sessionId, kind: 'asks', name, title: `${name} asks to remove ${count}`, body: `${names}. Open it to allow or deny.` };
+  const items = agent.removeAsk!.items === true;
+  const count = `${tiles.length} ${items ? 'board item' : 'tile'}${tiles.length === 1 ? '' : 's'}`;
+  return { sessionId, kind: 'asks', name, title: `${name} asks to ${items ? 'delete' : 'remove'} ${count}`, body: `${names}. Open it to allow or deny.` };
 }
 
 function notificationFor(agent: Agent, { kind, key }: { kind: NeedsYouKind; key: string }): AgentNotification {
   const { sessionId, name } = agent;
+  const title = `${name} ${REQUEST_WORDS[kind].says}`;
   if (key.startsWith('remove:') && agent.removeAsk != null) return removeNotification(agent);
   switch (kind) {
     case 'turn':
-      return { sessionId, kind, name, title: `${name} is waiting for you`, body: agent.lastMessage ?? 'It is waiting for your answer.' };
+      return { sessionId, kind, name, title, body: agent.lastMessage ?? 'It is waiting for your answer.' };
     case 'asks': {
       if (agent.ask === null) {
         const prompt = questionPrompt(agent);
-        return { sessionId, kind, name, title: `${name} asks you`, body: prompt === undefined ? 'Open it to answer.' : toolSummary(prompt) };
+        return { sessionId, kind, name, title, body: prompt === undefined ? 'Open it to answer.' : toolSummary(prompt) };
       }
       const asked = agent.ask;
       const { id, question, options } = asked;
       // Put on the board, or of several questions, its banner only says so: its options don't answer it.
       const elsewhere = askAnsweredElsewhere(asked);
-      if (elsewhere !== undefined) return { sessionId, kind, name, title: `${name} asks you`, body: `${question}\n${elsewhere}` };
-      return { sessionId, kind, name, title: `${name} asks you`, body: options.length === 0 ? question : `${question} (${options.join(' · ')})`, ask: { askId: id, question, options } };
+      if (elsewhere !== undefined) return { sessionId, kind, name, title, body: `${question}\n${elsewhere}` };
+      return { sessionId, kind, name, title, body: options.length === 0 ? question : `${question} (${options.join(' · ')})`, ask: { askId: id, question, options } };
     }
     case 'plan':
-      return { sessionId, kind, name, title: `${name} has a plan to review`, body: `${agent.plan!.title} · v${agent.plan!.version}` };
+      return { sessionId, kind, name, title, body: `${agent.plan!.title} · v${agent.plan!.version}` };
     case 'steps': {
       const wait = agent.stepsWait!;
-      return { sessionId, kind, name, title: `${name} asks you`, body: `${wait.title}: ${stepsLeftWords(wait)}` };
+      return { sessionId, kind, name, title, body: `${wait.title}: ${stepsLeftWords(wait)}` };
     }
     case 'todo':
-      return { sessionId, kind, name, title: `${name} waits on your to-do`, body: `${agent.stepsWait!.text} (${agent.stepsWait!.title})` };
+      return { sessionId, kind, name, title, body: `${agent.stepsWait!.text} (${agent.stepsWait!.title})` };
     case 'flagged': {
       const { reason, via } = agent.flag!;
-      return { sessionId, kind, name, title: `${name} needs you`, body: via === null ? reason : `${reason} (via ${via})` };
+      return { sessionId, kind, name, title, body: via === null ? reason : `${reason} (via ${via})` };
     }
     case 'permission': {
       const prompt = permissionPrompt(agent);
-      if (prompt === undefined) return { sessionId, kind, name, title: `${name} needs your permission`, body: 'It is asking in its terminal.' };
+      if (prompt === undefined) return { sessionId, kind, name, title, body: 'It is asking in its terminal.' };
       const summary = toolSummary(prompt);
       const asked = summary === '' ? prompt.toolName : `${prompt.toolName}: ${summary}`;
       const body = prompt.subagent === null ? asked : `Its ${prompt.subagent.type} subagent: ${asked}`;
-      return { sessionId, kind, name, title: `${name} needs your permission`, body };
+      return { sessionId, kind, name, title, body };
     }
   }
 }
@@ -138,7 +137,10 @@ export function createAgentAlerts(options: AgentAlertsOptions): AgentAlerts {
   const agents = new Map<string, Agent>();
   /** Per agent, the requests standing as it was last heard: each has been told of, or was there when first heard. */
   const notified = new Map<string, Set<string>>();
-  let settings = DEFAULT_ALERT_SETTINGS;
+  /** Per agent, the alert (by id) it had when last heard: a new one with a banner is told of once. */
+  const alerted = new Map<string, number | undefined>();
+  // Until the daemon's are read: its defaults.
+  let settings: NotificationSettings = NOTIFICATION_DEFAULTS;
   let shown: AppStatus | undefined;
 
   const showState = () => {
@@ -147,9 +149,24 @@ export function createAgentAlerts(options: AgentAlertsOptions): AgentAlerts {
     shown = next;
   };
 
+  /** Whether a notification may be raised now: the switch on (Simplified has none), and the app not in front unless asked. */
+  const mayNotify = () => (settings.notifications || options.simplified?.() === true) && (settings.notifyInFront || options.inFront?.() !== true);
+
+  /**
+   * Notifies of the agent's alert if it is new and the daemon gave it a banner (one per agent every few minutes; the
+   * rest only change its Done row), unless the agent is muted or alert banners are off. It never counts in the badge.
+   */
+  const trackAlert = (agent: Agent, heard: boolean) => {
+    const alert = agent.alert;
+    const last = alerted.get(agent.sessionId);
+    alerted.set(agent.sessionId, alert?.id);
+    if (!heard || alert === undefined || alert.id === last || !alert.banner || agent.muted || !settings.alertBanners || !mayNotify()) return;
+    const { sessionId, name } = agent;
+    options.notify({ sessionId, kind: 'done', name, title: `${name} is done`, body: alert.line });
+  };
+
   /** Records the agent, notifying if it made a new request the user is told about. */
-  const track = (agent: Agent) => {
-    const before = agents.get(agent.sessionId);
+  const trackRequests = (agent: Agent, before: Agent | undefined) => {
     agents.set(agent.sessionId, agent);
     const told = notified.get(agent.sessionId);
     // A version the user made is the plan they were already asked about: it keeps that one's key, left or not.
@@ -160,8 +177,15 @@ export function createAgentAlerts(options: AgentAlertsOptions): AgentAlerts {
     if (before === undefined || told === undefined || agent.muted) return;
     const fresh = requests.find((request) => !told.has(request.key));
     if (fresh === undefined) return;
-    if ((!settings.notifications && options.simplified?.() !== true) || (!settings.notifyInFront && options.inFront?.() === true)) return;
+    if (!mayNotify()) return;
     options.notify(notificationFor(agent, fresh));
+  };
+
+  /** Records the agent, notifying if it made a new request the user is told about, or alerted them. */
+  const track = (agent: Agent) => {
+    const before = agents.get(agent.sessionId);
+    trackRequests(agent, before);
+    trackAlert(agent, before !== undefined);
   };
 
   return {
@@ -175,6 +199,7 @@ export function createAgentAlerts(options: AgentAlertsOptions): AgentAlerts {
         track(agent);
       }
       for (const sessionId of notified.keys()) if (!agents.has(sessionId)) notified.delete(sessionId);
+      for (const sessionId of alerted.keys()) if (!agents.has(sessionId)) alerted.delete(sessionId);
       showState();
     },
     updated(agent) {
@@ -184,6 +209,7 @@ export function createAgentAlerts(options: AgentAlertsOptions): AgentAlerts {
     removed(sessionId) {
       agents.delete(sessionId);
       notified.delete(sessionId);
+      alerted.delete(sessionId);
       showState();
     },
     settingsChanged(next) {

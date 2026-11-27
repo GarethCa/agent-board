@@ -82,7 +82,7 @@ function CardItem({ item, last }: { item: ChatItem; last: boolean }) {
     case 'user':
       return <SaidMessage item={item} />;
     case 'agents-hidden':
-      return <HiddenAgents count={item.count} />;
+      return <HiddenAgents count={item.count} notAgents={item.notAgents} />;
     case 'assistant':
       return <AssistantMessage text={item.text} />;
     case 'notice':
@@ -248,7 +248,7 @@ function RailItem({ item, last }: { item: ChatItem; last: boolean }) {
       return (
         <div className="chat-ev">
           <span className="chat-dot" data-tone="muted" aria-hidden />
-          <HiddenAgents count={item.count} />
+          <HiddenAgents count={item.count} notAgents={item.notAgents} />
         </div>
       );
     case 'assistant':
@@ -479,7 +479,7 @@ function ChipStream({ items }: { items: ChatItem[] }) {
       case 'user':
         return <SaidMessage key={item.key} item={item} />;
       case 'agents-hidden':
-        return <HiddenAgents key={item.key} count={item.count} />;
+        return <HiddenAgents key={item.key} count={item.count} notAgents={item.notAgents} />;
       case 'assistant':
         return <AssistantMessage key={item.key} text={item.text} />;
       case 'compacted':

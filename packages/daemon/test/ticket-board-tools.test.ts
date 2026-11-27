@@ -114,25 +114,25 @@ describe("move, onto a ticket's board and back off", () => {
 
   it('refuses an agent not on the ticket a card it doesn’t read there, so it can’t move it out to read it', async () => {
     const setup = await setUp();
-    expect((await tool(setup, setup.helper.token, 'memory_new', { title: 'Secret builder notes' })).isError).toBe(false);
-    const [memory] = await onTicket(setup);
-    expect(memory).toMatchObject({ kind: 'memory' });
+    expect((await tool(setup, setup.helper.token, 'queue_new', { title: 'Secret builder jobs' })).isError).toBe(false);
+    const [queue] = await onTicket(setup);
+    expect(queue).toMatchObject({ kind: 'queue' });
     const other = await setup.spawn({ name: 'other' });
-    expect((await tool(setup, other.token, 'memory_read', {})).text).not.toContain('Secret builder notes');
+    expect((await tool(setup, other.token, 'queue_read', {})).text).not.toContain('Secret builder jobs');
 
     // Its own connection: one that has called with a board token speaks for that agent from then on.
     const outsider = await connectTestClient(setup.daemon);
-    const move = outsider.call('orchestrator.move', { token: other.token, target: { kind: 'item', id: memory!.id }, zoneId: setup.zone.id, at: { x: 0, y: 900 } });
-    await expect(move).rejects.toThrow("that memory is on a ticket's board you are not on");
+    const move = outsider.call('orchestrator.move', { token: other.token, target: { kind: 'item', id: queue!.id }, zoneId: setup.zone.id, at: { x: 0, y: 900 } });
+    await expect(move).rejects.toThrow("that queue is on a ticket's board you are not on");
     // Nor may it go near the card, which would say where the card is.
     const note = await setup.client.call('item.create', { ...NOTE, zoneId: setup.zone.id, x: 40, y: 900 });
-    const near = outsider.call('orchestrator.move', { token: other.token, target: { kind: 'item', id: note.id }, near: { kind: 'item', id: memory!.id } });
-    await expect(near).rejects.toThrow("that memory is on a ticket's board you are not on");
+    const near = outsider.call('orchestrator.move', { token: other.token, target: { kind: 'item', id: note.id }, near: { kind: 'item', id: queue!.id } });
+    await expect(near).rejects.toThrow("that queue is on a ticket's board you are not on");
 
-    expect(ids(await onTicket(setup))).toEqual([memory!.id]);
-    expect((await tool(setup, other.token, 'memory_read', {})).text).not.toContain('Secret builder notes');
+    expect(ids(await onTicket(setup))).toEqual([queue!.id]);
+    expect((await tool(setup, other.token, 'queue_read', {})).text).not.toContain('Secret builder jobs');
     // The ticket's own agents still move it.
-    expect((await cli(setup, setup.chat.token, 'move', ref(memory!.id), '--at', '300,0')).err).toBe('');
+    expect((await cli(setup, setup.chat.token, 'move', ref(queue!.id), '--at', '300,0')).err).toBe('');
   });
 
   it('works the same through the MCP move tool, refused without a place', async () => {
@@ -255,13 +255,13 @@ describe("the tools that place things, on a ticket's board", () => {
     expect((await onMain(setup)).filter((item) => item.kind === 'queue' || item.kind === 'steps')).toEqual([]);
   });
 
-  it('put a helper’s clock and memory on its ticket’s board, and a chat’s on the main board', async () => {
+  it('put a helper’s clock and queue on its ticket’s board, and a chat’s on the main board', async () => {
     const setup = await setUp();
     const clock = await tool(setup, setup.helper.token, 'clock_add', { cron: '*/30 * * * *', prompt: 'Check the build' });
     expect(clock.isError).toBe(false);
-    const memory = await tool(setup, setup.helper.token, 'memory_new', { title: 'Builder notes' });
-    expect(memory.isError).toBe(false);
-    expect((await onTicket(setup)).map((item) => item.kind).sort()).toEqual(['clock', 'memory']);
+    const queue = await tool(setup, setup.helper.token, 'queue_new', { title: 'Builder jobs' });
+    expect(queue.isError).toBe(false);
+    expect((await onTicket(setup)).map((item) => item.kind).sort()).toEqual(['clock', 'queue']);
 
     expect((await tool(setup, setup.chat.token, 'clock_add', { cron: '*/30 * * * *', prompt: 'Check the helper' })).isError).toBe(false);
     expect((await onMain(setup)).filter((item) => item.kind === 'clock')).toHaveLength(1);
@@ -295,12 +295,16 @@ describe("map and board, on a ticket's board", () => {
     const note = await setup.client.call('item.create', { ...NOTE, zoneId: null, ticket: setup.chat.agent.sessionId, x: 0, y: 0 });
     const loose = await setup.client.call('item.create', { ...NOTE, zoneId: null, x: 4000, y: 4000 });
 
-    const board = await tool(setup, setup.helper.token, 'board', {});
+    const board = await tool(setup, setup.helper.token, 'board', { zone: 'all' });
     const section = board.text.slice(board.text.indexOf("chat's ticket board"));
     expect(section).toContain(ref(note.id));
     expect(board.text.slice(board.text.indexOf('loose on the board'), board.text.indexOf("chat's ticket board"))).not.toContain(ref(note.id));
     expect(board.text).toContain(ref(loose.id));
     expect((await cli(setup, setup.chat.token, 'tree')).out).toContain(ref(note.id));
+    // By default each face shows the caller's own zone only, and the whole board with `all`.
+    expect((await tool(setup, setup.helper.token, 'board', {})).text).not.toContain(ref(loose.id));
+    expect((await cli(setup, setup.chat.token, 'tree')).out).not.toContain(ref(loose.id));
+    expect((await cli(setup, setup.chat.token, 'tree', '--zone', 'all')).out).toContain(ref(loose.id));
 
     const other = await setup.spawn({ name: 'other' });
     expect((await cli(setup, other.token, 'tree')).out).not.toContain("ticket board");

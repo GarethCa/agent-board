@@ -62,6 +62,41 @@ describe("an agent's message in the chat", () => {
   });
 });
 
+describe('a message no agent sent, in the chat', () => {
+  const clock: MessageSender = { ref: 'item:c0ffee12', name: 'Master check-in', kind: 'clock' };
+  const board: MessageSender = { ref: 'board', name: 'agent-board', kind: 'board' };
+
+  test("is a clock's run under its icon and name, in the board's grey, never the user's block", () => {
+    const html = render(createElement(AgentMessage, { text: 'Check the crew', from: clock }), { senderLook: () => ({ harness: 'claude', master: true }) });
+    expect(html).toContain('Clock · Master check-in');
+    expect(html).toContain('Scheduled run');
+    expect(html).toContain('data-sender="board"');
+    expect(html).toContain('data-testid="sender-badge"');
+    expect(html).not.toContain('data-testid="sender-figure"');
+    expect(html).not.toContain('chat-user');
+  });
+
+  test("is the board's own notice, under its name", () => {
+    const html = render(createElement(AgentMessage, { text: 'Step 2 is done', from: board }));
+    expect(html).toContain('<b>agent-board</b>');
+    expect(html).toContain('Notice');
+    expect(html).toContain('data-sender="board"');
+  });
+
+  for (const style of ['cards', 'timeline', 'status-line'] as const) {
+    test(`as ${style}: a clock's run and a notice are each a bubble apart from the user's`, () => {
+      const items = chatItems([
+        { kind: 'user', text: 'Mine' },
+        { kind: 'user', text: 'Check the crew', from: clock },
+        { kind: 'user', text: 'Step 2 is done', from: board },
+      ]);
+      const html = render(createElement(ChatStream, { items }), { style });
+      expect(html.match(/data-testid="chat-agent-message"/g)).toHaveLength(2);
+      expect(html.match(/data-testid="chat-user"/g)).toHaveLength(1);
+    });
+  }
+});
+
 describe('the three chat styles draw the same bubble', () => {
   const items = chatItems([
     { kind: 'user', text: 'Mine' },
@@ -78,5 +113,6 @@ describe('the three chat styles draw the same bubble', () => {
   test('a hidden run is one line that can show them again', () => {
     expect(render(createElement(HiddenAgents, { count: 3 }))).toContain('3 agent messages hidden');
     expect(render(createElement(HiddenAgents, { count: 1 }))).toContain('1 agent message hidden');
+    expect(render(createElement(HiddenAgents, { count: 2, notAgents: true }))).toContain('2 messages hidden');
   });
 });

@@ -156,6 +156,7 @@ const INBOX: Agent[] = [
         { sessionId: 'long-remove-a', name: NO_SPACES, held: null },
         { sessionId: 'long-remove-b', name: EMOJI, held: LONG_SENTENCE },
       ],
+      left: false,
     },
   }),
 ];

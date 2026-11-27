@@ -65,7 +65,7 @@ const bare = (key: string, text = key.toUpperCase()): Chord => ({ key, text, shi
 export const KEYS = [
   // The tile selected on the board.
   { id: 'tile.open', label: 'Open it, or type in a shape', section: 'tile', scope: 'tile', status: 'today', keys: [{ key: 'Enter', text: '↵' }] },
-  { id: 'tile.full', label: 'Open a memory, a queue, a to-do list or steps in full', section: 'tile', scope: 'tile', status: 'new', keys: [{ mod: 'command', key: 'Enter', text: '↵' }] },
+  { id: 'tile.full', label: 'Open a queue, a to-do list or steps in full', section: 'tile', scope: 'tile', status: 'new', keys: [{ mod: 'command', key: 'Enter', text: '↵' }] },
   { id: 'tile.rename', label: 'Rename (or click its name, then pause)', section: 'tile', scope: 'tile', status: 'today', keys: [{ key: 'F2', shift: 'any' }] },
   { id: 'tile.delete', label: 'Delete or close (asks first)', section: 'tile', scope: 'tile', status: 'today', keys: [{ text: '⌫' }] },
 
@@ -99,7 +99,6 @@ export const KEYS = [
   { id: 'make.shell', label: 'Shell: then click', section: 'make', scope: 'board', status: 'today', keys: [bare('`')] },
   { id: 'make.note', label: 'Sticky note at the pointer', section: 'make', scope: 'board', status: 'today', keys: [bare('n')] },
   { id: 'make.steps', label: 'Steps card at the pointer: questions and to-dos, in order', section: 'make', scope: 'board', status: 'today', keys: [bare('k')] },
-  { id: 'make.memory', label: 'Memory at the pointer', section: 'make', scope: 'board', status: 'today', keys: [bare('m')] },
   { id: 'make.queue', label: 'Queue at the pointer: jobs for agents to take', section: 'make', scope: 'board', status: 'today', keys: [bare('q')] },
   { id: 'make.text', label: 'Text: then click', section: 'make', scope: 'board', status: 'today', keys: [bare('t')] },
   { id: 'make.shape', label: 'Shape: then drag', section: 'make', scope: 'board', status: 'today', keys: [bare('s')] },

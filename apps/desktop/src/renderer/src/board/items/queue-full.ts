@@ -3,7 +3,7 @@
 import { isPutOff, isQueueWork, queueKindOn, type USER_QUEUE_KINDS, type HistoryVersion, type QueueAudience, type QueueJob } from '@agent-board/daemon/protocol';
 import type { NeedsYouEntry } from '../../../../shared/needs-you';
 import { needsLine } from './to-look-at';
-import { whenText, whoText } from './memory-card';
+import { whenText, whoText } from './list-card-text';
 import { handable, isLaterRow, matchingJobs, moveTarget, ordinal, puttable } from './queue-card';
 
 /** The groups a full screen lists: the user's queue by kind, an agents' queue by state. */

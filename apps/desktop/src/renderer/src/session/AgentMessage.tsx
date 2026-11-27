@@ -1,20 +1,31 @@
 import { useLayoutEffect, useRef, useState } from 'react';
-import { ArrowRightFromLine, ChevronDown, Info, Mail, Reply, type LucideIcon } from 'lucide-react';
+import { ArrowRightFromLine, ChevronDown, Clock, Info, LayoutGrid, Mail, Reply, type LucideIcon } from 'lucide-react';
 import type { MessageKind, MessageSender } from '@agent-board/daemon/protocol';
 import { Captain, Sender } from '../board/Character';
-import { agentMessageParts, isLong, messageKindLabel, senderTone, type SenderTone } from './agent-message';
+import { agentMessageParts, fromNoAgent, isLong, messageKindLabel, senderHead, senderTone, type SenderTone } from './agent-message';
 import { MessageText, useChatSetting } from './chat-parts';
 
-const KIND_ICONS: Record<MessageKind, LucideIcon> = { send: Mail, reply: Reply, 'hand-off': ArrowRightFromLine };
+const KIND_ICONS: Record<MessageKind, LucideIcon> = { send: Mail, reply: Reply, 'hand-off': ArrowRightFromLine, clock: Clock, board: LayoutGrid };
 
 /** The colour family of the sender of a message, as the chat knows them. */
 export function useSenderTone(from: MessageSender): SenderTone {
-  return senderTone(useChatSetting().senderLook?.(from.ref));
+  const look = useChatSetting().senderLook?.(from.ref);
+  return fromNoAgent(from) ? 'board' : senderTone(look);
 }
 
-/** The sender's character, standing: the Captain in its tricorn where the chat dresses it, else its harness's. */
-function SenderFigure({ tone }: { tone: SenderTone }) {
+/**
+ * The sender's character, standing: the Captain in its tricorn where the chat dresses it, else its harness's. A clock
+ * or the board has no character: its kind's icon stands in.
+ */
+function SenderFigure({ tone, Kind }: { tone: SenderTone; Kind: LucideIcon }) {
   const { captainHat } = useChatSetting();
+  if (tone === 'board') {
+    return (
+      <span className="chat-agent-figure chat-agent-badge" data-testid="sender-badge" aria-hidden>
+        <Kind />
+      </span>
+    );
+  }
   return (
     <span className="chat-agent-figure" aria-hidden>
       {tone === 'captain' && captainHat ? <Captain size="avatar" /> : <Sender harness={tone === 'codex' ? 'codex' : 'claude'} />}
@@ -24,7 +35,8 @@ function SenderFigure({ tone }: { tone: SenderTone }) {
 
 /**
  * A message another agent sent (its `send`, hand-off or reply), drawn apart from the user's own: the sender's
- * character beside a bubble tinted in its colour, headed "From …" and the kind it came as. Past a few lines it folds,
+ * character beside a bubble tinted in its colour, headed "From …" and the kind it came as. A clock's run and the
+ * board's own notice are drawn the same way, in the board's grey, under their icon and name. Past a few lines it folds,
  * with Show all; what the board added for the receiver (how to answer, a hand-off's head) is under the info badge.
  */
 export function AgentMessage({ text, from }: { text: string; from: MessageSender }) {
@@ -52,10 +64,10 @@ export function AgentBubble({ text, from, tone }: { text: string; from: MessageS
   const Kind = KIND_ICONS[from.kind];
   return (
     <div className="chat-agent" data-testid="chat-agent-message" data-sender={tone} data-kind={from.kind}>
-      <SenderFigure tone={tone} />
+      <SenderFigure tone={tone} Kind={Kind} />
       <div className="chat-agent-bubble">
         <div className="chat-agent-head">
-          <b>From {from.name}</b>
+          <b>{senderHead(from)}</b>
           <span className="chat-agent-kind">
             <Kind aria-hidden />
             {messageKindLabel(from)}
@@ -81,12 +93,16 @@ export function AgentBubble({ text, from, tone }: { text: string; from: MessageS
   );
 }
 
-/** One line for the agents' messages a chat leaves out while it shows only the user's own. */
-export function HiddenAgents({ count }: { count: number }) {
+/**
+ * One line for the messages a chat leaves out while it shows only the user's own: "agent messages", or plain
+ * "messages" when a clock's run or the board's notice is among them.
+ */
+export function HiddenAgents({ count, notAgents = false }: { count: number; notAgents?: boolean }) {
   const { onShowAgents } = useChatSetting();
   return (
     <p className="chat-agents-hidden" data-testid="chat-agents-hidden">
-      {count} agent {count === 1 ? 'message' : 'messages'} hidden ·{' '}
+      {count} {notAgents ? '' : 'agent '}
+      {count === 1 ? 'message' : 'messages'} hidden ·{' '}
       <button type="button" onClick={onShowAgents}>
         Show
       </button>

@@ -35,7 +35,19 @@ export function isLong(text: string): boolean {
 /** The kind a message came as, as its pill says it. */
 export function messageKindLabel(from: MessageSender): string {
   if (from.kind === 'hand-off') return from.payload === undefined ? 'Hand-off' : `Hand-off · ${from.payload}`;
+  if (from.kind === 'clock') return 'Scheduled run';
+  if (from.kind === 'board') return 'Notice';
   return from.kind === 'reply' ? 'Reply' : 'Message';
+}
+
+/** Whether a message came from no agent: a clock's run, or the board's own notice. */
+export const fromNoAgent = (from: MessageSender): boolean => from.kind === 'clock' || from.kind === 'board';
+
+/** Who a message's bubble says it is from: "From" an agent, a clock by its name, the board by its own. */
+export function senderHead(from: MessageSender): string {
+  if (from.kind === 'clock') return `Clock · ${from.name}`;
+  if (from.kind === 'board') return from.name;
+  return `From ${from.name}`;
 }
 
 /**
@@ -51,8 +63,10 @@ export function foldAgentMessages(items: ChatItem[], includeAgents: boolean): Ch
       continue;
     }
     const last = out.at(-1);
-    if (last?.kind === 'agents-hidden') out[out.length - 1] = { ...last, count: last.count + 1 };
-    else out.push({ kind: 'agents-hidden', key: `agents-hidden-${item.key}`, count: 1 });
+    const run = last?.kind === 'agents-hidden' ? last : { kind: 'agents-hidden' as const, key: `agents-hidden-${item.key}`, count: 0 };
+    const counted = { ...run, count: run.count + 1, ...(run.notAgents || fromNoAgent(item.from) ? { notAgents: true as const } : {}) };
+    if (run === last) out[out.length - 1] = counted;
+    else out.push(counted);
   }
   return out;
 }
@@ -69,7 +83,10 @@ export function senderLook(agents: readonly Agent[], ref: string): SenderLook | 
   return agent && { harness: agent.harness, master: agent.master };
 }
 
-/** The colour family of a sender's bubble: the Captain's teal, or its harness's colour (Claude's when it is gone). */
-export type SenderTone = 'captain' | Harness;
+/**
+ * The colour family of a sender's bubble: the Captain's teal, or its harness's colour (Claude's when it is gone); a
+ * clock's or the board's, `board`, a neutral grey.
+ */
+export type SenderTone = 'captain' | Harness | 'board';
 
 export const senderTone = (look: SenderLook | undefined): SenderTone => (look?.master ? 'captain' : (look?.harness ?? 'claude'));

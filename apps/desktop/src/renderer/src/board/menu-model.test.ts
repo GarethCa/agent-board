@@ -502,7 +502,7 @@ const repoZone: Zone = {
 const group: Zone = { ...repoZone, kind: 'unbound', repoRoot: null };
 
 /** The ids of Arrange items ▸: a row per kind, and in each its four places. */
-const PLACE_KINDS = ['notes', 'files', 'clocks', 'todos', 'queues', 'memory', 'steps', 'stickies', 'shapes', 'text'];
+const PLACE_KINDS = ['notes', 'files', 'clocks', 'todos', 'queues', 'steps', 'stickies', 'shapes', 'text'];
 const placeIds = (kind: string) => [`place-${kind}`, ...['cluster', 'sidebar', 'top', 'stay'].map((place) => `place-${kind}/place-${kind}-${place}`)];
 const PLACEMENT_IDS = ['placements', ...PLACE_KINDS.flatMap(placeIds).map((id) => `placements/${id}`)];
 

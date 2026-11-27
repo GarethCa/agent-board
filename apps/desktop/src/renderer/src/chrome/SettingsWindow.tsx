@@ -18,6 +18,7 @@ import { BoardBackgroundSetting } from './BoardBackgroundSetting';
 import { PopupSettings } from './PopupSettings';
 import { ArrangeSpacingSetting } from './ArrangeSpacingSetting';
 import { DockSetting } from './DockSetting';
+import { DocTilesSetting } from './DocTilesSetting';
 import { AgentNoteLookSetting, ChatRunsShowSetting, ClickOpensSetting, ConnectionsSetting, TethersSetting, TicketTilesOpenAsSetting, TileShowsSetting } from './BoardViewSettings';
 import { ChatStyleSetting } from './ChatStyleSetting';
 import { ChatThemeSetting } from './ChatThemeSetting';
@@ -39,6 +40,7 @@ import { TodoLookSetting } from './TodoLookSetting';
 import { TileDesignSetting } from './TileDesignSetting';
 import { UsagePlanSetting } from './UsageSetting';
 import { WebTabsSetting } from './WebTabsSetting';
+import { AgentsRestSetting } from './AgentsRestSetting';
 
 type OnError = (action: string) => (error: unknown) => void;
 
@@ -141,7 +143,12 @@ function sectionBody(home: SettingsHome, onError: OnError): ReactNode {
         </>
       );
     case 'board.tiles':
-      return <AgentTilesSettings />;
+      return (
+        <>
+          <AgentTilesSettings />
+          <DocTilesSetting onError={onError} />
+        </>
+      );
     case 'board.notes':
       return <AgentNoteLookSetting />;
     case 'board.tidying':
@@ -155,6 +162,7 @@ function sectionBody(home: SettingsHome, onError: OnError): ReactNode {
         <>
           <CompactWindowSetting onError={onError} />
           <BoardToolsOnlySetting onError={onError} />
+          <AgentsRestSetting onError={onError} />
         </>
       );
     case 'agents.links':

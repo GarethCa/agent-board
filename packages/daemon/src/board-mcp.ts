@@ -4,7 +4,7 @@
 import { isAbsolute } from 'node:path';
 import { addSchedule, listSchedules, listTemplates, removeSchedule, removeTemplate, saveTemplate, setOwnSchedule } from './clock-ops.ts';
 import { listSteps, newSteps, readStepsCard, stepsUpdate, stepWords, updateSteps, type StepsUpdate } from './steps-ops.ts';
-import { listMemories, listQueues, memoryHistory, newMemory, newQueue, queueHistory, memoryUpdate, queueUpdate, readMemory, readQueue, updateMemory, updateQueue, type MemoryUpdate, type QueueUpdate } from './memory-ops.ts';
+import { listQueues, newQueue, queueHistory, queueUpdate, readQueue, updateQueue, type QueueUpdate } from './queue-ops.ts';
 import { changeTodo, readTodos, remind } from './todo-ops.ts';
 import {
   addEdge,
@@ -52,6 +52,9 @@ import {
   setStatus,
   flagLine,
   flagOwn,
+  alertLine,
+  alertUser,
+  restOwn,
   openOwnPullRequest,
   recordEntry,
   pinEntry,
@@ -81,6 +84,7 @@ import {
   moveTile,
   removeConnector,
   removeNote,
+  deleteItem,
   passNote,
   removeShape,
   zoneMap,
@@ -129,7 +133,6 @@ import {
   MAX_REMOVE_ASK_TILES,
   MAX_OPTION_LENGTH,
   MAX_PLAN_TITLE_LENGTH,
-  MAX_MEMORY_KEY,
   MAX_STEPS,
   MAX_STEPS_QUESTIONS,
   MAX_ROLE_NAME_LENGTH,
@@ -151,6 +154,9 @@ import {
   isWaitState,
   lineSplitter,
   MAX_FLAG_LENGTH,
+  MAX_ALERT_LENGTH,
+  ALERT_INTERVAL_MS,
+  MAX_REST_LENGTH,
   MAX_PURPOSE_LENGTH,
   MAX_STATUS_LENGTH,
   RPC_ERROR,
@@ -175,10 +181,10 @@ export const BOARD_MCP_INSTRUCTIONS =
   'You are running on agent-board, a desktop app that shows coding agents and shells as tiles in zones on one board, ' +
   'joined by edges that hand work from one agent to the next. These tools are the few you need most; for anything else, ' +
   '`agent-board help <command>` in your shell prints that one command (the whole `agent-board --help` is long: read it only if you must). A turn ending tells no one: when you are blocked, ' +
-  'your work is ready for review, or you need a decision, call `needs_you` with the reason in a line. Before you start, ' +
-  'list memories with `memory_read`, then read what other agents left; before you finish or hand off, `memory_update` what the next one should know. ' +
-  'A zone shares one memory: add to it, and never start a memory of your own for a ticket. ' +
+  'your work is ready for review, or you need a decision, call `needs_you` with the reason in a line. When a task the user asked for is done, or something comes up they would ' +
+  'want to know now, you may `alert` them with a line (never for routine progress). ' +
   'Something only the user can do, later (send a pull request for approval, restart the app), goes on their to-do list with `remind`. ' +
+  "When you're waiting on someone else for longer than a few minutes, and have nothing to do, call `rest` with what you're waiting for: the board pauses you as your turn ends, and a message wakes you. " +
   'For a long watch, `clock_add` adds a clock of your own that messages you on a schedule; `clock_set` changes what your ' +
   'clock does with you after each run, or turns it off, with your reason; `save_clock_template` saves a clock to start new ones from.';
 
@@ -218,9 +224,16 @@ export const BOARD_MCP_TOOLS: Tool[] = [
   {
     name: 'board',
     description:
-      "Every zone with its tiles (agents and shells, with state and status), items (a shape's text and sections) and " +
-      'connectors (their ends, relation and labels). As `agent-board tree`.',
-    inputSchema: NO_INPUT,
+      "Your zone with its tiles (agents and shells, with state and status), items (a shape's text and sections) and " +
+      'connectors (their ends, relation and labels), its hibernated, finished and ended agents folded into one count line. ' +
+      '`zone: "all"` shows every zone and what is loose on the board, nothing folded. As `agent-board tree`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        zone: { type: 'string', description: 'A zone, by ref, or `all` for the whole board. Yours by default; the whole board if you are in no zone.' },
+      },
+      additionalProperties: false,
+    },
   },
   {
     name: 'usage',
@@ -328,11 +341,12 @@ export const BOARD_MCP_TOOLS: Tool[] = [
     name: 'show_doc',
     description:
       'Show the user a longer Markdown (.md) or HTML (.html) file of yours as a document, nicer to read than your ' +
-      'terminal: a Document tab in your window, and with on_board a card beside your tile too. Returns at once. It stays ' +
+      'terminal: a Document tab in your window, listed under Made on your sidebar, and with on_board a card beside your ' +
+      'tile too, if the user puts docs on the board (off by default). Returns at once. It stays ' +
       'live: write the file again and they see the new version. They may edit a Markdown document there: their edit is ' +
       'written to the file, and you are told what changed at your prompt. An HTML document is view-only, sandboxed and ' +
       'offline. With plan, it is your plan, for them to decide on before you carry it out, and waits for their ' +
-      'decision: it waits in their Needs you inbox (and, with on_board, on a plan card beside your tile), kept as v1, ' +
+      'decision: it waits in their Needs you inbox (and, with on_board, on a plan card beside your tile if they put docs on the board), kept as v1, ' +
       'v2… in your history; they approve it, ask for changes (with comments) or reject it. They may edit a Markdown ' +
       'plan before deciding: you are then told what they changed, and an approved edit is written to the file. ' +
       `Waits ${DEFAULT_PLAN_WAIT_MS / 60_000} minutes by default. After changes are asked for, write the revised plan ` +
@@ -343,7 +357,7 @@ export const BOARD_MCP_TOOLS: Tool[] = [
       properties: {
         path: { type: 'string', description: 'The file, relative to your working directory.' },
         title: { type: 'string', maxLength: MAX_PLAN_TITLE_LENGTH, description: 'What it is, in a line; else its first heading.' },
-        on_board: { type: 'boolean', description: 'Also put it on the board, as a card beside your tile (a plan card, with plan).' },
+        on_board: { type: 'boolean', description: 'Also put it on the board, as a card beside your tile (a plan card, with plan), if the user puts docs on the board: off by default.' },
         plan: { type: 'boolean', description: 'It is your plan, to approve, send back with changes, or reject: waits for their decision.' },
         timeout_minutes: { type: 'integer', minimum: 1, maximum: MAX_ASK_WAIT_MS / 60_000, description: 'With plan, how long to wait.' },
       },
@@ -411,6 +425,24 @@ export const BOARD_MCP_TOOLS: Tool[] = [
     },
   },
   {
+    name: 'rest',
+    description:
+      "Say you're done for now: when you wait on someone else for longer than a few minutes (a review, a merge, a GO) " +
+      'and have nothing to do. Your tile says "Resting" with your line, and as your turn ends the board pauses you, ' +
+      'freeing what your session holds and keeping your tile, worktree, branch and conversation. A message (send), a ' +
+      "hand-off, your clock or the user's Wake wakes you. Refused while the user's answer is pending (a permission " +
+      'prompt, a question, a plan or your needs_you flag), while a command you started in the background runs, or while ' +
+      'a message waits at your prompt. As `agent-board rest`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        line: { type: 'string', maxLength: MAX_REST_LENGTH, description: 'What you wait for, in a line: "waiting for the Playwright GO".' },
+      },
+      required: ['line'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'needs_you',
     description:
       'Ask for a look, without a question: when you are blocked, your work is ready for review, or you need a decision. ' +
@@ -424,6 +456,23 @@ export const BOARD_MCP_TOOLS: Tool[] = [
         via: { type: 'string', description: 'Orchestrators: the crew member whose flag you pass on to the user, by ref (agent:9c1e) or name.' },
         clear: { type: 'boolean', description: 'Drop your flag instead: you no longer need a look.' },
       },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'alert',
+    description:
+      'Tell the user something is done, with a banner and a row in their inbox\'s Done list, apart from Needs you: it ' +
+      'asks nothing of them. Use it when a task the user asked for is done, or for something they would want to know now; ' +
+      'not for routine progress, and not for a hand-off to another agent. It is your choice: the board never alerts for you. ' +
+      `One banner every ${ALERT_INTERVAL_MS / 60_000} minutes: alerts sooner fold into your Done row. As \`agent-board alert\`.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        line: { type: 'string', maxLength: MAX_ALERT_LENGTH, description: 'What is done, in a line: "PR #12 is merged".' },
+        link: { type: 'string', description: 'An https link to go with it, such as the pull request.' },
+      },
+      required: ['line'],
       additionalProperties: false,
     },
   },
@@ -560,65 +609,6 @@ export const BOARD_MCP_TOOLS: Tool[] = [
     },
   },
   {
-    name: 'memory_new',
-    description:
-      'Put a new memory beside your tile: shared context that the agents of its zone (every agent, if it is loose) and the user read and write. ' +
-      'A zone shares one memory, which agents add to with memory_update: never start one for each ticket. While your zone has one, this is ' +
-      'refused, naming it; make a second only for a different subject the whole zone needs, with second. As `agent-board memory new`.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        title: { type: 'string', maxLength: MAX_PLAN_TITLE_LENGTH, description: 'What it remembers, in a line.' },
-        second: { type: 'boolean', description: 'Make it though the zone has a memory: for a different subject the whole zone needs.' },
-      },
-      required: ['title'],
-      additionalProperties: false,
-    },
-  },
-  {
-    name: 'memory_read',
-    description:
-      'Read what other agents left before you start: your zone shares one memory. Without memory, list the memories you can read (in your zone, and loose ones). ' +
-      'With memory, its facts in full, pinned first, then newest first, and its documents by title (search: only those holding it); ' +
-      'with entry, that one in full (a document whole), or with history its versions, newest first. As `agent-board memory ls|read|history`.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        memory: { type: 'string', description: 'The memory, by ref (item:3f2a) or title.' },
-        entry: { type: 'string', description: 'An entry, by its key or #id.' },
-        search: { type: 'string', description: 'Only entries whose key or text holds this (any case).' },
-        history: { type: 'boolean', description: "With entry: its versions, every change anyone made, to put one back with memory_update's restore." },
-      },
-      additionalProperties: false,
-    },
-  },
-  {
-    name: 'memory_update',
-    description:
-      'Change a memory: add remembers a fact ("key: value" with a one-word key replaces that key\'s value; else a note) or, ' +
-      'with document (a title) or file, text kept whole (up to 1 MB), listed by title until read; edit changes an entry\'s text, ' +
-      'key or pin; remove removes one; restore puts a version back (memory_read with history lists them); confirm says a stale ' +
-      "one is still true. Any agent that reads it may change any entry, the user's too. Add what the next agent should know to your " +
-      "zone's memory before you finish, rather than a new memory. As `agent-board memory add|edit|rm|restore|confirm`.",
-    inputSchema: {
-      type: 'object',
-      properties: {
-        memory: { type: 'string', description: 'The memory, by ref (item:3f2a) or title.' },
-        action: { type: 'string', enum: ['add', 'edit', 'remove', 'restore', 'confirm'], description: 'What to do.' },
-        entry: { type: 'string', description: 'For edit, remove, restore and confirm: the entry, by its key, title or #id.' },
-        text: { type: 'string', description: 'For add and edit: the text.' },
-        key: { type: 'string', description: 'For add and edit: the key to keep it under (spaces and all).' },
-        no_key: { type: 'boolean', description: 'For add: keep the text as a note, "a: b" and all; for edit, take its key off.' },
-        document: { type: 'string', maxLength: MAX_MEMORY_KEY, description: 'For add: keep text whole as a document under this title.' },
-        file: { type: 'string', description: 'For add: a file to keep whole, by path (relative to where you started).' },
-        pinned: { type: 'boolean', description: 'For edit: pin it to the top rows, or unpin it.' },
-        version: { type: 'integer', minimum: 1, description: 'For restore: the version to put back.' },
-      },
-      required: ['memory', 'action'],
-      additionalProperties: false,
-    },
-  },
-  {
     name: 'queue_new',
     description: 'Put a new queue beside your tile: jobs for the agents of its zone (every agent, if it is loose) to take one at a time, and info to read; with for_user, a queue of things for the user to look at, which no agent takes from. As `agent-board queue new`.',
     inputSchema: {
@@ -633,12 +623,17 @@ export const BOARD_MCP_TOOLS: Tool[] = [
   },
   {
     name: 'queue_read',
-    description: 'Without queue, list the queues you can read; with queue, its rows in order, then those done; with job, that job\'s versions, newest first. As `agent-board queue ls|read|history`.',
+    description:
+      'Without queue, list the queues you can read; with queue, its open rows in order, each its headline and link, and how many are done; ' +
+      "with job and whole, that job whole (its body and result); with job alone, that job's versions, newest first; with done, the done " +
+      'jobs and their results, newest first. As `agent-board queue ls|read|history`.',
     inputSchema: {
       type: 'object',
       properties: {
         queue: { type: 'string', description: 'The queue, by ref (item:3f2a) or title.' },
-        job: { type: 'string', description: "A job's #id (its start will do): its history." },
+        job: { type: 'string', description: "A job's #id (its start will do): its history, or with whole, the job itself." },
+        whole: { type: 'boolean', description: 'With job: the job whole, not its history.' },
+        done: { type: 'boolean', description: 'The done jobs and their results, newest first, not the open rows.' },
       },
       additionalProperties: false,
     },
@@ -1227,6 +1222,7 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
               label: { type: 'string', description: 'For issue-label.' },
             },
             required: ['kind'],
+            additionalProperties: false,
           },
           description: 'All must pass before it delivers.',
         },
@@ -1275,7 +1271,7 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
       'holds. It places the zone\'s items too, each kind as placements says: cluster, beside the agent that made it (an ' +
       'agent note, the one it is about) in its lane after its tiles, down the sidebar if that agent is not in the zone or ' +
       "it is the user's; sidebar, one column down the right of the crew, by kind; top, a row under the top row, by kind (in columns, the column after it); " +
-      'stay, left where it is. Until a zone says otherwise notes and files cluster; clocks, todos, queues, memory and steps ' +
+      'stay, left where it is. Until a zone says otherwise notes and files cluster; clocks, todos, queues and steps ' +
       'go top; stickies, shapes and text stay. An item the user dragged or turned stays unless all; one in the zone\'s free ' +
       'area always does. It answers with the zone\'s map (see map), which says how many of each kind went where. by, ' +
       'layout and auto are kept as your settings for the next arrange. As `agent-board arrange`.',
@@ -1405,6 +1401,26 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
       type: 'object',
       properties: { note: { type: 'string', description: 'The note, by ref (item:31f0).' } },
       required: ['note'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'delete_item',
+    description:
+      'Delete a board item of any kind (a queue, to-do list, steps card, note, shape…; not a running crew\'s card) as ' +
+      'one step an open board can undo (not on a ticket\'s board), its connectors with it. One you, or an agent you started, made goes at once; ' +
+      'one made by the user or another agent only with ask, which asks the user in an Allow/Deny prompt and waits for the answer ' +
+      `(${DEFAULT_ASK_WAIT_MS / 60_000} minutes by default). A queue with open jobs, a to-do list with open lines or a steps card ` +
+      'with open steps stays, saying how many, unless force. As `agent-board delete`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        item: { type: 'string', description: 'The item, by ref (item:31f0).' },
+        force: { type: 'boolean', description: 'Delete it even with open jobs, lines or steps.' },
+        ask: { type: 'boolean', description: 'Ask the user to delete one you did not make.' },
+        timeout_minutes: { type: 'integer', minimum: 1, maximum: MAX_ASK_WAIT_MS / 60_000, description: 'With ask: how long to wait for the answer. No answer by then deletes nothing.' },
+      },
+      required: ['item'],
       additionalProperties: false,
     },
   },
@@ -1548,8 +1564,8 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
   },
   {
     name: 'list_schedules',
-    description: "Every schedule (clock) on the board: its ref, its cron, what it does, its next run and its last run's outcome. As `agent-board schedule list`.",
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    description: "Every schedule (clock) on the board: its ref, its cron, what it does, its next run and its last run's outcome. Each prompt is cut to 80 characters; full gives all of it. As `agent-board schedule list`.",
+    inputSchema: { type: 'object', properties: { full: { type: 'boolean', description: 'Show each schedule\'s whole prompt.' } }, additionalProperties: false },
   },
   {
     name: 'remove_schedule',
@@ -1652,14 +1668,15 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
     description:
       'Ask the user to remove agents you may close but did not start, each with its tile, worktree and branch: ' +
       'they get one Allow/Deny prompt for the whole list, and nothing goes unless they press Allow. One still running, ' +
-      'or with an agent it started still running, stays unless they tick it. Waits for the answer ' +
-      `(${DEFAULT_ASK_WAIT_MS / 60_000} minutes by default) and returns what was removed and what stayed, and why. ` +
-      'One ask at a time. As `agent-board close <ref…> --remove --ask`.',
+      'or with an agent it started still running, stays unless they tick it. Returns at once: the ask stays up until ' +
+      `they answer or the wait runs out (${DEFAULT_ASK_WAIT_MS / 60_000} minutes by default), and their answer comes ` +
+      'to your prompt as a message, with what was removed and what stayed, and why. One ask at a time. ' +
+      'As `agent-board close <ref…> --remove --ask`, which waits for the answer.',
     inputSchema: {
       type: 'object',
       properties: {
         agents: { type: 'array', items: AGENT_REF, minItems: 1, maxItems: MAX_REMOVE_ASK_TILES },
-        timeout_minutes: { type: 'integer', minimum: 1, maximum: MAX_ASK_WAIT_MS / 60_000, description: 'How long to wait for the answer. No answer by then removes nothing.' },
+        timeout_minutes: { type: 'integer', minimum: 1, maximum: MAX_ASK_WAIT_MS / 60_000, description: 'How long the ask stays up for the answer. No answer by then removes nothing.' },
       },
       required: ['agents'],
       additionalProperties: false,
@@ -1737,21 +1754,6 @@ function linesArgOf(args: Record<string, unknown>): { lines?: number } {
 function booleanArg(args: Record<string, unknown>, name: string): boolean | undefined {
   if (args[name] !== undefined && typeof args[name] !== 'boolean') throw new BoardError(`${name} must be true or false`);
   return args[name] as boolean | undefined;
-}
-
-/** `memory_update`'s arguments, read by the parser `memory add|edit|rm|restore|confirm` uses too. */
-function memoryUpdateArg(args: Record<string, unknown>): MemoryUpdate {
-  const note = booleanArg(args, 'no_key');
-  const pinned = booleanArg(args, 'pinned');
-  const { file: path, ...given } = givenStrings(args, ['entry', 'text', 'key', 'document', 'file'] as const);
-  return memoryUpdate({
-    action: typeof args.action === 'string' ? args.action : undefined,
-    ...given,
-    ...(path === undefined ? {} : { path }),
-    ...(note === undefined ? {} : { note }),
-    ...(pinned === undefined ? {} : { pinned }),
-    ...(args.version === undefined ? {} : { version: args.version }),
-  });
 }
 
 /** `queue_update`'s arguments, read by the parser `queue add|take|…` uses too. */
@@ -1867,10 +1869,61 @@ export interface BoardMcpContext {
   cwd(): string;
 }
 
+/** Every tool's input schema, by name, to check a call's arguments against. */
+const TOOL_SCHEMAS = new Map([...BOARD_MCP_TOOLS, ...ORCHESTRATOR_MCP_TOOLS].map((tool) => [tool.name, tool.inputSchema]));
+
+interface ObjectSchema {
+  properties?: Record<string, unknown>;
+  additionalProperties?: unknown;
+  items?: unknown;
+}
+
+/** An object in a call with keys its schema closes out: where it is, those keys, and the keys it allows. */
+interface UnknownKeys {
+  path: string;
+  keys: string[];
+  allowed: string[];
+}
+
+/**
+ * Every object in `value` with keys that `schema` closes out (additionalProperties false), at every level, through
+ * its properties and array items: each with its unknown keys and the keys it allows. `path` names `value` in the call.
+ */
+function unknownKeys(schema: unknown, value: unknown, path: string): UnknownKeys[] {
+  if (typeof schema !== 'object' || schema === null) return [];
+  const { properties = {}, additionalProperties, items } = schema as ObjectSchema;
+  if (Array.isArray(value)) return value.flatMap((each, index) => unknownKeys(items, each, `${path}[${index}]`));
+  if (typeof value !== 'object' || value === null) return [];
+  const keys = Object.keys(value);
+  const unknown = additionalProperties === false ? keys.filter((key) => !Object.hasOwn(properties, key)) : [];
+  const here = unknown.length > 0 ? [{ path, keys: unknown, allowed: Object.keys(properties) }] : [];
+  const inside = keys
+    .filter((key) => Object.hasOwn(properties, key))
+    .flatMap((key) => unknownKeys(properties[key], (value as Record<string, unknown>)[key], path === '' ? key : `${path}.${key}`));
+  return [...here, ...inside];
+}
+
+/** One line of a refusal: what `found` lacks, and what it takes. */
+function unknownKeysLine(name: string, found: UnknownKeys): string {
+  const keys = found.keys.join(', ');
+  if (found.path === '') {
+    if (found.allowed.length === 0) return `${name} takes no arguments, not ${keys}.`;
+    return `${name} has no argument${found.keys.length > 1 ? 's' : ''} ${keys}. Its arguments are: ${found.allowed.join(', ')}.`;
+  }
+  if (found.allowed.length === 0) return `${name}: ${found.path} takes no keys, not ${keys}.`;
+  return `${name}: ${found.path} has no ${keys}. Its keys are: ${found.allowed.join(', ')}.`;
+}
+
+/** Why `args` don't fit tool `name`'s schema, a line for each object with unknown keys, or undefined when they fit. */
+function argumentRefusal(name: string, args: Record<string, unknown>): string | undefined {
+  const found = unknownKeys(TOOL_SCHEMAS.get(name), args, '');
+  return found.length === 0 ? undefined : found.map((each) => unknownKeysLine(name, each)).join('\n');
+}
+
 /** What each tool does with a board session, its arguments and the caller's folder: the text the model reads, or what it sees. */
 const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, unknown>, cwd: string) => Promise<ToolAnswer>> = {
   whoami: async (session) => identifyView(new BoardRefs(await readBoard(session.client)), session.caller, session.socketPath).text,
-  board: async (session) => treeView(new BoardRefs(await readCards(session)), session.caller).text,
+  board: async (session, args) => treeView(new BoardRefs(await readCards(session)), session.caller, { zone: stringArg(args, 'zone', true), face: 'mcp' }).text,
   usage: async (session) => (await usageView(session)).text,
   connections: async (session) => connectionsView(new BoardRefs(await readBoard(session.client)), session.caller).text,
   open_pr: async (session) => (await openOwnPullRequest(session)).text,
@@ -1898,6 +1951,12 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
     if (!Array.isArray(args.blocks)) throw new BoardError('give blocks, a list of at least one block, or clear');
     return (await setOwnPage(session, { name, icon, blocks: args.blocks }, cwd)).text;
   },
+  alert: async (session, { line, link }) => {
+    if (typeof line !== 'string') throw new BoardError('give a line: what is done');
+    if (link !== undefined && typeof link !== 'string') throw new BoardError('link must be a string');
+    return alertLine(await alertUser(session, line, link));
+  },
+  rest: async (session, args) => (await restOwn(session, stringArg(args, 'line'))).text,
   needs_you: async (session, { reason, via, clear }) => {
     if (clear === true) return flagLine(await flagOwn(session, undefined), true);
     if (typeof reason !== 'string') throw new BoardError('give a reason, or clear');
@@ -1931,7 +1990,7 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
         ...(description === undefined ? {} : { description }),
         ...(crewMember === undefined ? {} : { agent: crewMember }),
     });
-    return answer.reading === undefined ? answer.text : `${answer.text}\n${answer.reading}`;
+    return answer.text;
   },
   new_agent: async (session, args) => {
     const prefab = stringArg(args, 'prefab', true);
@@ -2050,7 +2109,8 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
   ask_to_remove: async (session, { agents, timeout_minutes: minutes }) => {
     if (!Array.isArray(agents) || agents.length === 0 || !agents.every((ref) => typeof ref === 'string')) throw new BoardError('agents must be a list of agent refs');
     if (minutes !== undefined && (!Number.isInteger(minutes) || (minutes as number) < 1)) throw new BoardError('timeout_minutes must be a whole number of minutes');
-    return (await askToRemove(session, agents as string[], minutes === undefined ? undefined : (minutes as number) * 60_000)).text;
+    // Returns at once, so the client's own time limit on a call never ends it: the answer comes as a message.
+    return (await askToRemove(session, agents as string[], minutes === undefined ? undefined : (minutes as number) * 60_000, true)).text;
   },
   handoff: async (session, args) =>
     (
@@ -2167,6 +2227,12 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
     return (await editNote(session, stringArg(args, 'note'), { text, color, size, ...lines })).text;
   },
   remove_note: async (session, args) => (await removeNote(session, stringArg(args, 'note'))).text,
+  delete_item: async (session, args) => {
+    const minutes = args.timeout_minutes;
+    if (minutes !== undefined && (!Number.isInteger(minutes) || (minutes as number) < 1)) throw new BoardError('timeout_minutes must be a whole number of minutes');
+    if (minutes !== undefined && args.ask !== true) throw new BoardError('timeout_minutes is for ask: it says how long to wait for the user');
+    return (await deleteItem(session, stringArg(args, 'item'), { force: args.force === true, ask: args.ask === true, ...(minutes === undefined ? {} : { timeoutMs: (minutes as number) * 60_000 }) })).text;
+  },
   pass_note: async (session, args) => (await passNote(session, stringArg(args, 'note'), stringArg(args, 'to'))).text,
   add_shape: async (session, args) => (await addShape(session, { ...shapeArgs(args), shape: stringArg(args, 'shape'), ...placeArgs(args) })).text,
   add_diagram: async (session, args) => (await addDiagram(session, stringArg(args, 'mermaid'), placeArgs(args))).text,
@@ -2193,7 +2259,7 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
         handoffTo: stringArg(args, 'handoff_to', true),
       })
     ).text,
-  list_schedules: async (session) => (await listSchedules(session)).text,
+  list_schedules: async (session, { full }) => (await listSchedules(session, full === true)).text,
   save_clock_template: async (session, args) =>
     (
       await saveTemplate(session, {
@@ -2236,23 +2302,6 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
     return (await readStepsCard(session, card)).text;
   },
   steps_update: async (session, args) => (await updateSteps(session, stringArg(args, 'card'), stepsUpdateArg(args))).text,
-  memory_new: async (session, args) => (await newMemory(session, stringArg(args, 'title'), args.second === true)).text,
-  memory_read: async (session, args) => {
-    const memory = stringArg(args, 'memory', true);
-    const entry = stringArg(args, 'entry', true);
-    const search = stringArg(args, 'search', true);
-    if (args.history !== undefined && typeof args.history !== 'boolean') throw new BoardError('history must be true or false');
-    if (memory === undefined) {
-      if (entry !== undefined || search !== undefined || args.history !== undefined) throw new BoardError('give the memory');
-      return (await listMemories(session)).text;
-    }
-    if (args.history === true) {
-      if (entry === undefined) throw new BoardError('history needs entry');
-      return (await memoryHistory(session, memory, entry)).text;
-    }
-    return (await readMemory(session, memory, { ...(entry === undefined ? {} : { entry }), ...(search === undefined ? {} : { search }) })).text;
-  },
-  memory_update: async (session, args, cwd) => (await updateMemory(session, stringArg(args, 'memory'), memoryUpdateArg(args), cwd)).text,
   queue_new: async (session, args) => {
     if (args.for_user !== undefined && typeof args.for_user !== 'boolean') throw new BoardError('for_user must be true or false');
     return (await newQueue(session, stringArg(args, 'title'), args.for_user === true)).text;
@@ -2260,11 +2309,22 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
   queue_read: async (session, args) => {
     const queue = stringArg(args, 'queue', true);
     const job = stringArg(args, 'job', true);
+    for (const flag of ['whole', 'done']) {
+      if (args[flag] !== undefined && typeof args[flag] !== 'boolean') throw new BoardError(flag + ' must be true or false');
+    }
     if (queue === undefined) {
-      if (job !== undefined) throw new BoardError('give the queue');
+      if (job !== undefined || args.done === true || args.whole === true) throw new BoardError('give the queue');
       return (await listQueues(session)).text;
     }
-    return job === undefined ? (await readQueue(session, queue)).text : (await queueHistory(session, queue, job)).text;
+    if (args.done === true) {
+      if (job !== undefined || args.whole === true) throw new BoardError('give a job or done, not both');
+      return (await readQueue(session, queue, { done: true })).text;
+    }
+    if (job === undefined) {
+      if (args.whole === true) throw new BoardError('whole goes with a job: its #id');
+      return (await readQueue(session, queue)).text;
+    }
+    return args.whole === true ? (await readQueue(session, queue, { job })).text : (await queueHistory(session, queue, job)).text;
   },
   queue_update: async (session, args) => (await updateQueue(session, stringArg(args, 'queue'), queueUpdateArg(args))).text,
   remind: async (session, args) => (await remind(session, [stringArg(args, 'text')])).text,
@@ -2382,6 +2442,9 @@ export function boardMcpHandlers(context: BoardMcpContext): RpcHandlers<McpMetho
       const { name, arguments: args = {} } = (params ?? {}) as McpMethods['tools/call']['params'];
       const call = typeof name === 'string' && Object.hasOwn(TOOL_CALLS, name) ? TOOL_CALLS[name]! : undefined;
       if (call === undefined) throw new RpcMethodError(RPC_ERROR.invalidParams, `no tool ${String(name)}`);
+      // A misspelt or unsupported argument is refused, not ignored: the model reads which ones the tool takes.
+      const refusal = argumentRefusal(name!, args);
+      if (refusal !== undefined) return { content: [{ type: 'text', text: refusal }], isError: true };
       try {
         const answer = await callTool(call, args, context, signal);
         if (typeof answer === 'string') return { content: [{ type: 'text', text: answer }] };

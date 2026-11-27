@@ -7,7 +7,7 @@ import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone, type L
 import { RENDER_ARGS, RENDER_ENV, VIEWPORT, ignorePointer, pinFonts, pinNow, pinRandomText, settle } from '../render.ts';
 import { scratch } from '../scratch.ts';
 import { centreOf, drag, settledBox } from '../board-helpers.ts';
-import { settingsSection } from '../settings-helpers.ts';
+import { putDocsOnBoard, settingsSection } from '../settings-helpers.ts';
 import { SHOT, expectWatermarkShows, needsBaselines, viewSettled, nodesStill, coloursSettled, THEMES, launchGallery, openSettingsForShot, shootSimplifiedNotes } from './shared.ts';
 
 test.use({ viewport: null });
@@ -671,6 +671,7 @@ for (const { theme, suffix } of [
       await pinFonts(window);
       await pickFolderNext(app, repo);
       await browseForZone(window);
+      await putDocsOnBoard(window);
       await spawnAgent(window, 'monorepo', 'Plan doc on the board: docs/migration.md');
       const card = window.getByTestId('plan-card');
       await expect(card.getByTestId('plan-card-stamp')).toHaveText('waiting on you', { timeout: TURN_MS });
@@ -711,6 +712,7 @@ for (const { theme, suffix } of [
       await pinFonts(window);
       await pickFolderNext(app, repo);
       await browseForZone(window);
+      await putDocsOnBoard(window);
       await spawnAgent(window, 'monorepo', 'Doc on the board: docs/release-plan.md');
       const card = window.getByTestId('doc-card');
       await expect(card.getByTestId('doc-card-preview')).toContainText('Merge the flake fix first', { timeout: TURN_MS });
@@ -774,6 +776,7 @@ for (const { theme, suffix } of [
       await pinFonts(window);
       await pickFolderNext(app, repo);
       await browseForZone(window);
+      await putDocsOnBoard(window);
       await spawnAgent(window, 'monorepo', 'Doc on the board: docs/long-plan.md');
       const card = window.getByTestId('doc-card');
       const preview = card.getByTestId('doc-card-preview');

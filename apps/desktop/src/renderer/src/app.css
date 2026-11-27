@@ -6226,6 +6226,12 @@ kbd {
   --sender: var(--harness-codex);
 }
 
+/* A clock's run or the board's own notice: no agent's colour, the window's soft ink. */
+.chat-agent[data-sender='board'],
+.chat-ev[data-sender='board'] {
+  --sender: var(--window-ink-soft);
+}
+
 .chat-agent-figure {
   display: block;
   /* Drawn in the dark well, whatever the theme: ink and paper from the window, not the app. */
@@ -6237,6 +6243,24 @@ kbd {
 .chat-agent-figure svg {
   width: auto;
   height: 40px;
+}
+
+/* In place of a character, the kind's icon in a round badge the height of one. */
+.chat-agent-badge {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  margin-bottom: var(--space-1);
+  border: 1px solid color-mix(in srgb, var(--sender) 30%, var(--window-edge));
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--sender) 9%, var(--window-bg));
+  color: var(--sender);
+}
+
+.chat-agent-badge svg {
+  width: 16px;
+  height: 16px;
 }
 
 .chat-agent-bubble {
@@ -8391,8 +8415,8 @@ button.chat-chip[aria-expanded='true'] {
 }
 
 /*
- * A list card, a memory or a queue: a raised card in the theme's neutrals, or folded to its icon; its glyph on a round
- * face leads both (a memory's brain, a queue's ticket or inbox).
+ * A list card or a queue: a raised card in the theme's neutrals, or folded to its icon; its glyph on a round
+ * face leads both (a queue's ticket or inbox).
  */
 .listcard-anchor {
   width: 100%;
@@ -8532,13 +8556,6 @@ button.chat-chip[aria-expanded='true'] {
   background: var(--listcard-zone);
 }
 
-.memory-key-name {
-  overflow: hidden;
-  min-width: 0;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .listcard-who-mark {
   display: inline-block;
   width: var(--listcard-who-mark);
@@ -8594,7 +8611,7 @@ button.chat-chip[aria-expanded='true'] {
 }
 
 /* On the selected card every line cut short wraps in full; pointed at or focused, one shows whole laid over its row (whole-line.ts). */
-.react-flow__node.selected .listcard-rows :is(.listcard-value, .memory-key, .memory-key-name, .memory-doc-title, .memory-doc-title b) {
+.react-flow__node.selected .listcard-rows .listcard-value {
   overflow: visible;
   overflow-wrap: anywhere;
   white-space: normal;
@@ -8618,32 +8635,6 @@ button.chat-chip[aria-expanded='true'] {
 
 .listcard-row[data-fresh] {
   animation: listcard-flash var(--motion-record-fade) var(--ease-out);
-}
-
-.memory-key {
-  display: flex;
-  overflow: hidden;
-  align-items: center;
-  min-width: 0;
-  gap: var(--space-1);
-  color: var(--text-soft);
-  font-family: var(--font-mono);
-  font-size: var(--font-size-xs);
-  font-weight: var(--weight-semibold);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.memory-key[data-note] {
-  color: var(--muted);
-  font-weight: var(--weight-regular);
-}
-
-.memory-file-mark,
-.memory-pin-mark {
-  flex: none;
-  width: var(--font-size-xs);
-  height: var(--font-size-xs);
 }
 
 .listcard-value {
@@ -8798,7 +8789,7 @@ button.chat-chip[aria-expanded='true'] {
   text-align: center;
 }
 
-/* A folded memory, queue, to-do list or steps card: its icon at its own size, scaled as a picture to its frame. */
+/* A folded queue, to-do list or steps card: its icon at its own size, scaled as a picture to its frame. */
 .folded-picture {
   transform: scale(var(--picture-scale, 1));
   transform-origin: 0 0;
@@ -8953,119 +8944,13 @@ button.chat-chip[aria-expanded='true'] {
   resize: vertical;
 }
 
-.memory-file-text {
-  grid-column: 1 / -1;
-  max-height: var(--listcard-file-text);
-  margin: 0 var(--space-1) var(--space-1);
-  padding: var(--space-1-5) var(--space-2);
-  overflow: auto;
-  border-radius: var(--radius-sm);
-  background: var(--sunken);
-  font-family: var(--font-mono);
-  font-size: var(--font-size-2xs);
-  white-space: pre-wrap;
-}
-
-/* A memory's card, its notebook look: pinned facts, documents by title, then facts, each under a small heading. Made
-   smaller than its rows, a section that doesn't fit folds to its heading, which a click turns. */
-.memory-section-row {
-  grid-column: 1 / 4;
-}
-
-.memory-section {
-  display: flex;
-  box-sizing: border-box;
-  width: 100%;
-  align-items: center;
-  gap: var(--space-1);
-  padding: var(--space-1-5) var(--space-1) var(--space-0-5);
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: var(--font-size-2xs);
-  font-weight: var(--weight-semibold);
-  letter-spacing: var(--tracking-caps);
-  text-align: left;
-  text-transform: uppercase;
-  cursor: pointer;
-}
-
-.memory-section:hover {
-  background: var(--hover);
-}
-
-.memory-section svg {
-  width: var(--font-size-xs);
-  height: var(--font-size-xs);
-}
-
-.memory-section-chevron {
-  transition: transform var(--motion-fast) var(--ease-out);
-}
-
-.memory-section[aria-expanded='true'] .memory-section-chevron {
-  transform: rotate(90deg);
-}
-
-.memory-section-row + .listcard-row {
-  border-top: 0;
-}
-
-.memory-doc-title {
-  display: flex;
-  overflow: hidden;
-  grid-column: 1 / 3;
-  align-items: center;
-  min-width: 0;
-  gap: var(--space-1);
-}
-
-.memory-doc-title b {
-  overflow: hidden;
-  font-weight: var(--weight-semibold);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.memory-doc-title .memory-file-mark {
-  color: var(--accent-strong);
-}
-
 .listcard-who[data-stale] {
   color: var(--warning-ink);
 }
 
-.memory-read {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-}
-
-.memory-read svg,
 .listcard-open svg {
   width: var(--font-size-xs);
   height: var(--font-size-xs);
-}
-
-.memory-stale-count {
-  padding: 0 var(--space-1-5);
-  border: 1px solid var(--warning-edge);
-  border-radius: var(--radius-pill);
-  background: var(--warning-soft);
-  color: var(--warning-ink);
-  font-size: var(--font-size-2xs);
-}
-
-.memory-read ~ .listcard-open,
-.memory-stale-count ~ .listcard-open {
-  margin-left: auto;
-}
-
-.listcard-foot-line:has(.memory-stale-count) {
-  gap: var(--space-2);
-  justify-content: flex-start;
 }
 
 .listcard-open {
@@ -9184,12 +9069,12 @@ button.chat-chip[aria-expanded='true'] {
   background: var(--sunken);
 }
 
-.memory-full-search {
+.list-full-search {
   flex: 0 1 320px;
   background: var(--raised);
 }
 
-.memory-full-chip {
+.list-full-chip {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
@@ -9203,30 +9088,30 @@ button.chat-chip[aria-expanded='true'] {
   cursor: pointer;
 }
 
-.memory-full-chip svg {
+.list-full-chip svg {
   width: var(--font-size-xs);
   height: var(--font-size-xs);
 }
 
-.memory-full-chip[aria-pressed='true'] {
+.list-full-chip[aria-pressed='true'] {
   border-color: var(--accent);
   background: var(--accent-soft);
   color: var(--accent-ink);
 }
 
-.memory-full-chip[data-tone='warn'][aria-pressed='true'] {
+.list-full-chip[data-tone='warn'][aria-pressed='true'] {
   border-color: var(--warning-edge);
   background: var(--warning-soft);
   color: var(--warning-ink);
 }
 
-.memory-full-chip:disabled {
+.list-full-chip:disabled {
   opacity: 0.5;
   cursor: default;
 }
 
-.memory-full-chip:focus-visible,
-.memory-full-item:focus-visible {
+.list-full-chip:focus-visible,
+.list-full-item:focus-visible {
   outline: none;
   box-shadow: var(--shadow-focus);
 }
@@ -9243,7 +9128,7 @@ button.chat-chip[aria-expanded='true'] {
   min-height: 0;
 }
 
-.memory-full-list {
+.list-full-list {
   display: flex;
   flex: 1;
   flex-direction: column;
@@ -9261,7 +9146,7 @@ button.chat-chip[aria-expanded='true'] {
   overflow: auto;
 }
 
-/* The list's column: in a memory, the entries, then who read it, under them. */
+/* The list's column: the rows, then who is on them, under them. */
 .full-screen-side {
   display: flex;
   flex-direction: column;
@@ -9269,7 +9154,7 @@ button.chat-chip[aria-expanded='true'] {
   border-right: 1px solid var(--separator);
 }
 
-.memory-full-who {
+.list-full-who {
   display: grid;
   flex: none;
   gap: var(--space-1-5);
@@ -9279,37 +9164,7 @@ button.chat-chip[aria-expanded='true'] {
   border-top: 1px solid var(--separator);
 }
 
-/* Who read a memory and when, the latest first: in the foot's hover card and the full screen's column. */
-.memory-readers {
-  display: grid;
-  gap: var(--space-1);
-  margin: 0;
-  padding: 0;
-  font-size: var(--font-size-xs);
-  list-style: none;
-}
-
-.memory-readers li {
-  display: flex;
-  justify-content: space-between;
-  gap: var(--space-3);
-}
-
-.memory-readers b {
-  overflow: hidden;
-  color: var(--text-soft);
-  font-weight: var(--weight-semibold);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.memory-readers time,
-.memory-readers-more {
-  flex: none;
-  color: var(--muted);
-}
-
-.memory-full-group {
+.list-full-group {
   padding: var(--space-2) var(--space-2) var(--space-1);
   color: var(--muted);
   font-size: var(--font-size-2xs);
@@ -9318,7 +9173,7 @@ button.chat-chip[aria-expanded='true'] {
   text-transform: uppercase;
 }
 
-.memory-full-item {
+.list-full-item {
   display: grid;
   width: 100%;
   gap: var(--space-0-5);
@@ -9332,15 +9187,15 @@ button.chat-chip[aria-expanded='true'] {
   cursor: pointer;
 }
 
-.memory-full-item:hover {
+.list-full-item:hover {
   background: var(--hover);
 }
 
-.memory-full-item[aria-current='true'] {
+.list-full-item[aria-current='true'] {
   background: var(--accent-soft);
 }
 
-.memory-full-item-name {
+.list-full-item-name {
   display: flex;
   overflow: hidden;
   align-items: center;
@@ -9348,21 +9203,21 @@ button.chat-chip[aria-expanded='true'] {
   font-size: var(--font-size-sm);
 }
 
-.memory-full-item-name svg {
+.list-full-item-name svg {
   flex: none;
   width: var(--font-size-sm);
   height: var(--font-size-sm);
   color: var(--muted);
 }
 
-.memory-full-item-name b {
+.list-full-item-name b {
   overflow: hidden;
   font-weight: var(--weight-semibold);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.memory-full-item-sub {
+.list-full-item-sub {
   overflow: hidden;
   padding-left: calc(var(--font-size-sm) + var(--space-1-5));
   color: var(--muted);
@@ -9371,11 +9226,11 @@ button.chat-chip[aria-expanded='true'] {
   white-space: nowrap;
 }
 
-.memory-full-item[data-stale] .memory-full-item-sub {
+.list-full-item[data-stale] .list-full-item-sub {
   color: var(--warning-ink);
 }
 
-.memory-full-none {
+.list-full-none {
   padding: var(--space-4) var(--space-2);
   color: var(--muted);
   font-size: var(--font-size-sm);
@@ -9400,7 +9255,7 @@ button.chat-chip[aria-expanded='true'] {
   font-size: var(--font-size-xs);
 }
 
-.memory-full-empty {
+.list-full-empty {
   display: grid;
   align-content: center;
   max-width: 420px;
@@ -9411,11 +9266,11 @@ button.chat-chip[aria-expanded='true'] {
   text-align: center;
 }
 
-.memory-full-empty b {
+.list-full-empty b {
   color: var(--text);
 }
 
-.memory-full-entry {
+.list-full-entry {
   display: flex;
   flex: 1;
   flex-direction: column;
@@ -9424,14 +9279,14 @@ button.chat-chip[aria-expanded='true'] {
   padding: var(--space-4) var(--space-5);
 }
 
-.memory-full-entry-head {
+.list-full-entry-head {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
 }
 
-.memory-full-name {
+.list-full-name {
   flex: 1 1 240px;
   min-width: 0;
   padding: var(--space-1) var(--space-1-5);
@@ -9444,145 +9299,40 @@ button.chat-chip[aria-expanded='true'] {
   font-weight: var(--weight-bold);
 }
 
-.memory-full-name[data-mono] {
+.list-full-name[data-mono] {
   font-family: var(--font-mono);
   font-size: var(--font-size-md);
 }
 
-.memory-full-name:hover {
+.list-full-name:hover {
   border-color: var(--control-edge);
 }
 
-.memory-full-name:focus {
+.list-full-name:focus {
   border-color: var(--accent);
   outline: none;
   box-shadow: var(--shadow-focus);
 }
 
-.memory-full-entry-tools {
+.list-full-entry-tools {
   display: flex;
   align-items: center;
   gap: var(--space-1);
   margin-left: auto;
 }
 
-.memory-full-stale {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  padding: 0 0 0 var(--space-2);
-  border: 1px solid var(--warning-edge);
-  border-radius: var(--radius-pill);
-  background: var(--warning-soft);
-  color: var(--warning-ink);
-  font-size: var(--font-size-xs);
-}
-
-.memory-full-conflict {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--warning-edge);
-  border-radius: var(--radius-md);
-  background: var(--warning-soft);
-  color: var(--warning-ink);
-  font-size: var(--font-size-sm);
-}
-
-.memory-full-conflict span {
-  flex: 1;
-}
-
-.memory-full-toolbar {
-  display: flex;
-  align-items: center;
-  gap: var(--space-0-5);
-  padding: var(--space-1);
-  border: 1px solid var(--separator);
-  border-radius: var(--radius-md);
-  background: var(--sunken);
-}
-
-.memory-full-status {
-  margin-left: auto;
-  color: var(--muted);
-  font-size: var(--font-size-xs);
-}
-
-.memory-full-text {
-  display: flex;
-  flex: 1 0 200px;
-  min-height: 0;
-}
-
-.memory-full-editor {
-  flex: 1;
-  min-height: 160px;
-  padding: var(--space-3);
-  border: 1px solid var(--control-edge);
-  border-radius: var(--radius-md);
-  background: var(--raised);
-  color: var(--text);
-  font: inherit;
-  font-size: var(--font-size-sm);
-  line-height: var(--leading-roomy);
-  resize: none;
-}
-
-.memory-full-editor[data-mono] {
-  font-family: var(--font-mono);
-  font-size: var(--font-size-xs);
-}
-
-.memory-full-editor:focus {
-  border-color: var(--accent);
-  outline: none;
-  box-shadow: var(--shadow-focus);
-}
-
-.memory-full-doc {
-  flex: 1;
-  max-width: 72ch;
-  font-size: var(--font-size-sm);
-  line-height: var(--leading-roomy);
-}
-
-.memory-full-doc :is(h2, h3, h4) {
+h3,
+h4) {
   margin: var(--space-3) 0 var(--space-1);
   font-weight: var(--weight-bold);
 }
 
-.memory-full-doc h2 {
-  font-size: var(--font-size-lg);
-}
-
-.memory-full-doc h3 {
-  font-size: var(--font-size-md);
-}
-
-.memory-full-doc h4 {
-  font-size: var(--font-size-sm);
-}
-
-.memory-full-doc pre {
-  margin: var(--space-2) 0;
-  padding: var(--space-2) var(--space-3);
-  overflow: auto;
-  border-radius: var(--radius-sm);
-  background: var(--sunken);
-  font-family: var(--font-mono);
-  font-size: var(--font-size-xs);
-}
-
-.memory-full-who {
+.list-full-who {
   padding-top: var(--space-3);
   border-top: 1px solid var(--separator);
 }
 
-.memory-full-who h3,
-.memory-full-new h3 {
+.list-full-who h3 {
   margin: 0 0 var(--space-2);
   color: var(--muted);
   font-size: var(--font-size-2xs);
@@ -9591,7 +9341,7 @@ button.chat-chip[aria-expanded='true'] {
   text-transform: uppercase;
 }
 
-.memory-full-timeline {
+.list-full-timeline {
   display: grid;
   gap: var(--space-1);
   margin: 0;
@@ -9599,7 +9349,7 @@ button.chat-chip[aria-expanded='true'] {
   list-style: none;
 }
 
-.memory-full-timeline li {
+.list-full-timeline li {
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -9609,42 +9359,16 @@ button.chat-chip[aria-expanded='true'] {
   font-size: var(--font-size-xs);
 }
 
-.memory-full-timeline li[data-now] {
+.list-full-timeline li[data-now] {
   border-left-color: var(--accent);
   color: var(--text);
 }
 
-.memory-full-timeline time {
+.list-full-timeline time {
   color: var(--muted);
 }
 
-.memory-full-readers {
-  margin: var(--space-2) 0 0;
-  color: var(--muted);
-  font-size: var(--font-size-xs);
-}
-
-.memory-full-readers b {
-  color: var(--text-soft);
-  font-weight: var(--weight-semibold);
-}
-
-.memory-full-new .memory-full-editor {
-  flex: 1;
-}
-
-.memory-full-new-foot {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.memory-full-new-foot .memory-full-status {
-  margin-right: auto;
-  margin-left: 0;
-}
-
-/* A queue's full screen: the memory's list and detail, with its jobs' places in line, result, buttons and Next. */
+/* A queue's full screen: a list and its detail, with its jobs' places in line, result, buttons and Next. */
 .queue-full-group,
 .queue-full-rows {
   display: grid;
@@ -9654,12 +9378,12 @@ button.chat-chip[aria-expanded='true'] {
   list-style: none;
 }
 
-.queue-full-item[data-done] .memory-full-item-name b {
+.queue-full-item[data-done] .list-full-item-name b {
   color: var(--muted);
   text-decoration: line-through;
 }
 
-.queue-full-item .memory-full-item-sub {
+.queue-full-item .list-full-item-sub {
   padding-left: 0;
 }
 
@@ -9784,7 +9508,7 @@ button.chat-chip[aria-expanded='true'] {
   font-size: var(--font-size-2xs);
 }
 
-/* The gallery's memories, in rows on the desk; its "+1" stays put for the shot. */
+/* A list card gallery, its cards in rows on the desk. */
 .listcard-gallery {
   display: grid;
   gap: var(--space-6);
@@ -9834,7 +9558,7 @@ button.chat-chip[aria-expanded='true'] {
   }
 }
 
-/* A queue: the memory's card and icon (store-*), with a state chip on each row, its counts, and a NEXT tab when folded. */
+/* A queue: the list card and icon (store-*), with a state chip on each row, its counts, and a NEXT tab when folded. */
 .queue-state ~ .listcard-who {
   overflow: hidden;
   max-width: var(--queue-corner-width);
@@ -12257,42 +11981,6 @@ button.chat-chip[aria-expanded='true'] {
   stroke-width: 1.6px;
   stroke-linecap: round;
   stroke-linejoin: round;
-}
-
-/* A memory read: one soft dot from the memory's middle to its reader's, fading in and out on the way, once. */
-.memory-read-pulse {
-  position: absolute;
-  top: var(--pulse-y);
-  left: var(--pulse-x);
-  z-index: var(--layer-tool);
-  width: var(--space-3);
-  height: var(--space-3);
-  border-radius: var(--radius-pill);
-  background: var(--accent);
-  box-shadow: var(--shadow-pulse);
-  opacity: 0;
-  pointer-events: none;
-  animation: memory-read-pulse var(--motion-handoff) var(--ease-in-out) forwards;
-}
-
-@keyframes memory-read-pulse {
-  0% {
-    opacity: 0;
-    translate: -50% -50%;
-  }
-
-  20% {
-    opacity: 0.8;
-  }
-
-  80% {
-    opacity: 0.8;
-  }
-
-  100% {
-    opacity: 0;
-    translate: calc(var(--pulse-dx) - 50%) calc(var(--pulse-dy) - 50%);
-  }
 }
 
 /* Placed at its end of the rail; the body sits off that side of the tile, away from it. */
@@ -19495,6 +19183,23 @@ button.crew-card-row-body:focus-visible {
   border-color: var(--prefab-edge);
 }
 
+/* A crew an agent drafted, waiting for the user's review: first in the library, under its own heading. */
+.prefab-card.draft {
+  border-style: dashed;
+  border-color: var(--prefab-edge);
+}
+
+.prefab-cards-head {
+  margin: 0 0 var(--space-2);
+  color: var(--text-soft);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-medium);
+}
+
+.prefab-drafts-review .prefab-cards {
+  margin-bottom: var(--space-4);
+}
+
 .prefab-card-make button {
   display: flex;
   flex-direction: column;
@@ -20570,18 +20275,18 @@ button.tile-folded-row:is(:hover, :focus-visible) {
   cursor: pointer;
 }
 
-/* A to-do list's full screen: the memory's list and detail, in the to-do teal throughout. */
+/* A to-do list's full screen: the queue's list and detail, in the to-do teal throughout. */
 .todo-full .full-screen-face {
   background: var(--todo-solid);
   color: var(--todo-on);
 }
 
-.todo-full .memory-full-item[aria-current='true'] {
+.todo-full .list-full-item[aria-current='true'] {
   background: var(--todo-soft);
   box-shadow: var(--todo-cursor);
 }
 
-.todo-full .memory-full-chip[aria-pressed='true'] {
+.todo-full .list-full-chip[aria-pressed='true'] {
   border-color: var(--todo-edge);
   background: var(--todo-soft);
   color: var(--todo-ink);
@@ -20593,11 +20298,11 @@ button.tile-folded-row:is(:hover, :focus-visible) {
   color: var(--todo-on);
 }
 
-.todo-full-item .memory-full-item-name .todo-box {
+.todo-full-item .list-full-item-name .todo-box {
   flex: none;
 }
 
-.todo-full-item[data-done] .memory-full-item-name b,
+.todo-full-item[data-done] .list-full-item-name b,
 .todo-full-title[data-done] {
   color: var(--muted);
   text-decoration: line-through;

@@ -1412,7 +1412,6 @@ describe("arranging a zone's items", () => {
     agent('impl-b', { role: 'implementer', issue: 'ACME-2', createdAt: '2026-01-02' }),
   ];
   const tops = [
-    item('memory', 'memory', 'top'),
     item('todo', 'todos', 'top', { size: { width: 300, height: 260 } }),
     item('clock', 'clocks', 'top', { size: { width: 200, height: 120 } }),
     item('queue', 'queues', 'top'),
@@ -1426,8 +1425,8 @@ describe("arranging a zone's items", () => {
     const row = tops.map((tile) => positions.get(tile.id)!);
     expect(new Set(row.map((at) => at.y)).size).toBe(1);
     expect(row[0]!.y).toBeGreaterThan(head);
-    // By kind: the clock, the to-do list, the queue, then the memory.
-    expect(['clock', 'todo', 'queue', 'memory'].map((id) => positions.get(id)!.x)).toEqual(['clock', 'todo', 'queue', 'memory'].map((id) => positions.get(id)!.x).toSorted((a, b) => a - b));
+    // By kind: the clock, the to-do list, then the queue.
+    expect(['clock', 'todo', 'queue'].map((id) => positions.get(id)!.x)).toEqual(['clock', 'todo', 'queue'].map((id) => positions.get(id)!.x).toSorted((a, b) => a - b));
     expect(positions.get('impl-a')!.y).toBeGreaterThanOrEqual(row[0]!.y + 260 + TILE_GAP);
   });
 
@@ -1461,7 +1460,7 @@ describe("arranging a zone's items", () => {
   });
 
   it('stacks the sidebar in one column down the right of everything, from the top, by kind', () => {
-    const side = [item('memory', 'memory', 'sidebar'), item('note', 'notes', 'sidebar'), item('clock', 'clocks', 'sidebar', { size: { width: 200, height: 120 } })];
+    const side = [item('queue', 'queues', 'sidebar'), item('note', 'notes', 'sidebar'), item('clock', 'clocks', 'sidebar', { size: { width: 200, height: 120 } })];
     const tiles = [...lanes, ...side];
     const arranged = arrangeTiles(tiles, [], { by: 'issue', layout: 'rows', width: 1200, clusters: true });
     const crewRight = Math.max(...partsOf(arranged, lanes).map((part) => part.rect.x + part.rect.width));
@@ -1469,9 +1468,9 @@ describe("arranging a zone's items", () => {
     expect(new Set(side.map((tile) => at(tile.id).x)).size).toBe(1);
     expect(at('note').x).toBeGreaterThanOrEqual(crewRight + TILE_GAP);
     expect(at('note').y).toBe(GRID_ROW_TOP);
-    // By kind: notes, then clocks, then memory, each below the one before.
+    // By kind: notes, then clocks, then queues, each below the one before.
     expect(at('clock').y).toBeGreaterThanOrEqual(at('note').y + 180 + TILE_GAP);
-    expect(at('memory').y).toBeGreaterThanOrEqual(at('clock').y + 120 + TILE_GAP);
+    expect(at('queue').y).toBeGreaterThanOrEqual(at('clock').y + 120 + TILE_GAP);
     expect(arranged.size.width).toBe(at('note').x + 240 + ZONE_PADDING);
   });
 
@@ -1570,7 +1569,7 @@ describe("arranging a zone's items", () => {
   it('lays out only items, with no crew, in a top row and a sidebar', () => {
     const { positions, size } = arrangeTiles([...tops, item('side', 'notes', 'sidebar')], [], { by: 'issue', layout: 'rows', width: 600 });
     expect(positions.get('clock')).toEqual(FIRST);
-    expect(positions.get('side')!.x).toBeGreaterThan(positions.get('memory')!.x + 240);
+    expect(positions.get('side')!.x).toBeGreaterThan(positions.get('queue')!.x + 240);
     expect(size.width).toBe(positions.get('side')!.x + 240 + ZONE_PADDING);
   });
 

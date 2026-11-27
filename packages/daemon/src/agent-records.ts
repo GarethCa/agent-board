@@ -3,7 +3,7 @@
 import { readFileSync, realpathSync, statSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { pullRequestKey, pullRequestOfUrl } from '@agent-board/tracker';
+import { pullRequestKey, pullRequestOfUrl, pullRequestUrl } from '@agent-board/tracker';
 import { isObject } from './json.ts';
 import { isWebTabUrl, WEB_TAB_RULE } from './web-url.ts';
 import { invalidParams, optionalBooleanParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
@@ -123,7 +123,7 @@ function recordOfRow(row: RecordRow): AgentRecord | undefined {
 /** The record of the pull request `url` names, by its plain URL; undefined for a URL that names none. */
 export function pullRequestRecord(url: string, title: string | null): NewRecord | undefined {
   const ref = pullRequestOfUrl(url);
-  return ref === undefined ? undefined : { kind: 'pr', key: pullRequestKey(ref), url: `https://github.com/${ref.repo}/pull/${ref.number}`, title };
+  return ref === undefined ? undefined : { kind: 'pr', key: pullRequestKey(ref), url: pullRequestUrl(ref), title };
 }
 
 /** `board.record`'s params past the token, checked. */

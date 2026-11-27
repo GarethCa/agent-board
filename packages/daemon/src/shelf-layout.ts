@@ -5,7 +5,8 @@
 // Pure and deterministic, so the same board always draws the same way, whatever order it is listed in.
 import { lanesOf, LANE_SLOTS, type ArrangeLink } from './board-arrange.ts';
 import { AGENT_TILE_SIZE, CHIP_SIZE, isClosed, PERCH_ROOM, tileSizeKey, zoneGrid, type Point, type Size } from './board-layout.ts';
-import { needsYouKind, type Agent, type AgentState, type ArrangeSpacing, type NeedsYouShows, type ZoneLayout } from './protocol.ts';
+import { CARRYING_ON_STATES } from './human-status.ts';
+import { needsYouKind, type Agent, type ArrangeSpacing, type NeedsYouShows, type ZoneLayout } from './protocol.ts';
 import { workTilesOf } from './work-units.ts';
 
 /** The shelves, left to right. */
@@ -15,15 +16,12 @@ export type ShelfStage = (typeof SHELF_STAGES)[number];
 /** Each shelf's heading. */
 export const SHELF_NAMES: Record<ShelfStage, string> = { todo: 'To do', doing: 'Doing', waiting: 'Waiting', done: 'Done' };
 
-/** States an agent is at work in: someone has it. */
-export const WORKING_STATES: ReadonlySet<AgentState> = new Set<AgentState>(['running', 'thinking', 'on-command', 'handing-off', 'starting', 'rate-limited']);
-
 /**
- * Whether the agent waits on the user now, exactly as the Needs-you pill counts it: a permission prompt, a question or
- * plan, a flag, (with `turns`) its turn, or a restart that stopped it. So a stack is ringed only when the pill counts it.
- * Not a pull request left for review: that is someone else's turn, its stack on Waiting.
+ * Whether the agent needs the user to act, as the badge counts it (`needsYouKind`): a permission prompt, a question or
+ * plan, a flag, or (with `turns`) its turn. So a stack is ringed only when the badge counts it. Not a pull request left
+ * for review, which is someone else's turn, its stack on Waiting; nor a restart that stopped it, which sleeps as a paused one.
  */
-export const needsUser = (agent: Agent, shows: NeedsYouShows): boolean => needsYouKind(agent, shows) !== null || agent.state === 'stopped-by-restart';
+export const needsUser = (agent: Agent, shows: NeedsYouShows): boolean => needsYouKind(agent, shows) !== null;
 
 /**
  * Whether the agent failed, as the daemon says (`humanStatus` reads it so too): a stop is no failure, whatever exit code
@@ -52,7 +50,7 @@ const prMerged = (agent: Agent): boolean => agent.pullRequests.some((pr) => pr.s
  */
 export function stageOf(agents: readonly Agent[], shows: NeedsYouShows): ShelfStage {
   const shipped = agents.some(prMerged) && !agents.some(prOpen);
-  if (agents.some((agent) => (!isClosed(agent) && (WORKING_STATES.has(agent.state) || needsUser(agent, shows))) || (failed(agent) && !shipped))) return 'doing';
+  if (agents.some((agent) => (!isClosed(agent) && (CARRYING_ON_STATES.has(agent.state) || needsUser(agent, shows))) || (failed(agent) && !shipped))) return 'doing';
   if (shipped) return agents.some((agent) => !isClosed(agent) && agent.flag !== null) ? 'doing' : 'done';
   if (agents.some(prOpen)) return 'waiting';
   if (agents.length > 0 && agents.every(isClosed)) return 'done';

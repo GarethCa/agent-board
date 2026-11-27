@@ -21,6 +21,13 @@ describe('agent-board doc --plan', () => {
     expect(view.text).not.toMatch(/minute|hour/);
   });
 
+  it('says whether its plan card is on the board, as the daemon placed it or the user keeps docs off the board', async () => {
+    const left = { version: 1, expiresAt: null, left: true };
+    expect((await leavePlan(session({ left, onBoard: true }).session, plan)).text).toContain('and on a plan card beside your tile');
+    expect((await leavePlan(session({ left, onBoard: false }).session, plan)).text).toContain('(the user keeps docs off the board, so it has no card there)');
+    expect((await leavePlan(session({ left, onBoard: false }).session, { ...plan, onBoard: false })).text).not.toMatch(/card/);
+  });
+
   it('tells a crew member its plan went to its orchestrator, as the held call does', async () => {
     const { session: board } = session({ sentTo: 'orchestrator', name: 'lead' });
     const view = await leavePlan(board, plan);
