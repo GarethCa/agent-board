@@ -2,7 +2,7 @@
 // and lines turned into the daemon's methods, and what they answer with as text and JSON. Every answer names the queue it
 // came from.
 import { plural } from './text-words.ts';
-import { agentToken, BoardError, BoardRefs, itemPlace, readCards, type BoardSession, type BoardView } from './board-ops.ts';
+import { agentToken, BoardError, BoardRefs, faceOf, itemPlace, readCards, type BoardSession, type BoardView, type ReadFace } from './board-ops.ts';
 import {
   type BoardItem,
   type HistoryVersion,
@@ -72,8 +72,13 @@ function jobLine(refs: BoardRefs, job: QueueJob, place: number | null, short = f
   return `${lead}${shortId(job.id)}  ${job.kind}  ${state}${drops}\n     ${text}${link}${result}`;
 }
 
+/** How to read one job of the queue `ref` whole, on `face`. */
+function readOneHint(ref: string, face: ReadFace): string {
+  return face === 'mcp' ? '`queue_read` with `job` and `whole: true`' : `\`agent-board queue read ${ref} <job>\``;
+}
+
 /** A queue as `queue read` gives it: its open rows in order, each its headline, then how many are done and how to read them. */
-function queueText(refs: BoardRefs, item: BoardItem, jobs: QueueJob[]): string {
+function queueText(refs: BoardRefs, item: BoardItem, jobs: QueueJob[], face: ReadFace): string {
   const head = cardLine(refs, item);
   const ref = refs.of('item', item.id);
   const open = jobs.filter((job) => job.state !== 'done');
@@ -81,20 +86,23 @@ function queueText(refs: BoardRefs, item: BoardItem, jobs: QueueJob[]): string {
   if (jobs.length === 0) return `${head}\n  No jobs yet.`;
   let place = 0;
   const lines = open.length === 0 ? ['  No open jobs.'] : open.map((job) => jobLine(refs, job, isQueueWork(job.kind) ? ++place : 0, true));
-  if (open.some((job) => jobParts(job.text).body !== '')) lines.push(`  \`agent-board queue read ${ref} <job>\` shows one whole.`);
-  if (done.length > 0) lines.push(`  ${plural(done.length, 'job')} done: \`agent-board queue read ${ref} --done\` lists them.`);
+  if (open.some((job) => jobParts(job.text).body !== '')) lines.push(`  ${readOneHint(ref, face)} shows one whole.`);
+  if (done.length > 0) {
+    const hint = face === 'mcp' ? `\`queue_read\` with \`done: true\`` : `\`agent-board queue read ${ref} --done\``;
+    lines.push(`  ${plural(done.length, 'job')} done: ${hint} lists them.`);
+  }
   return `${head}\n${lines.join('\n')}`;
 }
 
 /** A queue's done jobs, newest first: each its headline and what its finisher said was done. */
-function doneText(refs: BoardRefs, item: BoardItem, done: QueueJob[]): string {
+function doneText(refs: BoardRefs, item: BoardItem, done: QueueJob[], face: ReadFace): string {
   const title = (item.data as unknown as QueueData).title;
   if (done.length === 0) return `No job is done yet on “${title}” (${refs.of('item', item.id)}).`;
   const lines = done.map((job) => {
     const row = jobLine(refs, job, null, true);
     return job.result === null ? row : `${row}\n     result: ${indent(job.result, '     ')}`;
   });
-  const more = done.some((job) => jobParts(job.text).body !== '') ? `\n  \`agent-board queue read ${refs.of('item', item.id)} <job>\` shows one whole.` : '';
+  const more = done.some((job) => jobParts(job.text).body !== '') ? `\n  ${readOneHint(refs.of('item', item.id), face)} shows one whole.` : '';
   return `Done on “${title}” (${refs.of('item', item.id)}), newest first:\n${lines.join('\n')}${more}`;
 }
 
@@ -140,14 +148,16 @@ export function versionNumber(value: unknown): number {
 export async function newQueue(session: BoardSession, title: string, forUser: boolean): Promise<BoardView> {
   const item = await session.client.call('board.newQueue', { token: agentToken(session, 'make a queue'), title, audience: forUser ? 'user' : 'agents' });
   const refs = new BoardRefs(await readCards(session));
-  return { text: `Put ${cardLine(refs, item)} beside your tile. \`agent-board queue add ${refs.of('item', item.id)} <job>\` queues a job.`, json: item };
+  const add = faceOf(session) === 'mcp' ? '`queue_update` with `action: "add"`' : `\`agent-board queue add ${refs.of('item', item.id)} <job>\``;
+  return { text: `Put ${cardLine(refs, item)} beside your tile. ${add} queues a job.`, json: item };
 }
 
 /** `queue ls`: the queues the caller reads. */
 export async function listQueues(session: BoardSession): Promise<BoardView> {
   const items = await session.client.call('board.listQueues', { token: agentToken(session, 'list queues') });
   const refs = new BoardRefs(await readCards(session));
-  const none = 'No queues you can read. `agent-board queue new "<title>"` puts one beside your tile: in a zone, for its agents; on the open board, for all.';
+  const make = faceOf(session) === 'mcp' ? '`queue_new` with `title`' : '`agent-board queue new "<title>"`';
+  const none = `No queues you can read. ${make} puts one beside your tile: in a zone, for its agents; on the open board, for all.`;
   return { text: items.length === 0 ? none : items.map((item) => cardLine(refs, item)).join('\n'), json: items };
 }
 
@@ -162,10 +172,10 @@ export async function readQueue(session: BoardSession, ref: string, of?: QueueRe
   const token = agentToken(session, 'read a queue');
   const { refs, item } = await cardFor(session, 'queue', ref);
   const view = await session.client.call('board.readQueue', { token, id: item.id });
-  if (of === undefined) return { text: queueText(refs, view.item, view.jobs), json: view };
+  if (of === undefined) return { text: queueText(refs, view.item, view.jobs, faceOf(session)), json: view };
   if ('done' in of) {
     const done = view.jobs.filter((job) => job.state === 'done');
-    return { text: doneText(refs, view.item, done), json: { item: view.item, jobs: done } };
+    return { text: doneText(refs, view.item, done, faceOf(session)), json: { item: view.item, jobs: done } };
   }
   const job = jobNamed(view.jobs, of.job, (view.item.data as unknown as QueueData).title);
   const open = view.jobs.filter((each) => each.state !== 'done' && isQueueWork(each.kind));

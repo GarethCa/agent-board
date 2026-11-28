@@ -490,12 +490,16 @@ function NavCount({ nav }: { nav: WindowNav }) {
 
 /**
  * How far down from the board's top edge a session window stays: on macOS, windowed, below the row of islands the traffic
- * lights float in, as its stylesheet places it filling the board (`.session-window-board`). Otherwise nothing.
+ * lights float in, as its stylesheet places it filling the board (`.session-window-board`). Otherwise nothing. That row
+ * ends below the lights' safe zone (shared/traffic-lights.ts) by construction: moving the board's lights means checking
+ * this again. `board` is what the window is placed in, which inherits the board's `--toolbar-row`.
  */
-function clearTop(): number {
+function clearTop(board: HTMLElement): number {
   const { chrome, fullScreen } = document.documentElement.dataset;
   if (chrome !== 'inset' || fullScreen === 'true') return 0;
-  return tokenNumber('--island-inset') + tokenNumber('--island-height') + tokenNumber('--space-2');
+  // With the toolbar on a row of its own (chrome-folds.ts), below that row too.
+  const toolbarRow = parseFloat(getComputedStyle(board).getPropertyValue('--toolbar-row')) || 0;
+  return tokenNumber('--island-inset') + tokenNumber('--island-height') + tokenNumber('--space-2') + toolbarRow;
 }
 
 /**
@@ -512,16 +516,28 @@ function useWindowFrame(root: React.RefObject<HTMLDivElement | null>, frame: Ses
   useEffect(() => {
     const parent = root.current?.offsetParent;
     if (!(parent instanceof HTMLElement) || onChange === undefined) return;
-    const measure = () => setBounds({ width: parent.clientWidth, height: parent.clientHeight, top: clearTop() });
+    const measure = () => setBounds({ width: parent.clientWidth, height: parent.clientHeight, top: clearTop(parent) });
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(parent);
     // Full screen hides the traffic lights, and the room kept for them goes with them.
-    const fullScreen = new MutationObserver(measure);
-    fullScreen.observe(document.documentElement, { attributes: true, attributeFilter: ['data-full-screen'] });
+    const restyled = new MutationObserver(measure);
+    restyled.observe(document.documentElement, { attributes: true, attributeFilter: ['data-full-screen'] });
+    // The toolbar taking a row of its own, or leaving it, moves the board's `--toolbar-row`, on its style; the board's
+    // other properties there (the Captain's, the dock's) change often and move nothing this measures.
+    const board = parent.closest<HTMLElement>('.board');
+    const toolbarRow = () => board?.style.getPropertyValue('--toolbar-row') ?? '';
+    let lastRow = toolbarRow();
+    const rowMoved = new MutationObserver(() => {
+      if (toolbarRow() === lastRow) return;
+      lastRow = toolbarRow();
+      measure();
+    });
+    if (board !== null) rowMoved.observe(board, { attributes: true, attributeFilter: ['style'] });
     return () => {
       observer.disconnect();
-      fullScreen.disconnect();
+      restyled.disconnect();
+      rowMoved.disconnect();
     };
   }, [root, onChange]);
   // On a wide screen, unless set to fill it, the window stops at the pop-up's cap, as the pop-up does.

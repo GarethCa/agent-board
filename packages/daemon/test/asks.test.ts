@@ -494,7 +494,7 @@ describe('a plan the user edits before deciding', () => {
   });
 });
 
-describe('a plan’s source, as the present_plan tool takes it', () => {
+describe('a plan’s source, inline or from a file', () => {
   it('reads inline Markdown or HTML, or a file by its extension, and exactly one of them', () => {
     const dir = tempDataDir();
     writeFileSync(join(dir, 'plan.html'), '<h1>Plan</h1>');

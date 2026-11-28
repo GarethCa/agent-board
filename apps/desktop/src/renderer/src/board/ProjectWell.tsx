@@ -146,6 +146,7 @@ export function ProjectWell({ data: { zone, tileCount = 0, resizeMin, shelves, c
           <FoldButton className="project-options" noun="project" onFold={() => binding.fold(zone)} />
         )}
         <Menu
+          head={zone.name}
           entries={optionsOpen ? projectMenu(input) : []}
           onOpenChange={(open) => {
             setOptionsOpen(open);
@@ -159,6 +160,7 @@ export function ProjectWell({ data: { zone, tileCount = 0, resizeMin, shelves, c
         <ContextMenu
           at={menuAt}
           label={`${zone.name} project`}
+          head={zone.name}
           entries={projectContextMenu({ ...input, newNote: () => newNote(menuAt) })}
           onClose={() => setMenuAt(undefined)}
         />

@@ -660,7 +660,7 @@ export function createClockHost(options: ClockHostOptions): ClockHost {
       if (!own.includes(named)) throw invalidParams(`that clock runs ${runsWho(item.data)}, not you`);
       clockId = named;
     } else if (own.length === 1) clockId = own[0]!;
-    else if (own.length === 0) throw invalidParams('you have no clock: add one with `agent-board schedule add --self`');
+    else if (own.length === 0) throw invalidParams('you have no clock: add one with `clock_add` (`agent-board schedule add --self`)');
     else throw invalidParams(`you have ${own.length} clocks: name one of ${own.join(', ')}`);
 
     const item = clockOf(clockId)!;

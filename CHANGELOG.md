@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.7.5 (2026-11-28)
+
+- README stills shot again from today's app, and a wide hero of the board at work
+- Where the toolbar can't fit between the top bar's islands, it takes a row of its own under them
+- Tool descriptions drop the CLI suffixes and the reference detail, about 9 KB less a request
+- MCP results and errors name the tool and its argument, not a CLI command
+- Menus and popovers open inside the window; a zone's menu drags by its head
+- One safe zone round the macOS traffic lights in every window, with an e2e check
+
 ## v0.7.4 (2026-11-27)
 
 **Rolling back:** this release changes the database in a way older versions can't read (`0111_remove_memories`). It backs the database up first. To go back to an older version afterwards, restore that backup: see [Rolling back](https://github.com/GarethCa/agent-board/blob/main/docs/rolling-back.md).

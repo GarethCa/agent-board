@@ -147,7 +147,7 @@ kbd {
  */
 .restart-banner {
   position: absolute;
-  top: calc(var(--island-inset) + var(--island-height) + var(--space-2));
+  top: calc(var(--island-inset) + var(--island-height) + var(--space-2) + var(--toolbar-row, 0px));
   left: calc((100% - var(--captain-push, 0px)) / 2);
   z-index: var(--layer-notice);
   translate: -50% 0;
@@ -1138,8 +1138,9 @@ kbd {
   z-index: var(--layer-popup);
   display: grid;
   place-items: center;
-  /* A small margin: on a laptop the pop-up fills the board less this, and only a big screen leaves more round it. */
-  padding: var(--space-4);
+  /* A small margin: on a laptop the pop-up fills the board less this, and only a big screen leaves more round it. Its top
+     clears the traffic lights' safe zone, so its header never sits under them. */
+  padding: max(var(--space-4), var(--traffic-lights-bottom)) var(--space-4) var(--space-4);
   background: var(--scrim-popup);
   animation: ui-fade var(--motion-fast) var(--ease-out);
 }
@@ -5183,8 +5184,11 @@ kbd {
 }
 
 :root[data-chrome='inset']:not([data-full-screen='true']) .session-window-board {
-  /* Below the traffic lights' row, which float over the board on macOS: an in-app window draws none of its own (V-c). */
-  top: calc(var(--island-inset) + var(--island-height) + var(--space-2));
+  /* Below the traffic lights' row, which float over the board on macOS: an in-app window draws none of its own (V-c).
+     The islands' row ends below the lights' safe zone (shared/traffic-lights.ts) by construction, 68px to its 52px:
+     moving the board's lights means checking this and clearTop() in SessionWindow.tsx again. With the toolbar on a row
+     of its own (chrome-folds.ts), below that row too. */
+  top: calc(var(--island-inset) + var(--island-height) + var(--space-2) + var(--toolbar-row, 0px));
 }
 
 @keyframes session-window-in {
@@ -5216,9 +5220,9 @@ kbd {
   outline-offset: calc(-1 * var(--focus-ring-width));
 }
 
-/* Popped out on macOS, its traffic lights sit at the header's start (main/chrome.ts), unless full screen hid them. */
-:root[data-chrome='inset']:not([data-full-screen='true']) :is(.session-window-own-window, .agent-popup-own-window) .session-window-head {
-  padding-left: calc(var(--size-traffic-lights) + var(--space-3));
+/* Popped out on macOS, its traffic lights sit at the header's start (shared/traffic-lights.ts): it starts past their safe zone. */
+:is(.session-window-own-window, .agent-popup-own-window) .session-window-head {
+  padding-left: max(var(--space-4), calc(var(--traffic-lights-right) + var(--space-1-5)));
 }
 
 .session-window-mark {
@@ -12599,7 +12603,7 @@ h4) {
  */
 .edge-rules {
   position: absolute;
-  top: calc(var(--island-inset) * 2 + var(--island-height));
+  top: calc(var(--island-inset) * 2 + var(--island-height) + var(--toolbar-row, 0px));
   /* Left of the Captain's pane, whether it pushes the board or covers it. */
   right: calc(var(--island-inset) + var(--captain-beside, 0px));
   bottom: var(--island-inset);

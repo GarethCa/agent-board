@@ -77,7 +77,7 @@ describe('a send whose Enter never starts a turn', () => {
 
     await expect(connection.call('orchestrator.send', { token, sessionId: worker.sessionId, text: 'Also add a test' })).rejects.toMatchObject({
       code: RPC_ERROR.invalidParams,
-      message: expect.stringMatching(new RegExp(`^worker: your message was typed at its prompt but not sent \\(no turn started on it after 3 presses of Enter\\)\\. Send it with \`agent-board send ${ref} --submit\`, or clear it with \`--clear\`$`)),
+      message: expect.stringMatching(new RegExp(`^worker: your message was typed at its prompt but not sent \\(no turn started on it after 3 presses of Enter\\)\\. Send it with \`send\` and \`submit: true\` \\(\`agent-board send ${ref} --submit\`\\), or clear it with \`clear: true\` \\(\`--clear\`\\)$`)),
     });
     expect((await setup.client.call('agent.list')).find((a) => a.sessionId === worker.sessionId)).toMatchObject({ unsent: 'A message', state: expect.stringMatching(/idle|waiting/) });
     const [line] = await setup.client.call('orchestrator.activity', { limit: 1 });
@@ -116,7 +116,7 @@ describe('a send whose Enter never starts a turn', () => {
 
     expect(await board(setup, token, 'send', [ref, '--submit'])).toMatchObject({
       code: 1,
-      out: expect.stringContaining("worker's unsent message was not sent (no turn started on it after 3 presses of Enter): it is still at its prompt. Try --submit again, or --clear"),
+      out: expect.stringContaining("worker's unsent message was not sent (no turn started on it after 3 presses of Enter): it is still at its prompt. Try `submit: true` (--submit) again, or `clear: true` (--clear)"),
     });
     expect((await setup.client.call('agent.list')).find((a) => a.sessionId === worker.sessionId)?.unsent).toBe('A message');
     await expect(connection.call('orchestrator.send', { token, sessionId: worker.sessionId, text: 'Rename the file' })).rejects.toThrow(/never sent: send or clear it first/);

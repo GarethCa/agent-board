@@ -196,7 +196,9 @@ test("an agent's pins are a block of its page, deleted with Undo, and what it sh
     await pins.nth(1).getByRole('button', { name: 'Delete record' }).click();
     await expect(pins.nth(1)).toHaveAttribute('data-gone', 'true');
     await window.getByRole('button', { name: 'Undo' }).click();
-    await expect(pins.nth(1)).not.toHaveAttribute('data-gone', 'true');
+    // Until the restore lands the row can be missing, which `not.toHaveAttribute` also accepts: wait for all four rows
+    // at once, none struck through, so the pins clicked below are the ones counted here.
+    await expect(shelves(window).getByTestId('page-pins').getByTestId('details-pin').and(window.locator(':not([data-gone])'))).toHaveCount(4);
 
     // A pinned Markdown file opens in a Doc tab, a link in a web tab.
     await pins.nth(0).getByRole('button').first().click();

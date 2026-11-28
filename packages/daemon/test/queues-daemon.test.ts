@@ -127,6 +127,10 @@ describe('queues', () => {
     const billing = await client.call('zone.add', { path: tempRepo('billing'), x: 4000, y: 0, name: 'billing' });
     const impl = await start('Print your board identity', billing.id, 'Impl');
     expect((await cli(impl.env, 'queue', 'ls')).out).toMatch(/^No queues you can read\. `agent-board queue new "<title>"` puts one beside your tile/);
+    // Over the MCP, the same answers name the tool and its argument.
+    const mcp = new McpClient({ command: TEST_CLI_LAUNCHER.command, args: [...TEST_CLI_LAUNCHER.args, 'mcp'], env: { ...process.env, ...impl.env } }, tempDataDir());
+    expect((await mcp.callTool('queue_read', {})).text).toMatch(/^No queues you can read\. `queue_new` with `title` puts one beside your tile/);
+    expect((await mcp.callTool('queue_new', { title: 'Ideas' })).text).toMatch(/^Put .* beside your tile\. `queue_update` with `action: "add"` queues a job\.$/);
   });
 
   it('keeps a job through a pause, and puts it back once its taker is deleted with no exit to come', async () => {
@@ -310,13 +314,22 @@ describe('kinds of queue row', () => {
     expect((await cli(env, 'queue', 'read', 'Backlog', taken, '--done')).err).toContain('give a job or --done, not both');
 
     const mcp = new McpClient({ command: TEST_CLI_LAUNCHER.command, args: [...TEST_CLI_LAUNCHER.args, 'mcp'], env: { ...process.env, ...env } }, tempDataDir());
-    expect((await mcp.callTool('queue_read', { queue: 'Backlog' })).text).toBe(read.trimEnd());
+    // The MCP's hints name the tool and its argument, where the CLI's name the command.
+    const named = (text: string) =>
+      text
+        .trimEnd()
+        .replace(/`agent-board queue read item:\w+ <job>`/g, '`queue_read` with `job` and `whole: true`')
+        .replace(/`agent-board queue read item:\w+ --done`/, '`queue_read` with `done: true`');
+    expect((await mcp.callTool('queue_read', { queue: 'Backlog' })).text).toBe(named(read));
+    // Following the hint reads the job whole.
+    expect(named(read)).toContain('`queue_read` with `job` and `whole: true` shows one whole.');
     expect((await mcp.callTool('queue_read', { queue: 'Backlog', job: proofread, whole: true })).text).toBe(whole.trimEnd());
-    expect((await mcp.callTool('queue_read', { queue: 'Backlog', done: true })).text).toBe(done.trimEnd());
+    expect((await mcp.callTool('queue_read', { queue: 'Backlog', done: true })).text).toBe(named(done));
     expect((await mcp.callTool('queue_read', { queue: 'Backlog', job: proofread })).text).toContain('History of');
     expect(await mcp.callTool('queue_read', { queue: 'Backlog', whole: true })).toMatchObject({ isError: true, text: expect.stringContaining('whole goes with a job') });
     expect(await mcp.callTool('queue_read', { queue: 'Backlog', done: true, whole: true })).toMatchObject({ isError: true, text: expect.stringContaining('not both') });
-    expect(await mcp.callTool('queue_read', { whole: true })).toMatchObject({ isError: true, text: expect.stringContaining('give the queue') });
+    expect(await mcp.callTool('queue_read', { whole: true })).toMatchObject({ isError: true, text: expect.stringContaining('give `queue`') });
+    expect((await mcp.callTool('queue_read', { queue: 'nope' })).text).toContain('nothing on the board is called "nope". `board` with `zone: "all"` lists what is.');
   });
 
   it("lets the user put off or skip a row of their own queue, and no one else's", async () => {

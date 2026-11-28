@@ -832,6 +832,9 @@
 
 .ui-popover {
   z-index: var(--layer-popover);
+  /* A popover taller than the room beside its button scrolls inside the window rather than run past its edge. */
+  max-height: var(--radix-popover-content-available-height);
+  overflow-y: auto;
   padding: var(--space-3);
   animation: ui-fade var(--motion-fast) var(--ease-out);
 }
@@ -921,6 +924,48 @@
 /* A submenu's words sit just before its chevron. */
 .ui-menu-detail + .ui-menu-chevron {
   margin-left: 0;
+}
+
+/*
+ * A menu's head: what it is for (a zone's name) and a grip, dragging the menu round the window. It stays at the top as
+ * a tall menu scrolls, so it can always be taken hold of.
+ */
+.ui-menu-head {
+  position: sticky;
+  top: calc(-1 * var(--space-1-25));
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  margin: calc(-1 * var(--space-1-25)) calc(-1 * var(--space-1-25)) var(--space-1);
+  padding: var(--space-1-5) var(--space-2-25);
+  border-bottom: 1px solid var(--separator);
+  border-radius: var(--radius-card) var(--radius-card) 0 0;
+  background: var(--raised);
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-medium);
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.ui-menu-head:hover {
+  color: var(--text);
+}
+
+.ui-menu-head[data-dragging='true'] {
+  cursor: grabbing;
+}
+
+.ui-menu-grip {
+  flex: none;
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+}
+
+.ui-menu-head-text {
+  min-width: 0;
 }
 
 .ui-menu-separator {

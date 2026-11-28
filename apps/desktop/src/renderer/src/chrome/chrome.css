@@ -20,14 +20,10 @@
   height: var(--island-height);
 }
 
+/* Clear of the traffic lights' safe zone, which is 0 unless they float over the board. */
 .island-top-left {
-  left: var(--island-inset);
+  left: max(var(--island-inset), calc(var(--traffic-lights-right) + var(--space-2)));
   transition: left var(--motion-base) var(--ease-out);
-}
-
-/* Room for the traffic lights, unless full screen has hidden them. */
-:root[data-chrome='inset']:not([data-full-screen='true']) .island-top-left {
-  left: calc(var(--size-traffic-lights) + var(--island-inset));
 }
 
 .island-top-centre {
@@ -42,6 +38,16 @@
 
 .island-top-right {
   right: calc(var(--island-inset) + var(--captain-push, 0px));
+}
+
+/*
+ * Where no fold lets it fit between the islands (chrome-folds.ts), the toolbar takes a row of its own under them, the
+ * row's gap below, so it covers neither: `--toolbar-shift` keeps it inside the board. What sits under the islands
+ * (the restart toast, the Edge rules panel, a session window on macOS) starts `--toolbar-row` lower, which the board sets
+ * to how much lower the toolbar's row ends.
+ */
+.board[data-folds~='row'] .create-toolbar.island-top-centre {
+  top: calc(var(--island-inset) + var(--island-height) + var(--space-2));
 }
 
 .island-bottom-left {
@@ -82,7 +88,7 @@
   left: 0;
   z-index: var(--layer-chrome);
   display: block;
-  width: calc(var(--size-traffic-lights) + var(--island-inset));
+  width: calc(var(--traffic-lights-right) + var(--space-2));
   height: calc(var(--island-height) + var(--island-inset));
   -webkit-app-region: drag;
 }
@@ -1901,7 +1907,7 @@
  * board's name (its mark stays, and the name is still read out), then Classic's drawing tools fold into one Draw menu
  * (each tool keeps its key) and Draw drops its word, then Find (⌘K still opens it), then New agent's and Shell's words
  * (their names and tooltips say what they are), then Classic's Needs-you words (its dot still shows attention, and its
- * name and tooltip say them).
+ * name and tooltip say them). Past those, the toolbar takes a row of its own under the islands (above).
  */
 .create-toolbar-drawing {
   display: contents;
@@ -2152,6 +2158,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  /* Both sides, so the title stays centred and never reaches the traffic lights' safe zone. */
+  padding-inline: var(--traffic-lights-right);
   border-bottom: 1px solid var(--separator);
   background: var(--panel);
 }

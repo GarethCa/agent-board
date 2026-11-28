@@ -62,7 +62,7 @@ function cardText(refs: BoardRefs, item: BoardItem): string {
 async function cardFor(session: BoardSession, ref: string): Promise<{ refs: BoardRefs; item: BoardItem }> {
   const refs = new BoardRefs(await readCards(session));
   const object = refs.resolve(ref, session.caller);
-  if (object.kind !== 'item' || object.item.kind !== 'steps') throw new BoardError(`${ref} is not a steps card: \`agent-board steps ls\` lists them`);
+  if (object.kind !== 'item' || object.item.kind !== 'steps') throw BoardError.hinted({ cli: '`agent-board steps ls`', mcp: '`steps_read`' }, (hint) => `${ref} is not a steps card: ${hint} lists them`);
   const [item] = await session.client.call('board.readSteps', { token: agentToken(session, 'read a steps card'), id: object.item.id });
   return { refs, item: item! };
 }
@@ -72,7 +72,7 @@ export async function newSteps(session: BoardSession, options: { title?: string;
   const token = agentToken(session, 'put up a steps card');
   const { title, steps } = await drafts(session, options.text);
   const named = options.title?.trim() || title;
-  if (named === null || named === undefined) throw new BoardError('give the card a title: a "# title" line, or --title');
+  if (named === null || named === undefined) throw BoardError.hinted({ cli: '--title', mcp: '`title`' }, (hint) => `give the card a title: a "# title" line, or ${hint}`);
   const item = await session.client.call('board.newSteps', { token, title: named, steps });
   const refs = new BoardRefs(await readCards(session));
   const data = stepsOf(item);

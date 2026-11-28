@@ -2,9 +2,9 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { fakeHarnessEnv, McpClient } from '@agent-board/fake-harness';
-import { COMMAND_HELP, COMMAND_OPTIONS } from '../src/board-cli.ts';
+import { COMMAND_HELP, COMMAND_OPTIONS, runBoardCommand, TOOL_COMMANDS } from '../src/board-cli.ts';
 import { BOARD_MCP_INSTRUCTIONS, BOARD_MCP_TOOLS, ORCHESTRATOR_INSTRUCTIONS, ORCHESTRATOR_MCP_TOOLS } from '../src/board-mcp.ts';
-import type { Agent, AgentUpdatedEvent, DaemonEvent, Harness } from '../src/protocol.ts';
+import { PAGE_ICONS, type Agent, type AgentUpdatedEvent, type DaemonEvent, type Harness } from '../src/protocol.ts';
 import { connectTestClient, recordEvents, startTestDaemon, TEST_CLI_LAUNCHER, tempDataDir, tempRepo } from './helpers.ts';
 
 const SIZE = { cols: 120, rows: 40 };
@@ -137,6 +137,18 @@ describe("the board MCP server's instructions", () => {
     expect(ORCHESTRATOR_INSTRUCTIONS).toMatch(/when your crew has room[^.]*`queue_update` take/i);
     expect(ORCHESTRATOR_INSTRUCTIONS).toContain('done');
   });
+
+  // A harness sends every tool's schema with every request, so what the instructions say once no tool says again.
+  it("say once that most tools are a CLI command, so no tool's text names its command", () => {
+    expect(BOARD_MCP_INSTRUCTIONS).toContain('`agent-board help <tool name>`');
+    const schemas = [...BOARD_MCP_TOOLS, ...ORCHESTRATOR_MCP_TOOLS].map((tool) => JSON.stringify(tool));
+    expect(schemas.filter((schema) => /As `(agent-board|status|--)/.test(schema) || / As --/.test(schema))).toEqual([]);
+  });
+
+  it("list a page's icons once, on its tab's icon", () => {
+    const page = JSON.stringify(BOARD_MCP_TOOLS.find((tool) => tool.name === 'set_page'));
+    expect(page.split('"enum":["').filter((after) => after.startsWith(String(PAGE_ICONS[0]))).length).toBe(1);
+  });
 });
 
 describe('the board MCP tools and the agent-board CLI', () => {
@@ -160,7 +172,7 @@ describe('the board MCP tools and the agent-board CLI', () => {
     { tool: 'needs_you', command: 'needs-you', positional: ['reason'] },
     { tool: 'alert', command: 'alert', positional: ['line'] },
     { tool: 'open_pr', command: 'open-pr' },
-    // With plan, it is present_plan, which waits on the user longer than a shell command runs: the tool's alone.
+    // The tool holds your turn for a plan's decision, up to timeout_minutes; `doc --plan` returns at once.
     { tool: 'show_doc', command: 'doc', positional: ['path'], renamed: { on_board: 'board' }, options: ['title', 'board', 'plan', 'timeout_minutes'] },
     { tool: 'record_pr', command: 'record', positional: ['url'], options: ['title'] },
     { tool: 'record_doc', command: 'record', positional: ['path'], renamed: { for_orchestrator: 'for' }, options: ['for'] },
@@ -261,7 +273,7 @@ describe('the board MCP tools and the agent-board CLI', () => {
   ];
   /** Tools with no command of their own, and commands with no tool, each for a reason. */
   // A question and a plan wait minutes for the user: longer than a harness lets a shell command run.
-  const MCP_ONLY = ['connections', 'ask', 'present_plan'];
+  const MCP_ONLY = ['connections', 'ask'];
   // `watch` prints as things happen, as no tool call can: the wait tool with since is one round of it.
   const CLI_ONLY = ['zones', 'agents', 'shells', 'show', 'mcp', 'activity', 'rpc', 'watch', 'crew'];
 
@@ -280,6 +292,15 @@ describe('the board MCP tools and the agent-board CLI', () => {
     const callable = [...table.matchAll(/^ {2}(\w+): /gm)].map((match) => match[1]!);
     expect(callable.length).toBeGreaterThan(20);
     expect(callable.filter((name) => !tools.some((tool) => tool.name === name))).toEqual([]);
+  });
+
+  it('finds each tool its command, and `help <tool name>` its help', async () => {
+    expect(PARITY.filter(({ tool, command }) => (TOOL_COMMANDS[tool] ?? tool) !== command)).toEqual([]);
+    for (const { tool, command } of PARITY) {
+      let out = '';
+      const code = await runBoardCommand('help', [tool], { out: (text) => (out += text), err: () => {} });
+      expect({ tool, code, usage: out.split('\n')[0] }).toEqual({ tool, code: 0, usage: expect.stringMatching(new RegExp(`^usage: agent-board ${command}\\b`)) });
+    }
   });
 
   it.each(PARITY)('gives $tool the options of `agent-board $command`', ({ tool, command, positional = [], renamed = {}, options }) => {

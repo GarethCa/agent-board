@@ -1,5 +1,6 @@
 import { cloneElement, useLayoutEffect, useRef, useState, type PointerEvent, type ReactElement, type ReactNode, type Ref, type SyntheticEvent } from 'react';
 import * as RadixTooltip from '@radix-ui/react-tooltip';
+import { placementProps } from './placement';
 
 /** How long the pointer rests on a control before its tooltip shows, and the grace to move to the next one. */
 const DELAY_MS = 500;
@@ -129,7 +130,7 @@ function LiveTooltip({ wake, content, side }: { wake: Wake; content: ReactNode; 
         <OnControl node={wake.node} first={wake.by} />
       </RadixTooltip.Trigger>
       <RadixTooltip.Portal>
-        <RadixTooltip.Content className="ui-tooltip" side={side} sideOffset={6} collisionPadding={8}>
+        <RadixTooltip.Content className="ui-tooltip" side={side} sideOffset={6} {...placementProps()}>
           {content}
         </RadixTooltip.Content>
       </RadixTooltip.Portal>
@@ -172,7 +173,7 @@ function LiveHoverCard({ wake, content, label }: { wake: Wake; content: ReactNod
           <OnControl node={wake.node} first="hover" hoverOnly />
         </RadixTooltip.Trigger>
         <RadixTooltip.Portal>
-          <RadixTooltip.Content className="ui-hover-card" side="bottom" sideOffset={8} collisionPadding={8}>
+          <RadixTooltip.Content className="ui-hover-card" side="bottom" sideOffset={8} {...placementProps()}>
             <span className="ui-section-label">{label}</span>
             <span className="ui-hover-card-text">{content}</span>
           </RadixTooltip.Content>

@@ -111,7 +111,7 @@ describe('an agent flagging the user', () => {
       tempDataDir(),
     );
     expect(await mcp.callTool('needs_you', { reason: 'Decision needed: Postgres or SQLite?' })).toMatchObject({
-      text: expect.stringContaining('Flagged for the user in Needs you'),
+      text: expect.stringMatching(/^Flagged for the user in Needs you: .*Opening your session, or `needs_you` with `clear: true`, clears it\.$/),
     });
     const flagged = await untilAgent(setup.recorder, agent.sessionId, (a) => a.flag !== null);
     expect(flagged).toMatchObject({ harness: 'codex', flag: { to: 'user', reason: 'Decision needed: Postgres or SQLite?' } });

@@ -256,8 +256,8 @@ COMMANDS
   mcp                   Serve these as MCP tools on stdio, for a harness. Two are MCP tools
                         alone, as they wait on the user longer than a shell command runs:
                         ask (a question in the user's Needs you inbox) and show_doc with plan
-                        (a plan for them to approve, send back with changes, or reject;
-                        present_plan still works), which holds your turn for the decision.
+                        (a plan for them to approve, send back with changes, or reject),
+                        which holds your turn for the decision.
                         From a shell, \`doc --plan\` presents a plan and returns at once, the
                         decision coming to your prompt later. An agent an orchestrator started
                         puts both to that orchestrator instead.
@@ -725,7 +725,7 @@ message waits at your prompt. With resting off in Settings, it only sets your ti
   },
   mcp: {
     usage: 'agent-board mcp',
-    text: `Serves the board as MCP tools on stdio: whoami, board, connections, handoff, ask, present_plan,
+    text: `Serves the board as MCP tools on stdio: whoami, board, connections, handoff, ask,
 show_doc, set_status, needs_you, open_pr, record_pr, record_doc, pin, unpin and set_page, and for an agent's own live session, new_agent, send, wait, read,
 interrupt, set_effort, rename, pin_expanded, give_role, continue_on_credits, restart, pause, wake, close, handover, add_edge, remove_edge, move, arrange, map,
 zone_layout, add_note, edit_note, remove_note, pass_note, prefabs, roles, set_role and remove_role. The app adds it to the agents it starts; add it to another Claude
@@ -1869,12 +1869,31 @@ refused. Outside a session it reaches every method, as the app does.`,
   },
 };
 
+/**
+ * The command each board MCP tool is, where its name is not the command's own, so `help <tool>` finds it: the tools
+ * say once, in the server's instructions, that their help has what their descriptions leave out.
+ */
+export const TOOL_COMMANDS: Record<string, string> = {
+  whoami: 'identify', board: 'tree', set_status: 'status', needs_you: 'needs-you', open_pr: 'open-pr', show_doc: 'doc',
+  record_pr: 'record', record_doc: 'record', set_page: 'page', new_agent: 'new', set_effort: 'effort',
+  pin_expanded: 'expand', ticket_watches: 'watches', give_role: 'role', continue_on_credits: 'continue',
+  ask_to_remove: 'close', handover: 'orchestrate', add_edge: 'edge', list_edges: 'edges', remove_edge: 'edge',
+  map: 'zone', zone_screenshot: 'zone', zone_layout: 'zone', add_note: 'note', edit_note: 'note', remove_note: 'note',
+  delete_item: 'delete', pass_note: 'note', add_shape: 'shape', edit_shape: 'shape', remove_shape: 'shape',
+  add_diagram: 'diagram', export_diagram: 'diagram', edit_connector: 'connector', remove_connector: 'connector',
+  add_schedule: 'schedule', clock_add: 'schedule', clock_set: 'schedule', list_schedules: 'schedule',
+  remove_schedule: 'schedule', save_clock_template: 'schedule', list_clock_templates: 'schedule',
+  remove_clock_template: 'schedule', steps_new: 'steps', steps_read: 'steps', steps_update: 'steps',
+  queue_new: 'queue', queue_read: 'queue', queue_update: 'queue', remind_read: 'remind', remind_update: 'remind',
+  prefabs: 'prefab', prefab_draft: 'prefab', set_role: 'roles', remove_role: 'roles',
+};
+
 /** The command `command` names: `ls` is `agents`. */
 const canonical = (command: string) => (command === 'ls' ? 'agents' : command);
 
-/** The help for `command`, or undefined if there is no such command. */
+/** The help for `command`, or for the command a board MCP tool of that name is; undefined if there is no such command. */
 function commandHelp(command: string): string | undefined {
-  const help = COMMAND_HELP[canonical(command)];
+  const help = COMMAND_HELP[canonical(command)] ?? COMMAND_HELP[TOOL_COMMANDS[command] ?? ''];
   return help === undefined ? undefined : `usage: ${help.usage}\n\n${help.text}\n`;
 }
 

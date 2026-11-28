@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactElement, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactElement, type ReactNode, type RefObject } from 'react';
 import * as RadixMenu from '@radix-ui/react-dropdown-menu';
-import { ChevronRight, Circle, CircleDot } from 'lucide-react';
+import { ChevronRight, Circle, CircleDot, GripHorizontal } from 'lucide-react';
 import { Swatch } from './Field';
 import { Kbd } from './Label';
+import { placementProps } from './placement';
 import { Truncate } from './Truncate';
+import { useFitInWindow } from './use-fit-in-window';
 
 /** A row that does something. */
 export interface MenuAction {
@@ -189,6 +191,8 @@ interface MenuProps {
   onOpenChange?(open: boolean): void;
   /** Called as the menu closes, before focus goes back to its button; `preventDefault()` keeps focus where the pick put it. */
   onCloseFocus?(event: Event): void;
+  /** A head above its rows naming what it is for, such as a zone's name, that drags the menu round the window. */
+  head?: string;
 }
 
 /** The rows of a menu, its submenus' too. */
@@ -228,9 +232,7 @@ function Entries({ entries }: { entries: MenuEntry[] }) {
             {entry.hint !== undefined && <span className="ui-menu-hint">{entry.hint}</span>}
           </RadixMenu.SubTrigger>
           <RadixMenu.Portal>
-            <RadixMenu.SubContent className="ui-card ui-menu" sideOffset={6} collisionPadding={8} loop onKeyDown={(event) => event.stopPropagation()}>
-              <Entries entries={entry.entries} />
-            </RadixMenu.SubContent>
+            <SubCard entries={entry.entries} />
           </RadixMenu.Portal>
         </RadixMenu.Sub>
       );
@@ -265,10 +267,20 @@ function Entries({ entries }: { entries: MenuEntry[] }) {
   });
 }
 
+/** An open submenu's card, kept inside the window as a menu's is. */
+function SubCard({ entries }: { entries: MenuEntry[] }) {
+  const content = useRef<HTMLDivElement>(null);
+  const fit = useFitInWindow(content);
+  return (
+    <RadixMenu.SubContent className="ui-card ui-menu" sideOffset={6} {...placementProps({ fitted: true })} loop onKeyDown={(event) => event.stopPropagation()} ref={content} style={fit.style}>
+      <Entries entries={entries} />
+    </RadixMenu.SubContent>
+  );
+}
+
 const contentProps = {
   className: 'ui-card ui-menu',
   sideOffset: 6,
-  collisionPadding: 8,
   // The arrow keys wrap round from the last row to the first.
   loop: true,
   // The board must not see the menu's keys as its own.
@@ -280,34 +292,63 @@ const contentProps = {
  * and typing a label's first letters move between rows, wrapping round; Enter or a click picks one; Esc or a click elsewhere closes it
  * and gives focus back to the button.
  */
-export function Menu({ children, entries, align = 'start', side = 'bottom', open, onOpenChange, onCloseFocus }: MenuProps) {
+export function Menu({ children, entries, align = 'start', side = 'bottom', open, onOpenChange, onCloseFocus, head }: MenuProps) {
   const button = useRef<HTMLButtonElement>(null);
-  const content = useRef<HTMLDivElement>(null);
   return (
     <RadixMenu.Root modal={false} open={open} onOpenChange={onOpenChange}>
       <RadixMenu.Trigger ref={button} asChild>
         {children}
       </RadixMenu.Trigger>
       <RadixMenu.Portal>
-        <RadixMenu.Content
-          {...contentProps}
-          align={align}
-          side={side}
-          onCloseAutoFocus={onCloseFocus}
-          // A menu closed just before this one opened gives focus back to the button a moment later. That is not focus
-          // leaving this menu, which would close it under the pointer and keep it from giving focus back as it closes:
-          // the menu keeps open and takes the focus back, as an ordinary open leaves it.
-          onInteractOutside={(event) => {
-            if (event.type !== 'dismissableLayer.focusOutside' || !button.current?.contains(event.target as Node)) return;
-            event.preventDefault();
-            content.current?.focus({ preventScroll: true });
-          }}
-          ref={content}
-        >
-          <Entries entries={entries} />
-        </RadixMenu.Content>
+        <MenuCard entries={entries} align={align} side={side} onCloseFocus={onCloseFocus} head={head} button={button} />
       </RadixMenu.Portal>
     </RadixMenu.Root>
+  );
+}
+
+/**
+ * An open menu's card, kept inside the window wherever its button is. It is drawn only while it is open, so a menu
+ * dragged by its head opens beside its button again.
+ */
+function MenuCard({ entries, align, side, onCloseFocus, head, button }: Pick<MenuProps, 'entries' | 'align' | 'side' | 'onCloseFocus' | 'head'> & { button: RefObject<HTMLButtonElement | null> }) {
+  const content = useRef<HTMLDivElement>(null);
+  const fit = useFitInWindow(content);
+  return (
+    <RadixMenu.Content
+      {...contentProps}
+      {...placementProps({ fitted: true })}
+      align={align}
+      side={side}
+      onCloseAutoFocus={onCloseFocus}
+      // A menu closed just before this one opened gives focus back to the button a moment later. That is not focus
+      // leaving this menu, which would close it under the pointer and keep it from giving focus back as it closes:
+      // the menu keeps open and takes the focus back, as an ordinary open leaves it.
+      onInteractOutside={(event) => {
+        if (event.type !== 'dismissableLayer.focusOutside' || !button.current?.contains(event.target as Node)) return;
+        event.preventDefault();
+        content.current?.focus({ preventScroll: true });
+      }}
+      ref={content}
+      style={fit.style}
+      data-headed={head === undefined ? undefined : true}
+    >
+      <MenuHead head={head} fit={fit} />
+      <Entries entries={entries} />
+    </RadixMenu.Content>
+  );
+}
+
+/**
+ * A menu's head, naming what it is the menu of, to drag it about by: a pointer's handle only, hidden from a screen
+ * reader, which has the menu's own name and moves through its rows with the keys.
+ */
+function MenuHead({ head, fit }: { head: string | undefined; fit: ReturnType<typeof useFitInWindow> }) {
+  if (head === undefined) return null;
+  return (
+    <div className="ui-menu-head" aria-hidden="true" data-dragging={fit.dragging || undefined} title="Drag to move this menu" {...fit.handle}>
+      <GripHorizontal className="ui-menu-grip" aria-hidden="true" />
+      <Truncate text={head} className="ui-menu-head-text" />
+    </div>
   );
 }
 
@@ -315,18 +356,28 @@ export function Menu({ children, entries, align = 'start', side = 'bottom', open
  * A menu opened at a point on the screen, as a right-click opens one, with the keys of `Menu`. It closes on Esc, a
  * click elsewhere or a pick, calling `onClose`.
  */
-export function ContextMenu({ at, entries, label, onClose }: { at: { x: number; y: number }; entries: MenuEntry[]; label: string; onClose(): void }) {
+export function ContextMenu({ at, entries, label, head, onClose }: { at: { x: number; y: number }; entries: MenuEntry[]; label: string; head?: string; onClose(): void }) {
   return (
     <RadixMenu.Root modal={false} open onOpenChange={(open) => !open && onClose()}>
       <RadixMenu.Trigger asChild>
         <span className="ui-context-anchor" aria-hidden="true" style={{ '--anchor-x': `${at.x}px`, '--anchor-y': `${at.y}px` } as CSSProperties} />
       </RadixMenu.Trigger>
       <RadixMenu.Portal>
-        <RadixMenu.Content {...contentProps} sideOffset={0} align="start" side="bottom" aria-label={label}>
-          <Entries entries={entries} />
-        </RadixMenu.Content>
+        <ContextCard entries={entries} label={label} head={head} />
       </RadixMenu.Portal>
     </RadixMenu.Root>
+  );
+}
+
+/** An open right-click menu's card, kept inside the window, with a head to drag it by if it has one. */
+function ContextCard({ entries, label, head }: { entries: MenuEntry[]; label: string; head: string | undefined }) {
+  const content = useRef<HTMLDivElement>(null);
+  const fit = useFitInWindow(content);
+  return (
+    <RadixMenu.Content {...contentProps} {...placementProps({ fitted: true })} sideOffset={0} align="start" side="bottom" aria-label={label} ref={content} style={fit.style} data-headed={head === undefined ? undefined : true}>
+      <MenuHead head={head} fit={fit} />
+      <Entries entries={entries} />
+    </RadixMenu.Content>
   );
 }
 

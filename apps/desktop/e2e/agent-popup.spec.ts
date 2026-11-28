@@ -36,8 +36,10 @@ test("a double-click opens the agent's pop-up over the dimmed board; Esc, – an
     const dimmed = (await scrim.boundingBox())!;
     for (const side of ['x', 'y', 'width', 'height'] as const) expect(Math.abs(dimmed[side] - board[side])).toBeLessThan(2);
     const box = (await popup.boundingBox())!;
+    // Centred in the room its margins leave: on macOS the top one clears the traffic lights.
+    const pad = await scrim.evaluate((el) => ({ top: parseFloat(getComputedStyle(el).paddingTop), bottom: parseFloat(getComputedStyle(el).paddingBottom) }));
     expect(Math.abs(box.x + box.width / 2 - (board.x + board.width / 2))).toBeLessThan(2);
-    expect(Math.abs(box.y + box.height / 2 - (board.y + board.height / 2))).toBeLessThan(2);
+    expect(Math.abs(box.y + box.height / 2 - (board.y + pad.top + (board.height - pad.top - pad.bottom) / 2))).toBeLessThan(2);
     expect(await popup.evaluate((element) => element.contains(document.activeElement))).toBe(true);
 
     // Esc from its header goes back to the tile, selected.
@@ -138,9 +140,11 @@ test("a ticket's pop-up has one row of tabs, its Board, its chat and its helper;
     await expect(window.getByRole('menuitem', { name: /New shell/ })).toHaveCount(0);
     await expect(popup).toBeVisible();
 
-    // Open beside… splits it: the helper on the right, the chat staying left; the window grows to 16px in from the
-    // board's edges, both tabs on with their sides' pills, one row, and the header's split button pressed.
+    // Open beside… splits it: the helper on the right, the chat staying left; the window grows to its margin in from the
+    // board's edges (16px, the top one on macOS clear of the traffic lights), both tabs on with their sides' pills, one
+    // row, and the header's split button pressed.
     const popupBoard = (await window.locator('.board').boundingBox())!;
+    const padTop = await window.getByTestId('agent-popup-scrim').evaluate((el) => parseFloat(getComputedStyle(el).paddingTop));
     const before = (await popup.boundingBox())!;
     await popup.getByTestId('agent-popup-plus').click();
     await window.getByRole('menuitem', { name: /^Open beside…/ }).click();
@@ -150,7 +154,7 @@ test("a ticket's pop-up has one row of tabs, its Board, its chat and its helper;
     await expect(async () => {
       const grown = (await popup.boundingBox())!;
       expect(Math.abs(grown.x - popupBoard.x - 16)).toBeLessThan(2);
-      expect(Math.abs(grown.y - popupBoard.y - 16)).toBeLessThan(2);
+      expect(Math.abs(grown.y - popupBoard.y - padTop)).toBeLessThan(2);
       expect(Math.abs(grown.width - (popupBoard.width - 32))).toBeLessThan(2);
     }).toPass();
     await expect(tab(chat.sessionId)).toHaveAttribute('data-active', 'true');
@@ -377,7 +381,9 @@ test('on a wide board the pop-up stops at 1600px, centred; the header button fil
       const capped = (await popup.boundingBox(ACT))!;
       expect(board.width).toBeGreaterThan(1632);
       expect(Math.abs(capped.x + capped.width / 2 - (board.x + board.width / 2))).toBeLessThan(2);
-      expect(Math.abs(capped.height - (board.height - 32))).toBeLessThan(2);
+      // Less its margins: on macOS the top one clears the traffic lights.
+      const pad = await window.getByTestId('agent-popup-scrim').evaluate((el) => parseFloat(getComputedStyle(el).paddingTop) + parseFloat(getComputedStyle(el).paddingBottom));
+      expect(Math.abs(capped.height - (board.height - pad))).toBeLessThan(2);
       reached('capped');
     });
 

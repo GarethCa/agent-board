@@ -76,7 +76,7 @@ export function FoldedZone({ data: { zone }, positionAbsoluteX, positionAbsolute
           <Chip className="project-options nodrag" icon={<Ellipsis />} aria-label={`${simplified ? 'Project' : 'Zone'} options`} title="Unfold, unfold and wake its agents, rename, delete" />
         </Menu>
       </div>
-      {menuAt !== undefined && <ContextMenu at={menuAt} label={`${zone.name} ${noun}`} entries={entries()} onClose={() => setMenuAt(undefined)} />}
+      {menuAt !== undefined && <ContextMenu at={menuAt} label={`${zone.name} ${noun}`} head={zone.name} entries={entries()} onClose={() => setMenuAt(undefined)} />}
     </div>
   );
 }

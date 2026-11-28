@@ -25,6 +25,10 @@ const shellQuoted = (text: string) => `'${text.replaceAll("'", `'\\''`)}'`;
 const writeFileCommand = (path: string, text: string) =>
   `mkdir -p "$(dirname ${shellQuoted(path)})" && printf '%b' ${shellQuoted(text.replaceAll('\\', '\\\\').replaceAll('\n', '\\n'))} > ${shellQuoted(path)}`;
 
+/** Where the `Plan:` and `Plan HTML:` scenarios write the plan they show. */
+const PLAN_FILE = '.agent-board/plan.md';
+const PLAN_HTML_FILE = '.agent-board/plan.html';
+
 /** The `review` scenario's doc for round 1, in the format a reviewer's prompt asks for. */
 const FIRST_REVIEW = [
   '# Review of the work so far',
@@ -484,16 +488,21 @@ const scripts: Record<FakeScenario, Script> = {
     if (plan !== undefined) {
       let markdown = `# ${plan}\n\n## Steps\n\n1. Wrap \`getProduct()\` in a Redis cache, 5-minute TTL.\n2. Bust the key on \`product.updated\`.\n\n<script>document.title = 'ran'</script>`;
       for (;;) {
-        const result = await session.callMcpTool('agent-board', 'present_plan', { title: plan, markdown });
+        // Each round writes the plan again and shows it: its next version.
+        await session.runShell(writeFileCommand(PLAN_FILE, markdown));
+        const result = await session.callMcpTool('agent-board', 'show_doc', { path: PLAN_FILE, title: plan, plan: true });
         if (!/asked for changes/.test(result?.text ?? '')) return say(result);
         await session.say(result!.text);
         markdown += `\n3. ${/Their comments:\n([\s\S]*?)\n\nRevise/.exec(result!.text)?.[1] ?? 'As asked.'}`;
       }
     }
     const html = /^Plan HTML: (.*)/.exec(prompt)?.[1];
-    if (html !== undefined) return say(await session.callMcpTool('agent-board', 'present_plan', { title: 'A hostile plan', html: hostilePlan(html) }));
+    if (html !== undefined) {
+      await session.runShell(writeFileCommand(PLAN_HTML_FILE, hostilePlan(html)));
+      return say(await session.callMcpTool('agent-board', 'show_doc', { path: PLAN_HTML_FILE, title: 'A hostile plan', plan: true }));
+    }
     const file = /^Plan file: (.*)/.exec(prompt)?.[1];
-    if (file !== undefined) return say(await session.callMcpTool('agent-board', 'present_plan', { title: 'Plan from a file', path: file }));
+    if (file !== undefined) return say(await session.callMcpTool('agent-board', 'show_doc', { path: file, title: 'Plan from a file', plan: true }));
     return scripts.output(session, typed);
   },
 

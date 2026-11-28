@@ -53,6 +53,7 @@ import { windowKeysFor } from './keys/menu-bar';
 import { ToastProvider, TooltipProvider } from './ui';
 import { ParkThought } from './keys/ParkThought';
 import { flushViewSaves } from '../../shared/view-saver';
+import { chromeFor, trafficLightsZone, zoneProperties } from '../../shared/traffic-lights';
 
 const root = document.getElementById('root');
 if (!root) throw new Error('missing #root element');
@@ -104,11 +105,18 @@ startMenuBar(windowKeysFor(new URLSearchParams(location.search)));
 window.agentBoard.view.onFlush(flushViewSaves);
 window.addEventListener('pagehide', () => void flushViewSaves());
 
-// How the window is framed, for the styles that leave room for macOS's traffic lights and draw the drag regions round
-// them. In full screen the lights hide, and what sat beside them moves into the corner.
+// How the window is framed, for the styles that keep clear of macOS's traffic lights (their safe zone,
+// shared/traffic-lights.ts) and draw the drag regions round them. In full screen the lights hide, the zone goes, and
+// what sat beside them moves into the corner.
 const { windows } = window.agentBoard;
 document.documentElement.dataset.chrome = windows.chrome;
-const setFullScreen = (fullScreen: boolean) => (document.documentElement.dataset.fullScreen = String(fullScreen));
+const chromeKind = chromeFor(Object.fromEntries(new URLSearchParams(location.search)));
+const setFullScreen = (fullScreen: boolean) => {
+  document.documentElement.dataset.fullScreen = String(fullScreen);
+  const zone = trafficLightsZone({ inset: windows.chrome === 'inset', fullScreen, kind: chromeKind });
+  for (const [name, value] of Object.entries(zoneProperties(zone))) document.documentElement.style.setProperty(name, value);
+};
+setFullScreen(false);
 // Asked once, unless a change arrives first: the answer would be older than the change.
 let changed = false;
 windows.onFullScreenChanged((fullScreen) => {

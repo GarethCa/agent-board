@@ -3,9 +3,12 @@
 // through `electronApp.evaluate`, which reaches it as `globalThis.agentBoardDemo`. The window must paint offscreen (headless mode): a shown window
 // sends no paints.
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
+import { dirname, isAbsolute, join } from 'node:path';
 import type { BrowserWindow, NativeImage, WebContents } from 'electron';
 import { createFrameTap, type CaptureStats, type Encoder, type EncoderResult, type FrameTap } from './demo-capture-core';
+import { rawVideoFrameHeader, rawVideoHeader } from './raw-video-stream';
 
 /** ffmpeg's output settings for each encoder a capture may ask for. The VideoToolbox ones run on the Mac's media engine. */
 export const DEMO_ENCODERS = {
@@ -15,6 +18,17 @@ export const DEMO_ENCODERS = {
   x264: ['-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '12', '-pix_fmt', 'yuv420p'],
 } as const;
 export type DemoEncoder = keyof typeof DEMO_ENCODERS;
+
+/**
+ * The environment to run `binary` in. An ffmpeg shipped in an npm package may load its libav libraries by bare name from beside it, so a
+ * binary with them beside it gets its own folder on the library path; any other runs in `env` as it is.
+ */
+export function ffmpegEnv(binary: string, env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  if (!isAbsolute(binary)) return env;
+  const dir = dirname(binary);
+  if (!existsSync(join(dir, 'libavcodec.dylib'))) return env;
+  return { ...env, DYLD_LIBRARY_PATH: [dir, env.DYLD_LIBRARY_PATH].filter(Boolean).join(':') };
+}
 
 /** The device pixels per CSS pixel the board's window paints at in demo mode, for frames sharp enough to zoom into. */
 export const DEMO_SCALE = 2;
@@ -59,7 +73,7 @@ export interface FfmpegOptions {
 }
 
 /**
- * ffmpeg reading raw BGRA frames of `size` on stdin and writing `out`. It runs in a process group of its own, so that
+ * ffmpeg reading raw BGRA frames of `size` on stdin, in a Matroska stream (see `raw-video-stream.ts`), and writing `out`. It runs in a process group of its own, so that
  * stopping it also stops whatever it started: a wrapper script's real ffmpeg, say. The group is stopped if the app exits
  * while it runs; only an app killed outright (SIGKILL) leaves it running.
  */
@@ -71,9 +85,11 @@ export function ffmpegEncoder({
   fps,
   finishMs = FINISH_MS,
 }: FfmpegOptions): Encoder & { pid?: number } {
-  const input = ['-f', 'rawvideo', '-pix_fmt', 'bgra', '-s', `${size.width}x${size.height}`, '-framerate', String(fps), '-i', 'pipe:0'];
+  // The frames' timestamps are within a microsecond of a steady `fps`; the output's own rate makes them exact.
+  const input = ['-f', 'matroska', '-i', 'pipe:0', '-r', String(fps)];
   const child = spawn(binary, ['-hide_banner', '-loglevel', 'error', '-stats', ...input, ...DEMO_ENCODERS[encoder], '-y', out], {
     stdio: ['pipe', 'ignore', 'pipe'],
+    env: ffmpegEnv(binary),
     detached: true,
   });
   let log = '';
@@ -109,6 +125,8 @@ export function ffmpegEncoder({
   // A pipe that breaks never drains: a tap waiting for it would wait for ever, so its going counts as a drain too.
   child.stdin.on('close', () => drainListeners.forEach((listener) => listener()));
   const frameBytes = size.width * size.height * 4;
+  child.stdin.write(rawVideoHeader({ ...size, fps }));
+  let frames = 0;
   /** `closed`, or undefined once `ms` have passed without it. */
   const closedWithin = async (ms: number) => {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -124,6 +142,7 @@ export function ffmpegEncoder({
       // Once ffmpeg has gone, frames go nowhere: the tap is told all is well, so it finishes rather than wait for a drain.
       if (ended || exited || failed !== undefined) return true;
       // Behind only once Node itself says so, since only then will it say 'drain'; and then only past the queue's limit.
+      child.stdin.write(rawVideoFrameHeader(frames++, bitmap.length, fps));
       return child.stdin.write(bitmap) || child.stdin.writableLength < MAX_QUEUED_FRAMES * frameBytes;
     },
     onDrain: (listener) => {

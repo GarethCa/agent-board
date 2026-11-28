@@ -24,7 +24,7 @@ export interface BoardMcpHttp {
 /**
  * One JSON-RPC message per POST (no batches, as in revision 2025-06-18). A notification is answered 202 with no body. A
  * request is answered with its JSON, but a tool call with an event stream: its headers at once and a comment line
- * every `keepAliveMs`, since `ask`, `present_plan` and `wait` hold it for minutes and a client gives up on a request
+ * every `keepAliveMs`, since `ask`, `show_doc` with `plan` and `wait` hold it for minutes and a client gives up on a request
  * that says nothing that long. A call ends, and hears no answer, when its client hangs up or posts
  * `notifications/cancelled`; either closes its daemon connection, which ends what it waits on.
  */

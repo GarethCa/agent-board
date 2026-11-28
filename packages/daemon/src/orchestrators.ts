@@ -694,7 +694,7 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
     const { sent } = submitted;
     if (!sent.started) {
       awaitingTurn.delete(to.sessionId);
-      throw invalidParams(`${to.name}'s unsent message was not sent (${sent.why}): it is still at its prompt. Try --submit again, or --clear`);
+      throw invalidParams(`${to.name}'s unsent message was not sent (${sent.why}): it is still at its prompt. Try \`submit: true\` (--submit) again, or \`clear: true\` (--clear)`);
     }
     return sentTo(to, me.agent, 'started');
   };
@@ -1007,7 +1007,7 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
               const next =
                 me === undefined
                   ? 'The user is flagged to send or clear it'
-                  : `Send it with \`agent-board send ${refOf(to)} --submit\`, or clear it with \`--clear\``;
+                  : `Send it with \`send\` and \`submit: true\` (\`agent-board send ${refOf(to)} --submit\`), or clear it with \`clear: true\` (\`--clear\`)`;
               throw invalidParams(`${to.name}: your message was typed at its prompt but not sent (${answered.unsent}). ${next}`);
             }
             if (sender !== null && opens) replies.open(to.sessionId, sender.sessionId);

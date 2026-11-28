@@ -998,7 +998,10 @@
   --size-separator: 22px; /* the rule between an island's groups */
   --island-inset: 14px; /* how far the islands float from the window's edges (ChromeC) */
   --island-height: 46px; /* the top islands', so they share a midline with the traffic lights (main/chrome.ts) */
-  --size-traffic-lights: 72px; /* the room macOS's traffic lights take, from the window's left edge */
+  /* The safe zone round macOS's traffic lights, from the window's top-left: no control or title sits inside it. The page
+     sets it for its window (shared/traffic-lights.ts); 0 where the OS frame holds the window controls, and in full screen. */
+  --traffic-lights-right: 0px;
+  --traffic-lights-bottom: 0px;
   --icon-2xs: 8px; /* a badge on an icon's corner */
   --icon-xs: 12px; /* in a pill or an extra-small control */
   --icon-sm: 14px; /* in a button or menu row */

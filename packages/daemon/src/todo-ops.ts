@@ -2,7 +2,7 @@
 // lines for the user to do, added to the caller's own to-do list, and the lists it reads, with who ticked each line
 // and when. A line is named by its place in the caller's own list, as `remind ls --mine` numbers it.
 import { plural } from './text-words.ts';
-import { agentToken, BoardError, BoardRefs, itemPlace, readCards, type BoardSession, type BoardView } from './board-ops.ts';
+import { agentToken, BoardError, BoardRefs, faceOf, itemPlace, readCards, type BoardSession, type BoardView, type Hint } from './board-ops.ts';
 import type { BoardItem, StepsWho, TodoData, TodoLine } from './protocol.ts';
 
 /** A time as the user's clock shows it: `14:06` today, `2026-11-10 14:06` before. */
@@ -43,19 +43,26 @@ function listText(refs: BoardRefs, item: BoardItem, me: string | undefined): str
   return [listHead(refs, item, me), ...(lines.length === 0 ? ['  Nothing to do.'] : lines)].join('\n');
 }
 
-const NO_LIST = 'You have no to-do list yet: `agent-board remind "<text>"` makes one under your tile.';
+const NO_LIST: Hint = { cli: '`agent-board remind "<text>"`', mcp: '`remind` with `text`' };
+
+/** That the caller has no to-do list yet, and how it makes one. */
+function noList(hint: string): string {
+  return `You have no to-do list yet: ${hint} makes one under your tile.`;
+}
+
+const READ_MINE: Hint = { cli: '`agent-board remind ls --mine`', mcp: '`remind_read` with `mine: true`' };
 
 /** `remind "<text>" …`: adds lines to the caller's to-do list for the user, making it under its tile if it has none. */
 export async function remind(session: BoardSession, texts: string[]): Promise<BoardView> {
   const lines = texts.flatMap((text) => text.split('\n')).filter((text) => text.trim() !== '');
-  if (lines.length === 0) throw new BoardError('give the to-do: `agent-board remind "<what the user must do>"`');
+  if (lines.length === 0) throw BoardError.hinted({ cli: '`agent-board remind "<what the user must do>"`', mcp: '`text`, what the user must do' }, (hint) => `give the to-do: ${hint}`);
   const { item, added } = await session.client.call('board.remind', { token: agentToken(session, 'add a to-do for the user'), text: lines });
   const refs = new BoardRefs(await readCards(session));
   const open = (item.data as unknown as TodoData).lines.filter((line) => line.done === null).length;
   return {
     text:
       `Added ${plural(added.length, 'to-do')} to your list ${refs.of('item', item.id)} under your tile: ${open} open for the user. ` +
-      'Nothing tells you when the user ticks one: `agent-board remind ls --mine` shows which are done.',
+      `Nothing tells you when the user ticks one: ${READ_MINE[faceOf(session)]} shows which are done.`,
     json: { item, added },
   };
 }
@@ -65,7 +72,7 @@ export async function readTodos(session: BoardSession, mine: boolean): Promise<B
   const items = await session.client.call('board.readTodos', { token: agentToken(session, 'read to-do lists'), mine });
   const refs = new BoardRefs(await readCards(session));
   const me = session.caller?.kind === 'agent' ? session.caller.sessionId : undefined;
-  if (items.length === 0) return { text: mine ? NO_LIST : 'No to-do lists you can read.', json: items };
+  if (items.length === 0) return { text: mine ? noList(NO_LIST[faceOf(session)]) : 'No to-do lists you can read.', json: items };
   return { text: items.map((item) => listText(refs, item, me)).join('\n\n'), json: items };
 }
 
@@ -73,10 +80,12 @@ export async function readTodos(session: BoardSession, mine: boolean): Promise<B
 export async function changeTodo(session: BoardSession, action: 'done' | 'undo' | 'rm', place: number): Promise<BoardView> {
   const token = agentToken(session, 'change its to-do list');
   const [item] = await session.client.call('board.readTodos', { token, mine: true });
-  if (item === undefined) throw new BoardError(NO_LIST);
+  if (item === undefined) throw BoardError.hinted(NO_LIST, noList);
   const lines = (item.data as unknown as TodoData).lines;
   const line = Number.isInteger(place) && place >= 1 ? lines[place - 1] : undefined;
-  if (line === undefined) throw new BoardError(lines.length === 0 ? 'your to-do list is empty' : `give a line from 1 to ${lines.length}, as \`agent-board remind ls --mine\` numbers them`);
+  if (line === undefined) {
+    throw lines.length === 0 ? new BoardError('your to-do list is empty') : BoardError.hinted(READ_MINE, (hint) => `give a line from 1 to ${lines.length}, as ${hint} numbers them`);
+  }
   const change = action === 'rm' ? ({ action: 'remove', line: line.id } as const) : ({ action: 'tick', line: line.id, done: action === 'done' } as const);
   const changed = await session.client.call('board.changeTodo', { token, change });
   const refs = new BoardRefs(await readCards(session));

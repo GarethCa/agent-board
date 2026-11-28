@@ -621,7 +621,7 @@ describe('an agent changing its own clock', () => {
   it("adds a clock of its own, and is refused another agent's clock and a clock it doesn't have", async () => {
     const setup = await watchDaemon();
     const { agent, token } = await agentAt(setup, clockSet({ stop: true, why: 'No reason' }));
-    expect((await listed(setup, agent.sessionId))!.lastMessage).toContain('you have no clock: add one with `agent-board schedule add --self`');
+    expect((await listed(setup, agent.sessionId))!.lastMessage).toContain('you have no clock: add one with `clock_add` (`agent-board schedule add --self`)');
     const other = await setup.client.call('agent.spawn', { zoneId: setup.zone.id, name: 'Watcher', prompt: 'Run the tests', ...SIZE });
     const theirs = await setup.client.call('clock.add', { place: { beside: other.sessionId }, data: { cron: '0 * * * *', prompt: 'Check Slack' } });
 

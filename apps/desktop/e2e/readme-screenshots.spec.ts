@@ -8,11 +8,12 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import sharp from 'sharp';
 import { agents, launch, listFinishedTurns, screen, sessionWindow, setClickOpens, tile, tileAction } from './agent-helpers.ts';
-import { demoReady, makeRepo, pinPaths, pinRandomLooks, scenarioPicker, seedBoard, stillBoard } from './demo-board.ts';
+import { showTethers, untilStill, viewSettled, viewTransform } from './board-helpers.ts';
+import { demoReady, makeRepo, pinLines, pinPaths, pinRandomLooks, scenarioPicker, seedBoard, stillBoard } from './demo-board.ts';
 import { openAddZone, removeDataDir, tempDataDir, test, tabText } from './launch.ts';
 import { ignorePointer, RENDER_ARGS, RENDER_ENV, settle, VIEWPORT } from './render.ts';
 import { scratch } from './scratch.ts';
-import { putDocsOnBoard } from './settings-helpers.ts';
+import { putDocsOnBoard, showTileParts } from './settings-helpers.ts';
 
 // The README's screenshots, made by `pnpm readme:screenshots`. The app runs on the fake claude with a seeded demo
 // board, drawn the way the visual spec draws it (./render.ts: software rendering, one device pixel per CSS pixel, motion
@@ -30,12 +31,12 @@ async function write(name: string, png: Buffer): Promise<void> {
 
 
 /** Shoots the whole window once the page is still. Taken through the DevTools protocol, scaled to two device pixels per CSS pixel for retina screens: Playwright's own screenshot of an Electron window is at one. */
-async function shoot(page: Page, name: string): Promise<void> {
+async function shoot(page: Page, name: string, size: { width: number; height: number } = VIEWPORT): Promise<void> {
   const restorePointer = await ignorePointer(page);
   await settle(page);
   await stillBoard(page);
   const session = await page.context().newCDPSession(page);
-  const { data } = await session.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false, clip: { x: 0, y: 0, ...VIEWPORT, scale: 2 } });
+  const { data } = await session.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false, clip: { x: 0, y: 0, ...size, scale: 2 } });
   await session.detach();
   await write(name, Buffer.from(data, 'base64'));
   await restorePointer();
@@ -121,12 +122,86 @@ test('the README screenshots: the board, an expanded tile, the session window, t
     await waiting.dblclick();
     await expect(window.getByTestId('expanded-tile')).toBeVisible();
     await expect(screen(window)).toContainText('Which database should I use');
+    // The board's heading and its zones' tops sit under the floating toolbar: scroll the board down, on bare desk left
+    // of the zone, until the zone's tab is well clear of it.
+    await viewSettled(window);
+    const zoneTab = window.getByTestId('zone-tab').filter({ hasText: 'web-app' });
+    for (let i = 0; i < 12 && (await zoneTab.boundingBox())!.y < 150; i++) {
+      await window.mouse.move(24, 400);
+      await window.mouse.wheel(0, -40);
+      await untilStill(() => viewTransform(window));
+    }
+    expect((await zoneTab.boundingBox())!.y).toBeGreaterThanOrEqual(150);
     await pinRandomLooks(window);
     await shoot(window, 'expanded-tile');
   } finally {
     await app.close();
     await removeDataDir(dataDir);
     github.dispose();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/**
+ * The README's wide hero: one zone at work, framed close enough that its tiles read at the README's width (960 px):
+ * an agent writing a document, one running subagents, one on a clock and one asking to run a command.
+ */
+const HERO_VIEWPORT = { width: 1440, height: 800 };
+
+test('the README screenshots: the wide hero, one zone at work', async () => {
+  const { dir, env } = scratch('output');
+  const dataDir = tempDataDir();
+  // Demo mode gives the spec a camera that frames any part of the board, and hides the dev-only chrome.
+  const { app, window: page } = await launch(dataDir, { ...env, ...RENDER_ENV, AGENT_BOARD_DEMO: '1', PATH: `${scenarioPicker(dir)}:${env.PATH}`, SHELL: '/bin/sh' }, RENDER_ARGS);
+  await listFinishedTurns(page);
+  try {
+    await page.setViewportSize(HERO_VIEWPORT);
+    // The zone shows a document's card, which only Settings' switch puts on the board.
+    await putDocsOnBoard(page);
+    const zone = await page.evaluate(async (path) => {
+      const result = await window.agentBoard.zones.addFolder(path, { x: 0, y: 0, width: 940, height: 480, color: '#f76707' });
+      if (result.status !== 'added') throw new Error(result.message);
+      return result.zone;
+    }, makeRepo(dir, 'docs-site'));
+    // Named for its work, as in the board-in-use shot: the fake claude picks its scenario by the worktree folder the name gives.
+    const spawn = (name: string, prompt: string, x: number, y: number) =>
+      page.evaluate(
+        async (params) => {
+          const result = await window.agentBoard.agents.spawn(params);
+          if (result.status !== 'started') throw new Error(result.message);
+          return result.agent;
+        },
+        { zoneId: zone.id, name, prompt, position: { x, y }, cols: 100, rows: 30 },
+      );
+    // Two columns of the zone are an agent and what sits to its right (its document's card, its clock).
+    await spawn('Write the release plan', 'Doc on the board: docs/release-plan.md', 30, 40);
+    await spawn('Build the search index', 'Build the search index', 640, 40);
+    const scheduled = await spawn('Check the build', 'Check the build', 30, 300);
+    await spawn('Clear the old build', 'Clear the old build', 640, 300);
+
+    const named = (name: string) => tile(page).filter({ has: page.getByText(name, { exact: true }) });
+    await expect(page.getByTestId('doc-card')).toContainText('Release 1.4 plan', { timeout: 60_000 });
+    await expect(named('Build the search index').getByTestId('character')).toHaveCount(3, { timeout: 60_000 });
+    await expect(named('Clear the old build')).toHaveAttribute('data-needs-you', 'true', { timeout: 60_000 });
+    await expect(named('Check the build')).toHaveAttribute('data-state', 'idle', { timeout: 60_000 });
+    await page.evaluate((id) => window.agentBoard.agents.setSchedule(id, { cron: '30 6 * * *', prompt: 'Check last night’s build' }), scheduled.sessionId);
+    await expect(page.getByTestId('clock')).toHaveCount(1);
+    // Framed this close, the minimap would sit over the bottom-right tile: hidden with its own button, as a user would.
+    await page.getByRole('button', { name: 'Minimap', exact: true }).click();
+    await expect(page.locator('.board-minimap')).toHaveCount(0);
+    await stillBoard(page);
+    await page.evaluate(async (id) => {
+      const framed = (await window.agentBoard.zones.list()).find((each) => each.id === id)!;
+      await window.__demo!.camera!({ x: framed.x, y: framed.y, width: framed.width, height: framed.height }, 0);
+    }, zone.id);
+    await untilStill(() => viewTransform(page));
+    await pinRandomLooks(page);
+    await pinPaths(page);
+    await pinLines(page, { 'Doc on the board: docs/release-plan.md': 'Write docs/release-plan.md' });
+    await shoot(page, 'board-at-work', HERO_VIEWPORT);
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -168,6 +243,8 @@ test('the README screenshots: flows, the review doc and the chat view', async ()
   await listFinishedTurns(page);
   try {
     await page.setViewportSize(VIEWPORT);
+    // The review and PR chips are tile parts Settings turns on: the shot is about them.
+    await showTileParts(page, ['chips']);
     const zone = await page.evaluate(async (path) => {
       const result = await window.agentBoard.zones.addFolder(path, { x: 0, y: 0, width: 1260, height: 330, color: '#4c6ef5' });
       if (result.status !== 'added') throw new Error(result.message);
@@ -182,7 +259,7 @@ test('the README screenshots: flows, the review doc and the chat view', async ()
         },
         { zoneId: zone.id, prompt, position: { x, y }, cols: 100, rows: 30 },
       );
-    // A gap between the tiles (~275 for the plan edge, whose pill and Send button are wide, ~185 for the other) leaves a visible line and arrowhead each side of each label; the reviewer sits below.
+    // A gap between the tiles (~275 for the plan edge, whose label is wide, ~185 for the other) leaves a visible line and arrowhead each side of each label; the reviewer sits below.
     const planner = await spawn('Plan the checkout', 20, 50);
     const coder = await spawn('Write the code', 550, 50);
     const shipper = await spawn('Ship the release', 990, 50);
@@ -190,12 +267,12 @@ test('the README screenshots: flows, the review doc and the chat view', async ()
       await expect(tile(page).filter({ hasText: name })).toHaveAttribute('data-state', 'idle', { timeout: 30_000 });
     }
 
-    // The planner's plan waits for a Send to reach the coder; the coder hands its handover on once the pull request's checks pass.
+    // Both edges hand on by themselves: the planner's plan when its turn ends, the coder's handover once the pull request's checks pass.
     writeFileSync(join(planner.worktree, 'plan.md'), '# Plan\n\n1. Validate the cart.\n2. Charge the card.\n');
     writeFileSync(join(coder.worktree, 'handover.md'), '# Handover\n\nThe checkout validates the cart and charges the card.\n');
     await page.evaluate(
       async ({ a, b, c }) => {
-        await window.agentBoard.flowEdges.create({ from: a, to: b, payload: 'handover', path: 'plan.md', trigger: 'manual' });
+        await window.agentBoard.flowEdges.create({ from: a, to: b, payload: 'handover', path: 'plan.md', trigger: 'auto' });
         await window.agentBoard.flowEdges.create({ from: b, to: c, payload: 'handover', path: 'handover.md', conditions: [{ kind: 'pr-checks' }] });
       },
       { a: planner.sessionId, b: coder.sessionId, c: shipper.sessionId },
@@ -299,7 +376,7 @@ test('the README screenshots: an orchestrator with its crew', async () => {
   try {
     await page.setViewportSize(VIEWPORT);
     const zone = await page.evaluate(async (path) => {
-      const result = await window.agentBoard.zones.addFolder(path, { x: 0, y: 0, width: 1180, height: 460, color: '#4c6ef5' });
+      const result = await window.agentBoard.zones.addFolder(path, { x: 0, y: 0, width: 1140, height: 280, color: '#4c6ef5' });
       if (result.status !== 'added') throw new Error(result.message);
       return result.zone;
     }, makeRepo(dir, 'storefront'));
@@ -327,8 +404,7 @@ test('the README screenshots: an orchestrator with its crew', async () => {
     // Fit View frames the nodes as they are: let them stop growing, shrinking and moving first.
     await stillBoard(page);
     await page.getByRole('button', { name: 'Fit View' }).click();
-    // The orchestrator selected: its crew count says how many it started.
-    await page.locator('[data-testid="agent-tile"][data-orchestrator]').click({ position: { x: 4, y: 4 } });
+    // Left unselected: a selected tile's resize handle would sit on its crew count, the badge this shot is about.
     await pinRandomLooks(page);
     await pinPaths(page);
     await shoot(page, 'orchestrator-crew');
@@ -422,27 +498,20 @@ test('the README screenshots: a board in use, with a question, a document, a clo
     );
     await expect(page.getByTestId('clock')).toHaveCount(1);
     await expect(tile(page).filter({ hasText: 'Tidy the changelog' })).toHaveAttribute('data-state', 'hibernated');
+    // The agent note's tether to its agent is off by default: the shot shows it.
+    await showTethers(page);
     // Fit View frames the nodes as they are: let them stop growing, shrinking and moving first.
     await stillBoard(page);
     await page.getByRole('button', { name: 'Fit View' }).click();
-    const pinTasks = () =>
-      page.evaluate((lines) => {
-        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-        while (walker.nextNode()) {
-          const node = walker.currentNode as Text;
-          const shown = lines[node.data.trim()];
-          if (shown !== undefined) node.data = shown;
-        }
-      }, taskLines);
     await pinRandomLooks(page);
     await pinPaths(page);
-    await pinTasks();
+    await pinLines(page, taskLines);
     await shoot(page, 'board-in-use');
 
     await page.getByRole('button', { name: 'View', exact: true }).click();
     await expect(page.getByRole('dialog', { name: 'View', exact: true })).toBeVisible();
     await pinRandomLooks(page);
-    await pinTasks();
+    await pinLines(page, taskLines);
     await shoot(page, 'view-popover');
   } finally {
     await app.close();
@@ -498,6 +567,8 @@ test('the README screenshots: a session window with two panes, a PR tab and a we
   await listFinishedTurns(page);
   try {
     await page.setViewportSize(VIEWPORT);
+    // The review and PR chips are tile parts Settings turns on: the shot is about them.
+    await showTileParts(page, ['chips']);
     // gh finds the agent's pull requests in the repo its worktree's remote names.
     const repo = makeRepo(dir, 'storefront');
     execFileSync('git', ['-C', repo, 'remote', 'add', 'origin', 'https://github.com/acme/storefront.git']);
