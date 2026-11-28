@@ -324,8 +324,14 @@ test('a session window resized up to the board\'s top edge clears the macOS traf
     };
     await dragTopEdgeUp();
     await shoot('session-window-top-edge.png');
-    // What the main process sends when the window goes full screen, which hides the lights.
-    await window.evaluate(() => (document.documentElement.dataset.fullScreen = 'true'));
+    // What the page does when the main process says the window went full screen, which hides the lights: the flag, and
+    // the lights' safe zone gone (renderer/src/main.tsx).
+    await window.evaluate(() => {
+      const root = document.documentElement;
+      root.dataset.fullScreen = 'true';
+      root.style.setProperty('--traffic-lights-right', '0px');
+      root.style.setProperty('--traffic-lights-bottom', '0px');
+    });
     // The page has taken it in: the bounds a drag stays inside follow the flag.
     await window.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
     await dragTopEdgeUp();

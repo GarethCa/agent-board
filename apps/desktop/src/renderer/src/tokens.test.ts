@@ -194,6 +194,8 @@ const LOCAL = [
   '--captain-beside',
   // How far the creation toolbar moves off the board's middle to clear the islands (`useChromeFolds`).
   '--toolbar-shift',
+  // And how much lower its own row ends than the islands', where it has taken one, for what sits under them.
+  '--toolbar-row',
   '--for-you-height',
   '--dock-room',
   '--radix-popover-content-available-width',

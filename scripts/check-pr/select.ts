@@ -30,6 +30,7 @@ export const SCANNERS: ReadonlyArray<{ tests: readonly string[]; globs: readonly
       'apps/desktop/src/renderer/src/tokens.test.ts',
       'apps/desktop/src/renderer/src/swatch-folding.test.ts',
       'apps/desktop/src/renderer/src/chrome/drag-regions.test.ts',
+      'apps/desktop/src/renderer/src/chrome/traffic-lights-zone.test.ts',
       'apps/desktop/src/renderer/src/demo/demo-mode.test.ts',
       'apps/desktop/src/renderer/src/board/board-background.test.ts',
       'apps/desktop/src/renderer/src/board/hybrid-tile-body.test.ts',

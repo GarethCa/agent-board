@@ -402,12 +402,12 @@ function ClassicZone({
               </span>
             ))}
           {clone !== null && foldedEntries.length > 0 && (
-            <Menu entries={menu}>
+            <Menu entries={menu} head={zone.name}>
               <Chip className="zone-tab-control nodrag" icon={<Ellipsis />} aria-label="Zone options" title="What doesn't fit on the tab" />
             </Menu>
           )}
           {clone === null && (
-            <Menu entries={menu}>
+            <Menu entries={menu} head={zone.name}>
               <Chip className="zone-tab-control nodrag" icon={<Ellipsis />} aria-label="Zone options" title="Clean up, spacing, rename, colour, default repo, unbind, trusting its folder, board MCP, orchestrating, gate command, role templates, delete" />
             </Menu>
           )}

@@ -41,6 +41,8 @@ case "$PWD" in
   */web-app-*/pick-a-cache*) FAKE_HARNESS_SCENARIO=waiting ;;
   */web-app-*/clear-build-output*) FAKE_HARNESS_SCENARIO=permission ;;
   */api-service-*/prune-old-jobs*) FAKE_HARNESS_SCENARIO=subagent-ask FAKE_HARNESS_SUBAGENT_WORK_MS=600000 ;;
+  */docs-site-*/clear-the-old-build*) FAKE_HARNESS_SCENARIO=permission ;;
+  */docs-site-*/build-the-search-index*) FAKE_HARNESS_SCENARIO=subagents-working FAKE_HARNESS_SUBAGENT_WORK_MS=600000 ;;
   *-review-r[0-9]*) FAKE_HARNESS_SCENARIO=review ;;
   */lead-two-*) FAKE_HARNESS_SCENARIO=orchestrate ;;
   */pick-a-cache*) FAKE_HARNESS_SCENARIO=orchestrate ;;
@@ -58,6 +60,21 @@ exec "${join(fakeBinDir, 'claude')}" "$@"
   writeFileSync(join(bin, 'claude'), script);
   chmodSync(join(bin, 'claude'), 0o755);
   return bin;
+}
+
+/**
+ * Swaps whole lines of the page's text for the ones `lines` gives: an agent's task line drawn from its prompt, which
+ * steers the fake claude, shown as the task a person would have given it.
+ */
+export async function pinLines(page: Page, lines: Record<string, string>): Promise<void> {
+  await page.evaluate((lines) => {
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const node = walker.currentNode as Text;
+      const shown = lines[node.data.trim()];
+      if (shown !== undefined) node.data = shown;
+    }
+  }, lines);
 }
 
 /**

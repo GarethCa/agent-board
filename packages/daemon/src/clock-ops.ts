@@ -1,6 +1,6 @@
 // The schedule commands as the CLI and MCP give them (`schedule add|list|remove|set|stop|template`): refs and words turned into the
 // daemon's clock methods, and their results as text and JSON (ADR-0010's one API, two faces).
-import { BoardError, BoardRefs, inZone, readBoard, resolveAgent, type BoardSession, type BoardView } from './board-ops.ts';
+import { BoardError, BoardRefs, faceOf, inZone, readBoard, resolveAgent, type BoardSession, type BoardView, type Hint } from './board-ops.ts';
 import { cronWords, lastRunWords, parseCron } from './cron.ts';
 import {
   CLOCK_MODES,
@@ -53,7 +53,7 @@ export function checkSchedule(options: ScheduleOptions): void {
   const targets = [options.to !== undefined, options.fresh === true, options.self === true].filter(Boolean).length;
   if (targets > 1 || (targets === 0 && !template)) throw new BoardError('give --to <agent> to message one, --self to message you, or --fresh to start one each run');
   if (options.after !== undefined && options.self !== true) throw new BoardError('--after is only for --self: `schedule set` changes a clock you have');
-  if (options.after !== undefined && options.after !== 'hibernate' && options.after !== 'idle') throw new BoardError('--after must be hibernate or idle: a clock of your own messages you');
+  if (options.after !== undefined && options.after !== 'hibernate' && options.after !== 'idle') throw new BoardError('--after must be hibernate or idle: a clock of your own messages you', '`after` must be hibernate or idle: a clock of your own messages you');
   // A template's own clock, with no --to, --self or --fresh, goes in a zone too: a fresh agent's, or one it starts.
   const zoned = template && targets === 0;
   const freshOnly = (['zone', 'harness', 'model', 'role', 'keep', 'result', 'handoffTo'] as const).find((key) => options[key] !== undefined && !(key === 'zone' && zoned));
@@ -143,6 +143,13 @@ async function addedView(session: BoardSession, item: BoardItem): Promise<BoardV
   return { text: `Added ${clockLine(fresh, item.data as unknown as ClockData, status, item.id)}\n  ${inZone(fresh, item.zoneId)}.`, json: { item, status } };
 }
 
+/** That `ref` names no schedule, and how to list them. */
+function notSchedule(ref: string): BoardError {
+  return BoardError.hinted({ cli: '`agent-board schedule list`', mcp: '`list_schedules`' }, (hint) => `${ref} is not a schedule: ${hint} lists them`);
+}
+
+const SAVE_TEMPLATE: Hint = { cli: '`agent-board schedule template save <name> --from <clock>`', mcp: '`save_clock_template` with `name` and `from`' };
+
 /** `schedule list`: every clock on the board. */
 export async function listSchedules(session: BoardSession, full = false): Promise<BoardView> {
   const refs = new BoardRefs(await readBoard(session.client));
@@ -150,7 +157,7 @@ export async function listSchedules(session: BoardSession, full = false): Promis
   const clocks = refs.board.items.filter((item) => item.kind === 'clock');
   const lines = clocks.map((item) => clockLine(refs, item.data as unknown as ClockData, statuses.find((status) => status.id === item.id), item.id, full));
   return {
-    text: lines.length === 0 ? 'No schedules on the board. `agent-board schedule add` makes one.' : lines.join('\n'),
+    text: lines.length === 0 ? `No schedules on the board. ${faceOf(session) === 'mcp' ? '`add_schedule`' : '`agent-board schedule add`'} makes one.` : lines.join('\n'),
     json: clocks.map((item) => ({ item, status: statuses.find((status) => status.id === item.id) ?? null })),
   };
 }
@@ -159,7 +166,7 @@ export async function listSchedules(session: BoardSession, full = false): Promis
 export async function removeSchedule(session: BoardSession, ref: string): Promise<BoardView> {
   const refs = new BoardRefs(await readBoard(session.client));
   const object = refs.resolve(ref, session.caller);
-  if (object.kind !== 'item' || object.item.kind !== 'clock') throw new BoardError(`${ref} is not a schedule: \`agent-board schedule list\` lists them`);
+  if (object.kind !== 'item' || object.item.kind !== 'clock') throw notSchedule(ref);
   await session.client.call('orchestrator.removeClock', { token: session.token, id: object.item.id });
   return { text: `Removed ${refs.of('item', object.item.id)}.`, json: null };
 }
@@ -174,13 +181,13 @@ export interface OwnScheduleOptions {
 
 /** Checks `schedule set`'s and `schedule stop`'s options before anything connects. */
 export function checkOwnSchedule(options: OwnScheduleOptions): void {
-  if (options.why.trim() === '') throw new BoardError('say why with --why "…": the user sees it on the clock');
+  if (options.why.trim() === '') throw new BoardError('say why with --why "…": the user sees it on the clock', 'say why with `why`: the user sees it on the clock');
   if (options.stop === true) {
-    if (options.after !== undefined) throw new BoardError('--after is for `schedule set`, not `schedule stop`');
+    if (options.after !== undefined) throw new BoardError('--after is for `schedule set`, not `schedule stop`', 'give `after` or `stop: true`, not both');
     return;
   }
-  if (options.after === undefined) throw new BoardError(`give --after ${CLOCK_MODES.join('|')}`);
-  if (!(CLOCK_MODES as readonly string[]).includes(options.after)) throw new BoardError(`--after must be ${CLOCK_MODES.join(', ')}`);
+  if (options.after === undefined) throw new BoardError(`give --after ${CLOCK_MODES.join('|')}`, `give \`after\` (${CLOCK_MODES.join(', ')}), or \`stop: true\``);
+  if (!(CLOCK_MODES as readonly string[]).includes(options.after)) throw new BoardError(`--after must be ${CLOCK_MODES.join(', ')}`, `\`after\` must be ${CLOCK_MODES.join(', ')}`);
 }
 
 /** `schedule set` and `schedule stop`: the caller changes its own clock's mode, or turns it off. */
@@ -190,7 +197,7 @@ export async function setOwnSchedule(session: BoardSession, options: OwnSchedule
   if (options.ref !== undefined) {
     const refs = new BoardRefs(await readBoard(session.client));
     const object = refs.resolve(options.ref, session.caller);
-    if (object.kind !== 'item' || object.item.kind !== 'clock') throw new BoardError(`${options.ref} is not a schedule: \`agent-board schedule list\` lists them`);
+    if (object.kind !== 'item' || object.item.kind !== 'clock') throw notSchedule(options.ref);
     clock = object.item.id;
   }
   const change = options.stop === true ? { stop: true } : { after: options.after as ClockMode };
@@ -223,7 +230,7 @@ export function checkTemplate(options: TemplateOptions): void {
   }
   checkCron(options.cron);
   if (options.prompt.trim() === '') throw new BoardError('give the template its prompt: what it sends, or a fresh agent its task');
-  if (options.after !== undefined && !(CLOCK_MODES as readonly string[]).includes(options.after)) throw new BoardError(`--after must be ${CLOCK_MODES.join(', ')}`);
+  if (options.after !== undefined && !(CLOCK_MODES as readonly string[]).includes(options.after)) throw new BoardError(`--after must be ${CLOCK_MODES.join(', ')}`, `\`after\` must be ${CLOCK_MODES.join(', ')}`);
   const freshOnly = (['harness', 'model', 'role', 'keep', 'result'] as const).find((key) => options[key] !== undefined);
   if (freshOnly !== undefined && options.after !== 'close') throw new BoardError(`--${freshOnly} is only for --after close: a fresh agent each run`);
   if (options.harness !== undefined && !(HARNESSES as readonly string[]).includes(options.harness)) throw new BoardError(`--harness must be ${HARNESSES.join(' or ')}`);
@@ -238,7 +245,9 @@ async function findTemplate(session: BoardSession, ref: string): Promise<ClockTe
   const templates = await session.client.call('clockTemplate.list', { token: session.token });
   const name = ref.trim();
   const found = templates.find((each) => each.id === ref || each.name === name) ?? templates.find((each) => asciiFolded(each.name) === asciiFolded(name));
-  if (found === undefined) throw new BoardError(`no clock template ${ref}: \`agent-board schedule template list\` lists them`);
+  if (found === undefined) {
+    throw BoardError.hinted({ cli: '`agent-board schedule template list`', mcp: '`list_clock_templates`' }, (hint) => `no clock template ${ref}: ${hint} lists them`);
+  }
   return found;
 }
 
@@ -260,7 +269,7 @@ export async function saveTemplate(session: BoardSession, options: TemplateOptio
   let source: { fromClock: string } | { data: Partial<ClockData> };
   if (options.from !== undefined) {
     const object = refs.resolve(options.from, session.caller);
-    if (object.kind !== 'item' || object.item.kind !== 'clock') throw new BoardError(`${options.from} is not a schedule: \`agent-board schedule list\` lists them`);
+    if (object.kind !== 'item' || object.item.kind !== 'clock') throw notSchedule(options.from);
     source = { fromClock: object.item.id };
   } else {
     const mode = (options.after ?? 'idle') as ClockMode;
@@ -282,7 +291,7 @@ export async function listTemplates(session: BoardSession): Promise<BoardView> {
   const refs = new BoardRefs(await readBoard(session.client));
   const templates = await session.client.call('clockTemplate.list', { token: session.token });
   return {
-    text: templates.length === 0 ? 'No clock templates. `agent-board schedule template save <name> --from <clock>` saves one.' : templates.map((each) => templateLine(refs, each)).join('\n'),
+    text: templates.length === 0 ? `No clock templates. ${SAVE_TEMPLATE[faceOf(session)]} saves one.` : templates.map((each) => templateLine(refs, each)).join('\n'),
     json: templates,
   };
 }

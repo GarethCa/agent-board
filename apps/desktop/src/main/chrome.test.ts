@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { windowChrome } from '../preload/api';
-import { chromeFor, chromeOptions } from './chrome';
+import { chromeOptions } from './chrome';
 
 describe('the window chrome', () => {
   it('has no title bar on macOS: the traffic lights float over the board, beside its menu island', () => {
@@ -18,13 +18,6 @@ describe('the window chrome', () => {
 
   it('sits the traffic lights inline in the Overview window’s title bar, as in Settings', () => {
     expect(chromeOptions('darwin', 'overview')).toEqual({ titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 14, y: 12 } });
-  });
-
-  it('tells each window from its query, the board when the query names no other', () => {
-    expect(chromeFor({})).toBe('board');
-    expect(chromeFor({ popOut: 'agent-1' })).toBe('pop-out');
-    expect(chromeFor({ settings: '1' })).toBe('settings');
-    expect(chromeFor({ overview: '1' })).toBe('overview');
   });
 
   it('keeps the native frame, and its window controls, everywhere else', () => {

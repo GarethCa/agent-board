@@ -79,17 +79,19 @@ for (const design of ['classic', 'simplified'] as const) for (const { theme, suf
       await settle(window);
       await expect.soft(popupHead).toHaveScreenshot(`long-title-popup-header${suffix}.png`, SHOT);
 
-      // Its size: as wide as the board less 16px each side, as tall as that or 16:10, centred on it.
+      // Its size: as wide as the board less 16px each side, as tall as the board less its margins (on macOS the top one
+      // clears the traffic lights) or 16:10, centred in the room they leave.
       const scrim = window.getByTestId('agent-popup-scrim');
       const board = (await scrim.boundingBox())!;
       const client = await scrim.evaluate((el) => ({ width: el.clientWidth, height: el.clientHeight }));
+      const pad = await scrim.evaluate((el) => ({ top: parseFloat(getComputedStyle(el).paddingTop), bottom: parseFloat(getComputedStyle(el).paddingBottom) }));
       const box = (await popup.boundingBox())!;
-      const fit = { width: board.width - 32, height: Math.min(board.height - 32, (board.width - 32) / 1.6) };
-      const seen = JSON.stringify({ board, client, box, fit });
+      const fit = { width: board.width - 32, height: Math.min(board.height - pad.top - pad.bottom, (board.width - 32) / 1.6) };
+      const seen = JSON.stringify({ board, client, pad, box, fit });
       console.log(`pop-up fit ${suffix || '-classic'}: ${seen}`);
       const centred = (at: { x: number; y: number; width: number; height: number }) => {
         expect(Math.abs(at.x + at.width / 2 - (board.x + board.width / 2)), seen).toBeLessThanOrEqual(1);
-        expect(Math.abs(at.y + at.height / 2 - (board.y + board.height / 2)), seen).toBeLessThanOrEqual(1);
+        expect(Math.abs(at.y + at.height / 2 - (board.y + pad.top + (board.height - pad.top - pad.bottom) / 2)), seen).toBeLessThanOrEqual(1);
       };
       expect(Math.abs(box.width - fit.width), seen).toBeLessThanOrEqual(1);
       expect(Math.abs(box.height - fit.height), seen).toBeLessThanOrEqual(1);

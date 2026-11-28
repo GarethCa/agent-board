@@ -494,6 +494,9 @@ describe('agent-board steps', () => {
     expect(await mcp.callTool('steps_update', { card: ref, action: 'done', step: 1, steps: '2' })).toMatchObject({ isError: true, text: expect.stringContaining('give step or steps, not both') });
     expect(await mcp.callTool('steps_update', { card: ref, action: 'done', steps: 'two' })).toMatchObject({ isError: true, text: expect.stringContaining("give the step's number, from 1, not two") });
     expect((await steps(env, 'done', ref, 'two')).err).toContain("give the step's number, from 1, not two");
+    // Over the MCP, the hints name the tool and its argument.
+    expect(await mcp.callTool('steps_read', { card: 'Release' })).toMatchObject({ isError: true, text: expect.stringMatching(/ is not a steps card: `steps_read` lists them$/) });
+    expect(await mcp.callTool('steps_new', { steps: '- [ ] Write it\n- [ ] Ship it' })).toMatchObject({ isError: true, text: 'give the card a title: a "# title" line, or `title`' });
   });
 
   it('says what is wrong before it connects', async () => {

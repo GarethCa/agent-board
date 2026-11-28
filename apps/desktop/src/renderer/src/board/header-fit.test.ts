@@ -44,7 +44,8 @@ describe("a header's long title keeps its buttons inside it", () => {
 
 describe("an agent's pop-up", () => {
   it('keeps a small margin of board round it, and has no pixel cap: its size is worked out on the board (popup-size.ts)', () => {
-    expect(rule(app, '.agent-popup-scrim')).toMatch(/padding: var\(--space-4\);/);
+    // The top margin also clears the traffic lights' safe zone, 0 off macOS.
+    expect(rule(app, '.agent-popup-scrim')).toMatch(/padding: max\(var\(--space-4\), var\(--traffic-lights-bottom\)\) var\(--space-4\) var\(--space-4\);/);
     expect(tokens).toMatch(/--space-4: 16px;/);
     expect(rule(app, '.agent-popup-frame')).toMatch(/max-width: 100%;/);
     expect(rule(app, '.agent-popup-frame')).toMatch(/max-height: 100%;/);

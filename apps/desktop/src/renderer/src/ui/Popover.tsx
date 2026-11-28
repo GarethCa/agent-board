@@ -1,6 +1,8 @@
-import type { ReactElement, ReactNode, RefObject } from 'react';
+import { useRef, type ComponentProps, type ReactElement, type ReactNode, type RefObject } from 'react';
 import * as RadixPopover from '@radix-ui/react-popover';
 import { cx } from './cx';
+import { placementProps } from './placement';
+import { useFitInWindow } from './use-fit-in-window';
 
 interface PopoverProps {
   /** The button that opens it: one element that takes a ref and DOM props, such as a Button. */
@@ -43,23 +45,29 @@ export function Popover({
     <RadixPopover.Root open={open} onOpenChange={onOpenChange}>
       <RadixPopover.Trigger asChild>{children}</RadixPopover.Trigger>
       <RadixPopover.Portal>
-        <RadixPopover.Content
+        <FittedContent
           className={cx('ui-card ui-popover', className)}
           aria-label={rest['aria-label']}
           align={align}
           side={side}
           sideOffset={6}
-          collisionPadding={8}
           onKeyDown={(event) => event.stopPropagation()}
           onPointerDownOutside={onPointerDownOutside}
           onCloseAutoFocus={onCloseAutoFocus}
           onEscapeKeyDown={onEscapeKeyDown}
         >
           {content}
-        </RadixPopover.Content>
+        </FittedContent>
       </RadixPopover.Portal>
     </RadixPopover.Root>
   );
+}
+
+/** An open popover's card, kept inside the window wherever what it opens from is. */
+function FittedContent(props: ComponentProps<typeof RadixPopover.Content>) {
+  const content = useRef<HTMLDivElement>(null);
+  const fit = useFitInWindow(content);
+  return <RadixPopover.Content {...props} {...placementProps({ fitted: true })} ref={content} style={fit.style} />;
 }
 
 /** A popover's card drawn open in place, for the component gallery. */
@@ -130,13 +138,12 @@ export function AnchoredPopover({
         <RadixPopover.Anchor asChild>{anchor}</RadixPopover.Anchor>
       )}
       <RadixPopover.Portal>
-        <RadixPopover.Content
+        <FittedContent
           className={cx('ui-card ui-popover', className)}
           aria-label={rest['aria-label']}
           align={align}
           side={side}
           sideOffset={sideOffset}
-          collisionPadding={8}
           onFocusOutside={(event) => event.preventDefault()}
           onKeyDown={(event) => event.stopPropagation()}
           onPointerDownOutside={onPointerDownOutside}
@@ -145,7 +152,7 @@ export function AnchoredPopover({
           onOpenAutoFocus={onOpenAutoFocus}
         >
           {children}
-        </RadixPopover.Content>
+        </FittedContent>
       </RadixPopover.Portal>
     </RadixPopover.Root>
   );

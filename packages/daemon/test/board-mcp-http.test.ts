@@ -92,7 +92,7 @@ describe('the board MCP over HTTP', () => {
     // A live agent's own session may act on other agents: it is told so, and listed the control tools.
     expect((await mcp.initialize()).instructions).toBe(`${BOARD_MCP_INSTRUCTIONS} ${ORCHESTRATOR_INSTRUCTIONS}`);
     expect(await mcp.listTools()).toEqual([
-      'whoami', 'board', 'usage', 'connections', 'handoff', 'ask', 'present_plan', 'show_doc', 'set_status', 'rest', 'needs_you', 'alert', 'open_pr', 'record_pr', 'record_doc', 'pin', 'unpin', 'steps_new', 'steps_read', 'steps_update', 'queue_new', 'queue_read', 'queue_update', 'remind', 'remind_read', 'remind_update', 'set_page', 'clock_add', 'clock_set', 'save_clock_template', 'list_clock_templates', 'remove_clock_template',
+      'whoami', 'board', 'usage', 'connections', 'handoff', 'ask', 'show_doc', 'set_status', 'rest', 'needs_you', 'alert', 'open_pr', 'record_pr', 'record_doc', 'pin', 'unpin', 'steps_new', 'steps_read', 'steps_update', 'queue_new', 'queue_read', 'queue_update', 'remind', 'remind_read', 'remind_update', 'set_page', 'clock_add', 'clock_set', 'save_clock_template', 'list_clock_templates', 'remove_clock_template',
       ...ORCHESTRATOR_MCP_TOOLS.map((tool) => tool.name),
     ]);
     // It adds a clock of its own.
@@ -208,7 +208,7 @@ describe('the board MCP over HTTP', () => {
     const hangUp = new AbortController();
 
     const call = post(
-      { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'present_plan', arguments: { title: 'Move the ids', path: 'plan.md' } } },
+      { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'show_doc', arguments: { path: 'plan.md', plan: true } } },
       { authorization: `Bearer ${token}` },
       hangUp.signal,
     );

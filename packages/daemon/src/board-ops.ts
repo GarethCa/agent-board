@@ -81,7 +81,28 @@ import { minutes, planDecisionText } from './plan-told.ts';
 import { removeAskLeftText, removeAskText } from './remove-ask-told.ts';
 
 /** A failure to show the user as it is: a bad ref, no daemon, an unknown token. */
-export class BoardError extends Error {}
+/**
+ * A refusal or failure to show the caller. `message` is the CLI's; `mcp` is what an MCP tool answers, the same but
+ * for its hints, which name a tool and its argument where the CLI's name a command.
+ */
+export class BoardError extends Error {
+  readonly mcp: string;
+
+  constructor(message: string, mcp: string = message) {
+    super(message);
+    this.mcp = mcp;
+  }
+
+  /** A failure that says `say` around its hint, the command on the CLI and the tool in an MCP answer. */
+  static hinted(hint: Hint, say: (hint: string) => string): BoardError {
+    return new BoardError(say(hint.cli), say(hint.mcp));
+  }
+
+  /** What `error` says to a caller on `face`: an MCP tool's words for a `BoardError`, else its message. */
+  static text(error: Error, face: ReadFace): string {
+    return face === 'mcp' && error instanceof BoardError ? error.mcp : error.message;
+  }
+}
 
 /** A connection to the daemon, and who is calling: the session holding the env's board token, or null outside one. */
 export interface BoardSession {
@@ -90,7 +111,14 @@ export interface BoardSession {
   caller: BoardCaller | null;
   /** The env's board token, which `board.*` calls carry. */
   token: string | undefined;
+  /** Where its answers are read: the CLI's when unset. An MCP tool's session is `mcp`, for hints that name tools. */
+  face?: ReadFace;
   close(): void;
+}
+
+/** Where `session`'s answers are read. */
+export function faceOf(session: BoardSession): ReadFace {
+  return session.face ?? 'cli';
 }
 
 /**
@@ -277,7 +305,7 @@ export class BoardRefs {
     const matches = this.matching(wanted);
     if (matches.length === 1) return matches[0]!;
     if (matches.length > 1) throw this.ambiguous(wanted, matches);
-    throw new BoardError(`nothing on the board is called ${JSON.stringify(wanted)}. \`agent-board tree\` lists what is.`);
+    throw BoardError.hinted(HINTS.board, (hint) => `nothing on the board is called ${JSON.stringify(wanted)}. ${hint} lists what is.`);
   }
 
   /**
@@ -664,7 +692,7 @@ export function zoneLine(refs: BoardRefs, zone: Zone): string {
 }
 
 /** `identify`: the caller's tile and zone, or that it is outside any session. */
-export function identifyView(refs: BoardRefs, caller: BoardCaller | null, socketPath: string): BoardView {
+export function identifyView(refs: BoardRefs, caller: BoardCaller | null, socketPath: string, face: ReadFace = 'cli'): BoardView {
   if (caller === null) {
     return {
       text: [
@@ -685,8 +713,8 @@ export function identifyView(refs: BoardRefs, caller: BoardCaller | null, socket
   if (caller.side === 'agent' && tile !== undefined) {
     const agent = tile as Agent;
     lines.push(`state    ${agent.state}`, `status   ${agent.status === null ? 'not set: your tile shows your task' : agentDoing(agent)}`);
-    lines.push(`pose     ${characterWords(characterReading(agent))}`);
-    lines.push(`category ${identifyCategoryWords(refs, agent)}`);
+    lines.push(`pose     ${characterWords(characterReading(agent), 'yours', face)}`);
+    lines.push(`category ${identifyCategoryWords(refs, agent, face)}`);
     lines.push(`branch   ${branchWords(agent)} in ${tilde(agent.worktree)}`);
     const role = roleLabel(agent);
     if (role !== null) lines.push(`role     ${role}`);
@@ -713,6 +741,22 @@ export function identifyView(refs: BoardRefs, caller: BoardCaller | null, socket
 
 /** Where a read is printed: the CLI, or an MCP tool's answer, whose hints name the tools instead of the commands. */
 export type ReadFace = 'cli' | 'mcp';
+
+/** A pointer to the next thing to do, on each face: the CLI's command, or the MCP's tool and its argument. */
+export type Hint = Record<ReadFace, string>;
+
+/** The hints the board's answers give, by what they point to. */
+const HINTS = {
+  board: { cli: '`agent-board tree`', mcp: '`board` with `zone: "all"`' },
+  handoff: { cli: '`agent-board handoff` (or the handoff tool)', mcp: '`handoff`' },
+  pose: { cli: '`agent-board status set --pose`', mcp: '`set_status` with `character`' },
+  category: { cli: '`agent-board status set --category`', mcp: '`set_status` with `category`' },
+  clearFlag: { cli: '`agent-board needs-you --clear`', mcp: '`needs_you` with `clear: true`' },
+  addRole: { cli: '`agent-board roles set <name> -- <template>`', mcp: '`set_role` with `name` and `template`' },
+  prefabs: { cli: 'agent-board prefab ls', mcp: '`prefabs`' },
+  wake: { cli: '`agent-board wake`', mcp: '`wake`' },
+  show: { cli: '`agent-board show <ref>`', mcp: '`read` with `agent`' },
+} satisfies Record<string, Hint>;
 
 /** How the whole board is asked for, on each face. */
 const WHOLE_BOARD: Record<ReadFace, string> = { cli: '`agent-board tree --zone all`', mcp: '`board` with `zone: "all"`' };
@@ -926,7 +970,7 @@ export function edgesView(refs: BoardRefs): BoardView {
  * The edges into and out of the caller's agent, from its side: who it hands off to, and who hands off to it, with
  * their states. Outside an agent, every edge.
  */
-export function connectionsView(refs: BoardRefs, caller: BoardCaller | null): BoardView {
+export function connectionsView(refs: BoardRefs, caller: BoardCaller | null, face: ReadFace = 'cli'): BoardView {
   if (caller === null || caller.kind !== 'agent') return edgesView(refs);
   const id = caller.tileId;
   const out = refs.board.edges.filter((edge) => edge.from === id);
@@ -937,7 +981,7 @@ export function connectionsView(refs: BoardRefs, caller: BoardCaller | null): Bo
     lines.push(`  ${endLabel(refs, edge.to)} by ${refs.of('edge', edge.id)}`, `    ${edgeSummary(refs, edge, 'your')}`);
   }
   if (out.some((edge) => edge.trigger === 'auto')) {
-    lines.push('  Hand off with `agent-board handoff` (or the handoff tool) once your work is ready; else your turn\'s end does.');
+    lines.push(`  Hand off with ${HINTS.handoff[face]} once your work is ready; else your turn's end does.`);
   }
   lines.push(into.length === 0 ? 'No one hands off to you: no edge comes into your tile.' : 'These hand off to you:');
   for (const edge of into) {
@@ -1088,8 +1132,8 @@ async function setOwnStatus(
  * A character's reading in words: the pose drawn, whose it is (`own` for the agent's own), and when a pose set goes;
  * a pose the board draws over waits under it.
  */
-function characterWords(reading: CharacterReading, own = 'yours'): string {
-  if (reading.yours === null) return `${reading.shown}, the board's (set one with \`agent-board status set --pose\`)`;
+function characterWords(reading: CharacterReading, own = 'yours', face: ReadFace = 'cli'): string {
+  if (reading.yours === null) return `${reading.shown}, the board's (set one with ${HINTS.pose[face]})`;
   const whose = reading.setBy === 'you' ? own : `set by ${reading.setBy}`;
   // Each pose an agent sets is shown by its own word.
   const drawn = reading.shown === reading.yours ? whose : `the board's, over ${reading.yours} (${whose}), shown again after`;
@@ -1100,9 +1144,9 @@ function characterWords(reading: CharacterReading, own = 'yours'): string {
  * A work category set, in words: its name, its label, who it waits on, and whose it is (`own` for the agent's own); or
  * that the board guesses one, while none is set.
  */
-function categoryWords(agent: Agent, own = 'yours'): string {
+function categoryWords(agent: Agent, own = 'yours', face: ReadFace = 'cli'): string {
   const set = agent.workCategory;
-  if (set === null) return "none set: the board guesses one (set one with `agent-board status set --category`)";
+  if (set === null) return `none set: the board guesses one (set one with ${HINTS.category[face]})`;
   const label = set.label === null ? '' : ` "${set.label}"`;
   const waiting = set.waitingOn === null ? '' : `, waiting on ${set.waitingOn.who}${set.waitingOn.ref === null ? '' : ` · ${set.waitingOn.ref}`}`;
   const whose = set.setBy === null ? own : `set by ${set.setBy}`;
@@ -1114,19 +1158,19 @@ function categoryWords(agent: Agent, own = 'yours'): string {
  * Identify's category line: the one the agent set, else what the board guesses and why; and, over one it set, what
  * the overview shows in its place for now (Needs help while something waits on the user).
  */
-function identifyCategoryWords(refs: BoardRefs, agent: Agent): string {
+function identifyCategoryWords(refs: BoardRefs, agent: Agent, face: ReadFace): string {
   const reviewers = refs.board.agents.filter((each) => each.reviewOf === agent.sessionId);
   // What the inbox lists of finished turns never makes a category, so either setting reads the same.
   const reading = workCategory(agent, { shows: 'explicit', reviewers });
   const shown = `${WORK_CATEGORY_LABELS[reading.category]}${reading.label === null ? '' : ` "${reading.label}"`}${reading.why === null ? '' : ` (${reading.why})`}`;
-  if (agent.workCategory === null) return `none set: the board guesses ${shown}; set one with \`agent-board status set --category\``;
+  if (agent.workCategory === null) return `none set: the board guesses ${shown}; set one with ${HINTS.category[face]}`;
   const own = categoryWords(agent);
   return reading.source === 'agent' ? own : `${own}; shown as ${shown} for now`;
 }
 
 /** What a status set with a category answers: the category it has now. */
-function categoryAnswer(agent: Agent): string {
-  return `Your category: ${categoryWords(agent)}.`;
+function categoryAnswer(agent: Agent, face: ReadFace): string {
+  return `Your category: ${categoryWords(agent, 'yours', face)}.`;
 }
 
 /** What a status set with a description answers: what the agent is for now, or that it says nothing. */
@@ -1135,8 +1179,8 @@ function purposeAnswer(agent: Agent, whose = 'Your'): string {
 }
 
 /** What a status set with a pose answers: the pose drawn, the one set, and when that goes. */
-function characterAnswer(agent: Agent): string {
-  return `Your character: ${characterWords(characterReading(agent))}.`;
+function characterAnswer(agent: Agent, face: ReadFace): string {
+  return `Your character: ${characterWords(characterReading(agent), 'yours', face)}.`;
 }
 
 /**
@@ -1176,13 +1220,13 @@ export async function restOwn(session: BoardSession, line: string): Promise<Boar
  * What flagging (`flagOwn`) did, in a line: who it reaches, or that it was cleared (`cleared`), and what still waits on
  * the user, which only they move on (a message left unsent or never delivered).
  */
-export function flagLine(agent: Agent, cleared = false): string {
+export function flagLine(agent: Agent, cleared = false, face: ReadFace = 'cli'): string {
   const { flag } = agent;
   if (flag === null) return 'Your flag is cleared.';
   if (cleared) return `Nothing of yours is flagged now. Still in Needs you, for the user to see to: "${flag.reason}".`;
   if (flag.to === 'orchestrator') return `Flagged for the agent that started you: "${flag.reason}". It hears it at its prompt, and its reply clears it.`;
   const via = flag.via === null ? '' : ` (passing on ${flag.via})`;
-  return `Flagged for the user in Needs you${via}: "${flag.reason}". Opening your session, or \`agent-board needs-you --clear\`, clears it.`;
+  return `Flagged for the user in Needs you${via}: "${flag.reason}". Opening your session, or ${HINTS.clearFlag[face]}, clears it.`;
 }
 
 /**
@@ -1227,8 +1271,8 @@ async function setCrewStatus(
   });
   const fresh = await freshAgentLine(session, agent.sessionId);
   const reading = characterReading(fresh.agent, 'its');
-  const pose = character === undefined ? '' : `\nIts character: ${characterWords(reading, 'its own')}.`;
-  const kind = category === undefined ? '' : `\nIts category: ${categoryWords(fresh.agent, 'its own')}.`;
+  const pose = character === undefined ? '' : `\nIts character: ${characterWords(reading, 'its own', faceOf(session))}.`;
+  const kind = category === undefined ? '' : `\nIts category: ${categoryWords(fresh.agent, 'its own', faceOf(session))}.`;
   const about = description === undefined ? '' : `\n${purposeAnswer(fresh.agent, 'Its')}`;
   return {
     text: `Set the status of ${fresh.line}${pose}${kind}${about}`,
@@ -1273,10 +1317,10 @@ export async function setStatus(session: BoardSession, set: StatusSet): Promise<
       : [
           `Your tile now says: "${statusLine(agent.status!)}" (${agent.status!.summary.length} of ${MAX_STATUS_LENGTH} characters, shown in full)${agent.workFinishedAt === null ? '' : ', and that your work is finished'}.`,
         ];
-  if (category !== undefined || set.done === true) lines.push(categoryAnswer(agent));
+  if (category !== undefined || set.done === true) lines.push(categoryAnswer(agent, faceOf(session)));
   if (description !== undefined) lines.push(purposeAnswer(agent));
   if (character !== undefined) {
-    lines.push(characterAnswer(agent));
+    lines.push(characterAnswer(agent, faceOf(session)));
   }
   return { text: lines.join('\n'), json: agent };
 }
@@ -1452,7 +1496,7 @@ export async function defaultRolesView(session: BoardSession): Promise<BoardView
   return {
     text:
       roles.length === 0
-        ? 'The app has no default roles. `agent-board roles set <name> -- <template>` adds one.'
+        ? `The app has no default roles. ${HINTS.addRole[faceOf(session)]} adds one.`
         : roles.map((role) => `${role.name.padEnd(width)}  ${cut(role.body.split('\n')[0] ?? '', 80) || '(empty)'}`).join('\n'),
     json: roles,
   };
@@ -1517,7 +1561,7 @@ async function libraryPrefab(session: BoardSession, name: string): Promise<Libra
   if (found !== undefined) return found;
   const bad = unreadable.find((each) => folded(each.name) === folded(name));
   if (bad !== undefined) throw new BoardError(`the crew prefab ${bad.name} can't be read (${bad.reason}): remove it, or import it again`);
-  throw new BoardError(`the library has no crew prefab named ${name.trim()}: agent-board prefab ls lists them`);
+  throw BoardError.hinted(HINTS.prefabs, (hint) => `the library has no crew prefab named ${name.trim()}: ${hint} lists them`);
 }
 
 /** `prefab ls`: every prefab in the library, built-ins first, each with its members and what it is for. */
@@ -1531,7 +1575,7 @@ export async function prefabsView(session: BoardSession): Promise<BoardView> {
         return `${prefab.name.padEnd(width)}  ${prefab.builtIn ? 'built-in' : 'saved   '}  ${members}${prefab.purpose === '' ? '' : `  ${cut(prefab.purpose, 80)}`}`;
       }),
       // Saved by an earlier release that read it looser: listed, so it can be removed or imported again.
-      ...unreadable.map((bad) => `${bad.name.padEnd(width)}  unreadable  ${cut(bad.reason, 80)}: \`agent-board prefab remove\` it, or import it again`),
+      ...unreadable.map((bad) => `${bad.name.padEnd(width)}  unreadable  ${cut(bad.reason, 80)}: ${faceOf(session) === 'mcp' ? 'the user can remove it or import it again' : '`agent-board prefab remove` it, or import it again'}`),
     ].join('\n'),
     json: { prefabs, unreadable },
   };
@@ -1696,7 +1740,13 @@ export async function startPrefab(session: BoardSession, options: StartPrefabOpt
         : `  ${later.member}: for ${builder} to start when its work is ready`,
     );
   }
-  if (crew.crew !== null) lines.push(`agent-board crew show crew:${crew.crew} follows its rounds; agent-board wait crew:${crew.crew} waits until it stops.`);
+  if (crew.crew !== null) {
+    lines.push(
+      faceOf(session) === 'mcp'
+        ? `\`wait\` with \`agents: ["crew:${crew.crew}"]\` waits until it stops.`
+        : `agent-board crew show crew:${crew.crew} follows its rounds; agent-board wait crew:${crew.crew} waits until it stops.`,
+    );
+  }
   return { text: lines.join('\n'), json: { prefab: crew.prefab, crew: crew.crew === null ? null : `crew:${crew.crew}`, started: json, later: crew.later } };
 }
 
@@ -1839,7 +1889,7 @@ export async function waitForAgents(
   });
   const lines = result.agents.map((agent) => agentLine(refs, agent, caller));
   const head = result.timedOut
-    ? `Timed out: ${options.any ? 'none is' : 'not all are'} there yet. Wait again, or look closer with \`agent-board show <ref>\`.`
+    ? `Timed out: ${options.any ? 'none is' : 'not all are'} there yet. Wait again, or look closer with ${HINTS.show[faceOf(session)]}.`
     : null;
   return {
     text: [...(head === null ? [] : [head]), ...lines].join('\n'),
@@ -2045,7 +2095,7 @@ export async function pauseAgent(session: BoardSession, ref: string): Promise<Bo
   const { token, refs, agent } = await orchestratorTarget(session, ref);
   const paused = await session.client.call('orchestrator.pause', { token, sessionId: agent.sessionId });
   return {
-    text: `Paused ${refs.of('agent', agent.sessionId)} ${agent.name}: hibernated. \`agent-board wake\`, a message or a hand-off wakes it.`,
+    text: `Paused ${refs.of('agent', agent.sessionId)} ${agent.name}: hibernated. ${HINTS.wake[faceOf(session)]}, a message or a hand-off wakes it.`,
     json: agentJson(refs, paused, session.caller),
   };
 }
@@ -2382,7 +2432,7 @@ export function readPlanSource(source: PlanSource, cwd: string): { body: string;
 }
 
 /**
- * `show_doc` with `plan` (and `present_plan`, kept for agents that call it): shows the user a plan, its next version,
+ * `show_doc` with `plan`: shows the user a plan, its next version,
  * and waits for their decision. With `onBoard`, its plan card goes beside the agent's tile.
  */
 export async function presentPlan(

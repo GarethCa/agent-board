@@ -639,7 +639,7 @@ describe('the orchestrator loop', () => {
 
     expect(await mcp.callTool('wait', { agents: ['worker'], until: ['running'], timeout_seconds: 0 })).toMatchObject({
       isError: false,
-      text: expect.stringContaining('Timed out'),
+      text: expect.stringMatching(/^Timed out: .* look closer with `read` with `agent`\.\n/),
       structured: { timedOut: true },
     });
     expect(await mcp.callTool('wait', { agents: ['worker'], timeout_seconds: 5 })).toMatchObject({ structured: { timedOut: false } });
@@ -1469,7 +1469,7 @@ describe('an orchestrator agent, over the board MCP and CLI', () => {
 describe('agent-board mcp for an orchestrator', () => {
   /** What the board MCP offers an agent's live session: every tool, the control tools among them. */
   const ALL_TOOLS = [
-    'whoami', 'board', 'usage', 'connections', 'handoff', 'ask', 'present_plan', 'show_doc', 'set_status', 'rest', 'needs_you', 'alert', 'open_pr', 'record_pr', 'record_doc', 'pin', 'unpin', 'steps_new', 'steps_read', 'steps_update', 'queue_new', 'queue_read', 'queue_update', 'remind', 'remind_read', 'remind_update', 'set_page', 'clock_add', 'clock_set', 'save_clock_template', 'list_clock_templates', 'remove_clock_template', 'new_agent', 'send', 'wait', 'read', 'interrupt', 'set_effort', 'rename', 'pin_expanded', 'ticket_watches', 'give_role', 'continue_on_credits', 'restart', 'pause', 'wake', 'add_edge', 'list_edges', 'remove_edge', 'move', 'arrange', 'zone_layout', 'map', 'zone_screenshot', 'add_note',
+    'whoami', 'board', 'usage', 'connections', 'handoff', 'ask', 'show_doc', 'set_status', 'rest', 'needs_you', 'alert', 'open_pr', 'record_pr', 'record_doc', 'pin', 'unpin', 'steps_new', 'steps_read', 'steps_update', 'queue_new', 'queue_read', 'queue_update', 'remind', 'remind_read', 'remind_update', 'set_page', 'clock_add', 'clock_set', 'save_clock_template', 'list_clock_templates', 'remove_clock_template', 'new_agent', 'send', 'wait', 'read', 'interrupt', 'set_effort', 'rename', 'pin_expanded', 'ticket_watches', 'give_role', 'continue_on_credits', 'restart', 'pause', 'wake', 'add_edge', 'list_edges', 'remove_edge', 'move', 'arrange', 'zone_layout', 'map', 'zone_screenshot', 'add_note',
     'edit_note', 'remove_note', 'delete_item', 'pass_note', 'add_shape', 'add_diagram', 'export_diagram', 'edit_shape', 'remove_shape', 'connect', 'edit_connector', 'remove_connector', 'add_schedule', 'list_schedules', 'remove_schedule', 'prefabs', 'prefab_draft', 'roles', 'set_role', 'remove_role', 'close', 'ask_to_remove', 'handover',
   ];
 
@@ -1947,7 +1947,7 @@ describe('pausing and waking an agent', () => {
     await untilAgentAfter(setup, before, worker.sessionId, (agent) => agent.endedAt === null && agent.hibernated === null);
 
     const mcp = mcpAs(setup, lead.token);
-    expect(await mcp.callTool('pause', { agent: ref })).toMatchObject({ isError: false, text: expect.stringMatching(/^Paused agent:/) });
+    expect(await mcp.callTool('pause', { agent: ref })).toMatchObject({ isError: false, text: expect.stringMatching(/^Paused agent:\S+ .*: hibernated\. `wake`, a message or a hand-off wakes it\.$/) });
     before = setup.recorder.events.length;
     expect(await mcp.callTool('send', { agent: ref, text: 'Also add a test' })).toMatchObject({ isError: false });
     expect((await hookAfter(setup, before, worker.sessionId, 'UserPromptSubmit')).payload).toMatchObject({
@@ -3154,6 +3154,10 @@ describe('agents setting their characters’ poses', () => {
     expect(answer.text).toMatch(/^Your character: [^\n]*\.$/);
     expect(answer.text.split('\n').some((line) => line.startsWith('{'))).toBe(false);
     expect(await mcp.callTool('set_status', { character: { pose: 'dancing' } })).toMatchObject({ isError: true, text: expect.stringMatching(/unknown pose 'dancing'/) });
+    // Over the MCP, the hint names the tool and its argument, not the command.
+    const cleared = await mcp.callTool('set_status', { character: { pose: 'none' } });
+    expect(cleared.text).toMatch(/the board's \(set one with `set_status` with `character`\)\.$/);
+    expect((await mcp.callTool('whoami', {})).text).toMatch(/\npose {5}.*the board's \(set one with `set_status` with `character`\)/);
     expect(await mcp.callTool('set_status', {})).toMatchObject({ isError: true, text: expect.stringMatching(/a summary, a character, a category, a description, or more/) });
   });
 
@@ -3167,6 +3171,14 @@ describe('agents setting their characters’ poses', () => {
     const long = 'Check the open pull requests and report which ones have gone quiet. '.repeat(2).trim();
     const exact = 'x'.repeat(80);
     expect(long.length).toBeGreaterThan(80);
+    // Over the MCP, an empty list or a wrong ref names the tool to use, not the command.
+    expect((await mcp.callTool('list_schedules', {})).text).toBe('No schedules on the board. `add_schedule` makes one.');
+    expect(await mcp.callTool('clock_set', { stop: true, why: ' ' })).toMatchObject({ isError: true, text: 'say why with `why`: the user sees it on the clock' });
+    expect(await mcp.callTool('clock_set', { stop: true, why: 'Done' })).toMatchObject({ isError: true, text: expect.stringContaining('you have no clock: add one with `clock_add`') });
+    expect((await mcp.callTool('list_clock_templates', {})).text).toBe('No clock templates. `save_clock_template` with `name` and `from` saves one.');
+    expect(await mcp.callTool('remove_schedule', { schedule: to })).toMatchObject({ isError: true, text: `${to} is not a schedule: \`list_schedules\` lists them` });
+    expect((await mcp.callTool('remind_read', { mine: true })).text).toBe('You have no to-do list yet: `remind` with `text` makes one under your tile.');
+    expect(await mcp.callTool('remind_update', { action: 'done', line: 1 })).toMatchObject({ isError: true, text: 'You have no to-do list yet: `remind` with `text` makes one under your tile.' });
     expect(await mcp.callTool('add_schedule', { cron: '@daily', to, prompt: long })).toMatchObject({ isError: false });
     expect(await mcp.callTool('add_schedule', { cron: '@hourly', to, prompt: exact })).toMatchObject({ isError: false });
 
@@ -3418,6 +3430,12 @@ describe('agents setting their work categories', () => {
       isError: false,
       text: 'Your category: In review, waiting on Ada · PR #12, yours; it stays until another is set, or none.',
     });
+    expect(await mcp.callTool('set_status', { category: 'none' })).toEqual({
+      isError: false,
+      text: 'Your category: none set: the board guesses one (set one with `set_status` with `category`).',
+    });
+    expect((await mcp.callTool('whoami', {})).text).toMatch(/\ncategory none set: the board guesses .*; set one with `set_status` with `category`\n/);
+    expect(await mcp.callTool('set_status', { category: 'in-review', waiting_on: { who: 'Ada', ref: 'PR #12' } })).toMatchObject({ isError: false });
     expect(await mcp.callTool('set_status', { category: 'working', waiting_on: { who: 'Ada' } })).toMatchObject({
       isError: true,
       text: expect.stringMatching(/waiting_on is only for waiting-on-others and in-review/),

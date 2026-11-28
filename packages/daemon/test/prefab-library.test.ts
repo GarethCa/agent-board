@@ -549,7 +549,9 @@ describe('starting a crew from a prefab', () => {
       tempDataDir(),
     );
     const started = await mcp.callTool('new_agent', { prompt: 'Fix it', prefab: 'Implementer + reviewer' });
-    const crew = /agent-board wait (crew:[0-9a-f]{8})/.exec(started.text)![1]!;
+    // Over the MCP, the start names the wait tool and its argument, not the command.
+    const crew = /`wait` with `agents: \["(crew:[0-9a-f]{8})"\]` waits until it stops\./.exec(started.text)![1]!;
+    expect(started.text).not.toContain('agent-board');
 
     expect(await mcp.callTool('wait', { agents: [crew], timeout_seconds: 0 })).toMatchObject({
       isError: false,
